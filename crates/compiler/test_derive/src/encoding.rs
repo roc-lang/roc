@@ -592,11 +592,11 @@ fn two_field_record() {
     derive_test(v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8, b : Str }
-        # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
-        # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : a }]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_{a,b}(0)]]
-        #   @<2>: [[custom(2) { a : val, b : a }]] | a has Encoding, val has Encoding
+        #   @<2>: [[custom(2) { a : val, b : val1 }]] | val has Encoding, val1 has Encoding
         #Derived.toEncoder_{a,b} =
           \#Derived.rcd ->
             Encode.custom
@@ -655,11 +655,11 @@ fn tag_one_label_two_args() {
     derive_test(v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str]
-        # [A val a] -[[toEncoder_[A 2](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
-        # [A val a] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val a]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [A val val1] -[[toEncoder_[A 2](0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # [A val val1] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_[A 2](0)]]
-        #   @<2>: [[custom(4) [A val a]]] | a has Encoding, val has Encoding
+        #   @<2>: [[custom(4) [A val val1]]] | val has Encoding, val1 has Encoding
         #Derived.toEncoder_[A 2] =
           \#Derived.tag ->
             Encode.custom
@@ -685,11 +685,11 @@ fn tag_two_labels() {
     derive_test(v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str U16, B Str]
-        # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
-        # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val a b, B c]]]-> List U8) | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_[A 3,B 1](0)]]
-        #   @<2>: [[custom(6) [A val a b, B c]]] | a has Encoding, b has Encoding, c has Encoding, val has Encoding
+        #   @<2>: [[custom(6) [A val val1 val1, B val1]]] | val has Encoding, val1 has Encoding
         #Derived.toEncoder_[A 3,B 1] =
           \#Derived.tag ->
             Encode.custom
@@ -717,11 +717,11 @@ fn recursive_tag_union() {
     derive_test(v!([Nil, Cons v!(U8) v!(*lst) ] as lst), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [Cons U8 $rec, Nil] as $rec
-        # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
-        # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val a, Nil]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_[Cons 2,Nil 0](0)]]
-        #   @<2>: [[custom(4) [Cons val a, Nil]]] | a has Encoding, val has Encoding
+        #   @<2>: [[custom(4) [Cons val val1, Nil]]] | val has Encoding, val1 has Encoding
         #Derived.toEncoder_[Cons 2,Nil 0] =
           \#Derived.tag ->
             Encode.custom
