@@ -7370,10 +7370,10 @@ mod solve_expr {
         E#k(10) : E -[[k(10)]]-> {}
         a : j | j has J
         b : j | j has J
-        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + a:j(2):2]-> {}) | a has J, j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + a:j(2):2 + j:j(2):2]-> {}) | a has J, j has J, k has K
-        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
         f : [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
         f A (@C {}) (@D {}) : E -[[k(10)]]-> {}
         main : {}
@@ -7439,10 +7439,10 @@ mod solve_expr {
         kF : F -[[kF(12)]]-> {}
         a : j | j has J
         b : j | j has J
-        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + a:j(2):2]-> {}) | a has J, j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + a:j(2):2 + j:j(2):2]-> {}) | a has J, j has J, k has K
-        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
         main : {}
         it : k -[[] + k:k(4):1]-> {} | k has K
         f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
