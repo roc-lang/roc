@@ -197,7 +197,7 @@ inline fn decref_ptr_to_refcount(
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
-                refcount_ptr[0] = refcount - 1;
+                refcount_ptr[0] = refcount -% 1;
                 if (refcount == REFCOUNT_ONE_ISIZE) {
                     dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
                 }
