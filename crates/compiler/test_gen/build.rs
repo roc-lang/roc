@@ -53,7 +53,7 @@ fn build_wasm_linking_test_host() {
         &format!("-femit-bin={}", host_wasm),
     ]);
 
-    let host_obj_path = PathBuf::from("build").join("wasm_linking_test_host.obj");
+    let host_obj_path = PathBuf::from("build").join("wasm_linking_test_host.o");
     let host_obj = host_obj_path.to_str().unwrap();
     run_zig(&[
         "build-obj",
@@ -61,7 +61,7 @@ fn build_wasm_linking_test_host() {
         &format!("-femit-bin={}", &host_obj),
     ]);
 
-    let import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports.obj");
+    let import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports.o");
     let import_obj = import_obj_path.to_str().unwrap();
     run_zig(&[
         "build-obj",
@@ -74,10 +74,6 @@ fn build_wasm_linking_test_host() {
         host_obj,
         import_obj,
         &format!("-femit-bin={}", host_native),
-        "--subsystem",
-        "console",
-        "-lc",
-        //"-fcompiler-rt",
     ]);
 }
 
