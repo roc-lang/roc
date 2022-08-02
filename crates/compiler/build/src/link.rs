@@ -1104,29 +1104,56 @@ fn link_windows(
     _target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
-    _link_type: LinkType,
+    link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let zig_str_path = find_zig_str_path();
 
-    let child = Command::new(&zig_executable())
-        .args(&["build-exe"])
-        .args(input_paths)
-        .args([
-            "-lc",
-            &format!("-femit-bin={}", output_path.to_str().unwrap()),
-            "-target",
-            "native",
-            "--pkg-begin",
-            "str",
-            zig_str_path.to_str().unwrap(),
-            "--pkg-end",
-            "--strip",
-            "-O",
-            "Debug",
-        ])
-        .spawn()?;
+    match link_type {
+        LinkType::Dylib => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-lib"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                    "-dynamic"
+                ])
+                .spawn()?;
 
-    Ok((child, output_path))
+            Ok((child, output_path))
+        }
+        LinkType::Executable => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::None => todo!(),
+    }
 }
 
 pub fn llvm_module_to_dylib(
