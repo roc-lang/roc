@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
-use roc_types::types::{AliasKind, Category, PatternCategory};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -547,7 +547,7 @@ pub fn type_implementing_specialization(
 }
 
 /// Result of trying to resolve an ability specialization.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
@@ -555,22 +555,60 @@ pub enum Resolved {
     NeedsGenerated,
 }
 
-pub fn resolve_ability_specialization(
+/// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
+/// [resolving ability specializations][`resolve_ability_specialization`].
+///
+/// The trait is provided so you can implement your own resolver at other points in the compilation
+/// process, for example during monomorphization we have module-re-entrant ability stores that are
+/// not available during solving.
+pub trait AbilityResolver {
+    /// Gets the parent ability and type of an ability member.
+    ///
+    /// If needed, the type of the ability member will be imported into a local `subs` buffer; as
+    /// such, subs must be provided.
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: Symbol,
+        home_subs: &mut Subs,
+    ) -> Option<(Symbol, Variable)>;
+
+    /// Finds the declared implementation of an [`ImplKey`][roc_can::abilities::ImplKey].
+    fn get_implementation(&self, impl_key: roc_can::abilities::ImplKey) -> Option<MemberImpl>;
+}
+
+/// Trivial implementation of a resolver for a module-local abilities store, that defers all
+/// queries to the module store.
+impl AbilityResolver for AbilitiesStore {
+    #[inline(always)]
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: Symbol,
+        _home_subs: &mut Subs, // only have access to one abilities store, do nothing with subs
+    ) -> Option<(Symbol, Variable)> {
+        self.member_def(ability_member)
+            .map(|def| (def.parent_ability, def.signature_var()))
+    }
+
+    #[inline(always)]
+    fn get_implementation(&self, impl_key: roc_can::abilities::ImplKey) -> Option<MemberImpl> {
+        self.get_implementation(impl_key).copied()
+    }
+}
+
+pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
-    abilities_store: &AbilitiesStore,
+    resolver: &R,
     ability_member: Symbol,
     specialization_var: Variable,
 ) -> Option<Resolved> {
     use roc_unify::unify::{unify, Mode};
 
-    let member_def = abilities_store
-        .member_def(ability_member)
+    let (parent_ability, signature_var) = resolver
+        .member_parent_and_signature_var(ability_member, subs)
         .expect("Not an ability member symbol");
 
     // Figure out the ability we're resolving in a temporary subs snapshot.
     let snapshot = subs.snapshot();
-
-    let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
@@ -585,8 +623,7 @@ pub fn resolve_ability_specialization(
 
     subs.rollback_to(snapshot);
 
-    let obligated =
-        type_implementing_specialization(&must_implement_ability, member_def.parent_ability)?;
+    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
@@ -595,9 +632,9 @@ pub fn resolve_ability_specialization(
                 ability_member,
             };
 
-            match abilities_store.get_implementation(impl_key)? {
+            match resolver.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
-                    Resolved::Specialization(*spec_symbol)
+                    Resolved::Specialization(spec_symbol)
                 }
                 roc_types::types::MemberImpl::Derived => Resolved::NeedsGenerated,
                 // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,

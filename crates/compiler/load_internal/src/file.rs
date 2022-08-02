@@ -167,6 +167,7 @@ impl Default for ModuleCache<'_> {
             NUM,
             BOX,
             ENCODE,
+            DECODE,
             JSON,
         }
 
@@ -3088,6 +3089,7 @@ fn load_module<'a>(
         "Bool", ModuleId::BOOL
         "Box", ModuleId::BOX
         "Encode", ModuleId::ENCODE
+        "Decode", ModuleId::DECODE
         "Json", ModuleId::JSON
     }
 
