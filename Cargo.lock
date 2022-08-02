@@ -3373,8 +3373,10 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_serialize",
+ "roc_std",
  "roc_types",
  "static_assertions",
+ "ven_pretty",
 ]
 
 [[package]]

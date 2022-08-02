@@ -7,12 +7,14 @@ use roc_exhaustive::{
     is_useful, Ctor, CtorName, Error, Guard, ListArity, Literal, Pattern, RenderAs, TagId, Union,
 };
 use roc_module::ident::{Lowercase, TagIdIntType, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
 };
 use roc_types::types::AliasKind;
+
+use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
@@ -270,6 +272,58 @@ impl SketchedPattern {
             }
         }
     }
+
+    fn to_doc<'a>(&'a self, interns: &'a Interns, f: &'a Arena<'a>) -> DocBuilder<'a, Arena<'a>> {
+        match self {
+            SketchedPattern::Anything => f.text("_"),
+            SketchedPattern::Literal(lit) => match lit {
+                Literal::Int(n) => f.text(i128::from_ne_bytes(*n).to_string()),
+                Literal::U128(n) => f.text(u128::from_ne_bytes(*n).to_string()),
+                Literal::Bit(b) => f.text(b.to_string()),
+                Literal::Byte(b) => f.text(b.to_string()),
+                Literal::Float(n) => f.text(f64::from_bits(*n).to_string()),
+                Literal::Decimal(d) => f.text(roc_std::RocDec::from_ne_bytes(*d).to_string()),
+                Literal::Str(s) => f.text(&**s),
+            },
+            SketchedPattern::Ctor(tag, args) => f
+                .text(tag.0.as_str())
+                .append(f.space())
+                .append(f.intersperse(args.iter().map(|arg| arg.to_doc(interns, f)), f.space()))
+                .group(),
+            SketchedPattern::KnownCtor(union, _, args) => match &union.render_as {
+                RenderAs::Opaque => {
+                    let opaque_name = union.alternatives[0].name.to_str(interns);
+                    f.text("@")
+                        .append(f.text(opaque_name))
+                        .append(f.space())
+                        .append(
+                            f.intersperse(args.iter().map(|arg| arg.to_doc(interns, f)), f.space()),
+                        )
+                        .group()
+                }
+                RenderAs::Record(fields) => f
+                    .reflow("{")
+                    .append(
+                        f.concat(fields.iter().zip(args).map(|(name, destruct)| {
+                            let field = f
+                                .text(name.as_str())
+                                .append(f.reflow(": "))
+                                .append(destruct.to_doc(interns, f))
+                                .nest(2)
+                                .group();
+                            f.line().append(field).append(",")
+                        }))
+                        .nest(2)
+                        .group(),
+                    )
+                    .append(f.line())
+                    .append(f.text("}"))
+                    .group(),
+
+                RenderAs::Tag | RenderAs::Guard => internal_error!(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +332,15 @@ struct SketchedRow {
     region: Region,
     guard: Guard,
     redundant_mark: RedundantMark,
+}
+
+impl SketchedRow {
+    fn to_doc<'a>(&'a self, interns: &'a Interns, f: &'a Arena<'a>) -> DocBuilder<'a, Arena<'a>> {
+        f.intersperse(
+            self.patterns.iter().map(|pat| pat.to_doc(interns, f)),
+            f.reflow(" | "),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,6 +360,17 @@ impl SketchedRows {
 
     pub fn overall_region(&self) -> Region {
         self.overall_region
+    }
+
+    pub fn to_doc(&self, interns: &Interns) -> String {
+        let f = Arena::new();
+        f.intersperse(
+            self.rows.iter().map(|row| row.to_doc(interns, &f)),
+            f.hardline(),
+        )
+        .1
+        .pretty(80)
+        .to_string()
     }
 }
 

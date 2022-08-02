@@ -5,7 +5,7 @@ use roc_collections::all::{HumanIndex, MutMap};
 use roc_error_macros::internal_error;
 use roc_module::{
     ident::{Lowercase, TagIdIntType, TagName},
-    symbol::Symbol,
+    symbol::{Interns, Symbol},
 };
 use roc_region::all::Region;
 
@@ -54,6 +54,13 @@ impl CtorName {
         match self {
             Self::Tag(test) => test == tag_name,
             _ => false,
+        }
+    }
+
+    pub fn to_str<'a>(&'a self, interns: &'a Interns) -> &'a str {
+        match self {
+            CtorName::Tag(tag) => tag.0.as_str(),
+            CtorName::Opaque(symbol) => symbol.as_str(interns),
         }
     }
 }
