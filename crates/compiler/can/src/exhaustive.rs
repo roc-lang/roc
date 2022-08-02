@@ -1,18 +1,18 @@
 use crate::expr::{self, IntValue, WhenBranch};
 use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_exhaustive::{
     is_useful, Ctor, CtorName, Error, Guard, ListArity, Literal, Pattern, RenderAs, TagId, Union,
 };
 use roc_module::ident::{Lowercase, TagIdIntType, TagName};
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
 };
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, RecordStructure, TagUnionStructure};
 
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
@@ -285,11 +285,18 @@ impl SketchedPattern {
                 Literal::Decimal(d) => f.text(roc_std::RocDec::from_ne_bytes(*d).to_string()),
                 Literal::Str(s) => f.text(&**s),
             },
-            SketchedPattern::Ctor(tag, args) => f
-                .text(tag.0.as_str())
-                .append(f.space())
-                .append(f.intersperse(args.iter().map(|arg| arg.to_doc(interns, f)), f.space()))
-                .group(),
+            SketchedPattern::Ctor(tag, args) => {
+                if args.is_empty() {
+                    f.text(tag.0.as_str())
+                } else {
+                    f.text(tag.0.as_str())
+                        .append(f.space())
+                        .append(
+                            f.intersperse(args.iter().map(|arg| arg.to_doc(interns, f)), f.space()),
+                        )
+                        .group()
+                }
+            }
             SketchedPattern::KnownCtor(union, _, args) => match &union.render_as {
                 RenderAs::Opaque => {
                     let opaque_name = union.alternatives[0].name.to_str(interns);
@@ -754,5 +761,341 @@ pub fn dealias_tag<'a>(subs: &'a Subs, content: &'a Content) -> &'a Content {
             } => result = subs.get_content_without_compacting(*real_var),
             _ => return result,
         }
+    }
+}
+
+/// Sketches rows synthetically from a type variable.
+pub fn sketch_variable(subs: &Subs, var: Variable, region: Region) -> SketchedRows {
+    let mut ctx = Ctx {
+        subs,
+        seen_recursion_vars: Default::default(),
+    };
+    let patterns = sketch_variable_help(&mut ctx, var);
+    let rows = patterns
+        .into_iter()
+        .map(|pat| SketchedRow {
+            patterns: vec![pat],
+            region,
+            guard: Guard::NoGuard,
+            redundant_mark: RedundantMark::known_non_redundant(),
+        })
+        .collect();
+
+    SketchedRows {
+        rows,
+        overall_region: region,
+    }
+}
+
+struct Ctx<'a> {
+    subs: &'a Subs,
+    seen_recursion_vars: VecSet<Variable>,
+}
+
+/// Given a list of [`args`], build a table of patterns that exhausts them.
+/// For example, if args = [ [A, B], [C, D] ], then we build the rows
+///   A C
+///   A D
+///   B C
+///   B D
+fn build_args_opts(
+    ctx: &mut Ctx,
+    args: impl IntoIterator<Item = Variable>,
+    build_pattern: impl Fn(Vec<SketchedPattern>) -> SketchedPattern,
+) -> impl Iterator<Item = SketchedPattern> {
+    let base = vec![vec![]];
+
+    let args_opts = args.into_iter().fold(base, |args_opts, arg| {
+        let next_args_opts = sketch_variable_help(ctx, arg);
+        let all_args_opts = next_args_opts
+            .into_iter()
+            .flat_map(|next_arg| {
+                let mut args_opts = args_opts.clone();
+                args_opts
+                    .iter_mut()
+                    .for_each(|arg_seq| arg_seq.push(next_arg.clone()));
+
+                args_opts
+            })
+            .collect();
+
+        all_args_opts
+    });
+
+    args_opts.into_iter().map(move |args| build_pattern(args))
+}
+
+fn sketch_variable_help(ctx: &mut Ctx, var: Variable) -> Vec<SketchedPattern> {
+    match *ctx.subs.get_content_without_compacting(var) {
+        Content::FlexVar(_)
+        | Content::RigidVar(_)
+        | Content::FlexAbleVar(_, _)
+        | Content::RigidAbleVar(_, _)
+        | Content::Error
+        | Content::RangedNumber(_) => vec![SketchedPattern::Anything],
+        Content::RecursionVar {
+            structure,
+            opt_name: _,
+        } => sketch_variable_help(ctx, structure),
+        Content::Alias(symbol, _, arg_var, AliasKind::Opaque) => {
+            let arg_options = sketch_variable_help(ctx, arg_var);
+
+            let tag_id = TagId(0);
+            let union = Union {
+                render_as: RenderAs::Opaque,
+                alternatives: vec![Ctor {
+                    name: CtorName::Opaque(symbol),
+                    tag_id,
+                    arity: 1,
+                }],
+            };
+
+            arg_options
+                .into_iter()
+                .map(|arg| SketchedPattern::KnownCtor(union.clone(), tag_id, vec![arg]))
+                .collect()
+        }
+        Content::Alias(symbol, _, real_var, AliasKind::Structural) => {
+            if symbol.module_id() == ModuleId::NUM {
+                vec![SketchedPattern::Anything]
+            } else {
+                sketch_variable_help(ctx, real_var)
+            }
+        }
+        Content::Structure(flat_type) => match flat_type {
+            FlatType::Apply(_, _) => vec![SketchedPattern::Anything],
+            FlatType::Func(_, _, _) => vec![SketchedPattern::Anything],
+            FlatType::Record(fields, ext) => {
+                let RecordStructure { fields, ext: _ } =
+                    match roc_types::types::gather_fields(ctx.subs, fields, ext) {
+                        Ok(record_structure) => record_structure,
+                        Err(_) => return vec![SketchedPattern::Anything],
+                    };
+
+                let tag_id = TagId(0);
+                let union = Union {
+                    render_as: RenderAs::Record(
+                        fields.iter().map(|(field, _)| field.clone()).collect(),
+                    ),
+                    alternatives: vec![Ctor {
+                        name: CtorName::Tag(TagName("#Record".into())),
+                        tag_id,
+                        arity: 0,
+                    }],
+                };
+
+                build_args_opts(
+                    ctx,
+                    fields.iter().map(|(_, var)| *var.as_inner()),
+                    |fields| SketchedPattern::KnownCtor(union.clone(), tag_id, fields),
+                )
+                .collect()
+            }
+            FlatType::TagUnion(tags, ext) => {
+                let TagUnionStructure { fields, ext: _ } =
+                    match roc_types::types::gather_tags(ctx.subs, tags, ext) {
+                        Ok(tag_structure) => tag_structure,
+                        Err(_) => return vec![SketchedPattern::Anything],
+                    };
+
+                fields
+                    .into_iter()
+                    .flat_map(|(tag, args)| {
+                        build_args_opts(ctx, args.iter().copied(), move |args| {
+                            SketchedPattern::Ctor(tag.clone(), args)
+                        })
+                    })
+                    .collect()
+            }
+            FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                if ctx.seen_recursion_vars.contains(&rec) {
+                    return vec![SketchedPattern::Anything];
+                }
+
+                ctx.seen_recursion_vars.insert(rec);
+
+                let TagUnionStructure { fields, ext: _ } =
+                    match roc_types::types::gather_tags(ctx.subs, tags, ext) {
+                        Ok(tag_structure) => tag_structure,
+                        Err(_) => return vec![SketchedPattern::Anything],
+                    };
+
+                fields
+                    .into_iter()
+                    .flat_map(|(tag, args)| {
+                        build_args_opts(ctx, args.iter().copied(), move |args| {
+                            SketchedPattern::Ctor(tag.clone(), args)
+                        })
+                    })
+                    .collect()
+            }
+            FlatType::FunctionOrTagUnion(tag, _, ext) => {
+                let ctor_pattern = SketchedPattern::Ctor(ctx.subs[tag].clone(), vec![]);
+                match ctx.subs.get_content_without_compacting(ext) {
+                    Content::Structure(FlatType::TagUnion(tags, _)) if tags.is_empty() => {
+                        vec![ctor_pattern, SketchedPattern::Anything]
+                    }
+                    Content::Structure(FlatType::EmptyTagUnion) => {
+                        vec![ctor_pattern, SketchedPattern::Anything]
+                    }
+                    _ => vec![ctor_pattern],
+                }
+            }
+            FlatType::EmptyRecord => {
+                let tag_id = TagId(0);
+                let union = Union {
+                    render_as: RenderAs::Record(vec![]),
+                    alternatives: vec![Ctor {
+                        name: CtorName::Tag(TagName("#Record".into())),
+                        tag_id,
+                        arity: 0,
+                    }],
+                };
+                vec![SketchedPattern::KnownCtor(union, tag_id, vec![])]
+            }
+            FlatType::Erroneous(_) => vec![SketchedPattern::Anything],
+            FlatType::EmptyTagUnion => internal_error!("unreachable"),
+        },
+        Content::LambdaSet(_) => internal_error!("unreachable"),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use roc_module::symbol::{IdentIds, Interns, ModuleIds};
+    use roc_region::all::Region;
+    use roc_types::{
+        subs::{Content, Subs, Variable},
+        synth::synth_var,
+        v,
+    };
+
+    use super::sketch_variable;
+
+    fn print_variable_sketch(synth: impl FnOnce(&mut Subs) -> Variable) -> String {
+        let mut subs = Subs::default();
+        let var = synth(&mut subs);
+        let rows = sketch_variable(&subs, var, Region::zero());
+        let interns = Interns {
+            module_ids: ModuleIds::default(),
+            all_ident_ids: IdentIds::exposed_builtins(0),
+        };
+        rows.to_doc(&interns)
+    }
+
+    #[test]
+    fn sketch_flex_var() {
+        insta::assert_snapshot!(
+            print_variable_sketch(|subs: &mut Subs| synth_var(subs, Content::FlexVar(None))),
+            @"_"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_tag_union() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([ A v!(U8), B v!(U16) ])),
+            @r###"
+        A _
+        B _
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_tag_union_with_flex_ext() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([ A v!(U8), B v!(U16) ]*)),
+            @r###"
+        A _
+        B _
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_tag_union_no_payloads() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([ A, B ])),
+            @r###"
+        A
+        B
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_tag_union_no_payloads_with_flex_ext() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([ A, B ]*)),
+            @r###"
+        A
+        B
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_tag_union_with_branching_payloads() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([ A v!([B, C]) v!([D, E]), F v!([G, H, I]) ]*)),
+            @r###"
+        A B D
+        A C D
+        A B E
+        A C E
+        F G
+        F H
+        F I
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_recursive_tag_union() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!([Nil, Cons v!(U8) v!(^lst) ] as lst)),
+            @r###"
+        Cons _ _
+        Nil 
+        "###
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_record() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!({ a: v!(U8), b: v!(U16), })),
+            @"{ a: _, b: _, }"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sketch_record_with_branching_value_types() {
+        insta::assert_snapshot!(
+            print_variable_sketch(v!({ a: v!([A v!([B, C]) v!([D, E])]), b: v!([F v!([G, H, I])]), })),
+            @r###"
+        { a: A B D, b: F G, }
+        { a: A C D, b: F G, }
+        { a: A B E, b: F G, }
+        { a: A C E, b: F G, }
+        { a: A B D, b: F H, }
+        { a: A C D, b: F H, }
+        { a: A B E, b: F H, }
+        { a: A C E, b: F H, }
+        { a: A B D, b: F I, }
+        { a: A C D, b: F I, }
+        { a: A B E, b: F I, }
+        { a: A C E, b: F I, }
+        "###
+        );
     }
 }
