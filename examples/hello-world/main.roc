@@ -35,46 +35,10 @@ toHelp = \parser -> #toHelpHelp parser []
 #             help1 = toHelpHelp inner1 configs
 #             toHelpHelp inner1 help1.configs
 
-parse : Parser a, List Str -> Result a [MissingRequiredArg, WrongType]*
-parse = \@Parser parser, args ->
-    when parser is
-        Succeed val -> Ok val
-        Arg _ run ->
-            when run args is
-                Ok val -> Ok val
-                Err NotFound -> Err MissingRequiredArg
-                Err WrongType -> Err WrongType
-
-        # Default parser2 defaultVal ->
-        #     parse parser2 args
-        #     |> Result.withDefault defaultVal
-        #     |> Ok
-
-        Lazy thunk -> Ok (thunk {})
-        WithConfig parser2 config ->
-            parse parser2 args
-
 expect
     parser = argBool { help: "blah", long: "foo", short: "F" }
 
     parse parser ["foo"] == Ok True
-
-argBool : Config -> Parser Bool
-argBool = \config ->
-    fn = \args ->
-        { long, short } = config
-
-        when findOneArg long short args is
-            Err NotFound -> Err NotFound
-            Ok foundArg ->
-                if foundArg == "true" then
-                    Ok True
-                else if foundArg == "false" then
-                    Ok False
-                else
-                    Err WrongType
-
-    @Parser (Arg config fn)
 
 argStr : Config -> Parser Str
 argStr = \config ->
@@ -89,10 +53,20 @@ argStr = \config ->
 
 findOneArg : Str, Str, List Str -> Result Str [NotFound]*
 findOneArg = \long, short, args ->
-    # TODO use List.firstIndex to find the first index of the arg,
-    # then return the one after it (if it exists).
+    longArg = "--\(long)"
+    shortArg = "-\(short)"
+
     # TODO allow = as well, etc.
-    Err NotFound
+    result = List.findFirstIndex args \arg ->
+        arg == longArg || arg == shortArg
+
+    when result is
+        Ok index ->
+            # Return the next arg after the given one
+            List.get args (index + 1)
+            |> Result.mapErr \_ -> NotFound
+
+        Err NotFound -> Err NotFound
 
 andMap : Parser a, Parser (a -> b) -> Parser b
 andMap = \@Parser parser, @Parser mapper ->
@@ -185,10 +159,47 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-main =
-    parser = argBool { help: "blah", long: "foo", short: "F" }
+parse : Parser a, List Str -> Result a [MissingRequiredArg, WrongType]*
+parse = \@Parser parser, args ->
+    when parser is
+        Succeed val -> Ok val
+        Arg _ run ->
+            when run args is
+                Ok val -> Ok val
+                Err NotFound -> Err MissingRequiredArg
+                Err WrongType -> Err WrongType
 
-    if parse parser ["foo"] == Ok True then
-        "Hello, World!\n"
+        # Default parser2 defaultVal ->
+        #     parse parser2 args
+        #     |> Result.withDefault defaultVal
+        #     |> Ok
+
+        Lazy thunk -> Ok (thunk {})
+        WithConfig parser2 config ->
+            parse parser2 args
+
+argBool : Config -> Parser Bool
+argBool = \config ->
+    fn = \args ->
+        { long, short } = config
+
+        when findOneArg long short args is
+            Err NotFound -> Err NotFound
+            Ok foundArg ->
+                if foundArg == "true" then
+                    Ok True
+                else if foundArg == "false" then
+                    Ok False
+                else
+                    Err WrongType
+
+    @Parser (Arg config fn)
+
+
+main =
+    parser = argBool { long: "foo", short: "F", help: "blah" }
+
+    if parse parser ["--foo", "true"] == Ok True then
+        "yep!\n\n"
     else
-        "nope!"
+        "nope!\n\n"
