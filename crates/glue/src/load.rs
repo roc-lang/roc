@@ -136,7 +136,7 @@ pub fn load_types(
     let types_and_targets = Architecture::iter()
         .map(|arch| {
             let target_info = TargetInfo {
-                architecture: arch.into(),
+                architecture: arch,
                 operating_system: OperatingSystem::Unix,
             };
             let mut env = Env::new(arena, subs, &mut interns, target_info);
