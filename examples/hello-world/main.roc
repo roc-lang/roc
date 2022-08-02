@@ -21,6 +21,9 @@ Help : {
     configs : List Config
 }
 
+succeed : a -> Parser a
+succeed = \val -> @Parser (Succeed val)
+
 toHelp : Parser * -> Help
 toHelp = \parser -> #toHelpHelp parser []
     { configs: [] }
@@ -39,17 +42,6 @@ expect
     parser = argBool { help: "blah", long: "foo", short: "F" }
 
     parse parser ["foo"] == Ok True
-
-argStr : Config -> Parser Str
-argStr = \config ->
-    fn = \args ->
-        { long, short ? "" } = config
-
-        when findOneArg long short args is
-            Err NotFound -> Err NotFound
-            Ok foundArg -> Ok foundArg
-
-    @Parser (Arg config fn)
 
 findOneArg : Str, Str, List Str -> Result Str [NotFound]*
 findOneArg = \long, short, args ->
@@ -195,11 +187,27 @@ argBool = \config ->
 
     @Parser (Arg config fn)
 
+argStr : Config -> Parser Str
+argStr = \config ->
+    fn = \args ->
+        { long, short ? "" } = config
+
+        when findOneArg long short args is
+            Err NotFound -> Err NotFound
+            Ok foundArg -> Ok foundArg
+
+    @Parser (Arg config fn)
 
 main =
-    parser = argBool { long: "foo", short: "F", help: "blah" }
+    apply = \arg1, arg2 -> andMap arg2 arg1
 
-    if parse parser ["--foo", "true"] == Ok True then
-        "yep!\n\n"
-    else
-        "nope!\n\n"
+    parser =
+        succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
+        |> apply (argStr { long: "foo", short: "F", help: "blah" })
+        |> apply (argStr { long: "bar", short: "B", help: "stuff" })
+
+    when parse parser ["subcmd", "--foo", "true", "--bar", "baz", "--stuff", "things"] is
+        Ok str -> "Ok \(str)\n\n"
+        Err NotFound -> "nope!\n\n"
+
+
