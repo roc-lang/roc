@@ -17,8 +17,8 @@ main =
         timeout: NoTimeout,
     }
 
-    output <- Http.send request
-        |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
-        |> Task.await
+    result <- Http.send request |> Task.attempt
 
-    Stdout.line output
+    when result is
+        Ok output -> Stdout.line output
+        Err Timeout -> Stdout.line "oops"
