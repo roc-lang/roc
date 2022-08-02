@@ -6970,7 +6970,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
             let condition_rem = {
                 bd.position_at_end(default_block);
 
-                let rem = bd.build_int_signed_rem(lhs, rhs, "int_rem");
+                let rem = if is_signed {
+                    bd.build_int_signed_rem(lhs, rhs, "int_rem")
+                } else {
+                    bd.build_int_unsigned_rem(lhs, rhs, "uint_rem")
+                };
                 let result = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
 
                 bd.build_unconditional_branch(cont_block);
