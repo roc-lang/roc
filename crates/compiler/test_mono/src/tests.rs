@@ -1895,3 +1895,24 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_3669() {
+    indoc!(
+        r#"
+        Peano a := [
+            Zero,
+            Successor (Peano a)
+        ]
+
+        unwrap : Peano a -> {}
+        unwrap = \@Peano p ->
+            when p is
+                Zero -> {}
+                Successor inner -> unwrap inner
+
+        when unwrap (@Peano Zero) == {} is
+            _ -> ""
+        "#
+    )
+}
