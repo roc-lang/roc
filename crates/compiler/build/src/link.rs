@@ -1125,7 +1125,7 @@ fn link_windows(
                     "--strip",
                     "-O",
                     "Debug",
-                    "-dynamic"
+                    "-dynamic",
                 ])
                 .spawn()?;
 
