@@ -3380,6 +3380,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "roc_utils",
  "serde_json",
  "target-lexicon",
  "tempfile",
@@ -3396,6 +3397,7 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_target",
+ "roc_utils",
  "tempfile",
 ]
 

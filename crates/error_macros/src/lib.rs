@@ -115,14 +115,4 @@ macro_rules! todo_abilities {
     };
 }
 
-#[macro_export]
-macro_rules! todo_opaques {
-    () => {
-        $crate::_incomplete_project!("Abilities (opaques)", 2463)
-    };
-    ($($arg:tt)+) => {
-        $crate::_incomplete_project!("Abilities (opaques)", 2463, $($arg)+)
-    };
-}
-
 // END LARGE SCALE PROJECTS

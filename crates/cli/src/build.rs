@@ -304,8 +304,11 @@ pub fn build_file<'a>(
                 host_input_path.as_path().to_str().unwrap(),
                 app_o_file.to_str().unwrap(),
             ];
+
+            let str_host_obj_path = bitcode::get_builtins_host_obj_path();
+
             if matches!(opt_level, OptLevel::Development) {
-                inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
+                inputs.push(&str_host_obj_path);
             }
 
             let (mut child, _) =  // TODO use lld

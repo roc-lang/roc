@@ -361,6 +361,21 @@ impl UlsOfVar {
     fn rollback_to(&mut self, snapshot: UlsOfVarSnapshot) {
         *self = snapshot.0;
     }
+
+    pub fn remove_dependent_unspecialized_lambda_sets<'a>(
+        &'a mut self,
+        subs: &'a Subs,
+        var: Variable,
+    ) -> impl Iterator<Item = Variable> + 'a {
+        let utable = &subs.utable;
+        let root_var = utable.root_key_without_compacting(var);
+
+        self.0
+            .drain_filter(move |cand_var, _| {
+                utable.root_key_without_compacting(*cand_var) == root_var
+            })
+            .flat_map(|(_, lambda_set_vars)| lambda_set_vars.into_iter())
+    }
 }
 
 #[derive(Clone)]

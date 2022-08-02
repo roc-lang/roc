@@ -77,6 +77,7 @@ pub fn type_problem<'b>(
                     region,
                     type_got,
                     alias_needs,
+                    alias_kind,
                 } => {
                     let needed_arguments = if alias_needs == 1 {
                         alloc.reflow("1 type argument")
@@ -92,7 +93,9 @@ pub fn type_problem<'b>(
                         alloc.concat([
                             alloc.reflow("The "),
                             alloc.symbol_unqualified(symbol),
-                            alloc.reflow(" alias expects "),
+                            alloc.reflow(" "),
+                            alloc.reflow(alias_kind.as_str()),
+                            alloc.reflow(" expects "),
                             needed_arguments,
                             alloc.reflow(", but it got "),
                             found_arguments,
@@ -433,16 +436,21 @@ pub fn cyclic_alias<'b>(
     symbol: Symbol,
     region: roc_region::all::Region,
     others: Vec<Symbol>,
+    alias_kind: AliasKind,
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
-        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+        alloc.reflow("Recursion in ")
+        .append(alloc.reflow(alias_kind.as_str()))
+        .append(alloc.reflow("es is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
 
     let doc = if others.is_empty() {
         alloc.stack([
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(alloc.reflow(" is self-recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
             when_is_recursion_legal,
         ])
@@ -451,14 +459,18 @@ pub fn cyclic_alias<'b>(
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(" alias is recursive in an invalid way:")),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(alloc.reflow(" is recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(
-                    " alias depends on itself through the following chain of definitions:",
-                )),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(
+                    alloc.reflow(" depends on itself through the following chain of definitions:"),
+                ),
             crate::report::cycle(
                 alloc,
                 4,

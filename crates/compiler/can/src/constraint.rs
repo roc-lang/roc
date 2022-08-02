@@ -713,7 +713,6 @@ pub struct PatternEq(
 pub struct OpportunisticResolve {
     /// The specialized type of this lookup, to try to resolve.
     pub specialization_variable: Variable,
-    pub specialization_expectation: Index<Expected<Type>>,
 
     /// The ability member to try to resolve.
     pub member: Symbol,

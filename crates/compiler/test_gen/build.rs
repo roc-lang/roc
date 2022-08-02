@@ -95,7 +95,7 @@ fn build_wasm_test_host() {
 
     run_zig(&[
         "wasm-ld",
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &bitcode::get_builtins_wasm32_obj_path(),
         platform_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH,
         WASI_LIBC_PATH,

@@ -439,9 +439,6 @@ pub fn constrain_expr(
             if let Some(specialization_id) = specialization_id {
                 env.resolutions_to_make.push(OpportunisticResolve {
                     specialization_variable: specialization_var,
-                    specialization_expectation: constraints.push_expected_type(
-                        Expected::NoExpectation(Type::Variable(specialization_var)),
-                    ),
                     member: symbol,
                     specialization_id,
                 });

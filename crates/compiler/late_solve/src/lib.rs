@@ -10,7 +10,8 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
+use roc_solve::solve::Pools;
+use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Env, Mode, Unified};
@@ -272,15 +273,18 @@ pub fn unify(
             let mut pools = Pools::default();
 
             let late_phase = LatePhase { home, abilities };
+            let derived_env = DerivedEnv {
+                derived_module,
+                exposed_types: exposed_by_module,
+            };
 
             let must_implement_constraints = compact_lambda_sets_of_vars(
                 subs,
-                derived_module,
+                &derived_env,
                 arena,
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
-                exposed_by_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.

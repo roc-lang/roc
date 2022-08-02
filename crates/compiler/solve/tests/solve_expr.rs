@@ -6510,7 +6510,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record() {
         infer_queries!(
             indoc!(
@@ -6523,14 +6522,11 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record_with_nested_custom_impl() {
         infer_queries!(
             indoc!(
@@ -6539,16 +6535,14 @@ mod solve_expr {
                     imports [Encode.{ toEncoder, Encoding, custom }]
                     provides [main] to "./platform"
 
-                A := {}
+                A := {} has [Encoding {toEncoder}]
                 toEncoder = \@A _ -> custom \b, _ -> b
 
                 main = toEncoder { a: @A {} }
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
@@ -6831,15 +6825,13 @@ mod solve_expr {
                     ping : a -> a | a has Bounce
                     pong : a -> a | a has Bounce
 
-                A := {} has [Bounce {ping, pong}]
+                A := {} has [Bounce {ping: pingA, pong: pongA}]
 
-                ping : A -> A
-                ping = \@A {} -> pong (@A {})
-                #^^^^{-1}        ^^^^
+                pingA = \@A {} -> pong (@A {})
+                #^^^^^{-1}        ^^^^
 
-                pong : A -> A
-                pong = \@A {} -> ping (@A {})
-                #^^^^{-1}        ^^^^
+                pongA = \@A {} -> ping (@A {})
+                #^^^^^{-1}        ^^^^
 
                 main =
                     a : A
@@ -6850,17 +6842,16 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
+        pingA : A -[[pingA(5)]]-> A
+        A#pong(6) : A -[[pongA(6)]]-> A
+        pongA : A -[[pongA(6)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
         "###
         )
     }
 
     #[test]
-    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
     fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
         infer_queries!(
             indoc!(
@@ -6889,7 +6880,7 @@ mod solve_expr {
             ),
             @r###"
         A#ping(5) : A -[[ping(5)]]-> A
-        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
         A#pong(6) : A -[[pong(6)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
@@ -7257,24 +7248,11 @@ mod solve_expr {
                 #   ^
                 "#
             ),
-            // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
-            // Two problems:
-            //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
-            //        of the type to the toplevel, but that is NOT correct here!
-            //   - 2. During solving lambda set compaction cannot happen until an entire module
-            //        is solved, which forces resolved-but-not-yet-compacted lambdas in
-            //        unspecialized lambda sets to pull the rank into a lower, non-generalized
-            //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
-            //        poorly with (1)
-            //
-            // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
-            // correctly!
-            // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : Go -[[g(8)]]-> {}
-        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        h : b -[[] + b:g(4):1]-> {} | b has G
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         h : Go -[[g(8)]]-> {}
         "###
         );

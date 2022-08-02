@@ -2608,10 +2608,10 @@ test "getScalarUnsafe" {
 }
 
 pub fn strCloneTo(
+    string: RocStr,
     ptr: [*]u8,
     offset: usize,
     extra_offset: usize,
-    string: RocStr,
 ) callconv(.C) usize {
     const WIDTH: usize = @sizeOf(RocStr);
     if (string.isSmallStr()) {

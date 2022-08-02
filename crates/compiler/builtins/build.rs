@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::str;
 
@@ -53,19 +54,9 @@ fn main() {
     #[cfg(not(windows))]
     const BUILTINS_HOST_FILE: &str = "builtins-host.o";
 
-    generate_object_file(
-        &bitcode_path,
-        "BUILTINS_HOST_O",
-        "object",
-        BUILTINS_HOST_FILE,
-    );
+    generate_object_file(&bitcode_path, "object", BUILTINS_HOST_FILE);
 
-    generate_object_file(
-        &bitcode_path,
-        "BUILTINS_WASM32_O",
-        "wasm32-object",
-        "builtins-wasm32.o",
-    );
+    generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
 
     copy_zig_builtins_to_target_dir(&bitcode_path);
 
@@ -84,20 +75,9 @@ fn main() {
         .expect("Failed to delete temp dir zig_cache_dir.");
 }
 
-fn generate_object_file(
-    bitcode_path: &Path,
-    env_var_name: &str,
-    zig_object: &str,
-    object_file_name: &str,
-) {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-
-    let dest_obj_path = Path::new(&out_dir).join(object_file_name);
+fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name: &str) {
+    let dest_obj_path = get_lib_dir().join(object_file_name);
     let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
-
-    // set the variable (e.g. BUILTINS_HOST_O) that is later used in
-    // `compiler/builtins/src/bitcode.rs` to load the object file
-    println!("cargo:rustc-env={}={}", env_var_name, dest_obj);
 
     let src_obj_path = bitcode_path.join(object_file_name);
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
@@ -146,19 +126,28 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     );
 }
 
-fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
-    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
-    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
-
+pub fn get_lib_dir() -> PathBuf {
     // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
     // So we just need to shed a 3 of the outer layers to get `/target/debug/` and then add `lib`.
     let out_dir = env::var_os("OUT_DIR").unwrap();
-    let target_profile_dir = Path::new(&out_dir)
+
+    let lib_path = Path::new(&out_dir)
         .parent()
         .and_then(|path| path.parent())
         .and_then(|path| path.parent())
         .unwrap()
         .join("lib");
+
+    // create dir of it does not exist
+    fs::create_dir_all(lib_path.clone()).expect("Failed to make lib dir.");
+
+    lib_path
+}
+
+fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
+    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
+    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
+    let target_profile_dir = get_lib_dir();
 
     let zig_src_dir = bitcode_path.join("src");
 

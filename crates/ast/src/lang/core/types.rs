@@ -7,7 +7,7 @@ use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::types::{Problem, RecordField};
+use roc_types::types::{AliasKind, Problem, RecordField};
 use roc_types::{subs::Variable, types::ErrorType};
 
 use crate::lang::env::Env;
@@ -793,6 +793,7 @@ fn to_type_apply<'a>(
                     region,
                     alias_needs: alias.targs.len() as u8,
                     type_got: args.len() as u8,
+                    alias_kind: AliasKind::Structural,
                 });
                 return error;
             }

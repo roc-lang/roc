@@ -1,5 +1,5 @@
 use snafu::OptionExt;
-use std::{collections::HashMap, slice::SliceIndex};
+use std::{collections::HashMap, path::PathBuf, slice::SliceIndex};
 use util_error::{IndexOfFailedSnafu, KeyNotFoundSnafu, OutOfBoundsSnafu, UtilResult};
 
 pub mod util_error;
@@ -92,4 +92,31 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         }
         .fail()
     }
+}
+
+// get the path of the lib folder
+// runtime dependencies like zig files, builtin_host.o are put in the lib folder
+pub fn get_lib_path() -> Option<PathBuf> {
+    let exe_relative_str_path_opt = std::env::current_exe().ok();
+
+    if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
+        let mut curr_parent_opt = exe_relative_str_path.parent();
+
+        // this differs for regular build and nix releases, so we check in multiple spots.
+        for _ in 0..3 {
+            if let Some(curr_parent) = curr_parent_opt {
+                let lib_path = curr_parent.join("lib");
+
+                if std::path::Path::exists(&lib_path) {
+                    return Some(lib_path);
+                } else {
+                    curr_parent_opt = curr_parent.parent();
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    None
 }
