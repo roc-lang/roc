@@ -655,16 +655,16 @@ fn make_specialization_decision<P: Phase>(
             }
         }
         Structure(_) | Alias(_, _, _, _) => {
-            let builtin = ability_member
-                .try_into()
-                .expect("can only derive builtin abilities");
+            let builtin = match ability_member.try_into() {
+                Ok(builtin) => builtin,
+                Err(_) => return SpecializeDecision::Drop,
+            };
 
             // This is a structural type, find the derived ability function it should use.
             match roc_derive_key::Derived::builtin(builtin, subs, var) {
                 Ok(derived) => match derived {
                     roc_derive_key::Derived::Immediate(imm) => {
                         SpecializeDecision::Specialize(Immediate(imm))
-                        // todo!("deal with lambda set extraction from immediates")
                     }
                     roc_derive_key::Derived::Key(derive_key) => {
                         SpecializeDecision::Specialize(Derived(derive_key))
