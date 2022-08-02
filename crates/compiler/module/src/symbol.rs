@@ -1391,9 +1391,37 @@ define_builtins! {
         24 ENCODE_APPEND: "append"
         25 ENCODE_TO_BYTES: "toBytes"
     }
-    12 JSON: "Json" => {
+    12 DECODE: "Decode" => {
+        0 DECODE_DECODE_ERROR: "DecodeError"
+        1 DECODE_DECODE_RESULT: "DecodeResult"
+        2 DECODE_DECODER_OPAQUE: "Decoder"
+        3 DECODE_DECODING: "Decoding"
+        4 DECODE_DECODER: "decoder"
+        5 DECODE_DECODERFORMATTING: "DecoderFormatting"
+        6 DECODE_U8: "u8"
+        7 DECODE_U16: "u16"
+        8 DECODE_U32: "u32"
+        9 DECODE_U64: "u64"
+        10 DECODE_U128: "u128"
+        11 DECODE_I8: "i8"
+        12 DECODE_I16: "i16"
+        13 DECODE_I32: "i32"
+        14 DECODE_I64: "i64"
+        15 DECODE_I128: "i128"
+        16 DECODE_F32: "f32"
+        17 DECODE_F64: "f64"
+        18 DECODE_DEC: "dec"
+        19 DECODE_BOOL: "bool"
+        20 DECODE_STRING: "string"
+        21 DECODE_LIST: "list"
+        22 DECODE_CUSTOM: "custom"
+        23 DECODE_DECODE_WITH: "decodeWith"
+        24 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        25 DECODE_FROM_BYTES: "fromBytes"
+    }
+    13 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 13 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

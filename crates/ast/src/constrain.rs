@@ -2362,7 +2362,7 @@ pub mod test_constrain {
                     \f -> (\a, b -> f b a)
                 "#
             ),
-            "(a, b -> c) -> (b, a -> c)",
+            "(a, b -> d) -> (b, a -> d)",
         );
     }
 
@@ -2400,7 +2400,7 @@ pub mod test_constrain {
                 \{} -> x
                 "#
             ),
-            "{}* -> Num *",
+            "{}* -> Num a",
         )
     }
 

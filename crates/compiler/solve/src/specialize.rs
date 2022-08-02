@@ -579,9 +579,13 @@ fn compact_lambda_set<P: Phase>(
 
     // 3. Unify `t_f1 ~ t_f2`.
     trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
-    let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) =
-        unify(&mut UEnv::new(subs), t_f1, t_f2, Mode::EQ)
-            .expect_success("ambient functions don't unify");
+    let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) = unify(
+        &mut UEnv::new(subs),
+        t_f1,
+        t_f2,
+        Mode::LAMBDA_SET_SPECIALIZATION,
+    )
+    .expect_success("ambient functions don't unify");
     trace_compact!(3iter_end. subs, t_f1);
 
     introduce(subs, target_rank, pools, &vars);

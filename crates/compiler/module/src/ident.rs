@@ -78,6 +78,7 @@ impl ModuleName {
     pub const RESULT: &'static str = "Result";
     pub const BOX: &'static str = "Box";
     pub const ENCODE: &'static str = "Encode";
+    pub const DECODE: &'static str = "Decode";
     pub const JSON: &'static str = "Json";
 
     pub fn as_str(&self) -> &str {

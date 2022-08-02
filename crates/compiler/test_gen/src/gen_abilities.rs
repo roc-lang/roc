@@ -350,7 +350,7 @@ fn encode_use_stdlib() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_use_stdlib_without_wrapping_custom() {
     assert_evals_to!(
         indoc!(
@@ -375,7 +375,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_encoder_encode_custom_has_capture() {
     assert_evals_to!(
         indoc!(
@@ -406,6 +406,9 @@ mod encode_immediate {
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
@@ -413,7 +416,7 @@ mod encode_immediate {
     use roc_std::RocStr;
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn string() {
         assert_evals_to!(
             indoc!(
@@ -472,7 +475,7 @@ mod encode_immediate {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_one_field_string() {
     assert_evals_to!(
         indoc!(
@@ -494,7 +497,7 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
         indoc!(
@@ -517,7 +520,7 @@ fn encode_derived_record_two_fields_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_string() {
     assert_evals_to!(
         indoc!(
@@ -541,7 +544,7 @@ fn encode_derived_nested_record_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_one_payload_string() {
     assert_evals_to!(
         indoc!(
@@ -565,7 +568,7 @@ fn encode_derived_tag_one_payload_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_two_payloads_string() {
     assert_evals_to!(
         indoc!(
@@ -589,7 +592,7 @@ fn encode_derived_tag_two_payloads_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_tag_string() {
     assert_evals_to!(
         indoc!(
@@ -614,7 +617,7 @@ fn encode_derived_nested_tag_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
         indoc!(
@@ -639,7 +642,7 @@ fn encode_derived_nested_record_tag_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_string() {
     assert_evals_to!(
         indoc!(
@@ -663,7 +666,7 @@ fn encode_derived_list_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_records() {
     assert_evals_to!(
         indoc!(
@@ -683,5 +686,97 @@ fn encode_derived_list_of_records() {
         ),
         RocStr::from(r#"[{"a":"foo"},{"a":"bar"},{"a":"baz"}]"#),
         RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
+fn encode_derived_record_with_many_types() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                fresh : [Fresh Str, Rotten Str]
+                fresh = Fresh "tomatoes"
+                rcd = {actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(
+            r#"{"actors":["Idris Elba","Mila Kunis"],"rating":{"average":7,"max":10,"min":1,"sentiment":{"Fresh":["tomatoes"]}},"year":2004}"#
+        ),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_use_stdlib() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Decode.{ Decoding }, Json]
+                provides [main] to "./platform"
+
+            MyNum := U8 has [Decoding {decoder: myDecoder}]
+
+            myDecoder =
+                Decode.custom \bytes, fmt ->
+                    when Decode.decodeWith bytes Decode.u8 fmt is
+                        {result, rest} ->
+                            when result is
+                                Ok n -> {result: Ok (@MyNum n), rest}
+                                Err e -> {result: Err e, rest}
+
+            main =
+                when Decode.fromBytes [49, 53] Json.fromUtf8 is
+                    Ok (@MyNum n) -> n
+                    _ -> 101
+            "#
+        ),
+        15,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_use_stdlib_json_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Decode.{ Decoding }, Json]
+                provides [main] to "./platform"
+
+            MyNumList := List U8 has [Decoding {decoder: myDecoder}]
+
+            myDecoder =
+                Decode.custom \bytes, fmt ->
+                    when Decode.decodeWith bytes (Decode.list Decode.u8) fmt is
+                        {result, rest} ->
+                            when result is
+                                Ok lst -> {result: Ok (@MyNumList lst), rest}
+                                Err e -> {result: Err e, rest}
+
+            main =
+                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok (@MyNumList lst) -> lst
+                    _ -> []
+            "#
+        ),
+        RocList::from_slice(&[1u8, 2u8, 3u8]),
+        RocList<u8>
     )
 }

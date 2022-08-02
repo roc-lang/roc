@@ -1226,7 +1226,7 @@ mod test_reporting {
         // variables they can put themselves in, and to run the constraint algorithm
         // against that extra variable, rather than possibly having to translate a `Type`
         // again.
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
         I'm inferring a weird self-referential type for `f`:
@@ -1265,7 +1265,20 @@ mod test_reporting {
         infinitely.
 
             List ∞ -> List a
-        "#
+
+        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+        I'm inferring a weird self-referential type for `main`:
+
+        3│  main =
+            ^^^^
+
+        Here is my best effort at writing down the type. You will see ∞ for
+        parts of the type that repeat something already printed out
+        infinitely.
+
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
@@ -3613,8 +3626,8 @@ mod test_reporting {
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        List
         Set
+        List
         Dict
         Result
 
