@@ -70,7 +70,7 @@ pub mod platform_dummys {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    pub unsafe extern "C" fn roc_panic(_c_ptr: *mut c_void, _tag_id: u32) {
         unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }
 
