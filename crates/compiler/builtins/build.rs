@@ -89,6 +89,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
             &bitcode_path,
             &zig_executable(),
             &["build", zig_object, "-Drelease=true"],
+            0,
         );
 
         println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
@@ -123,6 +124,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
         &bitcode_path,
         &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
+        0,
     );
 }
 
@@ -192,8 +194,12 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
-where
+fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(
+    path: P,
+    command_str: &str,
+    args: I,
+    flaky_fail_counter: usize,
+) where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
@@ -215,7 +221,11 @@ where
                 if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
                 {
-                    run_command(path, command_str, args)
+                    if flaky_fail_counter == 10 {
+                        panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                    } else {
+                        run_command(path, command_str, args, flaky_fail_counter + 1)
+                    }
                 } else {
                     panic!("{} failed: {}", command_str, error_str);
                 }
