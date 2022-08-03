@@ -4,9 +4,13 @@
 // For the `v!` macro we use uppercase variables when constructing tag unions.
 #![allow(non_snake_case)]
 
-use crate::{util::check_immediate, v};
+use crate::{
+    util::{check_immediate, derive_test},
+    v,
+};
+use insta::assert_snapshot;
 use roc_module::symbol::Symbol;
-use roc_types::subs::{Subs, Variable};
+use roc_types::subs::Variable;
 
 use roc_derive_key::DeriveBuiltin::Decoder;
 
@@ -26,4 +30,19 @@ fn immediates() {
     check_immediate(Decoder, v!(F32), Symbol::DECODE_F32);
     check_immediate(Decoder, v!(F64), Symbol::DECODE_F64);
     check_immediate(Decoder, v!(STR), Symbol::DECODE_STRING);
+}
+
+#[test]
+fn list() {
+    derive_test(Decoder, v!(Symbol::LIST_LIST v!(STR)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for List Str
+        # Decoder (List val) fmt | fmt has DecoderFormatting, val has Decoding
+        # List U8, fmt -[[] + fmt:Decode.list(21):3]-> { rest : List U8, result : [Err [TooShort], Ok (List val)] } | fmt has DecoderFormatting, val has Decoding
+        # Specialization lambda sets:
+        #   @<1>: [[] + fmt:Decode.list(21):3] | fmt has DecoderFormatting
+        #Derived.decoder_list = Decode.list Decode.decoder
+        "###
+        )
+    })
 }
