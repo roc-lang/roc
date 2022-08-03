@@ -872,3 +872,41 @@ mod decode_immediate {
         )
     }
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_then_decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
