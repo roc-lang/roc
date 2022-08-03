@@ -57,11 +57,23 @@ pub enum Derived {
     Key(DeriveKey),
 }
 
+/// The builtin ability member to derive.
+#[derive(Clone, Copy)]
+pub enum DeriveBuiltin {
+    ToEncoder,
+}
+
 impl Derived {
-    pub fn encoding(subs: &Subs, var: Variable) -> Result<Self, DeriveError> {
-        match encoding::FlatEncodable::from_var(subs, var)? {
-            FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
-            FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+    pub fn builtin(
+        builtin: DeriveBuiltin,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, DeriveError> {
+        match builtin {
+            DeriveBuiltin::ToEncoder => match encoding::FlatEncodable::from_var(subs, var)? {
+                FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+            },
         }
     }
 }

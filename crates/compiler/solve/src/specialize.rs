@@ -12,7 +12,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_TRACE_COMPACTION;
 use roc_derive::SharedDerivedModule;
-use roc_derive_key::{DeriveError, DeriveKey};
+use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::{
@@ -657,7 +657,7 @@ fn make_specialization_decision<P: Phase>(
         Structure(_) | Alias(_, _, _, _) => {
             // This is a structural type, find the name of the derived ability function it
             // should use.
-            match roc_derive_key::Derived::encoding(subs, var) {
+            match roc_derive_key::Derived::builtin(DeriveBuiltin::ToEncoder, subs, var) {
                 Ok(derived) => match derived {
                     roc_derive_key::Derived::Immediate(imm) => {
                         SpecializeDecision::Specialize(Immediate(imm))
