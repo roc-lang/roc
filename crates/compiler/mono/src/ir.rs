@@ -4921,7 +4921,7 @@ pub fn with_hole<'a>(
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
-                                        Resolved::NeedsGenerated => {
+                                        Resolved::NeedsGenerated(_) => {
                                             todo_abilities!("Generate impls for structural types")
                                         }
                                     };
@@ -5236,8 +5236,22 @@ fn late_resolve_ability_specialization<'a>(
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
-            Resolved::NeedsGenerated => {
-                todo_abilities!("Generate impls for structural types")
+            Resolved::NeedsGenerated(var) => {
+                let derive_key = roc_derive_key::Derived::builtin(
+                    roc_derive_key::DeriveBuiltin::Decoder,
+                    env.subs,
+                    var,
+                )
+                .expect("not a builtin");
+                match derive_key {
+                    roc_derive_key::Derived::Immediate(imm) => {
+                        // The immediate is an ability member itself, so it must be resolved!
+                        late_resolve_ability_specialization(env, imm, None, specialization_var)
+                    }
+                    roc_derive_key::Derived::Key(_) => {
+                        todo_abilities!("support derived specializations that aren't immediates")
+                    }
+                }
             }
         }
     }

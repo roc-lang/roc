@@ -16,6 +16,7 @@ use roc_types::subs::{
 };
 use util::Env;
 
+mod decoding;
 mod encoding;
 
 mod util;

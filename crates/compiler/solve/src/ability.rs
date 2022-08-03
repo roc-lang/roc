@@ -1,7 +1,7 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
@@ -825,8 +825,8 @@ pub fn type_implementing_specialization(
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
-    /// A specialization must be generated.
-    NeedsGenerated,
+    /// A specialization must be generated for the given type variable.
+    NeedsGenerated(Variable),
 }
 
 /// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
@@ -910,15 +910,17 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(spec_symbol)
                 }
-                roc_types::types::MemberImpl::Derived => Resolved::NeedsGenerated,
+                roc_types::types::MemberImpl::Derived => {
+                    todo_abilities!("get type from obligated opaque")
+                }
                 // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
                 // which will make this simpler.
                 roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
             }
         }
-        Obligated::Adhoc(_) => {
+        Obligated::Adhoc(variable) => {
             // TODO: more rules need to be validated here, like is this a builtin ability?
-            Resolved::NeedsGenerated
+            Resolved::NeedsGenerated(variable)
         }
     };
 
