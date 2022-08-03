@@ -38,10 +38,13 @@ fn list() {
         assert_snapshot!(golden, @r###"
         # derived for List Str
         # Decoder (List val) fmt | fmt has DecoderFormatting, val has Decoding
-        # List U8, fmt -[[] + fmt:Decode.list(21):3]-> { rest : List U8, result : [Err [TooShort], Ok (List val)] } | fmt has DecoderFormatting, val has Decoding
+        # List U8, fmt -[[custom(3)]]-> { rest : List U8, result : [Err [TooShort], Ok (List val)] } | fmt has DecoderFormatting, val has Decoding
         # Specialization lambda sets:
-        #   @<1>: [[] + fmt:Decode.list(21):3] | fmt has DecoderFormatting
-        #Derived.decoder_list = Decode.list Decode.decoder
+        #   @<1>: [[custom(3)]]
+        #Derived.decoder_list =
+          Decode.custom
+            \#Derived.bytes, #Derived.fmt ->
+              Decode.decodeWith #Derived.bytes (Decode.list Decode.decoder) #Derived.fmt
         "###
         )
     })
