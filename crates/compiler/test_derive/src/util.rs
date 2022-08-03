@@ -81,8 +81,11 @@ macro_rules! v {
              let $tag = vec![ $( $payload(subs), )* ];
              )*
              let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
+
+             #[allow(unused_mut)]
              let mut ext = Variable::EMPTY_TAG_UNION;
              $( ext = $crate::v!($ext)(subs); )?
+
              roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
          }
      }};
