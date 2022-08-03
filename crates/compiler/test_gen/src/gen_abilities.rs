@@ -795,7 +795,7 @@ mod decode_immediate {
     use roc_std::RocStr;
 
     #[test]
-    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    #[cfg(any(feature = "gen-llvm"))]
     fn string() {
         assert_evals_to!(
             indoc!(
@@ -816,7 +816,7 @@ mod decode_immediate {
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+            #[cfg(any(feature = "gen-llvm"))]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
@@ -852,7 +852,7 @@ mod decode_immediate {
     }
 
     #[test]
-    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    #[cfg(any(feature = "gen-llvm"))]
     fn dec() {
         use roc_std::RocDec;
 
