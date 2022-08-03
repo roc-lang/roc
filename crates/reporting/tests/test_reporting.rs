@@ -10183,4 +10183,128 @@ All branches in an `if` must have the same type!
     tagged union, at least one variant of which is not recursive.
     "###
     );
+
+    test_report!(
+        derive_decoding_for_function,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A a := a -> a has [Decode.Decoding]
+            "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+
+    3│  A a := a -> a has [Decode.Decoding]
+                           ^^^^^^^^^^^^^^^
+
+    Note: `Decoding` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_decoding_for_non_decoding_opaque,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A := B has [Decode.Decoding]
+
+            B := {}
+            "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+
+    3│  A := B has [Decode.Decoding]
+                    ^^^^^^^^^^^^^^^
+
+    Tip: `B` does not implement `Decoding`. Consider adding a custom
+    implementation or `has Decode.Decoding` to the definition of `B`.
+
+    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_decoding_for_other_has_decoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A := B has [Decode.Decoding]
+
+            B := {} has [Decode.Decoding]
+            "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_decoding_for_recursive_deriving,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [MyNat] to "./platform"
+
+            MyNat := [S MyNat, Z] has [Decode.Decoding]
+            "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        function_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (a -> a) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        a -> a
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        #[ignore = "needs structural deriving to be turned on first"]
+        nested_opaque_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            A : {}
+            main =
+                myDecoder : Decoder {x : A} fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    "###
+    );
 }
