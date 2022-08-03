@@ -262,10 +262,11 @@ fn create_llvm_module<'a>(
     // Verify the module
     if let Err(errors) = env.module.verify() {
         let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(path).unwrap();
+        env.module.print_to_file(&path).unwrap();
         panic!(
-            "Errors defining module:\n\n{}\n\nI have written the full module to `{path}`",
-            errors.to_string()
+            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
+            errors.to_string(),
+            path
         );
     }
 
