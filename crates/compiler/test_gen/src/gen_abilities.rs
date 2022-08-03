@@ -437,7 +437,7 @@ mod encode_immediate {
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm"))]
+            #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
