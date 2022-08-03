@@ -102,7 +102,7 @@ fn find_wasi_libc_path() -> PathBuf {
     panic!("cannot find `wasi-libc.a`")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -156,6 +156,62 @@ pub fn build_zig_host_native(
         "x86_64"
         ]);
     }*/
+
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
+    }
+
+    command.output().unwrap()
+}
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn build_zig_host_native(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+    target: &str,
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+    _target_valgrind: bool,
+) -> Output {
+    let mut command = Command::new(&zig_executable());
+    command
+        .env_clear()
+        .env("PATH", env_path)
+        .env("HOME", env_home);
+
+    if let Some(shared_lib_path) = shared_lib_path {
+        command.args(&[
+            "build-exe",
+            "-fPIE",
+            shared_lib_path.to_str().unwrap(),
+            &bitcode::get_builtins_host_obj_path(),
+        ]);
+    } else {
+        command.args(&["build-obj", "-fPIC"]);
+    }
+
+    command.args(&[
+        zig_host_src,
+        emit_bin,
+        "--pkg-begin",
+        "str",
+        zig_str_path,
+        "--pkg-end",
+        // include the zig runtime
+        // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
+        // include libc
+        "--library",
+        "c",
+        // cross-compile?
+        "-target",
+        target,
+    ]);
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
