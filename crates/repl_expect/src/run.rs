@@ -334,10 +334,11 @@ pub fn expect_mono_module_to_dylib<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        env.module.print_to_file("/tmp/test.ll").unwrap();
+        let path = std::env::temp_dir().join("test.ll");
+        env.module.print_to_file(&path).unwrap();
         panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `/tmp/test.ll`",
-            errors.to_string()
+            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `{:?}`",
+            errors.to_string(), path,
         );
     }
 
