@@ -5078,7 +5078,7 @@ fn load_derived_partial_procs<'a>(
 
     // TODO: we can be even lazier here if we move `add_def_to_module` to happen in mono. Also, the
     // timings would be more accurate.
-    for (derived_symbol, derived_expr) in derives_to_add.into_iter() {
+    for (derived_symbol, (derived_expr, derived_expr_var)) in derives_to_add.into_iter() {
         let mut mono_env = roc_mono::ir::Env {
             arena,
             subs,
@@ -5117,7 +5117,22 @@ fn load_derived_partial_procs<'a>(
                     return_type,
                 )
             }
-            _ => internal_error!("Expected only functions to be derived"),
+            _ => {
+                // mark this symbols as a top-level thunk before any other work on the procs
+                new_module_thunks.push(derived_symbol);
+
+                PartialProc {
+                    annotation: derived_expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: derived_expr,
+                    body_var: derived_expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                }
+            }
         };
 
         procs_base

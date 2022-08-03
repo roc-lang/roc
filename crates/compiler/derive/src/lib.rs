@@ -181,18 +181,18 @@ impl DerivedModule {
         &mut self,
         gen_subs: &mut Subs,
         should_load_def: impl Fn(Symbol) -> bool,
-    ) -> VecMap<Symbol, Expr> {
+    ) -> VecMap<Symbol, (Expr, Variable)> {
         self.map
             .values()
             .filter_map(|(symbol, def, _)| {
                 if should_load_def(*symbol) {
-                    let (_new_expr_var, new_expr) = roc_can::copy::deep_copy_expr_across_subs(
+                    let (new_expr_var, new_expr) = roc_can::copy::deep_copy_expr_across_subs(
                         &mut self.subs,
                         gen_subs,
                         def.expr_var,
                         &def.loc_expr.value,
                     );
-                    Some((*symbol, new_expr))
+                    Some((*symbol, (new_expr, new_expr_var)))
                 } else {
                     None
                 }
