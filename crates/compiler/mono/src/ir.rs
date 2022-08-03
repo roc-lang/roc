@@ -5249,8 +5249,15 @@ fn late_resolve_ability_specialization<'a>(
                         // The immediate is an ability member itself, so it must be resolved!
                         late_resolve_ability_specialization(env, imm, None, specialization_var)
                     }
-                    roc_derive_key::Derived::Key(_) => {
-                        todo_abilities!("support derived specializations that aren't immediates")
+                    roc_derive_key::Derived::Key(derive_key) => {
+                        let mut derived_module = env
+                            .derived_module
+                            .lock()
+                            .expect("derived module unavailable");
+
+                        derived_module
+                            .get_or_insert(env.exposed_by_module, derive_key)
+                            .0
                     }
                 }
             }
