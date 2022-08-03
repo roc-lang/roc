@@ -19,6 +19,7 @@ impl From<target_lexicon::OperatingSystem> for OperatingSystem {
             target_lexicon::OperatingSystem::Linux => OperatingSystem::Unix,
             target_lexicon::OperatingSystem::MacOSX { .. } => OperatingSystem::Unix,
             target_lexicon::OperatingSystem::Darwin => OperatingSystem::Unix,
+            target_lexicon::OperatingSystem::Unknown => OperatingSystem::Unix,
             other => unreachable!("unsupported operating system {:?}", other),
         }
     }
