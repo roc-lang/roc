@@ -74,30 +74,27 @@ pub fn build_file<'a>(
     // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
     //
     // and zig does not currently emit `.a` webassembly static libraries
-    let host_extension = if emit_wasm {
-        if matches!(opt_level, OptLevel::Development) {
-            "wasm"
-        } else {
-            "zig"
+    let (host_extension, app_extension, extension) = {
+        use roc_target::OperatingSystem::*;
+
+        match roc_target::OperatingSystem::from(target.operating_system) {
+            Wasi => {
+                if matches!(opt_level, OptLevel::Development) {
+                    ("wasm", "wasm", Some("wasm"))
+                } else {
+                    ("zig", "bc", Some("wasm"))
+                }
+            }
+            Unix => ("o", "o", None),
+            Windows => ("obj", "obj", Some("exe")),
         }
-    } else {
-        "o"
-    };
-    let app_extension = if emit_wasm {
-        if matches!(opt_level, OptLevel::Development) {
-            "wasm"
-        } else {
-            "bc"
-        }
-    } else {
-        "o"
     };
 
     let cwd = app_module_path.parent().unwrap();
-    let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut binary_path = cwd.join(&*loaded.output_path);
 
-    if emit_wasm {
-        binary_path.set_extension("wasm");
+    if let Some(extension) = extension {
+        binary_path.set_extension(extension);
     }
 
     let host_input_path = cwd
