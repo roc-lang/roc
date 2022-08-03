@@ -133,7 +133,7 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
-    fn to_goal_phase(&self) -> Phase {
+    fn goal_phase(&self) -> Phase {
         match self {
             ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
             ExecutionMode::Check => Phase::SolveTypes,
@@ -947,7 +947,7 @@ impl<'a> State<'a> {
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
-        let goal_phase = exec_mode.to_goal_phase();
+        let goal_phase = exec_mode.goal_phase();
         let dependencies = Dependencies::new(goal_phase);
 
         Self {
