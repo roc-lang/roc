@@ -2644,7 +2644,7 @@ fn is_multiple_of_signed() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn is_multiple_of_unsigned() {
     // true
     assert_evals_to!("Num.isMultipleOf 5u8 1", true, bool);
