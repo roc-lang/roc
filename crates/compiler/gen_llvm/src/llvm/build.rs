@@ -4220,10 +4220,16 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
+    build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        opt_entry_point,
+        debug_output_file,
+    );
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
@@ -4236,7 +4242,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
         env,
         opt_level,
         procedures,
-        entry_point,
+        Some(entry_point),
         Some(Path::new("/tmp/test.ll")),
     );
 
@@ -4253,7 +4259,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
         env,
         opt_level,
         procedures,
-        entry_point,
+        Some(entry_point),
         Some(Path::new("/tmp/test.ll")),
     );
 
@@ -4265,13 +4271,13 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
 ) -> Vec<'a, &'a str> {
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        entry_point,
+        opt_entry_point,
         Some(Path::new("/tmp/test.ll")),
     );
 
@@ -4333,7 +4339,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -4341,7 +4347,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_alias_analysis::spec_program(opt_level, entry_point, it) {
+    let solutions = match roc_alias_analysis::spec_program(opt_level, opt_entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };

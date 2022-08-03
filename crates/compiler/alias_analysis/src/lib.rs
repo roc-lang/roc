@@ -131,7 +131,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
 
 pub fn spec_program<'a, I>(
     opt_level: OptLevel,
-    entry_point: roc_mono::ir::EntryPoint<'a>,
+    opt_entry_point: Option<roc_mono::ir::EntryPoint<'a>>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
@@ -221,19 +221,21 @@ where
             m.add_func(func_name, spec)?;
         }
 
-        // the entry point wrapper
-        let roc_main_bytes = func_name_bytes_help(
-            entry_point.symbol,
-            entry_point.layout.arguments.iter().copied(),
-            CapturesNiche::no_niche(),
-            &entry_point.layout.result,
-        );
-        let roc_main = FuncName(&roc_main_bytes);
+        if let Some(entry_point) = opt_entry_point {
+            // the entry point wrapper
+            let roc_main_bytes = func_name_bytes_help(
+                entry_point.symbol,
+                entry_point.layout.arguments.iter().copied(),
+                CapturesNiche::no_niche(),
+                &entry_point.layout.result,
+            );
+            let roc_main = FuncName(&roc_main_bytes);
 
-        let entry_point_function =
-            build_entry_point(entry_point.layout, roc_main, &host_exposed_functions)?;
-        let entry_point_name = FuncName(ENTRY_POINT_NAME);
-        m.add_func(entry_point_name, entry_point_function)?;
+            let entry_point_function =
+                build_entry_point(entry_point.layout, roc_main, &host_exposed_functions)?;
+            let entry_point_name = FuncName(ENTRY_POINT_NAME);
+            m.add_func(entry_point_name, entry_point_function)?;
+        }
 
         for union_layout in type_definitions {
             let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
@@ -264,8 +266,10 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        let entry_point_name = FuncName(ENTRY_POINT_NAME);
-        p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
+        if opt_entry_point.is_some() {
+            let entry_point_name = FuncName(ENTRY_POINT_NAME);
+            p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
+        }
 
         p.build()?
     };

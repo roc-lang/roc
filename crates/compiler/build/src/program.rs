@@ -265,20 +265,18 @@ pub fn gen_from_mono_module_llvm(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
-    let entry_point = match loaded.entry_point {
+    let opt_entry_point = match loaded.entry_point {
         EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+            Some(roc_mono::ir::EntryPoint { symbol, layout })
         }
-        EntryPoint::Test => {
-            unreachable!()
-        }
+        EntryPoint::Test => None,
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
         loaded.procedures,
-        entry_point,
+        opt_entry_point,
         Some(&app_ll_file),
     );
 

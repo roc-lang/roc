@@ -299,13 +299,11 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
+    let opt_entry_point = match entry_point {
         EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+            Some(roc_mono::ir::EntryPoint { symbol, layout })
         }
-        EntryPoint::Test => {
-            unreachable!()
-        }
+        EntryPoint::Test => None,
     };
 
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
@@ -313,7 +311,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         opt_level,
         toplevel_expects.unzip_slices().0,
         procedures,
-        entry_point,
+        opt_entry_point,
     );
 
     let expects = bumpalo::collections::Vec::from_iter_in(
