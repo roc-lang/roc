@@ -264,3 +264,10 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     keep_test_binary: false && cfg!(debug_assertions),
     skip_dead_code_elim: false && cfg!(debug_assertions),
 };
+
+#[cfg(test)]
+mod dummy_platform_functions {
+    // `cargo test` produces an executable. At least on Windows, this means that extern symbols must be defined. This crate imports roc_std which
+    // defines a bunch of externs, and uses the three below. We provide dummy implementations because these functions are not called.
+    pub use roc_std::platform_dummys::{roc_alloc, roc_dealloc, roc_realloc};
+}
