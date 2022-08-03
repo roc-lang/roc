@@ -1,20 +1,21 @@
 use bumpalo::Bump;
-use roc_load::{LoadedModule, Threading};
+use roc_load::{ExecutionMode, LoadConfig, LoadedModule, Threading};
 use roc_target::TargetInfo;
 use std::path::Path;
 
 pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
     let subs_by_module = Default::default();
 
-    let arena = Bump::new();
-    let loaded = roc_load::load_and_typecheck(
-        &arena,
-        src_file.to_path_buf(),
-        subs_by_module,
-        TargetInfo::default_x86_64(),
-        roc_reporting::report::RenderTarget::ColorTerminal,
+    let load_config = LoadConfig {
+        target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
         threading,
-    );
+        exec_mode: ExecutionMode::Check,
+    };
+
+    let arena = Bump::new();
+    let loaded =
+        roc_load::load_and_typecheck(&arena, src_file.to_path_buf(), subs_by_module, load_config);
 
     match loaded {
         Ok(x) => x,

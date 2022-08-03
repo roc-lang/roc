@@ -15,7 +15,7 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::MonomorphizedModule;
+use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
@@ -238,6 +238,15 @@ pub fn mono_module_to_dylib<'a>(
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
     add_default_roc_externs(&env);
+
+    let entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,

@@ -1,7 +1,7 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
-use roc_load::{LoadedModule, LoadingProblem, Threading};
+use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use std::fs::File;
@@ -83,9 +83,12 @@ pub fn load_types(
         arena,
         full_file_path,
         subs_by_module,
-        target_info,
-        RenderTarget::Generic,
-        threading,
+        LoadConfig {
+            target_info,
+            render: RenderTarget::Generic,
+            threading,
+            exec_mode: ExecutionMode::Check,
+        },
     )
     .unwrap_or_else(|problem| match problem {
         LoadingProblem::FormattedReport(report) => {

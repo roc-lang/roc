@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::{MutSet, VecMap};
 use roc_gen_llvm::llvm::{build::LlvmBackendMode, externs::add_default_roc_externs};
-use roc_load::{Expectations, MonomorphizedModule};
+use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
@@ -298,6 +298,15 @@ pub fn expect_mono_module_to_dylib<'a>(
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
     add_default_roc_externs(&env);
+
+    let entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
 
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
