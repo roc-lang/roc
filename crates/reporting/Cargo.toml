@@ -16,7 +16,7 @@ roc_types = { path = "../compiler/types" }
 roc_can = { path = "../compiler/can" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_solve_problem = { path = "../compiler/solve_problem" }
-roc_std = { path = "../roc_std", default-features = false }
+roc_std = { path = "../roc_std" }
 ven_pretty = { path = "../vendor/pretty" }
 distance = "0.4.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
