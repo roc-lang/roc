@@ -1187,7 +1187,7 @@ fn return_wrapped_function_pointer() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1209,7 +1209,7 @@ fn return_wrapped_function_pointer_b() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1235,7 +1235,7 @@ fn return_wrapped_closure() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1500,8 +1500,9 @@ fn rbtree_balance_3() {
                 balance 0 Empty
             "#
         ),
-        0,
-        usize // treat pointer as usize for null check
+        false,
+        usize,
+        |x: usize| x == 0
     );
 }
 
@@ -1882,7 +1883,7 @@ fn task_always_twice() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -1912,7 +1913,7 @@ fn wildcard_rigid() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -1941,7 +1942,7 @@ fn alias_of_alias_with_type_arguments() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -3616,7 +3617,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
