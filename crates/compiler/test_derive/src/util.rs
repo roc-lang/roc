@@ -45,6 +45,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::ENCODE),
             builtins_path.join("Encode.roc"),
         ),
+        DeriveBuiltin::Decoder => (
+            ModuleId::DECODE,
+            module_source(ModuleId::DECODE),
+            builtins_path.join("Decode.roc"),
+        ),
     }
 }
 

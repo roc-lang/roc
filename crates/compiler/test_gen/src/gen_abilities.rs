@@ -437,7 +437,7 @@ mod encode_immediate {
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm"))]
+            #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
@@ -779,4 +779,96 @@ fn decode_use_stdlib_json_list() {
         RocList::from_slice(&[1u8, 2u8, 3u8]),
         RocList<u8>
     )
+}
+
+mod decode_immediate {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn string() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.fromUtf8 is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("foo"),
+            RocStr
+        )
+    }
+
+    macro_rules! num_immediate {
+        ($($num:expr, $typ:ident)*) => {$(
+            #[test]
+            #[cfg(any(feature = "gen-llvm"))]
+            fn $typ() {
+                assert_evals_to!(
+                    &format!(indoc!(
+                        r#"
+                        app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                        main =
+                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                                Ok n -> n
+                                _ -> 101{}
+                        "#
+                    ), $num, stringify!($typ), stringify!($typ)),
+                    $num,
+                    $typ
+                )
+            }
+        )*}
+    }
+
+    num_immediate! {
+        17, i8
+        17, i16
+        17, i32
+        17, i64
+        17, i128
+        17, u8
+        17, u16
+        17, u32
+        17, u64
+        17, u128
+        17.23, f32
+        17.23, f64
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn dec() {
+        use roc_std::RocDec;
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                main =
+                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                        Ok n -> n
+                        _ -> 101dec
+                "#
+            ),
+            RocDec::from_str("17.23").unwrap(),
+            RocDec
+        )
+    }
 }
