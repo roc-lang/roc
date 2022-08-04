@@ -4,7 +4,7 @@ use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::DEBUG_SETTINGS;
-use roc_load::Threading;
+use roc_load::{ExecutionMode, LoadConfig, Threading};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -84,15 +84,19 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info: roc_target::TargetInfo::default_wasm32(),
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        roc_target::TargetInfo::default_wasm32(),
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        Threading::Single,
+        load_config,
     );
 
     let loaded = loaded.expect("failed to load module");
