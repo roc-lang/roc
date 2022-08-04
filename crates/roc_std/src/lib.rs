@@ -40,7 +40,7 @@ extern "C" {
 #[cfg(not(feature = "platform"))]
 pub use platform_dummys::*;
 
-#[cfg(any(not(feature = "platform"), test))]
+#[cfg(not(feature = "platform"))]
 pub mod platform_dummys {
     use core::ffi::c_void;
 
