@@ -918,7 +918,10 @@ fn decode_list_of_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
 fn encode_then_decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
