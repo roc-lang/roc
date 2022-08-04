@@ -35,9 +35,9 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 fn write_final_wasm() -> bool {
-    use roc_debug_flags::{dbg_do, ROC_WRITE_FINAL_WASM};
+    use roc_debug_flags::dbg_do;
 
-    dbg_do!(ROC_WRITE_FINAL_WASM, {
+    dbg_do!(roc_debug_flags::ROC_WRITE_FINAL_WASM, {
         return true;
     });
 
