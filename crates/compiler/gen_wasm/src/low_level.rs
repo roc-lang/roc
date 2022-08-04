@@ -13,7 +13,7 @@ use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, LocalId, ValueType};
-use crate::TARGET_INFO;
+use crate::{PTR_TYPE, TARGET_INFO};
 
 /// Number types used for Wasm code gen
 /// Unlike other enums, this contains no details about layout or storage.
@@ -368,25 +368,27 @@ impl<'a> LowLevelCall<'a> {
                         location.local_and_offset(backend.storage.stack_frame_pointer);
                     backend.code_builder.get_local(fp);
                     backend.code_builder.i32_load(Align::Bytes4, offset);
+                } else {
+                    internal_error!("Lists are always stored in stack memory");
                 }
 
-                // Target element heap pointer
+                // Get pointer to target element and save it to a local var
                 backend.code_builder.i32_add(); // base + index*size
+                let elem_local = backend.storage.create_anonymous_local(PTR_TYPE);
+                backend.code_builder.set_local(elem_local);
 
-                // Copy to stack
+                // Copy element value from heap to stack
                 backend.storage.copy_value_from_memory(
                     &mut backend.code_builder,
                     self.ret_symbol,
-                    AddressValue::Loaded,
+                    AddressValue::NotLoaded(elem_local),
                     0,
                 );
 
                 // Increment refcount
                 if self.ret_layout.is_refcounted() {
                     let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
-                    backend
-                        .storage
-                        .load_symbols(&mut backend.code_builder, &[self.ret_symbol]);
+                    backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
                     backend.code_builder.call(inc_fn, 2, false);
                 }
