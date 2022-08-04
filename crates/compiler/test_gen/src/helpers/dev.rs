@@ -1,7 +1,7 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
-use roc_load::Threading;
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
@@ -50,15 +50,19 @@ pub fn helper(
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info: roc_target::TargetInfo::default_x86_64(),
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        roc_target::TargetInfo::default_x86_64(),
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        Threading::Single,
+        load_config,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -96,8 +100,16 @@ pub fn helper(
     }
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
-    let main_fn_symbol = loaded.entry_point.symbol;
-    let main_fn_layout = loaded.entry_point.layout;
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
+    let main_fn_symbol = entry_point.symbol;
+    let main_fn_layout = entry_point.layout;
 
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let main_fn_name = layout_ids

@@ -5,7 +5,7 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
-use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_load::{EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
@@ -55,14 +55,18 @@ pub fn build_file<'a>(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
+    let load_config = LoadConfig {
+        target_info,
+        // TODO: expose this from CLI?
+        render: RenderTarget::ColorTerminal,
+        threading,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
         subs_by_module,
-        target_info,
-        // TODO: expose this from CLI?
-        RenderTarget::ColorTerminal,
-        threading,
+        load_config,
     )?;
 
     use target_lexicon::Architecture;
@@ -97,10 +101,14 @@ pub fn build_file<'a>(
         binary_path.set_extension(extension);
     }
 
-    let host_input_path = cwd
-        .join(&*loaded.platform_path)
-        .with_file_name("host")
-        .with_extension(host_extension);
+    let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
+    {
+        cwd.join(platform_path)
+            .with_file_name("host")
+            .with_extension(host_extension)
+    } else {
+        unreachable!();
+    };
 
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
@@ -438,15 +446,15 @@ pub fn check_file(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let mut loaded = roc_load::load_and_typecheck(
-        arena,
-        roc_file_path,
-        subs_by_module,
+    let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
-        RenderTarget::ColorTerminal,
+        render: RenderTarget::ColorTerminal,
         threading,
-    )?;
+        exec_mode: ExecutionMode::Check,
+    };
+    let mut loaded =
+        roc_load::load_and_typecheck(arena, roc_file_path, subs_by_module, load_config)?;
 
     let buf = &mut String::with_capacity(1024);
 

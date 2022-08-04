@@ -10,7 +10,7 @@ use roc_error_macros::{internal_error, user_error};
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::run_roc::RocCallResult;
 use roc_gen_llvm::run_roc_dylib;
-use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_repl_expect::run::{expect_mono_module_to_dylib, roc_dev_expect};
@@ -361,16 +361,16 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let loaded = roc_load::load_and_monomorphize(
-        arena,
-        path.to_path_buf(),
-        subs_by_module,
+    let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
-        roc_reporting::report::RenderTarget::ColorTerminal,
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
         threading,
-    )
-    .unwrap();
+        exec_mode: ExecutionMode::Test,
+    };
+    let loaded =
+        roc_load::load_and_monomorphize(arena, path.to_path_buf(), subs_by_module, load_config)
+            .unwrap();
 
     let mut loaded = loaded;
     let mut expectations = std::mem::take(&mut loaded.expectations);

@@ -1,7 +1,7 @@
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_load::{LoadedModule, MonomorphizedModule};
+use roc_load::{EntryPoint, LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -265,11 +265,18 @@ pub fn gen_from_mono_module_llvm(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
+    let opt_entry_point = match loaded.entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            Some(roc_mono::ir::EntryPoint { symbol, layout })
+        }
+        EntryPoint::Test => None,
+    };
+
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
         loaded.procedures,
-        loaded.entry_point,
+        opt_entry_point,
         Some(&app_ll_file),
     );
 

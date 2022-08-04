@@ -80,7 +80,7 @@ mod test {
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
-    use roc_load::Threading;
+    use roc_load::{ExecutionMode, LoadConfig, Threading};
     use roc_reporting::report::RenderTarget;
     use target_lexicon::Triple;
 
@@ -104,15 +104,19 @@ mod test {
 
         std::fs::write(&filename, source).unwrap();
 
+        let load_config = LoadConfig {
+            target_info,
+            render: RenderTarget::ColorTerminal,
+            threading: Threading::Single,
+            exec_mode: ExecutionMode::Executable,
+        };
         let loaded = roc_load::load_and_monomorphize_from_str(
             arena,
             filename,
             source,
             src_dir.path().to_path_buf(),
             Default::default(),
-            target_info,
-            RenderTarget::ColorTerminal,
-            Threading::Single,
+            load_config,
         )
         .unwrap();
 

@@ -13,7 +13,7 @@ mod test_reporting {
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
     use roc_can::expr::PendingDerives;
-    use roc_load::{self, LoadedModule, LoadingProblem, Threading};
+    use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
@@ -83,14 +83,14 @@ mod test_reporting {
             let full_file_path = file_path.clone();
             let mut file = File::create(file_path).unwrap();
             writeln!(file, "{}", module_src).unwrap();
-            let result = roc_load::load_and_typecheck(
-                arena,
-                full_file_path,
-                exposed_types,
-                roc_target::TargetInfo::default_x86_64(),
-                RenderTarget::Generic,
-                Threading::Single,
-            );
+            let load_config = LoadConfig {
+                target_info: roc_target::TargetInfo::default_x86_64(),
+                render: RenderTarget::Generic,
+                threading: Threading::Single,
+                exec_mode: ExecutionMode::Check,
+            };
+            let result =
+                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
             drop(file);
 
             result
