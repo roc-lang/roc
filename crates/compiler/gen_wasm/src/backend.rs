@@ -1479,7 +1479,14 @@ impl<'a> WasmBackend<'a> {
             // length of the list
             self.code_builder.get_local(stack_local_id);
             self.code_builder.i32_const(elems.len() as i32);
-            self.code_builder.i32_store(Align::Bytes4, stack_offset + 4);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_LEN);
+
+            // capacity of the list
+            self.code_builder.get_local(stack_local_id);
+            self.code_builder.i32_const(elems.len() as i32);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_CAPACITY);
 
             let mut elem_offset = 0;
 
@@ -1521,12 +1528,14 @@ impl<'a> WasmBackend<'a> {
         if let StoredValue::StackMemory { location, .. } = storage {
             let (local_id, offset) = location.local_and_offset(self.storage.stack_frame_pointer);
 
-            // This is a minor cheat.
-            // What we want to write to stack memory is { elements: null, length: 0 }
-            // But instead of two 32-bit stores, we can do a single 64-bit store.
+            // Store 12 bytes of zeros { elements: null, length: 0, capacity: 0 }
+            debug_assert_eq!(Builtin::LIST_WORDS, 3);
             self.code_builder.get_local(local_id);
             self.code_builder.i64_const(0);
             self.code_builder.i64_store(Align::Bytes4, offset);
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(0);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
         } else {
             internal_error!("Unexpected storage for {:?}", sym)
         }

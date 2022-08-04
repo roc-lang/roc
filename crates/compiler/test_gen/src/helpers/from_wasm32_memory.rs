@@ -1,5 +1,6 @@
 use roc_error_macros::internal_error;
 use roc_gen_wasm::{round_up_to_alignment, wasm32_sized::Wasm32Sized};
+use roc_mono::layout::Builtin;
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use std::convert::TryInto;
 
@@ -57,8 +58,9 @@ impl FromWasm32Memory for RocStr {
 
         let str_words: &[u32; 3] = unsafe { std::mem::transmute(&str_bytes) };
 
-        let big_elem_ptr = str_words[0] as usize;
-        let big_length = str_words[1] as usize;
+        let big_elem_ptr = str_words[Builtin::WRAPPER_PTR as usize] as usize;
+        let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize;
+        let big_capacity = str_words[Builtin::WRAPPER_CAPACITY as usize] as usize;
 
         let last_byte = str_bytes[11];
         let is_small_str = last_byte >= 0x80;
@@ -70,16 +72,20 @@ impl FromWasm32Memory for RocStr {
             &memory_bytes[big_elem_ptr..][..big_length]
         };
 
-        unsafe { RocStr::from_slice_unchecked(slice) }
+        let mut roc_str = unsafe { RocStr::from_slice_unchecked(slice) };
+        if !is_small_str {
+            roc_str.reserve(big_capacity - big_length)
+        }
+        roc_str
     }
 }
 
 impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
     fn decode(memory: &[u8], offset: u32) -> Self {
-        let bytes = <u64 as FromWasm32Memory>::decode(memory, offset);
-
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
+        let elements = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
+        let length = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_LEN);
+        let capacity =
+            <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_CAPACITY);
 
         let mut items = Vec::with_capacity(length as usize);
 
@@ -91,7 +97,9 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
             items.push(item);
         }
 
-        RocList::from_slice(&items)
+        let mut list = RocList::with_capacity(capacity as usize);
+        list.extend_from_slice(&items);
+        list
     }
 }
 
