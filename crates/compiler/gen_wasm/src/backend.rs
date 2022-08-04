@@ -715,7 +715,7 @@ impl<'a> WasmBackend<'a> {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
             if DEBUG_SETTINGS.let_stmt_ir {
-                println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+                print!("\nlet {:?} = {}", sym, expr.to_pretty(200));
             }
 
             let kind = match following {
