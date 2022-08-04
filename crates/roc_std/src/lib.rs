@@ -1,15 +1,16 @@
 #![crate_type = "lib"]
 #![cfg_attr(feature = "no_std", no_std)]
 
+use arrayvec::ArrayString;
 use core::cmp::Ordering;
-use core::ffi::c_void;
 use core::fmt::{self, Debug};
 use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
 
-use arrayvec::ArrayString;
+#[cfg(feature = "platform")]
+use core::ffi::c_void;
 
 mod roc_box;
 mod roc_list;
