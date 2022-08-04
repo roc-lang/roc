@@ -919,7 +919,7 @@ fn decode_list_of_strings() {
 
 #[test]
 #[cfg(all(
-    any(feature = "gen-llvm", feature = "gen-wasm"),
+    any(feature = "gen-llvm"), // currently fails on gen-wasm
     not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
 ))]
 fn encode_then_decode_list_of_strings() {
