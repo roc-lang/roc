@@ -3423,7 +3423,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_conslist() {
     // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
     assert_evals_to!(

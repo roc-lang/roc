@@ -2319,7 +2319,13 @@ fn list_map_n<'a>(
     // If we have lists of different lengths, we may need to decrement
     let num_wasm_args = if arg_elem_layouts.len() > 1 {
         for el in arg_elem_layouts.iter() {
-            let idx = backend.get_refcount_fn_index(*el, HelperOp::Dec);
+            // The dec function will be passed a pointer to the element within the list, not the element itself!
+            // Here we wrap the layout in a Struct to ensure we get the right code gen
+            let el_ptr = Layout::Struct {
+                field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                field_layouts: backend.env.arena.alloc([*el]),
+            };
+            let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
