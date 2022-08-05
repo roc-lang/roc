@@ -85,6 +85,14 @@ impl Types {
                 use RocTagUnion::*;
 
                 match (union_a, union_b) {
+                    (
+                        SingleTagUnion {
+                            tag_name: tag_a, ..
+                        },
+                        SingleTagUnion {
+                            tag_name: tag_b, ..
+                        },
+                    ) => tag_a == tag_b,
                     (Enumeration { tags: tags_a, .. }, Enumeration { tags: tags_b, .. }) => {
                         tags_a == tags_b
                     }
@@ -199,7 +207,9 @@ impl Types {
                     }
                     // These are all listed explicitly so that if we ever add a new variant,
                     // we'll get an exhaustiveness error here.
-                    (Enumeration { .. }, _)
+                    (SingleTagUnion { .. }, _)
+                    | (_, SingleTagUnion { .. })
+                    | (Enumeration { .. }, _)
                     | (_, Enumeration { .. })
                     | (NonRecursive { .. }, _)
                     | (_, NonRecursive { .. })
@@ -514,6 +524,10 @@ pub enum RocTagUnion {
         name: String,
         tags: Vec<String>,
         size: u32,
+    },
+    SingleTagUnion {
+        name: String,
+        tag_name: String,
     },
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
@@ -1109,6 +1123,17 @@ fn add_tag_union<'a>(
             tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
             size: int_width.stack_size(),
         },
+        Layout::Struct { field_layouts, .. } if field_layouts.is_empty() => {
+            // This should be a single-tag union.
+            debug_assert_eq!(tags.len(), 1);
+
+            let (tag_name, _) = tags.pop().unwrap();
+
+            RocTagUnion::SingleTagUnion {
+                name: name.clone(),
+                tag_name,
+            }
+        }
         Layout::Builtin(_)
         | Layout::Struct { .. }
         | Layout::Boxed(_)
