@@ -89,6 +89,9 @@ test-rust:
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+    # run `roc test` on Str builtins
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo run test --release -- crates/compiler/builtins/roc/Str.roc && sccache --show-stats
     # repl_test: build the compiler for wasm target, then run the tests on native target
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         crates/repl_test/test_wasm.sh && sccache --show-stats
