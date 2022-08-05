@@ -147,9 +147,6 @@ mod glue_cli_run {
             .unwrap()
             .join("fixture-templates");
 
-        dbg!(&platform_module_path);
-        dbg!(&glue_file);
-
         // Copy the rust template from the templates directory into the fixture dir.
         dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
             .overwrite(true) // overwrite any files that were already present
