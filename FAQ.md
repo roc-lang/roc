@@ -448,6 +448,18 @@ The goal is for Roc's compiler to deliver the best user experience possible. Com
 
 Roc isn't trying to be the best possible language for high-performance compiler development, but it is trying to have a high-performance compiler. The best tool for that job is a language other than Roc, so that's what we're using!
 
+## Why does Roc use the license it does?
+
+The short explanation for why Roc is released under the [Universal Permissive License](https://opensource.org/licenses/UPL):
+
+- Like [MIT](https://opensource.org/licenses/MIT), it's permissive and concise
+- Like [Apache2](https://opensource.org/licenses/Apache-2.0), it protects against contributors claiming software patents over contributed code after the fact (MIT and BSD do not include protections against this)
+- It's compatible with [GPLv2](https://opensource.org/licenses/GPL-2.0) (which [Apache2 is not](https://www.apache.org/licenses/GPL-compatibility.html))
+- It's one license, unlike "MIT or Apache2, at your choice" (which is how [Rust addressed the problem](https://internals.rust-lang.org/t/rationale-of-apache-dual-licensing/8952/4) of MIT not having patent protections but Apache2 not being GPLv2 compatible)
+- It's been approved by OSI, FSF, and Oracle's lawyers, so it has been not only vetted by three giants in the world of software licensing, but also three giants with competing interests - and they all approved it.
+
+There's also [a longer explanation](https://github.com/rtfeldman/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
+
 ## Why does Roc use both Rust and Zig?
 
 Roc's compiler has always been written in [Rust](https://www.rust-lang.org/). Roc's standard library was briefly written in Rust, but was soon rewritten in [Zig](https://ziglang.org/).
