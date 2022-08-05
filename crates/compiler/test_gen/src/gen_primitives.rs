@@ -2205,9 +2205,10 @@ fn nullable_eval_cfold() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_switch() {
     // exposed bug with passing the right symbol/layout down into switch branch generation
+    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
     assert_evals_to!(
         indoc!(
             r#"

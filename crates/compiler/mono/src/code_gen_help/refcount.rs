@@ -144,6 +144,7 @@ pub fn refcount_reset_proc_body<'a>(
     let rc = root.create_symbol(ident_ids, "rc");
     let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
     let is_unique = root.create_symbol(ident_ids, "is_unique");
+    let masked = root.create_symbol(ident_ids, "masked");
 
     let union_layout = match layout {
         Layout::Union(u) => u,
@@ -201,6 +202,39 @@ pub fn refcount_reset_proc_body<'a>(
             )
         };
 
+        let alloc_addr_stmt = {
+            let alignment = root.create_symbol(ident_ids, "alignment");
+            let alignment_expr = Expr::Literal(Literal::Int(
+                (layout.alignment_bytes(root.target_info) as i128).to_ne_bytes(),
+            ));
+            let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
+            let alloc_addr_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::NumSubWrap,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: root.arena.alloc([masked, alignment]),
+            });
+
+            Stmt::Let(
+                alignment,
+                alignment_expr,
+                root.layout_isize,
+                root.arena.alloc(
+                    //
+                    Stmt::Let(
+                        alloc_addr,
+                        alloc_addr_expr,
+                        root.layout_isize,
+                        root.arena.alloc(
+                            //
+                            Stmt::Ret(alloc_addr),
+                        ),
+                    ),
+                ),
+            )
+        };
+
         let rc_contents_stmt = refcount_union_contents(
             root,
             ident_ids,
@@ -211,7 +245,7 @@ pub fn refcount_reset_proc_body<'a>(
             structure,
             tag_id_sym,
             tag_id_layout,
-            Stmt::Ret(structure),
+            alloc_addr_stmt,
         );
 
         tag_id_stmt(root.arena.alloc(
@@ -300,13 +334,14 @@ pub fn refcount_reset_proc_body<'a>(
 
     // Refcount pointer
     let rc_ptr_stmt = {
-        rc_ptr_from_data_ptr(
+        rc_ptr_from_data_ptr_help(
             root,
             ident_ids,
             structure,
             rc_ptr,
             union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(rc_stmt),
+            masked,
         )
     };
 
@@ -381,19 +416,44 @@ pub fn rc_ptr_from_data_ptr<'a>(
     mask_lower_bits: bool,
     following: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    let addr_sym = root.create_symbol(ident_ids, "addr");
+    rc_ptr_from_data_ptr_help(
+        root,
+        ident_ids,
+        structure,
+        rc_ptr_sym,
+        mask_lower_bits,
+        following,
+        addr_sym,
+    )
+}
+
+pub fn rc_ptr_from_data_ptr_help<'a>(
+    root: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    structure: Symbol,
+    rc_ptr_sym: Symbol,
+    mask_lower_bits: bool,
+    following: &'a Stmt<'a>,
+    addr_sym: Symbol,
+) -> Stmt<'a> {
     use std::ops::Neg;
 
     // Typecast the structure pointer to an integer
     // Backends expect a number Layout to choose the right "subtract" instruction
-    let addr_sym = root.create_symbol(ident_ids, "addr");
-    let addr_expr = Expr::Call(Call {
+    let as_int_sym = if mask_lower_bits {
+        root.create_symbol(ident_ids, "as_int")
+    } else {
+        addr_sym
+    };
+    let as_int_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::PtrCast,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: root.arena.alloc([structure]),
     });
-    let addr_stmt = |next| Stmt::Let(addr_sym, addr_expr, root.layout_isize, next);
+    let as_int_stmt = |next| Stmt::Let(as_int_sym, as_int_expr, root.layout_isize, next);
 
     // Mask for lower bits (for tag union id)
     let mask_sym = root.create_symbol(ident_ids, "mask");
@@ -402,15 +462,14 @@ pub fn rc_ptr_from_data_ptr<'a>(
     ));
     let mask_stmt = |next| Stmt::Let(mask_sym, mask_expr, root.layout_isize, next);
 
-    let masked_sym = root.create_symbol(ident_ids, "masked");
     let and_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::And,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: root.arena.alloc([addr_sym, mask_sym]),
+        arguments: root.arena.alloc([as_int_sym, mask_sym]),
     });
-    let and_stmt = |next| Stmt::Let(masked_sym, and_expr, root.layout_isize, next);
+    let and_stmt = |next| Stmt::Let(addr_sym, and_expr, root.layout_isize, next);
 
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
@@ -426,14 +485,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
             op: LowLevel::NumSub,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: root.arena.alloc([
-            if mask_lower_bits {
-                masked_sym
-            } else {
-                addr_sym
-            },
-            ptr_size_sym,
-        ]),
+        arguments: root.arena.alloc([addr_sym, ptr_size_sym]),
     });
     let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, root.layout_isize, next);
 
@@ -448,7 +500,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
     let cast_stmt = |next| Stmt::Let(rc_ptr_sym, cast_expr, LAYOUT_PTR, next);
 
     if mask_lower_bits {
-        addr_stmt(root.arena.alloc(
+        as_int_stmt(root.arena.alloc(
             //
             mask_stmt(root.arena.alloc(
                 //
@@ -468,7 +520,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
             )),
         ))
     } else {
-        addr_stmt(root.arena.alloc(
+        as_int_stmt(root.arena.alloc(
             //
             ptr_size_stmt(root.arena.alloc(
                 //

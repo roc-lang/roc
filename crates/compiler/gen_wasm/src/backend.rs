@@ -1575,13 +1575,24 @@ impl<'a> WasmBackend<'a> {
             StoredValue::Local { local_id, .. } => {
                 // Tag is stored as a heap pointer.
                 if let Some(reused) = maybe_reused {
-                    // Reuse an existing heap allocation
+                    // Reuse an existing heap allocation, if one is available (not NULL at runtime)
                     self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                    self.code_builder.if_();
+                    {
+                        self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.else_();
+                    {
+                        self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
                     self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                    self.code_builder.set_local(local_id);
                 }
-                self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
             StoredValue::VirtualMachineStack { .. } => {
@@ -1627,7 +1638,7 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.i64_store(id_align, id_offset);
                 }
             }
-        } else if stores_tag_id_in_pointer {
+        } else if stores_tag_id_in_pointer && tag_id != 0 {
             self.code_builder.get_local(local_id);
             self.code_builder.i32_const(tag_id as i32);
             self.code_builder.i32_or();
