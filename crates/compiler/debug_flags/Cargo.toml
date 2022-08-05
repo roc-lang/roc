@@ -1,6 +1,8 @@
 [package]
 name = "roc_debug_flags"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [dependencies]

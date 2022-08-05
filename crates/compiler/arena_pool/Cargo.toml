@@ -1,6 +1,6 @@
 [package]
 name = "arena-pool"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/rtfeldman/roc"
