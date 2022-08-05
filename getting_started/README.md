@@ -44,8 +44,3 @@ been able to find beginner-friendly projects to get people up to speed gradually
 
 If you're interested in getting involved, check out
 [CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
-
-## Name and Logo
-
-If you're curious about where the language's name and logo came from,
-[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
