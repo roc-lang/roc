@@ -12,4 +12,4 @@ We are very grateful to our sponsors [NoRedInk](https://www.noredink.com/), [rwx
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 
-If you or your employer would like to sponsor Roc's development, please DM Richard Feldman on Zulip!
+If you or your employer would like to sponsor Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
