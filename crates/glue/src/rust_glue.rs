@@ -931,7 +931,7 @@ pub struct {name} {{
     }
 
     // The Ord impl for the tag union
-    {
+    if !has_float(typ, types) {
         let opt_impl = Some(format!("impl Ord for {name}"));
         let mut buf = r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {
             match self.discriminant().cmp(&other.discriminant()) {
@@ -1041,7 +1041,7 @@ pub struct {name} {{
     }
 
     // The Hash impl for the tag union
-    {
+    if !has_float(typ, types) {
         let opt_impl = Some(format!("impl core::hash::Hash for {name}"));
         let mut buf = r#"fn hash<H: core::hash::Hasher>(&self, state: &mut H) {"#.to_string();
 
