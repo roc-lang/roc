@@ -5287,7 +5287,7 @@ mod test_fmt {
                              eq1,
                          },
                      ]
-                
+
                 0
                 "#
             ),
@@ -5397,6 +5397,64 @@ mod test_fmt {
             "Expecting to find at least 1 .roc file to format under {}",
             builtins_path.display()
         );
+    }
+
+    #[test]
+    fn expect_single_line() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+
+            expect x == y
+
+            expect y == z
+
+            42
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+                interface Foo exposes [] imports []
+
+                expect x == y
+
+                expect y == z
+
+                foo = bar
+            "#
+        ));
+    }
+
+    #[test]
+    fn expect_multiline() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 5
+
+            expect
+                foo bar
+                |> baz
+
+            42
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+                interface Foo exposes [] imports []
+
+                expect
+                    foo bar
+                    |> baz
+
+                expect
+                    blah
+                        etc
+
+                foo = bar
+            "#
+        ));
     }
 
     // this is a parse error atm

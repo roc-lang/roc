@@ -294,6 +294,7 @@ fn fmt_expect<'a, 'buf>(
         indent
     };
 
+    buf.ensure_ends_with_newline();
     buf.push_str("expect");
     condition.format(buf, return_indent);
 }
