@@ -690,6 +690,31 @@ fn encode_derived_list_of_records() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
+fn encode_derived_list_of_lists_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                lst = [["a", "b"], ["c", "d", "e"], ["f"]]
+                encoded = Encode.toBytes lst Json.toUtf8
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[["a","b"],["c","d","e"],["f"]]"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
     not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
@@ -871,4 +896,65 @@ mod decode_immediate {
             RocDec
         )
     }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm"), // currently fails on gen-wasm
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
+fn encode_then_decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
+fn encode_then_decode_list_of_lists_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("a,b;c,d,e;f"),
+        RocStr
+    )
 }

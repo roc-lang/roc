@@ -11,16 +11,9 @@ use crate::{
     util::{check_immediate, derive_test},
     v,
 };
-use roc_derive::synth_var;
 use roc_derive_key::DeriveBuiltin::ToEncoder;
-use roc_module::{ident::TagName, symbol::Symbol};
-use roc_types::{
-    subs::{
-        AliasVariables, Content, FlatType, RecordFields, Subs, SubsIndex, SubsSlice, UnionTags,
-        Variable,
-    },
-    types::{AliasKind, RecordField},
-};
+use roc_module::symbol::Symbol;
+use roc_types::subs::Variable;
 
 // {{{ hash tests
 
@@ -50,9 +43,9 @@ test_hash_eq! {
         v!(EMPTY_TAG_UNION), v!([])
 
     same_recursive_tag_union:
-        v!([ Nil, Cons v!(*lst)] as lst), v!([ Nil, Cons v!(*lst)] as lst)
+        v!([ Nil, Cons v!(^lst)] as lst), v!([ Nil, Cons v!(^lst)] as lst)
     same_tag_union_and_recursive_tag_union_fields:
-        v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(*lst)] as lst)
+        v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(^lst)] as lst)
 
     list_list_diff_types:
         v!(Symbol::LIST_LIST v!(STR)), v!(Symbol::LIST_LIST v!(U8))
@@ -90,7 +83,7 @@ test_hash_neq! {
     tag_union_empty_vs_nonempty:
         v!(EMPTY_TAG_UNION), v!([ B v!(U8) ])
     different_recursive_tag_union_tags:
-        v!([ Nil, Cons v!(*lst) ] as lst), v!([ Nil, Next v!(*lst) ] as lst)
+        v!([ Nil, Cons v!(^lst) ] as lst), v!([ Nil, Next v!(^lst) ] as lst)
 
     same_alias_diff_real_type:
         v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
@@ -324,7 +317,7 @@ fn tag_two_labels() {
 fn recursive_tag_union() {
     derive_test(
         ToEncoder,
-        v!([Nil, Cons v!(U8) v!(*lst) ] as lst),
+        v!([Nil, Cons v!(U8) v!(^lst) ] as lst),
         |golden| {
             assert_snapshot!(golden, @r###"
         # derived for [Cons U8 $rec, Nil] as $rec

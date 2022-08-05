@@ -5238,18 +5238,26 @@ fn late_resolve_ability_specialization<'a>(
             Resolved::Specialization(symbol) => symbol,
             Resolved::NeedsGenerated(var) => {
                 let derive_key = roc_derive_key::Derived::builtin(
-                    roc_derive_key::DeriveBuiltin::Decoder,
+                    member.try_into().expect("derived symbols must be builtins"),
                     env.subs,
                     var,
                 )
-                .expect("not a builtin");
+                .expect("specialization var not derivable!");
+
                 match derive_key {
                     roc_derive_key::Derived::Immediate(imm) => {
                         // The immediate is an ability member itself, so it must be resolved!
                         late_resolve_ability_specialization(env, imm, None, specialization_var)
                     }
-                    roc_derive_key::Derived::Key(_) => {
-                        todo_abilities!("support derived specializations that aren't immediates")
+                    roc_derive_key::Derived::Key(derive_key) => {
+                        let mut derived_module = env
+                            .derived_module
+                            .lock()
+                            .expect("derived module unavailable");
+
+                        derived_module
+                            .get_or_insert(env.exposed_by_module, derive_key)
+                            .0
                     }
                 }
             }
