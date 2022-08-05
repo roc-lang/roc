@@ -1,6 +1,8 @@
 # Work in progress!
 
-Roc is not ready for an 0.1 release yet, but we have a [Zulip chat](https://roc.zulipchat.com) where you can learn more about the project. If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/rtfeldman/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+Roc is not ready for an 0.1 release yet, but we have a [Zulip chat](https://roc.zulipchat.com) where you can learn more about the project.
+
+If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/rtfeldman/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 
 # Sponsors
 
