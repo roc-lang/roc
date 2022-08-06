@@ -273,7 +273,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         format!(
                             r#"/// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{tag_name}(&self) {{
+    pub fn as_{tag_name}(&self) {{
         ()
     }}"#,
                         ),
@@ -831,7 +831,7 @@ pub struct {name} {{
                     format!(
                         r#"/// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{tag_name}(&self) {{
+    pub fn as_{tag_name}(&self) {{
         ()
     }}"#,
                     ),
@@ -1641,7 +1641,7 @@ pub struct {name} {{
             format!(
                 r#"/// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{null_tag}(&self) {{
+    pub fn as_{null_tag}(&self) {{
         ()
     }}"#,
             ),
