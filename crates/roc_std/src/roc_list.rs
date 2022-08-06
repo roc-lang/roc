@@ -7,11 +7,11 @@ use core::{
     fmt::Debug,
     hash::Hash,
     intrinsics::copy_nonoverlapping,
+    iter::FromIterator,
     mem::{self, ManuallyDrop},
     ops::Deref,
     ptr::{self, NonNull},
 };
-use std::iter::FromIterator;
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
 
@@ -474,7 +474,7 @@ where
 
 impl<'a, T> IntoIterator for &'a RocList<T> {
     type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = core::slice::Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.as_slice().iter()
@@ -529,7 +529,7 @@ impl<T> Drop for IntoIter<T> {
 }
 
 impl<T: Hash> Hash for RocList<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         // This is the same as Rust's Vec implementation, which
         // just delegates to the slice implementation. It's a bit surprising
         // that Hash::hash_slice doesn't automatically incorporate the length,
@@ -551,7 +551,7 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
     {
         let iter = into.into_iter();
 
-        if std::mem::size_of::<T>() == 0 {
+        if core::mem::size_of::<T>() == 0 {
             let count = iter.count();
             return Self {
                 elements: Some(Self::elems_with_capacity(count)),

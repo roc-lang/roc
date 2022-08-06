@@ -1,5 +1,5 @@
+#![no_std]
 #![crate_type = "lib"]
-#![cfg_attr(feature = "no_std", no_std)]
 
 use arrayvec::ArrayString;
 use core::cmp::Ordering;
@@ -365,7 +365,7 @@ impl RocDec {
     }
 
     fn to_str_helper(self, string: &mut ArrayString<{ Self::MAX_STR_LENGTH }>) -> &str {
-        use std::fmt::Write;
+        use core::fmt::Write;
 
         if self.as_i128() == 0 {
             return "0";
