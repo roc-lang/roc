@@ -402,6 +402,28 @@ fn union_linked_list_dec() {
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
+fn union_linked_list_nil_dec() {
+    let no_refcounts: &[crate::helpers::RefCount] = &[];
+    assert_refcounts!(
+        indoc!(
+            r#"
+                LinkedList a : [Nil, Cons a (LinkedList a)]
+
+                linked : LinkedList Str
+                linked = Nil
+
+                when linked is
+                    Cons x _ -> x
+                    Nil -> ""
+            "#
+        ),
+        RocStr,
+        no_refcounts
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
 fn union_linked_list_long_dec() {
     assert_refcounts!(
         indoc!(

@@ -944,7 +944,7 @@ fn when_peano() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(
@@ -963,8 +963,8 @@ fn overflow_frees_list() {
             List.get myList index
                  "#
         ),
-        3,
-        i64
+        (3, 0),
+        (i64, i8)
     );
 }
 
@@ -1187,7 +1187,7 @@ fn return_wrapped_function_pointer() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1209,7 +1209,7 @@ fn return_wrapped_function_pointer_b() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1235,7 +1235,7 @@ fn return_wrapped_closure() {
             "#
         ),
         1,
-        i64,
+        usize,
         |_| 1
     );
 }
@@ -1343,7 +1343,7 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
     assert_evals_to!(
@@ -1479,7 +1479,10 @@ fn rbtree_insert() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm")
+))]
 fn rbtree_balance_3() {
     assert_evals_to!(
         indoc!(
@@ -1498,8 +1501,8 @@ fn rbtree_balance_3() {
             "#
         ),
         false,
-        *const i64,
-        |x: *const i64| x.is_null()
+        usize,
+        |x: usize| x == 0
     );
 }
 
@@ -1880,7 +1883,7 @@ fn task_always_twice() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -1910,7 +1913,7 @@ fn wildcard_rigid() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -1939,7 +1942,7 @@ fn alias_of_alias_with_type_arguments() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -2202,9 +2205,10 @@ fn nullable_eval_cfold() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_switch() {
     // exposed bug with passing the right symbol/layout down into switch branch generation
+    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
     assert_evals_to!(
         indoc!(
             r#"
@@ -3420,7 +3424,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_conslist() {
     // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
     assert_evals_to!(
@@ -3614,7 +3618,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
@@ -3651,7 +3655,7 @@ fn shared_pattern_variable_in_when_branches() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
     assert_evals_to!(
         indoc!(
@@ -3662,8 +3666,8 @@ fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
             {a: f (A 15u8), b: f (B 15u8)}
             "#
         ),
-        31u8,
-        u8,
+        (31u8, 31u8),
+        (u8, u8),
         |x| x,
         true // allow errors
     );
