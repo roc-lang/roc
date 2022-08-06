@@ -3,14 +3,12 @@
 
 use arrayvec::ArrayString;
 use core::cmp::Ordering;
+use core::ffi::c_void;
 use core::fmt::{self, Debug};
 use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
-
-#[cfg(feature = "platform")]
-use core::ffi::c_void;
 
 mod roc_box;
 mod roc_list;
@@ -23,7 +21,6 @@ pub use roc_str::{InteriorNulError, RocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported
-#[cfg(feature = "platform")]
 extern "C" {
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
@@ -38,10 +35,6 @@ extern "C" {
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
-#[cfg(not(feature = "platform"))]
-pub use platform_dummys::*;
-
-#[cfg(not(feature = "platform"))]
 pub mod platform_dummys {
     use core::ffi::c_void;
 
