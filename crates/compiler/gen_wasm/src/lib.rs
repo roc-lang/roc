@@ -269,5 +269,46 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
 mod dummy_platform_functions {
     // `cargo test` produces an executable. At least on Windows, this means that extern symbols must be defined. This crate imports roc_std which
     // defines a bunch of externs, and uses the three below. We provide dummy implementations because these functions are not called.
-    pub use roc_std::platform_dummys::{roc_alloc, roc_dealloc, roc_realloc};
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
+        unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_realloc(
+        _ptr: *mut c_void,
+        _new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
+        unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_panic(_c_ptr: *mut c_void, _tag_id: u32) {
+        unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
+        unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
+        unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
 }
