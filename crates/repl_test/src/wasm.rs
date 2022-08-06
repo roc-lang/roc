@@ -98,7 +98,7 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) -> u32 {
                 if false {
                     let path = std::env::temp_dir().join("roc_repl_test_invalid_app.wasm");
                     fs::write(path, app_module_bytes).unwrap();
-                    println!("Wrote invalid wasm to {}", path);
+                    println!("Wrote invalid wasm to {:?}", path);
                 }
                 return false.into();
             }
