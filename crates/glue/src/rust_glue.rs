@@ -268,7 +268,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 
                     add_decl(
                         impls,
-                        opt_impl.clone(),
+                        opt_impl,
                         target_info,
                         format!(
                             r#"/// Other `as` methods return a payload, but since the {tag_name} tag
