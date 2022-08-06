@@ -788,4 +788,50 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn rose_tree() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                RoseTree a : [Tree a (List (RoseTree a))]
+
+                expect
+                    a : RoseTree Str
+                    a = Tree "Astra mortemque praestare gradatim" []
+
+                    b : RoseTree Str
+                    b = Tree "foo" [ Tree "bar" [] ]
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      a : RoseTree Str
+                 9│>      a = Tree "Astra mortemque praestare gradatim" []
+                10│>
+                11│>      b : RoseTree Str
+                12│>      b = Tree "foo" [ Tree "bar" [] ]
+                13│>
+                14│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : RoseTree Str
+                a = Tree "Astra mortemque praestare gradatim" []
+
+                b : RoseTree Str
+                b = Tree "foo" [Tree "bar" []]
+                "#
+            ),
+        );
+    }
 }

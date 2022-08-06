@@ -608,7 +608,45 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        NonNullableUnwrapped(_) => todo!(),
+        NonNullableUnwrapped(fields) => {
+            //
+
+            let tag_value = tag_value.into_pointer_value();
+
+            build_copy(env, ptr, offset, extra_offset.into());
+
+            let layout = Layout::struct_no_name_order(fields);
+            let basic_type = basic_type_from_layout(env, &layout);
+
+            let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+            let cursors = Cursors {
+                offset: extra_offset,
+                extra_offset: env.builder.build_int_add(
+                    extra_offset,
+                    env.ptr_int().const_int(width as _, false),
+                    "new_offset",
+                ),
+            };
+
+            let raw_data_ptr = env
+                .builder
+                .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+                .unwrap();
+
+            let data_ptr = env.builder.build_pointer_cast(
+                raw_data_ptr,
+                basic_type.ptr_type(AddressSpace::Generic),
+                "data_ptr",
+            );
+
+            let data = env.builder.build_load(data_ptr, "load_data");
+
+            let when_recursive = WhenRecursive::Loop(union_layout);
+            let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+            env.builder.build_return(Some(&answer));
+        }
         NullableWrapped {
             nullable_id,
             other_tags,
