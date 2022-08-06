@@ -536,7 +536,78 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        Recursive(_) => todo!(),
+        Recursive(tags) => {
+            let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+            let switch_block = env.context.append_basic_block(parent, "switch_block");
+            env.builder.build_unconditional_branch(switch_block);
+
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_modify");
+                env.builder.position_at_end(block);
+
+                // write the "pointer" of the current offset
+                write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, tag_id);
+
+                let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
+
+                let raw_data_ptr = env
+                    .builder
+                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+                    .unwrap();
+
+                let layout = Layout::struct_no_name_order(field_layouts);
+                let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    layout
+                } else {
+                    Layout::struct_no_name_order(
+                        env.arena.alloc([layout, union_layout.tag_id_layout()]),
+                    )
+                };
+                let basic_type = basic_type_from_layout(env, &layout);
+
+                let data_ptr = env.builder.build_pointer_cast(
+                    raw_data_ptr,
+                    basic_type.ptr_type(AddressSpace::Generic),
+                    "data_ptr",
+                );
+
+                let data = env.builder.build_load(data_ptr, "load_data");
+
+                let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+                let cursors = Cursors {
+                    offset: extra_offset,
+                    extra_offset: env.builder.build_int_add(
+                        extra_offset,
+                        env.ptr_int().const_int(width as _, false),
+                        "new_offset",
+                    ),
+                };
+
+                let when_recursive = WhenRecursive::Loop(union_layout);
+                let answer =
+                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+                env.builder.build_return(Some(&answer));
+
+                cases.push((id.get_type().const_int(tag_id as u64, false), block));
+            }
+
+            env.builder.position_at_end(switch_block);
+
+            match cases.pop() {
+                Some((_, default)) => {
+                    env.builder.build_switch(id, default, &cases);
+                }
+                None => {
+                    // we're serializing an empty tag union; this code is effectively unreachable
+                    env.builder.build_unreachable();
+                }
+            }
+        }
         NonNullableUnwrapped(_) => todo!(),
         NullableWrapped {
             nullable_id,
@@ -565,23 +636,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     let block = env.context.append_basic_block(parent, "tag_id_modify");
                     env.builder.position_at_end(block);
 
-                    // write the "pointer" af the current offset
-                    {
-                        // first, store tag id as u32
-                        let tag_id_intval = env.context.i32_type().const_int(i as _, false);
-                        build_copy(env, ptr, offset, tag_id_intval.into());
-
-                        // increment offset by 4
-                        let four = env.ptr_int().const_int(4, false);
-                        let offset = env.builder.build_int_add(offset, four, "");
-
-                        // cast to u32
-                        let extra_offset =
-                            env.builder
-                                .build_int_cast(extra_offset, env.context.i32_type(), "");
-
-                        build_copy(env, ptr, offset, extra_offset.into());
-                    }
+                    // write the "pointer" of the current offset
+                    write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, i);
 
                     let fields = if i >= nullable_id as _ {
                         other_tags[i - 1]
@@ -712,6 +768,34 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 env.builder.build_return(Some(&answer));
             }
         }
+    }
+}
+
+fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+    offset: IntValue<'ctx>,
+    extra_offset: IntValue<'ctx>,
+    union_layout: UnionLayout<'a>,
+    tag_id: usize,
+) {
+    if union_layout.stores_tag_id_in_pointer(env.target_info) {
+        // first, store tag id as u32
+        let tag_id_intval = env.context.i32_type().const_int(tag_id as _, false);
+        build_copy(env, ptr, offset, tag_id_intval.into());
+
+        // increment offset by 4
+        let four = env.ptr_int().const_int(4, false);
+        let offset = env.builder.build_int_add(offset, four, "");
+
+        // cast to u32
+        let extra_offset = env
+            .builder
+            .build_int_cast(extra_offset, env.context.i32_type(), "");
+
+        build_copy(env, ptr, offset, extra_offset.into());
+    } else {
+        build_copy(env, ptr, offset, extra_offset.into());
     }
 }
 

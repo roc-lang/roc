@@ -696,7 +696,7 @@ mod test {
     }
 
     #[test]
-    fn tree() {
+    fn nullable_tree() {
         run_expect_test(
             indoc!(
                 r#"
@@ -738,6 +738,52 @@ mod test {
 
                 b : Tree Str
                 b = Node Empty Empty
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn recursive_tree() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                Tree a : [ Leaf a, Node (Tree a) (Tree a) ]
+
+                expect
+                    a : Tree Str
+                    a = Leaf "Astra mortemque praestare gradatim"
+
+                    b : Tree Str
+                    b = Node (Leaf "a") (Leaf "b")
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      a : Tree Str
+                 9│>      a = Leaf "Astra mortemque praestare gradatim"
+                10│>
+                11│>      b : Tree Str
+                12│>      b = Node (Leaf "a") (Leaf "b")
+                13│>
+                14│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Tree Str
+                a = Leaf "Astra mortemque praestare gradatim"
+
+                b : Tree Str
+                b = Node (Leaf "a") (Leaf "b")
                 "#
             ),
         );
