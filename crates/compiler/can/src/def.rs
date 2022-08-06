@@ -79,7 +79,7 @@ impl Def {
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
     pub region: Region,
 }
 
