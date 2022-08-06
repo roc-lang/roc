@@ -82,6 +82,15 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
 
         unsafe { std::str::from_utf8_unchecked(str_bytes) }
     }
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        let addr_with_id = self.deref_usize(addr);
+        let tag_id_mask = 0b11;
+
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as _, data_addr as _)
+    }
 }
 
 impl<'a> WasmReplApp<'a> {

@@ -81,4 +81,6 @@ pub trait ReplAppMemory {
     }
 
     fn deref_str(&self, addr: usize) -> &str;
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64);
 }
