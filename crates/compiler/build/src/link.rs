@@ -3,6 +3,7 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
+use roc_utils::get_lib_path;
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -66,12 +67,13 @@ pub fn link(
 
 fn find_zig_str_path() -> PathBuf {
     // First try using the lib path relative to the executable location.
-    let exe_relative_str_path = std::env::current_exe()
-        .ok()
-        .and_then(|path| Some(path.parent()?.join("lib").join("str.zig")));
-    if let Some(exe_relative_str_path) = exe_relative_str_path {
-        if std::path::Path::exists(&exe_relative_str_path) {
-            return exe_relative_str_path;
+    let lib_path_opt = get_lib_path();
+
+    if let Some(lib_path) = lib_path_opt {
+        let zig_str_path = lib_path.join("str.zig");
+
+        if std::path::Path::exists(&zig_str_path) {
+            return zig_str_path;
         }
     }
 
@@ -87,7 +89,7 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
+    panic!("cannot find `str.zig`. Check the source code in find_zig_str_path() to show all the paths I tried.")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
@@ -118,16 +120,18 @@ pub fn build_zig_host_native(
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home);
+
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
+
     command.args(&[
         zig_host_src,
         emit_bin,
@@ -158,6 +162,7 @@ pub fn build_zig_host_native(
     } else if matches!(opt_level, OptLevel::Size) {
         command.args(&["-O", "ReleaseSmall"]);
     }
+
     command.output().unwrap()
 }
 
@@ -228,7 +233,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -340,7 +345,7 @@ pub fn build_c_host_native(
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
             "-fPIE",
             "-pie",
             "-lm",
@@ -423,7 +428,11 @@ pub fn rebuild_host(
         host_input_path.with_file_name(if shared_lib_path.is_some() {
             "dynhost"
         } else {
-            "host.o"
+            match roc_target::OperatingSystem::from(target.operating_system) {
+                roc_target::OperatingSystem::Windows => "host.obj",
+                roc_target::OperatingSystem::Unix => "host.o",
+                roc_target::OperatingSystem::Wasi => "host.o",
+            }
         })
     };
 
@@ -1093,11 +1102,58 @@ fn link_wasm32(
 
 fn link_windows(
     _target: &Triple,
-    _output_path: PathBuf,
-    _input_paths: &[&str],
-    _link_type: LinkType,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    todo!("Add windows support to the surgical linker. See issue #2608.")
+    let zig_str_path = find_zig_str_path();
+
+    match link_type {
+        LinkType::Dylib => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-lib"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                    "-dynamic",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::Executable => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::None => todo!(),
+    }
 }
 
 pub fn llvm_module_to_dylib(
@@ -1172,7 +1228,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     let mut command = Command::new(&zig_executable());
     let args = &[
         "wasm-ld",
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &bitcode::get_builtins_wasm32_obj_path(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti

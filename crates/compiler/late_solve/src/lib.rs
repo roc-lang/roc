@@ -10,12 +10,14 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
+use roc_module::symbol::Symbol;
+use roc_solve::ability::AbilityResolver;
+use roc_solve::solve::Pools;
+use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Env, Mode, Unified};
 
-pub use roc_solve::ability::resolve_ability_specialization;
 pub use roc_solve::ability::Resolved;
 pub use roc_types::subs::instantiate_rigids;
 
@@ -49,12 +51,12 @@ impl WorldAbilities {
 
     #[inline(always)]
     pub fn with_module_exposed_type<T>(
-        &mut self,
+        &self,
         module: ModuleId,
-        mut f: impl FnMut(&mut ExposedTypesStorageSubs) -> T,
+        mut f: impl FnMut(&ExposedTypesStorageSubs) -> T,
     ) -> T {
-        let mut world = self.world.write().unwrap();
-        let (_, exposed_types) = world.get_mut(&module).expect("module not in the world");
+        let world = self.world.read().unwrap();
+        let (_, exposed_types) = world.get(&module).expect("module not in the world");
 
         f(exposed_types)
     }
@@ -94,6 +96,75 @@ impl AbilitiesView<'_> {
             AbilitiesView::Module(store) => f(store),
         }
     }
+}
+
+pub struct LateResolver<'a> {
+    home: ModuleId,
+    abilities: &'a AbilitiesView<'a>,
+}
+
+impl<'a> AbilityResolver for LateResolver<'a> {
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: roc_module::symbol::Symbol,
+        home_subs: &mut Subs,
+    ) -> Option<(roc_module::symbol::Symbol, Variable)> {
+        let (parent_ability, signature_var) =
+            self.abilities
+                .with_module_abilities_store(ability_member.module_id(), |store| {
+                    store
+                        .member_def(ability_member)
+                        .map(|def| (def.parent_ability, def.signature_var()))
+                })?;
+
+        let parent_ability_module = parent_ability.module_id();
+        debug_assert_eq!(parent_ability_module, ability_member.module_id());
+
+        let signature_var = match (parent_ability_module == self.home, self.abilities) {
+            (false, AbilitiesView::World(world)) => {
+                // Need to copy the type from an external module into our home subs
+                world.with_module_exposed_type(parent_ability_module, |external_types| {
+                    let stored_signature_var =
+                        external_types.stored_ability_member_vars.get(&signature_var).expect("Ability member is in an external store, but its signature variables are not stored accordingly!");
+
+                    let home_copy = external_types
+                        .storage_subs
+                        .export_variable_to(home_subs, *stored_signature_var);
+
+                    home_copy.variable
+                })
+            }
+            _ => signature_var,
+        };
+
+        Some((parent_ability, signature_var))
+    }
+
+    fn get_implementation(
+        &self,
+        impl_key: roc_can::abilities::ImplKey,
+    ) -> Option<roc_types::types::MemberImpl> {
+        self.abilities
+            .with_module_abilities_store(impl_key.opaque.module_id(), |store| {
+                store.get_implementation(impl_key).copied()
+            })
+    }
+}
+
+pub fn resolve_ability_specialization(
+    home: ModuleId,
+    subs: &mut Subs,
+    abilities: &AbilitiesView,
+    ability_member: Symbol,
+    specialization_var: Variable,
+) -> Option<Resolved> {
+    let late_resolver = LateResolver { home, abilities };
+    roc_solve::ability::resolve_ability_specialization(
+        subs,
+        &late_resolver,
+        ability_member,
+        specialization_var,
+    )
 }
 
 pub struct LatePhase<'a> {
@@ -272,15 +343,18 @@ pub fn unify(
             let mut pools = Pools::default();
 
             let late_phase = LatePhase { home, abilities };
+            let derived_env = DerivedEnv {
+                derived_module,
+                exposed_types: exposed_by_module,
+            };
 
             let must_implement_constraints = compact_lambda_sets_of_vars(
                 subs,
-                derived_module,
+                &derived_env,
                 arena,
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
-                exposed_by_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.

@@ -369,6 +369,7 @@ fn canonicalize_alias<'a>(
                         typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
+                        alias_kind: AliasKind::Structural,
                     });
                 }
                 AliasKind::Opaque => {
@@ -2688,6 +2689,7 @@ fn correct_mutual_recursive_type_alias<'a>(
                 env,
                 &mut alias.typ,
                 alias_name,
+                alias.kind,
                 alias.region,
                 rest,
                 can_still_report_error,
@@ -2870,7 +2872,15 @@ fn make_tag_union_recursive_help<'a, 'b>(
         }
         _ => {
             // take care to report a cyclic alias only once (not once for each alias in the cycle)
-            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_cyclic_error);
+            mark_cyclic_alias(
+                env,
+                typ,
+                symbol,
+                alias_kind,
+                region,
+                others,
+                *can_report_cyclic_error,
+            );
             *can_report_cyclic_error = false;
 
             Cyclic
@@ -2882,6 +2892,7 @@ fn mark_cyclic_alias<'a>(
     env: &mut Env<'a>,
     typ: &mut Type,
     symbol: Symbol,
+    alias_kind: AliasKind,
     region: Region,
     others: Vec<Symbol>,
     report: bool,
@@ -2890,7 +2901,7 @@ fn mark_cyclic_alias<'a>(
     *typ = Type::Erroneous(problem);
 
     if report {
-        let problem = Problem::CyclicAlias(symbol, region, others);
+        let problem = Problem::CyclicAlias(symbol, region, others, alias_kind);
         env.problems.push(problem);
     }
 }

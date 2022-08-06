@@ -13,8 +13,10 @@
 //! For these reasons the content keying is based on a strategy as well, which are the variants of
 //! [`DeriveKey`].
 
+pub mod decoding;
 pub mod encoding;
 
+use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
 
 use roc_module::symbol::Symbol;
@@ -33,15 +35,14 @@ pub enum DeriveError {
 #[repr(u8)]
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
-    #[allow(unused)]
-    Decoding,
+    Decoder(FlatDecodableKey),
 }
 
 impl DeriveKey {
     pub fn debug_name(&self) -> String {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
-            DeriveKey::Decoding => todo!(),
+            DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
         }
     }
 }
@@ -57,11 +58,40 @@ pub enum Derived {
     Key(DeriveKey),
 }
 
+/// The builtin ability member to derive.
+#[derive(Clone, Copy)]
+pub enum DeriveBuiltin {
+    ToEncoder,
+    Decoder,
+}
+
+impl TryFrom<Symbol> for DeriveBuiltin {
+    type Error = Symbol;
+
+    fn try_from(value: Symbol) -> Result<Self, Self::Error> {
+        match value {
+            Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
+            Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
+            _ => Err(value),
+        }
+    }
+}
+
 impl Derived {
-    pub fn encoding(subs: &Subs, var: Variable) -> Result<Self, DeriveError> {
-        match encoding::FlatEncodable::from_var(subs, var)? {
-            FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
-            FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+    pub fn builtin(
+        builtin: DeriveBuiltin,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, DeriveError> {
+        match builtin {
+            DeriveBuiltin::ToEncoder => match encoding::FlatEncodable::from_var(subs, var)? {
+                FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+            },
+            DeriveBuiltin::Decoder => match decoding::FlatDecodable::from_var(subs, var)? {
+                FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
+            },
         }
     }
 }

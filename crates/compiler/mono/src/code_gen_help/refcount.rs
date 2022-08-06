@@ -144,7 +144,7 @@ pub fn refcount_reset_proc_body<'a>(
     let rc = root.create_symbol(ident_ids, "rc");
     let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
     let is_unique = root.create_symbol(ident_ids, "is_unique");
-    let masked = root.create_symbol(ident_ids, "masked");
+    let addr = root.create_symbol(ident_ids, "addr");
 
     let union_layout = match layout {
         Layout::Union(u) => u,
@@ -213,7 +213,7 @@ pub fn refcount_reset_proc_body<'a>(
                     op: LowLevel::NumSubWrap,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([masked, alignment]),
+                arguments: root.arena.alloc([addr, alignment]),
             });
 
             Stmt::Let(
@@ -341,7 +341,7 @@ pub fn refcount_reset_proc_body<'a>(
             rc_ptr,
             union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(rc_stmt),
-            masked,
+            addr,
         )
     };
 

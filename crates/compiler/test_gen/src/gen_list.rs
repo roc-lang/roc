@@ -15,8 +15,6 @@ use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocResult, RocStr};
 
-use core::convert::Infallible;
-
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_list_construction() {
@@ -287,6 +285,8 @@ fn list_map_try_ok() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_try_err() {
+    use core::convert::Infallible;
+
     assert_evals_to!(
         r#"
             List.mapTry [1, 2, 3] \_ -> Err -1

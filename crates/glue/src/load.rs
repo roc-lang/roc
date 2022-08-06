@@ -1,9 +1,9 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
-use roc_load::{LoadedModule, LoadingProblem, Threading};
+use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
-use roc_target::{Architecture, TargetInfo};
+use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -83,9 +83,12 @@ pub fn load_types(
         arena,
         full_file_path,
         subs_by_module,
-        target_info,
-        RenderTarget::Generic,
-        threading,
+        LoadConfig {
+            target_info,
+            render: RenderTarget::Generic,
+            threading,
+            exec_mode: ExecutionMode::Check,
+        },
     )
     .unwrap_or_else(|problem| match problem {
         LoadingProblem::FormattedReport(report) => {
@@ -135,7 +138,10 @@ pub fn load_types(
 
     let types_and_targets = Architecture::iter()
         .map(|arch| {
-            let target_info = arch.into();
+            let target_info = TargetInfo {
+                architecture: arch,
+                operating_system: OperatingSystem::Unix,
+            };
             let mut env = Env::new(arena, subs, &mut interns, target_info);
 
             (env.vars_to_types(variables.clone()), target_info)

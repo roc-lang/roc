@@ -1,6 +1,6 @@
 [package]
 name = "roc_build"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -26,6 +26,7 @@ roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../../reporting" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std", default-features = false }
+roc_utils = { path = "../../utils" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"
 tempfile = "3.2.0"

@@ -3451,7 +3451,7 @@ mod solve_expr {
                 { id1, id2 }
                 "#
             ),
-            "{ id1 : q -> q, id2 : a -> a }",
+            "{ id1 : q -> q, id2 : q1 -> q1 }",
         );
     }
 
@@ -3966,7 +3966,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num a } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c1 } }",
         );
     }
 
@@ -3997,7 +3997,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
         );
     }
 
@@ -6157,7 +6157,7 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, b -> Bool | a has Hash, b has Hash",
+            "a, a1 -> Bool | a has Hash, a1 has Hash",
         )
     }
 
@@ -6510,7 +6510,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record() {
         infer_queries!(
             indoc!(
@@ -6523,14 +6522,11 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record_with_nested_custom_impl() {
         infer_queries!(
             indoc!(
@@ -6539,16 +6535,14 @@ mod solve_expr {
                     imports [Encode.{ toEncoder, Encoding, custom }]
                     provides [main] to "./platform"
 
-                A := {}
+                A := {} has [Encoding {toEncoder}]
                 toEncoder = \@A _ -> custom \b, _ -> b
 
                 main = toEncoder { a: @A {} }
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
@@ -6721,7 +6715,7 @@ mod solve_expr {
             ),
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            Id#id(3) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
             alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             "#
             print_only_under_alias: true
@@ -6831,15 +6825,13 @@ mod solve_expr {
                     ping : a -> a | a has Bounce
                     pong : a -> a | a has Bounce
 
-                A := {} has [Bounce {ping, pong}]
+                A := {} has [Bounce {ping: pingA, pong: pongA}]
 
-                ping : A -> A
-                ping = \@A {} -> pong (@A {})
-                #^^^^{-1}        ^^^^
+                pingA = \@A {} -> pong (@A {})
+                #^^^^^{-1}        ^^^^
 
-                pong : A -> A
-                pong = \@A {} -> ping (@A {})
-                #^^^^{-1}        ^^^^
+                pongA = \@A {} -> ping (@A {})
+                #^^^^^{-1}        ^^^^
 
                 main =
                     a : A
@@ -6850,17 +6842,16 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
+        pingA : A -[[pingA(5)]]-> A
+        A#pong(6) : A -[[pongA(6)]]-> A
+        pongA : A -[[pongA(6)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
         "###
         )
     }
 
     #[test]
-    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
     fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
         infer_queries!(
             indoc!(
@@ -6889,7 +6880,7 @@ mod solve_expr {
             ),
             @r###"
         A#ping(5) : A -[[ping(5)]]-> A
-        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
         A#pong(6) : A -[[pong(6)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
@@ -7257,24 +7248,11 @@ mod solve_expr {
                 #   ^
                 "#
             ),
-            // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
-            // Two problems:
-            //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
-            //        of the type to the toplevel, but that is NOT correct here!
-            //   - 2. During solving lambda set compaction cannot happen until an entire module
-            //        is solved, which forces resolved-but-not-yet-compacted lambdas in
-            //        unspecialized lambda sets to pull the rank into a lower, non-generalized
-            //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
-            //        poorly with (1)
-            //
-            // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
-            // correctly!
-            // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : Go -[[g(8)]]-> {}
-        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        h : b -[[] + b:g(4):1]-> {} | b has G
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         h : Go -[[g(8)]]-> {}
         "###
         );
@@ -7342,6 +7320,169 @@ mod solve_expr {
         Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
         Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
         Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+                #^{-1}
+
+                f = \flag, a, b ->
+                #          ^  ^
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                            #    ^
+                    it
+                #   ^^
+
+                main = (f A (@C {}) (@D {})) (@E {})
+                #       ^
+                #       ^^^^^^^^^^^^^^^^^^^
+                #^^^^{-1}
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(8)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        E#k(10) : E -[[k(10)]]-> {}
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        f : [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
+        f A (@C {}) (@D {}) : E -[[k(10)]]-> {}
+        main : {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables_two_results() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k: kE}]
+                kE = \@E _ -> {}
+                #^^{-1}
+
+                F := {} has [K {k: kF}]
+                kF = \@F _ -> {}
+                #^^{-1}
+
+                f = \flag, a, b ->
+                #          ^  ^
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                            #    ^
+                    it
+                #   ^^
+
+                main =
+                #^^^^{-1}
+                    it =
+                #   ^^
+                        (f A (@C {}) (@D {}))
+                #        ^
+                    if True
+                        then it (@E {})
+                        #    ^^
+                        else it (@F {})
+                        #    ^^
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        kE : E -[[kE(11)]]-> {}
+        kF : F -[[kF(12)]]-> {}
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        main : {}
+        it : k -[[] + k:k(4):1]-> {} | k has K
+        f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        it : E -[[kE(11)]]-> {}
+        it : F -[[kF(12)]]-> {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_branching_over_single_variable() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [f] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+
+                f = \flag, a, c ->
+                    it =
+                        when flag is
+                            A -> j a
+                            B -> j a
+                    it c
+                #   ^^ ^
+                "#
+            ),
+            @r###"
+        it : k -[[] + j:j(2):2]-> {} | j has J, k has K
+        c : k | k has K
         "###
         );
     }

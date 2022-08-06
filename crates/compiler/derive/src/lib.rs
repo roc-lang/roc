@@ -14,8 +14,12 @@ use roc_region::all::Loc;
 use roc_types::subs::{
     copy_import_to, Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable,
 };
+use util::Env;
 
+mod decoding;
 mod encoding;
+
+mod util;
 
 pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
 
@@ -56,20 +60,23 @@ fn build_derived_body(
     derived_symbol: Symbol,
     derive_key: DeriveKey,
 ) -> (Def, SpecializationLambdaSets) {
+    let mut env = Env {
+        subs: derived_subs,
+        exposed_types: exposed_by_module,
+        derived_ident_ids,
+    };
+
     let DerivedBody {
         body,
         body_type,
         specialization_lambda_sets,
     } = match derive_key {
         DeriveKey::ToEncoder(to_encoder_key) => {
-            let mut env = encoding::Env {
-                subs: derived_subs,
-                exposed_types: exposed_by_module,
-                derived_ident_ids,
-            };
             encoding::derive_to_encoder(&mut env, to_encoder_key, derived_symbol)
         }
-        DeriveKey::Decoding => todo!(),
+        DeriveKey::Decoder(decoder_key) => {
+            decoding::derive_decoder(&mut env, decoder_key, derived_symbol)
+        }
     };
 
     let def = Def {
@@ -174,18 +181,18 @@ impl DerivedModule {
         &mut self,
         gen_subs: &mut Subs,
         should_load_def: impl Fn(Symbol) -> bool,
-    ) -> VecMap<Symbol, Expr> {
+    ) -> VecMap<Symbol, (Expr, Variable)> {
         self.map
             .values()
             .filter_map(|(symbol, def, _)| {
                 if should_load_def(*symbol) {
-                    let (_new_expr_var, new_expr) = roc_can::copy::deep_copy_expr_across_subs(
+                    let (new_expr_var, new_expr) = roc_can::copy::deep_copy_expr_across_subs(
                         &mut self.subs,
                         gen_subs,
                         def.expr_var,
                         &def.loc_expr.value,
                     );
-                    Some((*symbol, new_expr))
+                    Some((*symbol, (new_expr, new_expr_var)))
                 } else {
                     None
                 }

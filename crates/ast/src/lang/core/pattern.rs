@@ -8,7 +8,7 @@ use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
 };
 use roc_collections::all::BumpMap;
-use roc_error_macros::todo_opaques;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -272,7 +272,7 @@ pub fn to_pattern2<'a>(
             }
         }
 
-        OpaqueRef(..) => todo_opaques!(),
+        OpaqueRef(..) => internal_error!("opaques not implemented"),
 
         Apply(tag, patterns) => {
             let can_patterns = PoolVec::with_capacity(patterns.len() as u32, env.pool);

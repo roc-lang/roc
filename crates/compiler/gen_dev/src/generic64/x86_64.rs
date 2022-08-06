@@ -1264,12 +1264,12 @@ impl X86_64Assembler {
     }
 }
 const REX: u8 = 0x40;
-const REX_W: u8 = REX + 0x8;
+const REX_W: u8 = REX | 0x8;
 
 #[inline(always)]
 fn add_rm_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte + 1
+        byte | 1
     } else {
         byte
     }
@@ -1283,7 +1283,7 @@ fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 #[inline(always)]
 fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte + 4
+        byte | 4
     } else {
         byte
     }
@@ -1300,7 +1300,7 @@ fn binop_reg64_reg64(
     let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
+    buf.extend(&[rex, op_code, 0xC0 | dst_mod | src_mod]);
 }
 
 #[inline(always)]
@@ -1315,7 +1315,7 @@ fn extended_binop_reg64_reg64(
     let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
-    buf.extend(&[rex, op_code1, op_code2, 0xC0 + dst_mod + src_mod]);
+    buf.extend(&[rex, op_code1, op_code2, 0xC0 | dst_mod | src_mod]);
 }
 
 // Below here are the functions for all of the assembly instructions.
@@ -1330,7 +1330,7 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
-    buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
+    buf.extend(&[rex, 0x81, 0xC0 | dst_mod]);
     buf.extend(&imm.to_le_bytes());
 }
 
@@ -1350,13 +1350,13 @@ fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     if dst_high || src_high {
         buf.extend(&[
             0xF2,
-            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
             0x0F,
             0x58,
-            0xC0 + (dst_mod << 3) + (src_mod),
+            0xC0 | (dst_mod << 3) | (src_mod),
         ])
     } else {
-        buf.extend(&[0xF2, 0x0F, 0x58, 0xC0 + (dst_mod << 3) + (src_mod)])
+        buf.extend(&[0xF2, 0x0F, 0x58, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -1370,13 +1370,13 @@ fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     if dst_high || src_high {
         buf.extend(&[
             0x66,
-            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
             0x0F,
             0x54,
-            0xC0 + (dst_mod << 3) + (src_mod),
+            0xC0 | (dst_mod << 3) | (src_mod),
         ])
     } else {
-        buf.extend(&[0x66, 0x0F, 0x54, 0xC0 + (dst_mod << 3) + (src_mod)])
+        buf.extend(&[0x66, 0x0F, 0x54, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -1385,7 +1385,7 @@ fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
 fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
-    buf.extend(&[rex, 0x83, 0xE0 + dst_mod, imm as u8]);
+    buf.extend(&[rex, 0x83, 0xE0 | dst_mod, imm as u8]);
 }
 
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
@@ -1395,7 +1395,7 @@ fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Ge
     let rex = add_rm_extension(src, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let src_mod = src as u8 % 8;
-    buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
+    buf.extend(&[rex, 0x0F, 0x4C, 0xC0 | dst_mod | src_mod]);
 }
 
 /// `CMP r/m64,i32` -> Compare i32 to r/m64.
@@ -1404,7 +1404,7 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
-    buf.extend(&[rex, 0x81, 0xF8 + dst_mod]);
+    buf.extend(&[rex, 0x81, 0xF8 | dst_mod]);
     buf.extend(&imm.to_le_bytes());
 }
 
@@ -1452,7 +1452,7 @@ fn mov_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
-    buf.extend(&[rex, 0xC7, 0xC0 + dst_mod]);
+    buf.extend(&[rex, 0xC7, 0xC0 | dst_mod]);
     buf.extend(&imm.to_le_bytes());
 }
 
@@ -1465,7 +1465,7 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
         let rex = add_opcode_extension(dst, REX_W);
         let dst_mod = dst as u8 % 8;
         buf.reserve(10);
-        buf.extend(&[rex, 0xB8 + dst_mod]);
+        buf.extend(&[rex, 0xB8 | dst_mod]);
         buf.extend(&imm.to_le_bytes());
     }
 }
@@ -1501,7 +1501,7 @@ fn mov_base64_offset32_reg64(
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
-    buf.extend(&[rex, 0x89, 0x80 + src_mod + base_mod]);
+    buf.extend(&[rex, 0x89, 0x80 | src_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -1522,7 +1522,7 @@ fn mov_reg64_base64_offset32(
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
-    buf.extend(&[rex, 0x8B, 0x80 + dst_mod + base_mod]);
+    buf.extend(&[rex, 0x8B, 0x80 | dst_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -1543,7 +1543,7 @@ fn movzx_reg64_base8_offset32(
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(9);
-    buf.extend(&[rex, 0x0F, 0xB6, 0x80 + dst_mod + base_mod]);
+    buf.extend(&[rex, 0x0F, 0xB6, 0x80 | dst_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -1571,13 +1571,13 @@ fn raw_movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_
     if dst_high || src_high {
         buf.extend(&[
             0xF2,
-            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
             0x0F,
             0x10,
-            0xC0 + (dst_mod << 3) + (src_mod),
+            0xC0 | (dst_mod << 3) | (src_mod),
         ])
     } else {
-        buf.extend(&[0xF2, 0x0F, 0x10, 0xC0 + (dst_mod << 3) + (src_mod)])
+        buf.extend(&[0xF2, 0x0F, 0x10, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -1587,10 +1587,10 @@ fn movss_freg32_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     let dst_mod = dst as u8 % 8;
     if dst as u8 > 7 {
         buf.reserve(9);
-        buf.extend(&[0xF3, 0x44, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+        buf.extend(&[0xF3, 0x44, 0x0F, 0x10, 0x05 | (dst_mod << 3)]);
     } else {
         buf.reserve(8);
-        buf.extend(&[0xF3, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+        buf.extend(&[0xF3, 0x0F, 0x10, 0x05 | (dst_mod << 3)]);
     }
     buf.extend(&offset.to_le_bytes());
 }
@@ -1601,10 +1601,10 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     let dst_mod = dst as u8 % 8;
     if dst as u8 > 7 {
         buf.reserve(9);
-        buf.extend(&[0xF2, 0x44, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+        buf.extend(&[0xF2, 0x44, 0x0F, 0x10, 0x05 | (dst_mod << 3)]);
     } else {
         buf.reserve(8);
-        buf.extend(&[0xF2, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+        buf.extend(&[0xF2, 0x0F, 0x10, 0x05 | (dst_mod << 3)]);
     }
     buf.extend(&offset.to_le_bytes());
 }
@@ -1626,7 +1626,7 @@ fn movsd_base64_offset32_freg64(
     if src as u8 > 7 || base as u8 > 7 {
         buf.push(rex);
     }
-    buf.extend(&[0x0F, 0x11, 0x80 + src_mod + base_mod]);
+    buf.extend(&[0x0F, 0x11, 0x80 | src_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -1651,7 +1651,7 @@ fn movsd_freg64_base64_offset32(
     if dst as u8 > 7 || base as u8 > 7 {
         buf.push(rex);
     }
-    buf.extend(&[0x0F, 0x10, 0x80 + dst_mod + base_mod]);
+    buf.extend(&[0x0F, 0x10, 0x80 | dst_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -1664,7 +1664,7 @@ fn movsd_freg64_base64_offset32(
 fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let rex = add_rm_extension(reg, REX_W);
     let reg_mod = reg as u8 % 8;
-    buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
+    buf.extend(&[rex, 0xF7, 0xD8 | reg_mod]);
 }
 
 // helper function for `set*` instructions
@@ -1677,10 +1677,10 @@ fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
     match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, op_code, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, op_code, 0xC0 + reg_mod]),
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, op_code, 0xC0 | reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, op_code, 0xC0 | reg_mod]),
         R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, op_code, 0xC0 + reg_mod])
+            buf.extend(&[REX | 1, 0x0F, op_code, 0xC0 | reg_mod])
         }
     }
 
@@ -1702,7 +1702,7 @@ fn cvtsi2_help<T: RegTrait, U: RegTrait>(
     let mod1 = (dst.value() % 8) << 3;
     let mod2 = src.value() % 8;
 
-    buf.extend(&[op_code1, rex, 0x0F, op_code2, 0xC0 + mod1 + mod2])
+    buf.extend(&[op_code1, rex, 0x0F, op_code2, 0xC0 | mod1 | mod2])
 }
 
 #[inline(always)]
@@ -1716,7 +1716,7 @@ fn cvtsx2_help<T: RegTrait, V: RegTrait>(
     let mod1 = (dst.value() % 8) << 3;
     let mod2 = src.value() % 8;
 
-    buf.extend(&[op_code1, 0x0F, op_code2, 0xC0 + mod1 + mod2])
+    buf.extend(&[op_code1, 0x0F, op_code2, 0xC0 | mod1 | mod2])
 }
 
 /// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
@@ -1794,7 +1794,7 @@ fn sub_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
-    buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
+    buf.extend(&[rex, 0x81, 0xE8 | dst_mod]);
     buf.extend(&imm.to_le_bytes());
 }
 
@@ -1810,9 +1810,9 @@ fn pop_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     if reg as u8 > 7 {
         let rex = add_opcode_extension(reg, REX);
-        buf.extend(&[rex, 0x58 + reg_mod]);
+        buf.extend(&[rex, 0x58 | reg_mod]);
     } else {
-        buf.push(0x58 + reg_mod);
+        buf.push(0x58 | reg_mod);
     }
 }
 
@@ -1822,9 +1822,9 @@ fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     if reg as u8 > 7 {
         let rex = add_opcode_extension(reg, REX);
-        buf.extend(&[rex, 0x50 + reg_mod]);
+        buf.extend(&[rex, 0x50 | reg_mod]);
     } else {
-        buf.push(0x50 + reg_mod);
+        buf.push(0x50 | reg_mod);
     }
 }
 

@@ -10,7 +10,7 @@ use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::{LoadedModule, LoadingProblem, Threading};
+use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
@@ -432,14 +432,13 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let mut modules = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
-        match roc_load::load_and_typecheck(
-            &arena,
-            filename,
-            Default::default(),
-            roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
-            roc_reporting::report::RenderTarget::ColorTerminal,
-            Threading::AllAvailable,
-        ) {
+        let load_config = LoadConfig {
+            target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
+            render: roc_reporting::report::RenderTarget::ColorTerminal,
+            threading: Threading::AllAvailable,
+            exec_mode: ExecutionMode::Check,
+        };
+        match roc_load::load_and_typecheck(&arena, filename, Default::default(), load_config) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
                 eprintln!("{}", report);

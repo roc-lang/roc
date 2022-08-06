@@ -96,6 +96,23 @@ enum Test<'a> {
     },
 }
 
+impl<'a> Test<'a> {
+    fn can_be_switch(&self) -> bool {
+        match self {
+            Test::IsCtor { .. } => true,
+            Test::IsInt(_, int_width) => {
+                // llvm does not like switching on 128-bit values
+                !matches!(int_width, IntWidth::U128 | IntWidth::I128)
+            }
+            Test::IsFloat(_, _) => true,
+            Test::IsDecimal(_) => false,
+            Test::IsStr(_) => false,
+            Test::IsBit(_) => true,
+            Test::IsByte { .. } => true,
+        }
+    }
+}
+
 use std::hash::{Hash, Hasher};
 impl<'a> Hash for Test<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -1370,8 +1387,6 @@ fn test_to_equality<'a>(
         }
 
         Test::IsInt(test_int, precision) => {
-            // TODO don't downcast i128 here
-            debug_assert!(i128::from_ne_bytes(test_int) <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));
@@ -1833,7 +1848,8 @@ fn decide_to_branching<'a>(
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,
-                    other => todo!("other {:?}", other),
+                    Test::IsDecimal(_) => unreachable!("decimals cannot be switched on"),
+                    Test::IsStr(_) => unreachable!("strings cannot be switched on"),
                 };
 
                 // branch info is only useful for refcounted values
@@ -2004,15 +2020,30 @@ fn fanout_decider<'a>(
     edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
 ) -> Decider<'a, u64> {
     let fallback_decider = tree_to_decider(fallback);
-    let necessary_tests = edges
+    let necessary_tests: Vec<_> = edges
         .into_iter()
         .map(|(test, tree)| fanout_decider_help(tree, test))
         .collect();
 
-    Decider::FanOut {
-        path,
-        tests: necessary_tests,
-        fallback: Box::new(fallback_decider),
+    if necessary_tests.iter().all(|(t, _)| t.can_be_switch()) {
+        Decider::FanOut {
+            path,
+            tests: necessary_tests,
+            fallback: Box::new(fallback_decider),
+        }
+    } else {
+        // in llvm, we cannot switch on strings so must chain
+        let mut decider = fallback_decider;
+
+        for (test, branch_decider) in necessary_tests.into_iter().rev() {
+            decider = Decider::Chain {
+                test_chain: vec![(path.clone(), test)],
+                success: Box::new(branch_decider),
+                failure: Box::new(decider),
+            };
+        }
+
+        decider
     }
 }
 

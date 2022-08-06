@@ -1612,13 +1612,46 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightBy => {
-                backend.storage.load_symbols(
-                    &mut backend.code_builder,
-                    &[self.arguments[1], self.arguments[0]],
-                );
+                let bits = self.arguments[0];
+                let num = self.arguments[1];
                 match CodeGenNumType::from(self.ret_layout) {
-                    I32 => backend.code_builder.i32_shr_s(),
-                    I64 => backend.code_builder.i64_shr_s(),
+                    I32 => {
+                        // In most languages this operation is for signed numbers, but Roc defines it on all integers.
+                        // So the argument is implicitly converted to signed before the shift operator.
+                        // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
+                        let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO) as i32;
+                        if bit_width < 32 && !symbol_is_signed_int(backend, num) {
+                            // Sign-extend the number by shifting left and right again
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[num]);
+                            backend.code_builder.i32_const(32 - bit_width);
+                            backend.code_builder.i32_shl();
+                            backend.code_builder.i32_const(32 - bit_width);
+                            backend.code_builder.i32_shr_s();
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[bits]);
+
+                            // Do the actual bitshift operation
+                            backend.code_builder.i32_shr_s();
+
+                            // Restore to unsigned
+                            backend.code_builder.i32_const((1 << bit_width) - 1);
+                            backend.code_builder.i32_and();
+                        } else {
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[num, bits]);
+                            backend.code_builder.i32_shr_s();
+                        }
+                    }
+                    I64 => {
+                        backend
+                            .storage
+                            .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_shr_s();
+                    }
                     I128 => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
@@ -1626,7 +1659,7 @@ impl<'a> LowLevelCall<'a> {
             NumShiftRightZfBy => {
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
-                        // This is normally an unsigned operation, but Roc defines it on all integer types.
+                        // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
                         let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);

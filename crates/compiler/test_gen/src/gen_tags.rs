@@ -1863,3 +1863,53 @@ fn error_type_in_tag_union_payload() {
         true // ignore type errors
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3653_recursion_pointer_in_naked_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Peano := [ Zero, Succ Peano ]
+
+            recurse = \@Peano peano ->
+                when peano is
+                    Succ inner -> recurse inner
+                    _ -> {}
+
+            main =
+                when recurse (@Peano Zero) is
+                    _ -> "we're back"
+            "#
+        ),
+        RocStr::from("we're back"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Peano := [ Zero, Succ Peano ]
+
+            recurse = \peano ->
+                when peano is
+                    @Peano (Succ inner) -> recurse inner
+                    @Peano Zero -> {}
+
+            main =
+                when recurse (@Peano Zero) is
+                    _ -> "we're back"
+            "#
+        ),
+        RocStr::from("we're back"),
+        RocStr
+    )
+}

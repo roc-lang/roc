@@ -2,7 +2,7 @@ use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, UnsortedUnionLabels, Variable,
 };
-use crate::types::{name_type_var, RecordField, Uls};
+use crate::types::{name_type_var, name_type_var_with_hint, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -202,7 +202,7 @@ fn find_names_needed(
                 );
             }
         }
-        Structure(Func(arg_vars, _closure_var, ret_var)) => {
+        Structure(Func(arg_vars, closure_var, ret_var)) => {
             for index in arg_vars.into_iter() {
                 let var = subs[index];
                 find_names_needed(
@@ -214,6 +214,15 @@ fn find_names_needed(
                     find_under_alias,
                 );
             }
+
+            find_names_needed(
+                *closure_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
 
             find_names_needed(
                 *ret_var,
@@ -455,10 +464,34 @@ fn name_root(
     subs: &mut Subs,
     taken: &mut MutMap<Lowercase, Variable>,
 ) -> u32 {
-    let (generated_name, new_letters_used) =
-        name_type_var(letters_used, &mut taken.keys(), |var, str| {
+    let (generated_name, new_letters_used) = match subs.get_content_unchecked(root) {
+        Content::FlexVar(Some(name))
+        | Content::RigidVar(name)
+        | Content::FlexAbleVar(Some(name), _)
+        | Content::RigidAbleVar(name, _)
+        | Content::RecursionVar {
+            opt_name: Some(name),
+            ..
+        } => {
+            let name_hint = &subs[*name];
+            if name_hint.as_str() == "*" {
+                // Give a proper name to named wildcards!
+                name_type_var(letters_used, &mut taken.keys(), |var, str| {
+                    var.as_str() == str
+                })
+            } else {
+                let generated =
+                    name_type_var_with_hint(name_hint.as_str(), &mut taken.keys(), |var, str| {
+                        var.as_str() == str
+                    });
+
+                (generated, letters_used)
+            }
+        }
+        _ => name_type_var(letters_used, &mut taken.keys(), |var, str| {
             var.as_str() == str
-        });
+        }),
+    };
 
     taken.insert(generated_name.clone(), root);
 

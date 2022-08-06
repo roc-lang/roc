@@ -1,5 +1,3 @@
-pub use roc_load_internal::file::Threading;
-
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
@@ -11,7 +9,8 @@ use std::path::PathBuf;
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    Expectations, LoadResult, LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase,
+    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadResult, LoadStart, LoadedModule,
+    LoadingProblem, MonomorphizedModule, Phase, Threading,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -19,23 +18,11 @@ fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
-    target_info: TargetInfo,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
-    roc_load_internal::file::load(
-        arena,
-        load_start,
-        exposed_types,
-        goal_phase,
-        target_info,
-        cached_subs,
-        render,
-        threading,
-    )
+    roc_load_internal::file::load(arena, load_start, exposed_types, cached_subs, load_config)
 }
 
 /// Load using only a single thread; used when compiling to webassembly
@@ -43,9 +30,9 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
     target_info: TargetInfo,
     render: RenderTarget,
+    exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
@@ -53,10 +40,10 @@ pub fn load_single_threaded<'a>(
         arena,
         load_start,
         exposed_types,
-        goal_phase,
         target_info,
         cached_subs,
         render,
+        exec_mode,
     )
 }
 
@@ -67,23 +54,13 @@ pub fn load_and_monomorphize_from_str<'a>(
     src: &'a str,
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src, src_dir)?;
 
-    match load(
-        arena,
-        load_start,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-        render,
-        threading,
-    )? {
+    match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
     }
@@ -93,23 +70,13 @@ pub fn load_and_monomorphize(
     arena: &Bump,
     filename: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, render)?;
+    let load_start = LoadStart::from_path(arena, filename, load_config.render)?;
 
-    match load(
-        arena,
-        load_start,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-        render,
-        threading,
-    )? {
+    match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
     }
@@ -119,23 +86,13 @@ pub fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, render)?;
+    let load_start = LoadStart::from_path(arena, filename, load_config.render)?;
 
-    match load(
-        arena,
-        load_start,
-        exposed_types,
-        Phase::SolveTypes,
-        target_info,
-        render,
-        threading,
-    )? {
+    match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
@@ -161,9 +118,9 @@ pub fn load_and_typecheck_str<'a>(
         arena,
         load_start,
         exposed_types,
-        Phase::SolveTypes,
         target_info,
         render,
+        ExecutionMode::Check,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

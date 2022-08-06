@@ -13,7 +13,7 @@ mod test_reporting {
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
     use roc_can::expr::PendingDerives;
-    use roc_load::{self, LoadedModule, LoadingProblem, Threading};
+    use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
@@ -83,14 +83,14 @@ mod test_reporting {
             let full_file_path = file_path.clone();
             let mut file = File::create(file_path).unwrap();
             writeln!(file, "{}", module_src).unwrap();
-            let result = roc_load::load_and_typecheck(
-                arena,
-                full_file_path,
-                exposed_types,
-                roc_target::TargetInfo::default_x86_64(),
-                RenderTarget::Generic,
-                Threading::Single,
-            );
+            let load_config = LoadConfig {
+                target_info: roc_target::TargetInfo::default_x86_64(),
+                render: RenderTarget::Generic,
+                threading: Threading::Single,
+                exec_mode: ExecutionMode::Check,
+            };
+            let result =
+                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
             drop(file);
 
             result
@@ -1226,7 +1226,7 @@ mod test_reporting {
         // variables they can put themselves in, and to run the constraint algorithm
         // against that extra variable, rather than possibly having to translate a `Type`
         // again.
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
         I'm inferring a weird self-referential type for `f`:
@@ -1265,7 +1265,20 @@ mod test_reporting {
         infinitely.
 
             List ∞ -> List a
-        "#
+
+        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+        I'm inferring a weird self-referential type for `main`:
+
+        3│  main =
+            ^^^^
+
+        Here is my best effort at writing down the type. You will see ∞ for
+        parts of the type that repeat something already printed out
+        infinitely.
+
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
@@ -3112,7 +3125,7 @@ mod test_reporting {
         @r###"
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    The `Num` alias expects 1 type argument, but it got 2 instead:
+    The `Num` opaque expects 1 type argument, but it got 2 instead:
 
     4│      a : Num.Num Num.I64 Num.F64
                 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -3134,7 +3147,7 @@ mod test_reporting {
         @r###"
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    The `Num` alias expects 1 type argument, but it got 2 instead:
+    The `Num` opaque expects 1 type argument, but it got 2 instead:
 
     4│      f : Str -> Num.Num Num.I64 Num.F64
                        ^^^^^^^^^^^^^^^^^^^^^^^
@@ -3210,7 +3223,7 @@ mod test_reporting {
     4│      Foo a : [Foo]
                 ^
 
-    Roc does not allow unused type alias parameters!
+    Roc does not allow unused type parameters!
 
     Tip: If you want an unused type parameter (a so-called "phantom
     type"), read the guide section on phantom values.
@@ -3613,8 +3626,8 @@ mod test_reporting {
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        List
         Set
+        List
         Dict
         Result
 
@@ -10115,6 +10128,183 @@ All branches in an `if` must have the same type!
 
     It was previously claimed to be a specialization for `Id`, but was
     determined to actually specialize `Id2`!
+    "###
+    );
+
+    test_report!(
+        mismatched_record_annotation,
+        indoc!(
+            r#"
+                x : { y : Str }
+                x = {}
+
+                x
+                "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│      x : { y : Str }
+    5│      x = {}
+                ^^
+
+    The body is a record of type:
+
+        {}
+
+    But the type annotation on `x` says it should be:
+
+        { y : Str }
+
+    Tip: Looks like the y field is missing.
+    "###
+    );
+
+    test_report!(
+        cyclic_opaque,
+        indoc!(
+            r#"
+            Recursive := [Infinitely Recursive]
+
+            0
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Recursive` opaque is self-recursive in an invalid way:
+
+    4│      Recursive := [Infinitely Recursive]
+            ^^^^^^^^^
+
+    Recursion in opaquees is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        derive_decoding_for_function,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A a := a -> a has [Decode.Decoding]
+            "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+
+    3│  A a := a -> a has [Decode.Decoding]
+                           ^^^^^^^^^^^^^^^
+
+    Note: `Decoding` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_decoding_for_non_decoding_opaque,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A := B has [Decode.Decoding]
+
+            B := {}
+            "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+
+    3│  A := B has [Decode.Decoding]
+                    ^^^^^^^^^^^^^^^
+
+    Tip: `B` does not implement `Decoding`. Consider adding a custom
+    implementation or `has Decode.Decoding` to the definition of `B`.
+
+    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_decoding_for_other_has_decoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [A] to "./platform"
+
+            A := B has [Decode.Decoding]
+
+            B := {} has [Decode.Decoding]
+            "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_decoding_for_recursive_deriving,
+        indoc!(
+            r#"
+            app "test" imports [Decode] provides [MyNat] to "./platform"
+
+            MyNat := [S MyNat, Z] has [Decode.Decoding]
+            "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        function_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (a -> a) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        a -> a
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        #[ignore = "needs structural deriving to be turned on first"]
+        nested_opaque_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            A : {}
+            main =
+                myDecoder : Decoder {x : A} fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
     "###
     );
 }

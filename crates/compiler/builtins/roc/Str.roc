@@ -334,7 +334,7 @@ lastMatch : Str, Str -> [Some Nat, None]
 lastMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
-    lastPossibleIndex = Num.subSaturated haystackLength (needleLength + 1)
+    lastPossibleIndex = Num.subSaturated haystackLength needleLength
 
     lastMatchHelp haystack needle lastPossibleIndex
 

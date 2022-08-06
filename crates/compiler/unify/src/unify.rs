@@ -100,6 +100,10 @@ bitflags! {
         ///
         /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
         const PRESENT = 1 << 1;
+        /// Like [`Mode::EQ`], but also instructs the unifier that the ambient lambda set
+        /// specialization algorithm is running. This has implications for the unification of
+        /// unspecialized lambda sets; see [`unify_unspecialized_lambdas`].
+        const LAMBDA_SET_SPECIALIZATION = Mode::EQ.bits | (1 << 2);
     }
 }
 
@@ -112,6 +116,11 @@ impl Mode {
     fn is_present(&self) -> bool {
         debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
         self.contains(Mode::PRESENT)
+    }
+
+    fn is_lambda_set_specialization(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::LAMBDA_SET_SPECIALIZATION)
     }
 
     fn as_eq(self) -> Self {
@@ -671,46 +680,95 @@ fn unify_two_aliases<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
-    // _symbol has an underscore because it's unused in --release builds
-    _symbol: Symbol,
+    kind: AliasKind,
+    symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
     other_args: AliasVariables,
     other_real_var: Variable,
-    other_content: &Content,
 ) -> Outcome<M> {
     if args.len() == other_args.len() {
         let mut outcome = Outcome::default();
-        let it = args
-            .all_variables()
+
+        let args_it = args
+            .type_variables()
             .into_iter()
-            .zip(other_args.all_variables().into_iter());
+            .zip(other_args.type_variables().into_iter());
 
-        let length_before = env.subs.len();
+        let lambda_set_it = args
+            .lambda_set_variables()
+            .into_iter()
+            .zip(other_args.lambda_set_variables().into_iter());
 
-        for (l, r) in it {
+        let mut merged_args = Vec::with_capacity(args.type_variables().len());
+        let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
+        debug_assert_eq!(
+            merged_args.capacity() + merged_lambda_set_args.capacity(),
+            args.all_variables_len as _
+        );
+
+        for (l, r) in args_it {
             let l_var = env.subs[l];
             let r_var = env.subs[r];
             outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_args.push(merged_var);
+        }
+
+        for (l, r) in lambda_set_it {
+            let l_var = env.subs[l];
+            let r_var = env.subs[r];
+            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_lambda_set_args.push(merged_var);
         }
 
         if outcome.mismatches.is_empty() {
-            outcome.union(merge(env, ctx, *other_content));
-        }
+            // Even if there are no changes to alias arguments, and no new variables were
+            // introduced, we may still need to unify the "actual types" of the alias or opaque!
+            //
+            // The unification is not necessary from a types perspective (and in fact, we may want
+            // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
+            // which expects identical types to be reflected in the same variable.
+            //
+            // As a concrete example, consider the unification of two opaques
+            //
+            //   P := [Zero, Succ P]
+            //
+            //   (@P (Succ n)) ~ (@P (Succ o))
+            //
+            // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
+            // But if we do not unify the types of `n` and `o`, which are recursion variables, they
+            // will remain disjoint! Currently, the implication of this is that they will be seen
+            // to have separate recursive memory layouts in the monomorphizer - which is no good
+            // for our compilation model.
+            //
+            // As such, always unify the real vars.
 
-        let length_after = env.subs.len();
+            // Don't report real_var mismatches, because they must always be surfaced higher, from
+            // the argument types.
+            let mut real_var_outcome =
+                unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
+            let _ = real_var_outcome.mismatches.drain(..);
+            outcome.union(real_var_outcome);
 
-        let args_unification_had_changes = length_after != length_before;
+            let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
 
-        if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
-            // We need to unify the real vars because unification of type variables
-            // may have made them larger, which then needs to be reflected in the `real_var`.
-            outcome.union(unify_pool(env, pool, real_var, other_real_var, ctx.mode));
+            // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
+            // the merged vars are all left, avoid re-insertion. Is checking for argument slice
+            // equality faster than re-inserting?
+            let merged_variables =
+                AliasVariables::insert_into_subs(env.subs, merged_args, merged_lambda_set_args);
+            let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
+
+            outcome.union(merge(env, ctx, merged_content));
         }
 
         outcome
     } else {
-        mismatch!("{:?}", _symbol)
+        mismatch!("{:?}", symbol)
     }
 }
 
@@ -744,12 +802,12 @@ fn unify_alias<M: MetaCollector>(
                     env,
                     pool,
                     ctx,
+                    AliasKind::Structural,
                     symbol,
                     args,
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 unify_pool(env, pool, real_var, *other_real_var, ctx.mode)
@@ -813,12 +871,12 @@ fn unify_opaque<M: MetaCollector>(
                     env,
                     pool,
                     ctx,
+                    AliasKind::Opaque,
                     symbol,
                     args,
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 mismatch!("{:?}", symbol)
@@ -1049,6 +1107,7 @@ struct SeparatedUnionLambdas {
 fn separate_union_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
+    mode: Mode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> (Outcome<M>, SeparatedUnionLambdas) {
@@ -1157,7 +1216,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                             maybe_mark_union_recursive(env, var1);
                             maybe_mark_union_recursive(env, var2);
 
-                            let outcome = unify_pool(env, pool, var1, var2, Mode::EQ);
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
 
                             if !outcome.mismatches.is_empty() {
                                 env.subs.rollback_to(snapshot);
@@ -1198,64 +1257,292 @@ fn separate_union_lambdas<M: MetaCollector>(
     )
 }
 
+/// ULS-SORT-ORDER:
+///   - Arrange into partitions of (_, member, region), in ascending order of (member, region).
+///   - Within each partition, place flex-able vars at the end of the partition.
+///   - Amongst all flex-able vars, sort by their root key, so that identical vars are next to each other.
+#[inline(always)]
+fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cmp::Ordering {
+    let Uls(var1, sym1, region1) = uls1;
+    let Uls(var2, sym2, region2) = uls2;
+
+    use std::cmp::Ordering::*;
+    use Content::*;
+    match (sym1, region1).cmp(&(sym2, region2)) {
+        Equal => {
+            match (
+                subs.get_content_without_compacting(var1),
+                subs.get_content_without_compacting(var2),
+            ) {
+                (FlexAbleVar(..) | RigidAbleVar(..), FlexAbleVar(..) | RigidAbleVar(..)) => subs
+                    .get_root_key_without_compacting(var1)
+                    .cmp(&subs.get_root_key_without_compacting(var2)),
+                (FlexVar(..) | RigidVar(..), _) | (_, FlexVar(..) | RigidVar(..)) => {
+                    internal_error!("unexpected variable type in unspecialized lambda set!")
+                }
+                (FlexAbleVar(..), _) => Greater,
+                (_, FlexAbleVar(..)) => Less,
+                // For everything else, the order is irrelevant
+                (_, _) => Less,
+            }
+        }
+        ord => ord,
+    }
+}
+
+#[inline(always)]
+fn sort_unspecialized_lambda_sets(subs: &Subs, mut uls: Vec<Uls>) -> Vec<Uls> {
+    uls.sort_by(|&uls1, &uls2| unspecialized_lambda_set_sorter(subs, uls1, uls2));
+    uls
+}
+
+#[inline(always)]
+fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
+    uls == sort_unspecialized_lambda_sets(subs, uls.to_vec())
+}
+
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    uls1: SubsSlice<Uls>,
-    uls2: SubsSlice<Uls>,
+    mode: Mode,
+    uls_left: SubsSlice<Uls>,
+    uls_right: SubsSlice<Uls>,
 ) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
-    // For now we merge all variables of unspecialized lambdas in a lambda set that share the same
-    // ability member/region.
-    // See the section "A property that's lost, and how we can hold on to it" of
-    // solve/docs/ambient_lambda_set_specialization.md to see how we can loosen this restriction.
-
     // Note that we don't need to update the bookkeeping of variable -> lambda set to be resolved,
     // because if we had v1 -> lset1, and now lset1 ~ lset2, then afterward either lset1 still
     // resolves to itself or re-points to lset2.
     // In either case the merged unspecialized lambda sets will be there.
-    match (uls1.is_empty(), uls2.is_empty()) {
-        (true, true) => Ok((SubsSlice::default(), Default::default())),
-        (false, true) => Ok((uls1, Default::default())),
-        (true, false) => Ok((uls2, Default::default())),
-        (false, false) => {
-            let mut all_uls = (env.subs.get_subs_slice(uls1).iter())
-                .chain(env.subs.get_subs_slice(uls2))
-                .map(|&Uls(var, sym, region)| {
-                    // Take the root key to deduplicate
-                    Uls(env.subs.get_root_key_without_compacting(var), sym, region)
-                })
-                .collect::<Vec<_>>();
-            // Arrange into partitions of (_, member, region).
-            all_uls.sort_by_key(|&Uls(_, sym, region)| (sym, region));
+    let (uls_left, uls_right) = match (uls_left.is_empty(), uls_right.is_empty()) {
+        (true, true) => return Ok((SubsSlice::default(), Default::default())),
+        (false, true) => return Ok((uls_left, Default::default())),
+        (true, false) => return Ok((uls_right, Default::default())),
+        (false, false) => (
+            env.subs.get_subs_slice(uls_left).to_vec(),
+            env.subs.get_subs_slice(uls_right).to_vec(),
+        ),
+    };
 
-            // Now merge the variables of unspecialized lambdas pointing to the same
-            // member/region.
-            let mut whole_outcome = Outcome::default();
-            let mut j = 1;
-            while j < all_uls.len() {
-                let i = j - 1;
-                let Uls(var_i, sym_i, region_i) = all_uls[i];
-                let Uls(var_j, sym_j, region_j) = all_uls[j];
-                if sym_i == sym_j && region_i == region_j {
-                    let outcome = unify_pool(env, pool, var_i, var_j, Mode::EQ);
-                    if !outcome.mismatches.is_empty() {
-                        return Err(outcome);
+    // Unfortunately, it is not an invariant that `uls_left` and `uls_right` obey ULS-SORT-ORDER before
+    // merging.
+    //
+    // That's because flex-able variables in unspecialized lambda sets may be unified at any time,
+    // and unification of flex-able variables may change their root keys, which ULS-SORT-ORDER
+    // considers.
+    //
+    // As such, we must sort beforehand. In practice these sets are very, very small (<5 elements).
+    let uls_left = sort_unspecialized_lambda_sets(env.subs, uls_left);
+    let uls_right = sort_unspecialized_lambda_sets(env.subs, uls_right);
+
+    let (mut uls_left, mut uls_right) = (uls_left.iter().peekable(), uls_right.iter().peekable());
+    let mut merged_uls = Vec::with_capacity(uls_left.len() + uls_right.len());
+    let mut whole_outcome = Outcome::default();
+
+    loop {
+        let (uls_l, uls_r) = match (uls_left.peek(), uls_right.peek()) {
+            (Some(uls_l), Some(uls_r)) => (**uls_l, **uls_r),
+            (Some(_), None) => {
+                merged_uls.push(*uls_left.next().unwrap());
+                continue;
+            }
+            (None, Some(_)) => {
+                merged_uls.push(*uls_right.next().unwrap());
+                continue;
+            }
+            (None, None) => break,
+        };
+
+        let Uls(var_l, sym_l, region_l) = uls_l;
+        let Uls(var_r, sym_r, region_r) = uls_r;
+
+        use std::cmp::Ordering::*;
+        match (sym_l, region_l).cmp(&(sym_r, region_r)) {
+            Less => {
+                // Left needs to catch up to right, add it to the merged lambdas.
+                merged_uls.push(*uls_left.next().unwrap());
+            }
+            Greater => {
+                // Right needs to catch up to left, add it to the merged lambdas.
+                merged_uls.push(*uls_right.next().unwrap());
+            }
+            Equal => {
+                // The interesting case - both point to the same specialization.
+                use Content::*;
+                match (
+                    env.subs.get_content_without_compacting(var_l),
+                    env.subs.get_content_without_compacting(var_r),
+                ) {
+                    (FlexAbleVar(..) | RigidAbleVar(..), FlexAbleVar(..) | RigidAbleVar(..)) => {
+                        // If the types are root-equivalent, de-duplicate them.
+                        //
+                        // Otherwise, the type variables are disjoint, and we want to keep both
+                        // of them, for purposes of disjoint variable lambda specialization.
+                        //
+                        // For more information, see "A Property that’s lost, and how we can hold on to it"
+                        // in solve/docs/ambient_lambda_set_specialization.md.
+
+                        if env.subs.equivalent_without_compacting(var_l, var_r) {
+                            //     ... a1    ...
+                            //     ... b1=a1 ...
+                            // =>  ... a1    ...
+                            //
+                            // Keep the one on the left, drop the one on the right.
+                            //
+                            // Then progress both, because the invariant tells us they must be
+                            // disjoint, and if there were any concrete variables, they would have
+                            // appeared earlier.
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
+                        } else if mode.is_lambda_set_specialization() {
+                            //     ... a1    ...
+                            //     ... b1    ...
+                            // =>  ... a1=b1 ...
+                            //
+                            // If we're in the process of running the ambient lambda set
+                            // specialization procedure, disjoint type variables being merged from
+                            // the left and right lists are treated specially!
+                            //
+                            // In particular, we are unifying a local list of lambda sets, for
+                            // which the specialization is for (on the left), with specialization
+                            // lambda sets, which have just been freshened (on the right).
+                            //
+                            //     [ ..  a:lam:1 ] (local, undergoing specialization)
+                            //     [ .. a':lam:1 ] (specialization lambda sets, just freshened)
+                            //
+                            // Because the specialization lambdas are freshened, they certainly are
+                            // disjoint from the local lambdas - but they may be equivalent in
+                            // principle, from the perspective of a human looking at the
+                            // unification!
+                            //
+                            // Running with the example above, the specialization lambda set has an
+                            // unspecialized lambda `a':lam:1`. Now, this is disjoint from
+                            // `a:lam:1` in the local lambda set, from the purely technical
+                            // perspective that `a' != a`.
+                            //
+                            // But, in expected function, they **should not** be treated as disjoint!
+                            // In this case, the specialization lambda is not introducing any new
+                            // information, and is targeting exactly the local lambda `a:lam:1`.
+                            //
+                            // So, to avoid introducing superfluous variables, we unify these disjoint
+                            // variables once, and then progress on both sides. We progress on both
+                            // sides to avoid unifying more than what we should in our principle.
+                            //
+                            // It doesn't matter which side we choose to progress on, since after
+                            // unification of flex vars roots are equivalent. So, choose the left
+                            // side.
+                            //
+                            // See the ambient lambda set specialization document for more details.
+                            let outcome = unify_pool(env, pool, var_l, var_r, mode);
+                            if !outcome.mismatches.is_empty() {
+                                return Err(outcome);
+                            }
+                            whole_outcome.union(outcome);
+
+                            debug_assert!(env.subs.equivalent_without_compacting(var_l, var_r));
+
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
+                        } else {
+                            //     ... a1     ...
+                            //     ... b1     ...
+                            // =>  ... a1, b1 ...
+                            //
+                            // Keep both. But, we have to be careful about how we do this -
+                            // immediately add the one with the lower root, and advance that side;
+                            // keep the other as-is, because the next variable on the advanced side
+                            // might be lower than the current non-advanced variable. For example:
+                            //
+                            //     ... 640 645 ...
+                            //     ... 670 ...
+                            //
+                            // we want to add `640` to the merged list and advance to
+                            //
+                            //     ... 645 ...
+                            //     ... 670 ...
+                            //
+                            // rather than adding both `640` and `670`, and skipping the comparison
+                            // of `645` with `670`.
+                            //
+                            // An important thing to notice is that we *don't* want to advance
+                            // both sides, because if these two variables are disjoint, then
+                            // advancing one side *might* make the next comparison be between
+                            // equivalent variables, for example in a case like
+                            //
+                            //     ... 640 670 ...
+                            //     ... 670 ...
+                            //
+                            // In the above case, we certainly only want to advance the left side!
+                            if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
+                                let kept = uls_left.next().unwrap();
+                                merged_uls.push(*kept);
+                            } else {
+                                let kept = uls_right.next().unwrap();
+                                merged_uls.push(*kept);
+                            }
+                        }
                     }
-                    whole_outcome.union(outcome);
-                    // Keep the Uls in position `i` and remove the one in position `j`.
-                    all_uls.remove(j);
-                } else {
-                    // Keep both Uls, look at the next one.
-                    j += 1;
+                    (FlexAbleVar(..) | RigidAbleVar(..), _) => {
+                        //     ... a1       ...
+                        //     ... {foo: _} ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance the merged flex var.
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_right.next().unwrap();
+                    }
+                    (_, FlexAbleVar(..) | RigidAbleVar(..)) => {
+                        //     ... {foo: _} ...
+                        //     ... a1       ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance the merged flex var.
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_left.next().unwrap();
+                    }
+                    (_, _) => {
+                        //     ... {foo: _} ...
+                        //     ... {foo: _} ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance one.
+                        // (the choice is arbitrary, so we choose the left)
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_left.next().unwrap();
+                    }
                 }
             }
-
-            Ok((
-                SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, all_uls),
-                whole_outcome,
-            ))
         }
     }
+
+    debug_assert!(
+        is_sorted_unspecialized_lamba_set_list(env.subs, &merged_uls),
+        "merging of unspecialized lambda sets does not preserve sort! {:?}",
+        merged_uls
+    );
+
+    Ok((
+        SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, merged_uls),
+        whole_outcome,
+    ))
 }
 
 fn unify_lambda_set_help<M: MetaCollector>(
@@ -1300,7 +1587,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
             only_in_right,
             joined,
         },
-    ) = separate_union_lambdas(env, pool, solved1, solved2);
+    ) = separate_union_lambdas(env, pool, ctx.mode, solved1, solved2);
 
     let all_lambdas = joined
         .into_iter()
@@ -1327,7 +1614,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
         (None, None) => OptVariable::NONE,
     };
 
-    let merged_unspecialized = match unify_unspecialized_lambdas(env, pool, uls1, uls2) {
+    let merged_unspecialized = match unify_unspecialized_lambdas(env, pool, ctx.mode, uls1, uls2) {
         Ok((merged, outcome)) => {
             whole_outcome.union(outcome);
             merged
@@ -1954,6 +2241,46 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
     }
 }
 
+fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
+    // If one of the variables is a recursion var, keep that one, so that we avoid inlining
+    // a recursive tag union type content where we should have a recursion var instead.
+    //
+    // When might this happen? For example, in the code
+    //
+    //   Indirect : [Indirect ConsList]
+    //
+    //   ConsList : [Nil, Cons Indirect]
+    //
+    //   l : ConsList
+    //   l = Cons (Indirect (Cons (Indirect Nil)))
+    //   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+    //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+    //   l
+    //
+    // Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
+    // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+    // we might have that e.g. `actual` is `<rec>` and `expected` is `[Cons (Indirect ...)]`.
+    //
+    // Now, we need to be careful to set the type we choose to represent the merged type
+    // here to be `<rec>`, not the tag union content of `expected`! Otherwise, we will
+    // have lost a recursion variable in the recursive tag union.
+    //
+    // This would not be incorrect from a type perspective, but causes problems later on for e.g.
+    // layout generation, which expects recursion variables to be placed correctly. Attempting to detect
+    // this during layout generation does not work so well because it may be that there *are* recursive
+    // tag unions that should be inlined, and not pass through recursion variables. So instead, resolve
+    // these cases here.
+    //
+    // See tests labeled "issue_2810" for more examples.
+    match (
+        (var1, subs.get_content_unchecked(var1)),
+        (var2, subs.get_content_unchecked(var2)),
+    ) {
+        ((var, Content::RecursionVar { .. }), _) | (_, (var, Content::RecursionVar { .. })) => var,
+        _ => var1,
+    }
+}
+
 fn unify_shared_tags_new<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2014,44 +2341,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
             outcome.union(unify_pool(env, pool, actual, expected, ctx.mode));
 
             if outcome.mismatches.is_empty() {
-                // If one of the variables is a recursion var, keep that one, so that we avoid inlining
-                // a recursive tag union type content where we should have a recursion var instead.
-                //
-                // When might this happen? For example, in the code
-                //
-                //   Indirect : [Indirect ConsList]
-                //
-                //   ConsList : [Nil, Cons Indirect]
-                //
-                //   l : ConsList
-                //   l = Cons (Indirect (Cons (Indirect Nil)))
-                //   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
-                //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
-                //   l
-                //
-                // Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
-                // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
-                // we might have that e.g. `actual` is `<rec>` and `expected` is `[Cons (Indirect ...)]`.
-                //
-                // Now, we need to be careful to set the type we choose to represent the merged type
-                // here to be `<rec>`, not the tag union content of `expected`! Otherwise, we will
-                // have lost a recursion variable in the recursive tag union.
-                //
-                // This would not be incorrect from a type perspective, but causes problems later on for e.g.
-                // layout generation, which expects recursion variables to be placed correctly. Attempting to detect
-                // this during layout generation does not work so well because it may be that there *are* recursive
-                // tag unions that should be inlined, and not pass through recursion variables. So instead, resolve
-                // these cases here.
-                //
-                // See tests labeled "issue_2810" for more examples.
-                let merged_var = match (
-                    (actual, env.subs.get_content_unchecked(actual)),
-                    (expected, env.subs.get_content_unchecked(expected)),
-                ) {
-                    ((var, Content::RecursionVar { .. }), _)
-                    | (_, (var, Content::RecursionVar { .. })) => var,
-                    _ => actual,
-                };
+                let merged_var = choose_merged_var(env.subs, actual, expected);
 
                 matching_vars.push(merged_var);
             }

@@ -3999,9 +3999,10 @@ pub fn with_hole<'a>(
             }
 
             // creating a record from the var will unpack it if it's just a single field.
-            let layout = layout_cache
-                .from_var(env.arena, record_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
+                Ok(layout) => layout,
+                Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
+            };
 
             let field_symbols = field_symbols.into_bump_slice();
 
@@ -4915,14 +4916,12 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = env.abilities.with_module_abilities_store(env.home, |store|
-                                        resolve_ability_specialization(env.subs, store, member, fn_var)
-                                            .expect("Recorded as an ability member, but it doesn't have a specialization")
-                                    );
+                                    let resolved_proc = resolve_ability_specialization(env.home, env.subs, &env.abilities, member, fn_var)
+                                            .expect("Recorded as an ability member, but it doesn't have a specialization");
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
-                                        Resolved::NeedsGenerated => {
+                                        Resolved::NeedsGenerated(_) => {
                                             todo_abilities!("Generate impls for structural types")
                                         }
                                     };
@@ -5226,17 +5225,41 @@ fn late_resolve_ability_specialization<'a>(
         env.subs[spec_symbol_index]
     } else {
         // Otherwise, resolve by checking the able var.
-        let specialization = env
-            .abilities
-            .with_module_abilities_store(env.home, |store| {
-                resolve_ability_specialization(env.subs, store, member, specialization_var)
-                    .expect("Ability specialization is unknown - code generation cannot proceed!")
-            });
+        let specialization = resolve_ability_specialization(
+            env.home,
+            env.subs,
+            &env.abilities,
+            member,
+            specialization_var,
+        )
+        .expect("Ability specialization is unknown - code generation cannot proceed!");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
-            Resolved::NeedsGenerated => {
-                todo_abilities!("Generate impls for structural types")
+            Resolved::NeedsGenerated(var) => {
+                let derive_key = roc_derive_key::Derived::builtin(
+                    member.try_into().expect("derived symbols must be builtins"),
+                    env.subs,
+                    var,
+                )
+                .expect("specialization var not derivable!");
+
+                match derive_key {
+                    roc_derive_key::Derived::Immediate(imm) => {
+                        // The immediate is an ability member itself, so it must be resolved!
+                        late_resolve_ability_specialization(env, imm, None, specialization_var)
+                    }
+                    roc_derive_key::Derived::Key(derive_key) => {
+                        let mut derived_module = env
+                            .derived_module
+                            .lock()
+                            .expect("derived module unavailable");
+
+                        derived_module
+                            .get_or_insert(env.exposed_by_module, derive_key)
+                            .0
+                    }
+                }
             }
         }
     }
@@ -8957,7 +8980,7 @@ impl NumLiteral {
     fn to_pattern(&self) -> Pattern<'static> {
         match *self {
             NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
-            NumLiteral::U128(_) => todo!(),
+            NumLiteral::U128(n) => Pattern::IntLiteral(n, IntWidth::U128),
             NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
             NumLiteral::Decimal(n) => Pattern::DecimalLiteral(n),
         }

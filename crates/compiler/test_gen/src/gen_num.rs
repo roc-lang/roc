@@ -2004,25 +2004,22 @@ fn shift_left_by() {
 fn shift_right_by() {
     // Sign Extended Right Shift
 
-    let is_wasm = cfg!(feature = "gen-wasm");
     let is_llvm_release_mode = cfg!(feature = "gen-llvm") && !cfg!(debug_assertions);
 
     // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
-    if !is_wasm {
-        assert_evals_to!(
-            "Num.shiftRightBy 2 (Num.toI8 0b1100_0000u8)",
-            0b1111_0000u8 as i8,
-            i8
-        );
-        assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
-        assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
-        assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
-        assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
+    assert_evals_to!(
+        "Num.shiftRightBy 2 (Num.toI8 0b1100_0000u8)",
+        0b1111_0000u8 as i8,
+        i8
+    );
+    assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
+    assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
 
-        // LLVM in release mode returns 0 instead of -1 for some reason
-        if !is_llvm_release_mode {
-            assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
-        }
+    // LLVM in release mode returns 0 instead of -1 for some reason
+    if !is_llvm_release_mode {
+        assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
     }
     assert_evals_to!("Num.shiftRightBy 0 12", 12, i64);
     assert_evals_to!("Num.shiftRightBy 1 12", 6, i64);
@@ -2647,7 +2644,7 @@ fn is_multiple_of_signed() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn is_multiple_of_unsigned() {
     // true
     assert_evals_to!("Num.isMultipleOf 5u8 1", true, bool);
@@ -3649,5 +3646,72 @@ fn promote_u128_number_layout() {
         ),
         170141183460469231731687303715884105729,
         u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_decimals() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 42.42dec is
+                42.42 -> 42
+                0.05 -> 1
+                3.14 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 42.42dec is
+                0.05 -> 1
+                3.14 -> 2
+                _ -> 4
+            "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 1701411834604692317316873037158841057i128 is
+                1701411834604692317316873037158841057 -> 42
+                32 -> 1
+                64 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 170141183460469231731687303715884105728u128 is
+                170141183460469231731687303715884105728u128 -> 42
+                32 -> 1
+                64 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
     );
 }

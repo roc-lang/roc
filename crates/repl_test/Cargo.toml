@@ -1,7 +1,9 @@
 [package]
 edition = "2021"
 name = "repl_test"
-version = "0.1.0"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [build-dependencies]
 roc_cli = {path = "../cli"}

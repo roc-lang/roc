@@ -866,7 +866,7 @@ where
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
+            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }

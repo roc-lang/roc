@@ -6,7 +6,7 @@ license = "UPL-1.0"
 name = "roc_std"
 readme = "README.md"
 repository = "https://github.com/rtfeldman/roc"
-version = "0.1.0"
+version = "0.0.1"
 
 [dependencies]
 static_assertions = "1.1.0"
