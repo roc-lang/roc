@@ -146,11 +146,11 @@ impl Types {
                         }
                     }
                     (
-                        NonNullableUnwrapped {
-                            content: content_a, ..
+                        RecursiveSingleTag {
+                            payload: content_a, ..
                         },
-                        NonNullableUnwrapped {
-                            content: content_b, ..
+                        RecursiveSingleTag {
+                            payload: content_b, ..
                         },
                     ) => content_a == content_b,
                     (
@@ -206,8 +206,8 @@ impl Types {
                     | (_, NonRecursive { .. })
                     | (Recursive { .. }, _)
                     | (_, Recursive { .. })
-                    | (NonNullableUnwrapped { .. }, _)
-                    | (_, NonNullableUnwrapped { .. })
+                    | (RecursiveSingleTag { .. }, _)
+                    | (_, RecursiveSingleTag { .. })
                     | (NullableUnwrapped { .. }, _)
                     | (_, NullableUnwrapped { .. }) => false,
                 }
@@ -540,7 +540,11 @@ pub enum RocTagUnion {
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-    NonNullableUnwrapped { name: String, content: TypeId },
+    RecursiveSingleTag {
+        name: String,
+        tag_name: String,
+        payload: TypeId,
+    },
 
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison

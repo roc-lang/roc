@@ -245,7 +245,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     types,
                     impls,
                 ),
-                RocTagUnion::NonNullableUnwrapped { .. } => {
+                RocTagUnion::RecursiveSingleTag { .. } => {
                     todo!();
                 }
                 RocTagUnion::NonRecursiveSingleTag {
@@ -1416,7 +1416,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
-        | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
+        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag { name, .. }) => name.clone(),
         RocType::RecursivePointer(content) => type_name(*content, types),
         RocType::Function { name, .. } => name.clone(),
     }
@@ -2041,7 +2041,7 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocBox(_)
-        | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. })
+        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag { .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
         | RocType::TagUnion(RocTagUnion::Recursive { .. })
@@ -2124,7 +2124,9 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             non_null_payload: content,
             ..
         })
-        | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
+        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag {
+            payload: content, ..
+        })
         | RocType::RecursivePointer(content) => {
             if do_not_recurse.contains(content) {
                 false
