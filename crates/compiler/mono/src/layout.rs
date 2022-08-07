@@ -472,10 +472,13 @@ impl<'a> UnionLayout<'a> {
         tags.len() < target_info.ptr_width() as usize
     }
 
+    pub const POINTER_MASK_32BIT: usize = 0b0000_0111;
+    pub const POINTER_MASK_64BIT: usize = 0b0000_0011;
+
     pub fn tag_id_pointer_bits_and_mask(target_info: TargetInfo) -> (usize, usize) {
         match target_info.ptr_width() {
-            PtrWidth::Bytes8 => (3, 0b0000_0111),
-            PtrWidth::Bytes4 => (2, 0b0000_0011),
+            PtrWidth::Bytes8 => (3, Self::POINTER_MASK_64BIT),
+            PtrWidth::Bytes4 => (2, Self::POINTER_MASK_32BIT),
         }
     }
 

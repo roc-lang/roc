@@ -190,6 +190,15 @@ impl ReplAppMemory for CliMemory {
         let reference: &RocStr = unsafe { std::mem::transmute(addr) };
         reference.as_str()
     }
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        let addr_with_id = self.deref_usize(addr);
+        let tag_id_mask = 0b111;
+
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as _, data_addr as _)
+    }
 }
 
 pub fn mono_module_to_dylib<'a>(

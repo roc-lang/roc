@@ -62,6 +62,14 @@ impl ReplAppMemory for ExpectMemory {
             }
         }
     }
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        // because addr is an index/offset, we cannot use the low bits
+        let tag_id = self.deref_u32(addr);
+        let offset = self.deref_u32(addr + 4);
+
+        (tag_id as _, offset as _)
+    }
 }
 
 pub(crate) struct ExpectReplApp<'a> {

@@ -336,7 +336,7 @@ mod test {
     }
 
     #[test]
-    fn lookup_result() {
+    fn lookup_copy_result() {
         run_expect_test(
             indoc!(
                 r#"
@@ -370,6 +370,50 @@ mod test {
 
                 expected : Result I64 [OutOfBounds]*
                 expected = Ok 42
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lookup_clone_result() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a : Result Str Str
+                    a = Ok "foo"
+
+                    b : Result Str Str
+                    b = Err "bar"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 5│>  expect
+                 6│>      a : Result Str Str
+                 7│>      a = Ok "foo"
+                 8│>
+                 9│>      b : Result Str Str
+                10│>      b = Err "bar"
+                11│>
+                12│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Result Str Str
+                a = Ok "foo"
+
+                b : Result Str Str
+                b = Err "bar"
                 "#
             ),
         );
@@ -594,6 +638,198 @@ mod test {
 
                 b : [Err Str]a
                 b = Err "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn linked_list() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                ConsList a : [ Nil, Cons a (ConsList a) ]
+
+                cons = \list, x -> Cons x list
+
+                expect
+                    a : ConsList Str
+                    a = Nil
+
+                    b : ConsList Str
+                    b = Nil
+                        |> cons "Astra mortemque praestare gradatim"
+                        |> cons "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 9│>  expect
+                10│>      a : ConsList Str
+                11│>      a = Nil
+                12│>
+                13│>      b : ConsList Str
+                14│>      b = Nil
+                15│>          |> cons "Astra mortemque praestare gradatim"
+                16│>          |> cons "Profundum et fundamentum"
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : ConsList Str
+                a = Nil
+
+                b : ConsList Str
+                b = Cons "Profundum et fundamentum" (Cons "Astra mortemque praestare gradatim" Nil)
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn nullable_tree() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                Tree a : [ Empty, Leaf a, Node (Tree a) (Tree a) ]
+
+                cons = \list, x -> Cons x list
+
+                expect
+                    a : Tree Str
+                    a = Leaf "Astra mortemque praestare gradatim"
+
+                    b : Tree Str
+                    b = Node Empty Empty
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 9│>  expect
+                10│>      a : Tree Str
+                11│>      a = Leaf "Astra mortemque praestare gradatim"
+                12│>
+                13│>      b : Tree Str
+                14│>      b = Node Empty Empty
+                15│>
+                16│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Tree Str
+                a = Leaf "Astra mortemque praestare gradatim"
+
+                b : Tree Str
+                b = Node Empty Empty
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn recursive_tree() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                Tree a : [ Leaf a, Node (Tree a) (Tree a) ]
+
+                expect
+                    a : Tree Str
+                    a = Leaf "Astra mortemque praestare gradatim"
+
+                    b : Tree Str
+                    b = Node (Leaf "a") (Leaf "b")
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      a : Tree Str
+                 9│>      a = Leaf "Astra mortemque praestare gradatim"
+                10│>
+                11│>      b : Tree Str
+                12│>      b = Node (Leaf "a") (Leaf "b")
+                13│>
+                14│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Tree Str
+                a = Leaf "Astra mortemque praestare gradatim"
+
+                b : Tree Str
+                b = Node (Leaf "a") (Leaf "b")
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn rose_tree() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                RoseTree a : [Tree a (List (RoseTree a))]
+
+                expect
+                    a : RoseTree Str
+                    a = Tree "Astra mortemque praestare gradatim" []
+
+                    b : RoseTree Str
+                    b = Tree "foo" [ Tree "bar" [] ]
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      a : RoseTree Str
+                 9│>      a = Tree "Astra mortemque praestare gradatim" []
+                10│>
+                11│>      b : RoseTree Str
+                12│>      b = Tree "foo" [ Tree "bar" [] ]
+                13│>
+                14│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : RoseTree Str
+                a = Tree "Astra mortemque praestare gradatim" []
+
+                b : RoseTree Str
+                b = Tree "foo" [Tree "bar" []]
                 "#
             ),
         );
