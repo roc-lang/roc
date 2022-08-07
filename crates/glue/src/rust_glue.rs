@@ -292,7 +292,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 
                     add_decl(
                         impls,
-                        opt_impl.clone(),
+                        opt_impl,
                         target_info,
                         format!(
                             r#"/// Other `as` methods return a payload, but since the {tag_name} tag
@@ -610,7 +610,7 @@ pub struct {name} {{
             }
         }
 
-        for (tag_index, (tag_name, opt_payload_id)) in tags.into_iter().enumerate() {
+        for (tag_index, (tag_name, opt_payload_id)) in tags.iter().enumerate() {
             // Add a convenience constructor function to the impl, e.g.
             //
             // /// Construct a tag named Foo, with the appropriate payload
