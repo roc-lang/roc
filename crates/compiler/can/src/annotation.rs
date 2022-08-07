@@ -18,7 +18,7 @@ pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
     pub references: VecSet<Symbol>,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
 }
 
 impl Annotation {
@@ -271,7 +271,7 @@ pub fn canonicalize_annotation(
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
-    let mut aliases = SendMap::default();
+    let mut aliases = VecMap::default();
 
     let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
@@ -475,7 +475,7 @@ fn can_annotation_help(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
@@ -976,7 +976,7 @@ fn can_extension_type<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
@@ -1169,7 +1169,7 @@ fn can_assigned_fields<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
@@ -1282,7 +1282,7 @@ fn can_tags<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
