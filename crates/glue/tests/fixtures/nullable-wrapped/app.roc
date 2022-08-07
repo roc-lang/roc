@@ -3,4 +3,4 @@ app "app"
     imports []
     provides [main] to pf
 
-main = More "foo" (More "bar" Empty)
+main = More "foo" (More "bar" (Single "baz"))
