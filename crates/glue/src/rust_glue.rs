@@ -610,7 +610,7 @@ pub struct {name} {{
             }
         }
 
-        for (tag_name, opt_payload_id) in tags {
+        for (tag_index, (tag_name, opt_payload_id)) in tags.into_iter().enumerate() {
             // Add a convenience constructor function to the impl, e.g.
             //
             // /// Construct a tag named Foo, with the appropriate payload
@@ -817,6 +817,21 @@ pub struct {name} {{
 
         {borrowed_ret}
     }}"#,
+                    ),
+                );
+            } else if Some(tag_index) == null_tag_index {
+                // The null tag index only occurs for nullable-wrapped tag unions,
+                // and it always has no payload. This is the one scenario where
+                // that constructor could come up!
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, which has no payload.
+    pub const {tag_name}: Self = Self {{
+        pointer: core::ptr::null_mut(),
+    }};"#,
                     ),
                 );
             } else {

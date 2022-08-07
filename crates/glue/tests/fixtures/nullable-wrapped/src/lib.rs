@@ -21,6 +21,10 @@ pub extern "C" fn rust_main() -> i32 {
         ret.assume_init()
     };
 
+    // Eq
+    assert!(StrFingerTree::Empty == StrFingerTree::Empty);
+    assert!(StrFingerTree::Empty != tag_union);
+
     // StrFingerTree : [Empty, Single Str, More Str (FingerTree Str)]
 
     // Verify that it has all the expected traits.
