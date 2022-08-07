@@ -1,6 +1,7 @@
 mod test_glue;
 
 use indoc::indoc;
+use roc_std::RocStr;
 use test_glue::StrFingerTree;
 
 extern "C" {
@@ -24,39 +25,45 @@ pub extern "C" fn rust_main() -> i32 {
     // Eq
     assert!(StrFingerTree::Empty == StrFingerTree::Empty);
     assert!(StrFingerTree::Empty != tag_union);
-
-    // Clone
-    assert!(StrFingerTree::Empty.clone() == StrFingerTree::Empty);
-
-    // StrFingerTree : [Empty, Single Str, More Str (FingerTree Str)]
+    assert!(
+        StrFingerTree::Single(RocStr::from("foo")) == StrFingerTree::Single(RocStr::from("foo"))
+    );
+    assert!(StrFingerTree::Single(RocStr::from("foo")) != StrFingerTree::Empty);
 
     // Verify that it has all the expected traits.
+    assert!(tag_union == tag_union); // PartialEq
+    assert!(tag_union.clone() == tag_union.clone()); // Clone
+    assert!(StrFingerTree::Empty.clone() == StrFingerTree::Empty); // Clone
 
-    // assert!(tag_union == tag_union); // PartialEq
-    // assert!(tag_union.clone() == tag_union.clone()); // Clone
+    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
+    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
-    // assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    // assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
+    print!(
+        indoc!(
+            r#"
+                tag_union was: {:?}
+                `More "small str" (Single "other str")` is: {:?}
+                `More "small str" Empty` is: {:?}
+                `Single "small str"` is: {:?}
+                `Empty` is: {:?}
+            "#
+        ),
+        tag_union,
+        StrFingerTree::More(
+            "small str".into(),
+            StrFingerTree::Single("other str".into()),
+        ),
+        StrFingerTree::More("small str".into(), StrFingerTree::Empty),
+        StrFingerTree::Single("small str".into()),
+        StrFingerTree::Empty,
+    ); // Debug
 
-    // print!(
-    //     indoc!(
-    //         r#"
-    //             tag_union was: {:?}
-    //             `Cons "small str" Nil` is: {:?}
-    //             `Nil` is: {:?}
-    //         "#
-    //     ),
-    //     tag_union,
-    //     StrConsList::Cons("small str".into(), StrConsList::Nil),
-    //     StrConsList::Nil,
-    // ); // Debug
+    let mut set = HashSet::new();
 
-    // let mut set = HashSet::new();
+    set.insert(tag_union.clone()); // Eq, Hash
+    set.insert(tag_union);
 
-    // set.insert(tag_union.clone()); // Eq, Hash
-    // set.insert(tag_union);
-
-    // assert_eq!(set.len(), 1);
+    assert_eq!(set.len(), 1);
 
     // Exit code
     0

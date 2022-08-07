@@ -90,9 +90,11 @@ mod glue_cli_run {
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
         nullable_wrapped:"nullable-wrapped" => indoc!(r#"
-            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
-            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
-            `Nil` is: StrConsList::Nil
+            tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
+            `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
+            `More "small str" Empty` is: StrFingerTree::More("small str", StrFingerTree::Empty)
+            `Single "small str"` is: StrFingerTree::Single("small str")
+            `Empty` is: StrFingerTree::Empty
         "#),
         nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
             tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
