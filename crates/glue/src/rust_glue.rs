@@ -388,7 +388,7 @@ fn add_tag_union(
     target_info: TargetInfo,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
-    null_tag_index: Option<usize>,
+    null_tag_index: Option<usize>, // used only in the nullable-wrapped case
     discriminant_size: u32,
     discriminant_offset: u32,
     types: &Types,
@@ -891,6 +891,10 @@ pub struct {name} {{
             &discriminant_name,
             &mut drop_payload,
             |_index, tag_name, opt_payload_id| {
+                // Note: we don't need to check Some(tag_index) != null_tag_index
+                // because the null tag is guaranteed to have no payload,
+                // and so it will already be handled correctly by the logic of
+                // "don't drop it if it has no payload."
                 match opt_payload_id {
                     Some(payload_id) if cannot_derive_copy(types.get_type(payload_id), types) => {
                         format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut {actual_self_mut}.{tag_name}) }},",)
