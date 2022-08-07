@@ -704,6 +704,8 @@ impl<
                 | IntWidth::U64
                 | IntWidth::I32
                 | IntWidth::U32
+                | IntWidth::I16
+                | IntWidth::U16
                 | IntWidth::I8
                 | IntWidth::U8,
             )) => {

@@ -973,6 +973,34 @@ fn gen_add_u8() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1i16 + 2i16 + 3i16
+                "#
+        ),
+        6,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1u16 + 2u16 + 3u16
+                "#
+        ),
+        6,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_add_i32() {
     assert_evals_to!(
         indoc!(
