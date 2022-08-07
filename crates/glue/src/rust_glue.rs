@@ -245,7 +245,16 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     types,
                     impls,
                 ),
-                RocTagUnion::RecursiveSingleTag { .. } => {
+                RocTagUnion::RecursiveSingleTag {
+                    name,
+                    tag_name,
+                    payload,
+                }
+                | RocTagUnion::NonRecursiveSingleTag {
+                    name,
+                    tag_name,
+                    payload: Some(payload),
+                } => {
                     todo!();
                 }
                 RocTagUnion::NonRecursiveSingleTag {
@@ -253,7 +262,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     tag_name,
                     payload: None,
                 } => {
-                    // An enumeration with one tag is a zero-sized unit type, so
+                    // A single tag with no payload is a zero-sized unit type, so
                     // represent it as a zero-sized struct (e.g. "struct Foo()").
                     let derive = derive_str(
                         &RocType::Struct {
