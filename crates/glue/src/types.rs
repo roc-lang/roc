@@ -154,24 +154,15 @@ impl Types {
                         },
                     ) => content_a == content_b,
                     (
-                        NullableWrapped {
-                            null_tag: null_a,
-                            non_null_tags: non_null_a,
-                            ..
-                        },
-                        NullableWrapped {
-                            null_tag: null_b,
-                            non_null_tags: non_null_b,
-                            ..
-                        },
+                        NullableWrapped { tags: tags_a, .. },
+                        NullableWrapped { tags: tags_b, .. },
                     ) => {
-                        if null_a != null_b || non_null_a.len() != non_null_b.len() {
+                        if tags_a.len() != tags_b.len() {
                             false
                         } else {
-                            non_null_a.iter().zip(non_null_b.iter()).all(
-                                |((disc_a, name_a, opt_id_a), (disc_b, name_b, opt_id_b))| {
-                                    disc_a == disc_b
-                                        && name_a == name_b
+                            tags_a.iter().zip(tags_b.iter()).all(
+                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                    name_a == name_b
                                         && match (opt_id_a, opt_id_b) {
                                             (Some(id_a), Some(id_b)) => self.is_equivalent(
                                                 self.get_type(*id_a),
@@ -560,8 +551,9 @@ pub enum RocTagUnion {
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         name: String,
-        null_tag: String,
-        non_null_tags: Vec<(u16, String, Option<TypeId>)>,
+        index_of_null_tag: u16,
+        tags: Vec<(String, Option<TypeId>)>,
+        discriminant_size: u32,
         discriminant_offset: u32,
     },
 
@@ -1079,8 +1071,26 @@ fn add_tag_union<'a>(
                 // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
                 // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
                 // see also: https://youtu.be/ip92VMpf_-A?t=164
-                NullableWrapped { .. } => {
-                    todo!()
+                NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => {
+                    let discriminant_size =
+                        Discriminant::from_number_of_tags(other_tags.len()).stack_size();
+                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+
+                    // nullable_id refers to the index of the tag that is represented at runtime as NULL.
+                    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+                    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+                    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+                    // and since Empty's tag id is 0, here nullable_id would be 0.
+                    RocTagUnion::NullableWrapped {
+                        name: name.clone(),
+                        index_of_null_tag: nullable_id,
+                        tags,
+                        discriminant_size,
+                        discriminant_offset,
+                    }
                 }
                 // A recursive tag union with only two variants, where one is empty.
                 // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.

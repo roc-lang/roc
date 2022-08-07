@@ -201,8 +201,29 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         );
                     }
                 }
-                RocTagUnion::NullableWrapped { .. } => {
-                    todo!();
+                RocTagUnion::NullableWrapped {
+                    name,
+                    index_of_null_tag,
+                    tags,
+                    discriminant_size,
+                    discriminant_offset,
+                } => {
+                    // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
+                    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+                    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+                    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+                    // and since Empty's tag id is 0, here nullable_id would be 0.
+                    add_nullable_wrapped(
+                        name,
+                        target_info,
+                        id,
+                        *index_of_null_tag,
+                        tags,
+                        *discriminant_size,
+                        *discriminant_offset,
+                        types,
+                        impls,
+                    )
                 }
                 RocTagUnion::NullableUnwrapped {
                     name,
@@ -1390,6 +1411,383 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn add_nullable_wrapped(
+    name: &str,
+    target_info: TargetInfo,
+    id: TypeId,
+    index_of_null_tag: u16,
+    tags: &[(String, Option<TypeId>)],
+    discriminant_size: u32,
+    discriminant_offset: u32,
+    types: &Types,
+    impls: &mut Impls,
+) {
+    // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
+    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+    // and since Empty's tag id is 0, here nullable_id would be 0.
+    let mut tag_names = vec![null_tag.to_string(), non_null_tag.to_string()];
+
+    tag_names.sort();
+
+    let discriminant_name = add_discriminant(name, target_info, tag_names, 1, types, impls);
+    let payload_type = types.get_type(non_null_payload);
+    let payload_type_name = type_name(non_null_payload, types);
+    let cannot_derive_copy = cannot_derive_copy(payload_type, types);
+
+    // The opaque struct for the tag union
+    {
+        // This struct needs its own Clone impl because it has
+        // a refcount to bump
+        let derive_extras = if has_float(types.get_type(id), types) {
+            ""
+        } else {
+            ", Eq, Ord, Hash"
+        };
+        let body = format!(
+            r#"#[repr(transparent)]
+#[derive(PartialEq, PartialOrd{derive_extras})]
+pub struct {name} {{
+    pointer: *mut core::mem::ManuallyDrop<{payload_type_name}>,
+}}"#
+        );
+
+        add_decl(impls, None, target_info, body);
+    }
+
+    // The impl for the tag union
+    {
+        let opt_impl = Some(format!("impl {name}"));
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            RECURSIVE_TAG_UNION_STORAGE.to_string(),
+        );
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            format!(
+                r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
+        if self.pointer.is_null() {{
+            {discriminant_name}::{null_tag}
+        }} else {{
+            {discriminant_name}::{non_null_tag}
+        }}
+    }}"#
+            ),
+        );
+
+        let owned_ret_type;
+        let borrowed_ret_type;
+        let payload_args;
+        let args_to_payload;
+        let owned_ret;
+        let borrowed_ret;
+
+        match payload_type {
+            RocType::Unit
+            | RocType::EmptyTagUnion
+            | RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                owned_ret_type = type_name(non_null_payload, types);
+                borrowed_ret_type = format!("&{}", owned_ret_type);
+                payload_args = format!("arg: {owned_ret_type}");
+                args_to_payload = "arg".to_string();
+                owned_ret = "payload".to_string();
+                borrowed_ret = format!("&{owned_ret}");
+            }
+            RocType::Struct { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, false);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+            RocType::TagUnionPayload { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, true);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+            RocType::Function { .. } => todo!(),
+        };
+
+        // Add a convenience constructor function for the tag with the payload, e.g.
+        //
+        // /// Construct a tag named Cons, with the appropriate payload
+        // pub fn Cons(payload: roc_std::RocStr) -> Self {
+        //     let size = core::mem::size_of::<roc_std::RocStr>();
+        //     let align = core::mem::align_of::<roc_std::RocStr>();
+        //
+        //     unsafe {
+        //         let pointer =
+        //             roc_alloc(size, align as u32) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
+        //
+        //         *pointer = core::mem::ManuallyDrop::new(payload);
+        //
+        //         Self { pointer }
+        //     }
+        // }
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            format!(
+                r#"/// Construct a tag named `{non_null_tag}`, with the appropriate payload
+    pub fn {non_null_tag}({payload_args}) -> Self {{
+        let payload_align = core::mem::align_of::<{payload_type_name}>();
+        let self_align = core::mem::align_of::<Self>();
+        let size = self_align + core::mem::size_of::<{payload_type_name}>();
+        let payload = {args_to_payload};
+
+        unsafe {{
+            // Store the payload at `self_align` bytes after the allocation,
+            // to leave room for the refcount.
+            let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
+            let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<core::mem::ManuallyDrop<{payload_type_name}>>();
+
+            *payload_ptr = payload;
+
+            // The reference count is stored immediately before the payload,
+            // which isn't necessarily the same as alloc_ptr - e.g. when alloc_ptr
+            // needs an alignment of 16.
+            let storage_ptr = payload_ptr.cast::<roc_std::Storage>().sub(1);
+            storage_ptr.write(roc_std::Storage::new_reference_counted());
+
+            Self {{ pointer: payload_ptr }}
+        }}
+    }}"#,
+            ),
+        );
+
+        {
+            let assign_payload = if cannot_derive_copy {
+                "core::mem::ManuallyDrop::take(&mut *self.pointer)"
+            } else {
+                "*self.pointer"
+            };
+
+            add_decl(
+                impls,
+                opt_impl.clone(),
+                target_info,
+                format!(
+                    r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return {non_null_tag}.
+    pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
+
+        let payload = {assign_payload};
+
+        core::mem::drop::<Self>(self);
+
+        {owned_ret}
+    }}"#,
+                ),
+            );
+        }
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            format!(
+                r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{non_null_tag}`.
+    pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
+
+        let payload = &*self.pointer;
+
+        {borrowed_ret}
+    }}"#,
+            ),
+        );
+
+        // Add a convenience constructor function for the nullable tag, e.g.
+        //
+        // /// A tag named Nil, which has no payload.
+        // pub const Nil: Self = Self {
+        //     pointer: core::ptr::null_mut(),
+        // };
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            format!(
+                r#"/// A tag named {null_tag}, which has no payload.
+    pub const {null_tag}: Self = Self {{
+        pointer: core::ptr::null_mut(),
+    }};"#,
+            ),
+        );
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            target_info,
+            format!(
+                r#"/// Other `into_` methods return a payload, but since the {null_tag} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_{null_tag}(self) {{
+        ()
+    }}"#,
+            ),
+        );
+
+        add_decl(
+            impls,
+            opt_impl,
+            target_info,
+            format!(
+                r#"/// Other `as` methods return a payload, but since the {null_tag} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_{null_tag}(&self) {{
+        ()
+    }}"#,
+            ),
+        );
+    }
+
+    // The Clone impl for the tag union
+    {
+        // Note that these never have Copy because they always contain a pointer.
+        let opt_impl = Some(format!("impl Clone for {name}"));
+
+        add_decl(
+            impls,
+            opt_impl,
+            target_info,
+            RECURSIVE_TAG_UNION_CLONE.to_string(),
+        );
+    }
+
+    // The Drop impl for the tag union
+    {
+        let opt_impl = Some(format!("impl Drop for {name}"));
+
+        add_decl(
+            impls,
+            opt_impl,
+            target_info,
+            r#"fn drop(&mut self) {{
+        // We only need to do any work if there's actually a heap-allocated payload.
+        if let Some(storage) = self.storage() {{
+            let mut new_storage = storage.get();
+
+            // Decrement the refcount
+            let needs_dealloc = !new_storage.is_readonly() && new_storage.decrease();
+
+            if needs_dealloc {{
+                // Drop the payload first.
+                unsafe {{
+                    core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer));
+                }}
+
+                // Dealloc the pointer
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+
+                unsafe {{
+                    crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32);
+                }}
+            }} else {{
+                // Write the storage back.
+                storage.set(new_storage);
+            }}
+        }}
+    }}"#.to_string(),
+        );
+    }
+
+    // The Debug impl for the tag union
+    {
+        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
+        let extra_deref = if cannot_derive_copy { "*" } else { "" };
+
+        let fields_str = match payload_type {
+            RocType::Unit
+            | RocType::EmptyTagUnion
+            | RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                format!(
+                    r#"f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish()"#
+                )
+            }
+            RocType::Struct { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+            RocType::TagUnionPayload { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    // Needs an "f" prefix
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+            RocType::Function { .. } => todo!(),
+        };
+
+        let body = format!(
+            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        if self.pointer.is_null() {{
+            f.write_str("{name}::{null_tag}")
+        }} else {{
+            f.write_str("{name}::")?;
+
+            unsafe {{
+                f.debug_tuple("{non_null_tag}")
+                    {fields_str}
+                    .finish()
+            }}
+        }}
+    }}"#
+        );
+
+        add_decl(impls, opt_impl, target_info, body);
+    }
+}
+#[allow(clippy::too_many_arguments)]
 fn add_nullable_unwrapped(
     name: &str,
     target_info: TargetInfo,
@@ -2046,8 +2444,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
             })
         }
-        RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-            non_null_tags.iter().any(|(_, _, payloads)| {
+        RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+            tags.iter().any(|(_, payloads)| {
                 payloads
                     .iter()
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
