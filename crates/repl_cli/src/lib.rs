@@ -15,7 +15,7 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::MonomorphizedModule;
+use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
@@ -190,6 +190,15 @@ impl ReplAppMemory for CliMemory {
         let reference: &RocStr = unsafe { std::mem::transmute(addr) };
         reference.as_str()
     }
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        let addr_with_id = self.deref_usize(addr);
+        let tag_id_mask = 0b111;
+
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as _, data_addr as _)
+    }
 }
 
 pub fn mono_module_to_dylib<'a>(
@@ -238,6 +247,15 @@ pub fn mono_module_to_dylib<'a>(
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
     add_default_roc_externs(&env);
+
+    let entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,

@@ -30,8 +30,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
+    UpdateModeIds,
 };
 use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
@@ -115,6 +115,30 @@ const PRELUDE_TYPES: [(&str, Symbol); 33] = [
 
 macro_rules! log {
     ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
+}
+
+#[derive(Debug)]
+pub struct LoadConfig {
+    pub target_info: TargetInfo,
+    pub render: RenderTarget,
+    pub threading: Threading,
+    pub exec_mode: ExecutionMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExecutionMode {
+    Test,
+    Check,
+    Executable,
+}
+
+impl ExecutionMode {
+    fn goal_phase(&self) -> Phase {
+        match self {
+            ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
+            ExecutionMode::Check => Phase::SolveTypes,
+        }
+    }
 }
 
 /// Struct storing various intermediate stages by their ModuleId
@@ -421,6 +445,7 @@ fn start_phase<'a>(
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
+                    execution_mode: state.exec_mode,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -670,7 +695,6 @@ pub struct MonomorphizedModule<'a> {
     pub interns: Interns,
     pub subs: Subs,
     pub output_path: Box<Path>,
-    pub platform_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -680,6 +704,16 @@ pub struct MonomorphizedModule<'a> {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
+}
+
+#[derive(Debug)]
+pub enum EntryPoint<'a> {
+    Executable {
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        platform_path: Box<Path>,
+    },
+    Test,
 }
 
 #[derive(Debug)]
@@ -848,7 +882,6 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub platform_data: Option<PlatformData>,
-    pub goal_phase: Phase,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
@@ -859,6 +892,7 @@ struct State<'a> {
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub toplevel_expects: VecMap<Symbol, Region>,
     pub exposed_to_host: ExposedToHost,
+    pub goal_phase: Phase,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -886,6 +920,7 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub render: RenderTarget,
+    pub exec_mode: ExecutionMode,
 
     /// All abilities across all modules.
     pub world_abilities: WorldAbilities,
@@ -903,16 +938,17 @@ impl<'a> State<'a> {
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
-        goal_phase: Phase,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
         number_of_workers: usize,
+        exec_mode: ExecutionMode,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
+        let goal_phase = exec_mode.goal_phase();
         let dependencies = Dependencies::new(goal_phase);
 
         Self {
@@ -940,6 +976,7 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
+            exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
         }
@@ -1054,6 +1091,7 @@ enum BuildTask<'a> {
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
+        execution_mode: ExecutionMode,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
@@ -1146,16 +1184,14 @@ pub fn load_and_typecheck_str<'a>(
     // where we want to regenerate the cached data
     let cached_subs = MutMap::default();
 
-    match load(
-        arena,
-        load_start,
-        exposed_types,
-        Phase::SolveTypes,
+    let load_config = LoadConfig {
         target_info,
-        cached_subs,
         render,
         threading,
-    )? {
+        exec_mode: ExecutionMode::Check,
+    };
+
+    match load(arena, load_start, exposed_types, cached_subs, load_config)? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
@@ -1364,11 +1400,8 @@ pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
-    target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
@@ -1385,7 +1418,7 @@ pub fn load<'a>(
                 Err(_) => Threads::Single,
                 Ok(0) => unreachable!("NonZeroUsize"),
                 Ok(1) => Threads::Single,
-                Ok(reported) => match threading {
+                Ok(reported) => match load_config.threading {
                     Threading::Single => Threads::Single,
                     Threading::AllAvailable => Threads::Many(reported),
                     Threading::AtMost(at_most) => Threads::Many(Ord::min(reported, at_most)),
@@ -1399,20 +1432,20 @@ pub fn load<'a>(
             arena,
             load_start,
             exposed_types,
-            goal_phase,
-            target_info,
+            load_config.target_info,
             cached_subs,
-            render,
+            load_config.render,
+            load_config.exec_mode,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
             load_start,
             exposed_types,
-            goal_phase,
-            target_info,
+            load_config.target_info,
             cached_subs,
-            render,
+            load_config.render,
             threads,
+            load_config.exec_mode,
         ),
     }
 }
@@ -1423,10 +1456,10 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1447,13 +1480,13 @@ pub fn load_single_threaded<'a>(
     let mut state = State::new(
         root_id,
         target_info,
-        goal_phase,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
         cached_subs,
         render,
         number_of_workers,
+        exec_mode,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1624,11 +1657,11 @@ fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
     available_threads: usize,
+    exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1664,13 +1697,13 @@ fn load_multi_threaded<'a>(
     let mut state = State::new(
         root_id,
         target_info,
-        goal_phase,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
         cached_subs,
         render,
         num_workers,
+        exec_mode,
     );
 
     // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work
@@ -2749,6 +2782,7 @@ fn finish_specialization(
         output_path,
         platform_path,
         platform_data,
+        exec_mode,
         ..
     } = state;
 
@@ -2765,53 +2799,60 @@ fn finish_specialization(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
-    let path_to_platform = {
-        use PlatformPath::*;
-        let package_name = match platform_path {
-            Valid(To::ExistingPackage(shorthand)) => {
-                match (*state.arc_shorthands).lock().get(shorthand) {
-                    Some(p_or_p) => *p_or_p,
-                    None => unreachable!(),
-                }
-            }
-            Valid(To::NewPackage(p_or_p)) => p_or_p,
-            other => {
-                let buf = to_missing_platform_report(state.root_id, other);
-                return Err(LoadingProblem::FormattedReport(buf));
-            }
-        };
-
-        package_name.into()
-    };
-
-    let platform_path = Path::new(path_to_platform).into();
-
     let entry_point = {
-        let symbol = match platform_data {
-            None => {
-                debug_assert_eq!(exposed_to_host.values.len(), 1);
-                *exposed_to_host.values.iter().next().unwrap().0
-            }
-            Some(PlatformData { provides, .. }) => provides,
-        };
+        match exec_mode {
+            ExecutionMode::Test => EntryPoint::Test,
+            ExecutionMode::Executable => {
+                let path_to_platform = {
+                    use PlatformPath::*;
+                    let package_name = match platform_path {
+                        Valid(To::ExistingPackage(shorthand)) => {
+                            match (*state.arc_shorthands).lock().get(shorthand) {
+                                Some(p_or_p) => *p_or_p,
+                                None => unreachable!(),
+                            }
+                        }
+                        Valid(To::NewPackage(p_or_p)) => p_or_p,
+                        other => {
+                            let buf = to_missing_platform_report(state.root_id, other);
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
+                    };
 
-        match procedures.keys().find(|(s, _)| *s == symbol) {
-            Some((_, layout)) => EntryPoint {
-                layout: *layout,
-                symbol,
-            },
-            None => {
-                // the entry point is not specialized. This can happen if the repl output
-                // is a function value
-                EntryPoint {
-                    layout: roc_mono::ir::ProcLayout {
-                        arguments: &[],
-                        result: Layout::struct_no_name_order(&[]),
-                        captures_niche: CapturesNiche::no_niche(),
+                    package_name.into()
+                };
+
+                let platform_path = Path::new(path_to_platform).into();
+                let symbol = match platform_data {
+                    None => {
+                        debug_assert_eq!(exposed_to_host.values.len(), 1);
+                        *exposed_to_host.values.iter().next().unwrap().0
+                    }
+                    Some(PlatformData { provides, .. }) => provides,
+                };
+
+                match procedures.keys().find(|(s, _)| *s == symbol) {
+                    Some((_, layout)) => EntryPoint::Executable {
+                        layout: *layout,
+                        symbol,
+                        platform_path,
                     },
-                    symbol,
+                    None => {
+                        // the entry point is not specialized. This can happen if the repl output
+                        // is a function value
+                        EntryPoint::Executable {
+                            layout: roc_mono::ir::ProcLayout {
+                                arguments: &[],
+                                result: Layout::struct_no_name_order(&[]),
+                                captures_niche: CapturesNiche::no_niche(),
+                            },
+                            symbol,
+                            platform_path,
+                        }
+                    }
                 }
             }
+            ExecutionMode::Check => unreachable!(),
         }
     };
 
@@ -2824,7 +2865,7 @@ fn finish_specialization(
         can_problems,
         type_problems,
         output_path,
-        platform_path,
+        expectations,
         exposed_to_host,
         module_id: state.root_id,
         subs,
@@ -2834,7 +2875,6 @@ fn finish_specialization(
         sources,
         timings: state.timings,
         toplevel_expects,
-        expectations,
     })
 }
 
@@ -4479,7 +4519,7 @@ fn canonicalize_and_constrain<'a>(
             Vacant(vacant) => {
                 let should_include_builtin = matches!(
                     name.module_id(),
-                    ModuleId::ENCODE | ModuleId::DICT | ModuleId::SET
+                    ModuleId::ENCODE | ModuleId::DECODE | ModuleId::DICT | ModuleId::SET
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -4698,6 +4738,7 @@ fn make_specializations<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
+    execution_mode: ExecutionMode,
     solved_subs: Solved<Subs>,
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
@@ -4955,6 +4996,12 @@ fn build_pending_specializations<'a>(
                 // the declarations of this group will be treaded individually by later iterations
             }
             Expectation => {
+                // skip expectations if we're not going to run them
+                match execution_mode {
+                    ExecutionMode::Test => { /* fall through */ }
+                    ExecutionMode::Check | ExecutionMode::Executable => continue,
+                }
+
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
@@ -5078,7 +5125,7 @@ fn load_derived_partial_procs<'a>(
 
     // TODO: we can be even lazier here if we move `add_def_to_module` to happen in mono. Also, the
     // timings would be more accurate.
-    for (derived_symbol, derived_expr) in derives_to_add.into_iter() {
+    for (derived_symbol, (derived_expr, derived_expr_var)) in derives_to_add.into_iter() {
         let mut mono_env = roc_mono::ir::Env {
             arena,
             subs,
@@ -5117,7 +5164,22 @@ fn load_derived_partial_procs<'a>(
                     return_type,
                 )
             }
-            _ => internal_error!("Expected only functions to be derived"),
+            _ => {
+                // mark this symbols as a top-level thunk before any other work on the procs
+                new_module_thunks.push(derived_symbol);
+
+                PartialProc {
+                    annotation: derived_expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: derived_expr,
+                    body_var: derived_expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                }
+            }
         };
 
         procs_base
@@ -5212,6 +5274,7 @@ fn run_task<'a>(
         )),
         BuildPendingSpecializations {
             module_id,
+            execution_mode,
             ident_ids,
             decls,
             module_timing,
@@ -5224,6 +5287,7 @@ fn run_task<'a>(
             derived_module,
         } => Ok(build_pending_specializations(
             arena,
+            execution_mode,
             solved_subs,
             imported_module_thunks,
             module_id,

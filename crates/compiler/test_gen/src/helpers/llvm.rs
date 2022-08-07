@@ -7,7 +7,7 @@ use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_load::Threading;
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
@@ -66,15 +66,19 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info,
+        render: RenderTarget::ColorTerminal,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        target_info,
-        RenderTarget::ColorTerminal,
-        Threading::Single,
+        load_config,
     );
 
     let mut loaded = match loaded {
@@ -226,6 +230,14 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
+    let entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
     let (main_fn_name, main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
         LlvmBackendMode::CliTest => unreachable!(),

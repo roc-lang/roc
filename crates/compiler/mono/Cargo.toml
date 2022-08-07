@@ -1,6 +1,6 @@
 [package]
 name = "roc_mono"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -12,6 +12,7 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
+roc_derive_key = { path = "../derive_key" }
 roc_derive = { path = "../derive" }
 roc_late_solve = { path = "../late_solve" }
 roc_std = { path = "../../roc_std" }

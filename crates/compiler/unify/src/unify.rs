@@ -680,25 +680,49 @@ fn unify_two_aliases<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
-    // _symbol has an underscore because it's unused in --release builds
-    _symbol: Symbol,
+    kind: AliasKind,
+    symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
     other_args: AliasVariables,
     other_real_var: Variable,
-    other_content: &Content,
 ) -> Outcome<M> {
     if args.len() == other_args.len() {
         let mut outcome = Outcome::default();
-        let it = args
-            .all_variables()
-            .into_iter()
-            .zip(other_args.all_variables().into_iter());
 
-        for (l, r) in it {
+        let args_it = args
+            .type_variables()
+            .into_iter()
+            .zip(other_args.type_variables().into_iter());
+
+        let lambda_set_it = args
+            .lambda_set_variables()
+            .into_iter()
+            .zip(other_args.lambda_set_variables().into_iter());
+
+        let mut merged_args = Vec::with_capacity(args.type_variables().len());
+        let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
+        debug_assert_eq!(
+            merged_args.capacity() + merged_lambda_set_args.capacity(),
+            args.all_variables_len as _
+        );
+
+        for (l, r) in args_it {
             let l_var = env.subs[l];
             let r_var = env.subs[r];
             outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_args.push(merged_var);
+        }
+
+        for (l, r) in lambda_set_it {
+            let l_var = env.subs[l];
+            let r_var = env.subs[r];
+            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_lambda_set_args.push(merged_var);
         }
 
         if outcome.mismatches.is_empty() {
@@ -730,12 +754,21 @@ fn unify_two_aliases<M: MetaCollector>(
             let _ = real_var_outcome.mismatches.drain(..);
             outcome.union(real_var_outcome);
 
-            outcome.union(merge(env, ctx, *other_content));
+            let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
+
+            // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
+            // the merged vars are all left, avoid re-insertion. Is checking for argument slice
+            // equality faster than re-inserting?
+            let merged_variables =
+                AliasVariables::insert_into_subs(env.subs, merged_args, merged_lambda_set_args);
+            let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
+
+            outcome.union(merge(env, ctx, merged_content));
         }
 
         outcome
     } else {
-        mismatch!("{:?}", _symbol)
+        mismatch!("{:?}", symbol)
     }
 }
 
@@ -769,12 +802,12 @@ fn unify_alias<M: MetaCollector>(
                     env,
                     pool,
                     ctx,
+                    AliasKind::Structural,
                     symbol,
                     args,
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 unify_pool(env, pool, real_var, *other_real_var, ctx.mode)
@@ -838,12 +871,12 @@ fn unify_opaque<M: MetaCollector>(
                     env,
                     pool,
                     ctx,
+                    AliasKind::Opaque,
                     symbol,
                     args,
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 mismatch!("{:?}", symbol)
@@ -2208,6 +2241,46 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
     }
 }
 
+fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
+    // If one of the variables is a recursion var, keep that one, so that we avoid inlining
+    // a recursive tag union type content where we should have a recursion var instead.
+    //
+    // When might this happen? For example, in the code
+    //
+    //   Indirect : [Indirect ConsList]
+    //
+    //   ConsList : [Nil, Cons Indirect]
+    //
+    //   l : ConsList
+    //   l = Cons (Indirect (Cons (Indirect Nil)))
+    //   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+    //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+    //   l
+    //
+    // Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
+    // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+    // we might have that e.g. `actual` is `<rec>` and `expected` is `[Cons (Indirect ...)]`.
+    //
+    // Now, we need to be careful to set the type we choose to represent the merged type
+    // here to be `<rec>`, not the tag union content of `expected`! Otherwise, we will
+    // have lost a recursion variable in the recursive tag union.
+    //
+    // This would not be incorrect from a type perspective, but causes problems later on for e.g.
+    // layout generation, which expects recursion variables to be placed correctly. Attempting to detect
+    // this during layout generation does not work so well because it may be that there *are* recursive
+    // tag unions that should be inlined, and not pass through recursion variables. So instead, resolve
+    // these cases here.
+    //
+    // See tests labeled "issue_2810" for more examples.
+    match (
+        (var1, subs.get_content_unchecked(var1)),
+        (var2, subs.get_content_unchecked(var2)),
+    ) {
+        ((var, Content::RecursionVar { .. }), _) | (_, (var, Content::RecursionVar { .. })) => var,
+        _ => var1,
+    }
+}
+
 fn unify_shared_tags_new<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2268,44 +2341,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
             outcome.union(unify_pool(env, pool, actual, expected, ctx.mode));
 
             if outcome.mismatches.is_empty() {
-                // If one of the variables is a recursion var, keep that one, so that we avoid inlining
-                // a recursive tag union type content where we should have a recursion var instead.
-                //
-                // When might this happen? For example, in the code
-                //
-                //   Indirect : [Indirect ConsList]
-                //
-                //   ConsList : [Nil, Cons Indirect]
-                //
-                //   l : ConsList
-                //   l = Cons (Indirect (Cons (Indirect Nil)))
-                //   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
-                //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
-                //   l
-                //
-                // Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
-                // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
-                // we might have that e.g. `actual` is `<rec>` and `expected` is `[Cons (Indirect ...)]`.
-                //
-                // Now, we need to be careful to set the type we choose to represent the merged type
-                // here to be `<rec>`, not the tag union content of `expected`! Otherwise, we will
-                // have lost a recursion variable in the recursive tag union.
-                //
-                // This would not be incorrect from a type perspective, but causes problems later on for e.g.
-                // layout generation, which expects recursion variables to be placed correctly. Attempting to detect
-                // this during layout generation does not work so well because it may be that there *are* recursive
-                // tag unions that should be inlined, and not pass through recursion variables. So instead, resolve
-                // these cases here.
-                //
-                // See tests labeled "issue_2810" for more examples.
-                let merged_var = match (
-                    (actual, env.subs.get_content_unchecked(actual)),
-                    (expected, env.subs.get_content_unchecked(expected)),
-                ) {
-                    ((var, Content::RecursionVar { .. }), _)
-                    | (_, (var, Content::RecursionVar { .. })) => var,
-                    _ => actual,
-                };
+                let merged_var = choose_merged_var(env.subs, actual, expected);
 
                 matching_vars.push(merged_var);
             }

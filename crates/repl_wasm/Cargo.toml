@@ -1,7 +1,9 @@
 [package]
 edition = "2021"
 name = "roc_repl_wasm"
-version = "0.1.0"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [lib]
 crate-type = ["cdylib"]

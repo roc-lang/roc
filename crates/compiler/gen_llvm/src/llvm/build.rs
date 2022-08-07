@@ -4220,10 +4220,16 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
+    build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        opt_entry_point,
+        debug_output_file,
+    );
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
@@ -4236,7 +4242,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
         env,
         opt_level,
         procedures,
-        entry_point,
+        Some(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4253,7 +4259,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
         env,
         opt_level,
         procedures,
-        entry_point,
+        Some(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4265,13 +4271,13 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
 ) -> Vec<'a, &'a str> {
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        entry_point,
+        opt_entry_point,
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4333,7 +4339,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -4341,7 +4347,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_alias_analysis::spec_program(opt_level, entry_point, it) {
+    let solutions = match roc_alias_analysis::spec_program(opt_level, opt_entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
@@ -6951,21 +6957,30 @@ fn build_int_binop<'a, 'ctx, 'env>(
             // but llvm normalizes to the above ordering in -O3
             let zero = rhs.get_type().const_zero();
             let neg_1 = rhs.get_type().const_int(-1i64 as u64, false);
+            let is_signed = int_width.is_signed();
 
             let special_block = env.context.append_basic_block(parent, "special_block");
             let default_block = env.context.append_basic_block(parent, "default_block");
             let cont_block = env.context.append_basic_block(parent, "branchcont");
 
-            bd.build_switch(
-                rhs,
-                default_block,
-                &[(zero, special_block), (neg_1, special_block)],
-            );
+            if is_signed {
+                bd.build_switch(
+                    rhs,
+                    default_block,
+                    &[(zero, special_block), (neg_1, special_block)],
+                )
+            } else {
+                bd.build_switch(rhs, default_block, &[(zero, special_block)])
+            };
 
             let condition_rem = {
                 bd.position_at_end(default_block);
 
-                let rem = bd.build_int_signed_rem(lhs, rhs, "int_rem");
+                let rem = if is_signed {
+                    bd.build_int_signed_rem(lhs, rhs, "int_rem")
+                } else {
+                    bd.build_int_unsigned_rem(lhs, rhs, "uint_rem")
+                };
                 let result = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
 
                 bd.build_unconditional_branch(cont_block);
@@ -6976,10 +6991,15 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 bd.position_at_end(special_block);
 
                 let is_zero = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
-                let is_neg_one =
-                    bd.build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
 
-                let result = bd.build_or(is_neg_one, is_zero, "cond");
+                let result = if is_signed {
+                    let is_neg_one =
+                        bd.build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
+
+                    bd.build_or(is_neg_one, is_zero, "cond")
+                } else {
+                    is_zero
+                };
 
                 bd.build_unconditional_branch(cont_block);
 

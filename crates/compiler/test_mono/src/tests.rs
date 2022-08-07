@@ -13,6 +13,8 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use roc_load::ExecutionMode;
+use roc_load::LoadConfig;
 use test_mono_macros::*;
 
 use roc_collections::all::MutMap;
@@ -91,15 +93,19 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info: TARGET_INFO,
+        threading: Threading::Single,
+        render: roc_reporting::report::RenderTarget::Generic,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        TARGET_INFO,
-        roc_reporting::report::RenderTarget::Generic,
-        Threading::Single,
+        load_config,
     );
 
     let mut loaded = match loaded {
@@ -1892,6 +1898,27 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
         when Wrapper (Payload "err") is
             Wrapper (Payload str) -> str
             Wrapper (AlternatePayload str) -> str
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_3669() {
+    indoc!(
+        r#"
+        Peano a := [
+            Zero,
+            Successor (Peano a)
+        ]
+
+        unwrap : Peano a -> {}
+        unwrap = \@Peano p ->
+            when p is
+                Zero -> {}
+                Successor inner -> unwrap inner
+
+        when unwrap (@Peano Zero) == {} is
+            _ -> ""
         "#
     )
 }

@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::{MutSet, VecMap};
 use roc_gen_llvm::llvm::{build::LlvmBackendMode, externs::add_default_roc_externs};
-use roc_load::{Expectations, MonomorphizedModule};
+use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
@@ -299,12 +299,19 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
+    let opt_entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            Some(roc_mono::ir::EntryPoint { symbol, layout })
+        }
+        EntryPoint::Test => None,
+    };
+
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
         toplevel_expects.unzip_slices().0,
         procedures,
-        entry_point,
+        opt_entry_point,
     );
 
     let expects = bumpalo::collections::Vec::from_iter_in(

@@ -18,7 +18,7 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-cFzOcU982kANsZjx4YoLQOZSOYN3loj+5zowhWoBWM8=";
+  cargoSha256 = "sha256-Pd84GGtW1ecrP03uiCVcybIUtWCSDGfLl+fbbdmFyiE=";
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
@@ -79,8 +79,11 @@ rustPlatform.buildRustPackage {
 
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
-  postInstall = ''
+  postInstall = if pkgs.stdenv.isLinux then ''
     cp -r target/x86_64-unknown-linux-gnu/release/lib/. $out/lib
     wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]}
+  '' else ''
+    cp -r target/aarch64-apple-darwin/release/lib/. $out/lib
+    wrapProgram $out/bin/roc --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]}
   '';
 }

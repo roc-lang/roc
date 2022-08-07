@@ -257,14 +257,12 @@ fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
     rec_addr: usize,
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
-    let addr_with_id = mem.deref_usize(rec_addr);
 
     if tag_in_ptr {
-        let (_, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
-        let tag_id = addr_with_id & tag_id_mask;
-        let data_addr = addr_with_id & !tag_id_mask;
-        (tag_id as i64, data_addr)
+        let (tag_id, data_addr) = mem.deref_pointer_with_tag_id(rec_addr);
+        (tag_id as _, data_addr as _)
     } else {
+        let addr_with_id = mem.deref_usize(rec_addr);
         let tag_id = tag_id_from_data(env, mem, union_layout, addr_with_id);
         (tag_id, addr_with_id)
     }

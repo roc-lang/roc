@@ -17,8 +17,8 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
-use roc_load_internal::file::Threading;
-use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
+use roc_load_internal::file::{ExecutionMode, LoadConfig, Threading};
+use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_problem::can::Problem;
@@ -41,16 +41,19 @@ fn load_and_typecheck(
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
+    let load_config = LoadConfig {
+        target_info,
+        render: RenderTarget::Generic,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Check,
+    };
 
     match roc_load_internal::file::load(
         arena,
         load_start,
         exposed_types,
-        Phase::SolveTypes,
-        target_info,
         Default::default(), // these tests will re-compile the builtins
-        RenderTarget::Generic,
-        Threading::Single,
+        load_config,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

@@ -15,8 +15,6 @@ use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocResult, RocStr};
 
-use core::convert::Infallible;
-
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_list_construction() {
@@ -287,6 +285,8 @@ fn list_map_try_ok() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_try_err() {
+    use core::convert::Infallible;
+
     assert_evals_to!(
         r#"
             List.mapTry [1, 2, 3] \_ -> Err -1
@@ -3353,4 +3353,19 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
         RocStr::from("added 1, added 2, added 3, added 4, multiplied 1, multiplied 2, multiplied 3, multiplied 4"),
         RocStr
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3530_uninitialized_capacity_in_list_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [11,22,33]
+            "#
+        ),
+        3,
+        (usize, usize, usize),
+        |(_, _, cap)| cap
+    );
 }

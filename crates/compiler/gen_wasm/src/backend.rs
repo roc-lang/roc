@@ -715,7 +715,7 @@ impl<'a> WasmBackend<'a> {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
             if DEBUG_SETTINGS.let_stmt_ir {
-                println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+                print!("\nlet {:?} = {}", sym, expr.to_pretty(200));
             }
 
             let kind = match following {
@@ -1479,7 +1479,14 @@ impl<'a> WasmBackend<'a> {
             // length of the list
             self.code_builder.get_local(stack_local_id);
             self.code_builder.i32_const(elems.len() as i32);
-            self.code_builder.i32_store(Align::Bytes4, stack_offset + 4);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_LEN);
+
+            // capacity of the list
+            self.code_builder.get_local(stack_local_id);
+            self.code_builder.i32_const(elems.len() as i32);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_CAPACITY);
 
             let mut elem_offset = 0;
 
@@ -1521,12 +1528,14 @@ impl<'a> WasmBackend<'a> {
         if let StoredValue::StackMemory { location, .. } = storage {
             let (local_id, offset) = location.local_and_offset(self.storage.stack_frame_pointer);
 
-            // This is a minor cheat.
-            // What we want to write to stack memory is { elements: null, length: 0 }
-            // But instead of two 32-bit stores, we can do a single 64-bit store.
+            // Store 12 bytes of zeros { elements: null, length: 0, capacity: 0 }
+            debug_assert_eq!(Builtin::LIST_WORDS, 3);
             self.code_builder.get_local(local_id);
             self.code_builder.i64_const(0);
             self.code_builder.i64_store(Align::Bytes4, offset);
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(0);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
         } else {
             internal_error!("Unexpected storage for {:?}", sym)
         }
@@ -1566,13 +1575,24 @@ impl<'a> WasmBackend<'a> {
             StoredValue::Local { local_id, .. } => {
                 // Tag is stored as a heap pointer.
                 if let Some(reused) = maybe_reused {
-                    // Reuse an existing heap allocation
+                    // Reuse an existing heap allocation, if one is available (not NULL at runtime)
                     self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                    self.code_builder.if_();
+                    {
+                        self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.else_();
+                    {
+                        self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
                     self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                    self.code_builder.set_local(local_id);
                 }
-                self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
             StoredValue::VirtualMachineStack { .. } => {
@@ -1618,7 +1638,7 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.i64_store(id_align, id_offset);
                 }
             }
-        } else if stores_tag_id_in_pointer {
+        } else if stores_tag_id_in_pointer && tag_id != 0 {
             self.code_builder.get_local(local_id);
             self.code_builder.i32_const(tag_id as i32);
             self.code_builder.i32_or();

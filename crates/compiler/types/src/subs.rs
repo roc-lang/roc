@@ -2366,10 +2366,6 @@ impl AliasVariables {
 
         let all_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
 
-        if type_variables_len == 3 {
-            panic!();
-        }
-
         Self {
             variables_start,
             type_variables_len,
