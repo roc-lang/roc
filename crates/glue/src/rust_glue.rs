@@ -875,7 +875,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut drop_payload,
-            |tag_name, opt_payload_id| {
+            |_index, tag_name, opt_payload_id| {
                 match opt_payload_id {
                     Some(payload_id) if cannot_derive_copy(types.get_type(payload_id), types) => {
                         format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut {actual_self_mut}.{tag_name}) }},",)
@@ -952,7 +952,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut buf,
-            |tag_name, opt_payload_id| {
+            |_index, tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("{actual_self}.{tag_name} == {actual_other}.{tag_name},")
                 } else {
@@ -991,7 +991,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut buf,
-            |tag_name, opt_payload_id| {
+            |_index, tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("{actual_self}.{tag_name}.partial_cmp(&{actual_other}.{tag_name}),",)
                 } else {
@@ -1030,7 +1030,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut buf,
-            |tag_name, opt_payload_id| {
+            |_index, tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("{actual_self}.{tag_name}.cmp(&{actual_other}.{tag_name}),",)
                 } else {
@@ -1073,7 +1073,7 @@ pub struct {name} {{
                     tags.iter(),
                     &discriminant_name,
                     &mut buf,
-                    |tag_name, opt_payload_id| {
+                    |_index, tag_name, opt_payload_id| {
                         if opt_payload_id.is_some() {
                             match recursiveness {
                                 Recursiveness::Recursive => {
@@ -1132,7 +1132,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut buf,
-            |tag_name, opt_payload_id| {
+            |_index, tag_name, opt_payload_id| {
                 let hash_tag = format!("{discriminant_name}::{tag_name}.hash(state)");
 
                 if opt_payload_id.is_some() {
@@ -1170,7 +1170,7 @@ pub struct {name} {{
             tags.iter(),
             &discriminant_name,
             &mut buf,
-            |tag_name, opt_payload_id| match opt_payload_id {
+            |_index, tag_name, opt_payload_id| match opt_payload_id {
                 Some(payload_id) => {
                     // If it's a ManuallyDrop, we need a `*` prefix to dereference it
                     // (because otherwise we're using ManuallyDrop's Debug instance
@@ -1236,7 +1236,7 @@ pub struct {name} {{
 fn write_impl_tags<
     'a,
     I: IntoIterator<Item = &'a (String, Option<TypeId>)>,
-    F: Fn(&str, Option<TypeId>) -> String,
+    F: Fn(usize, &str, Option<TypeId>) -> String,
 >(
     indentations: usize,
     tags: I,
@@ -1248,8 +1248,8 @@ fn write_impl_tags<
 
     buf.push_str("match self.discriminant() {\n");
 
-    for (tag_name, opt_payload_id) in tags {
-        let branch_str = to_branch_str(tag_name, *opt_payload_id);
+    for (index, (tag_name, opt_payload_id)) in tags.into_iter().enumerate() {
+        let branch_str = to_branch_str(index, tag_name, *opt_payload_id);
 
         write_indents(indentations + 1, buf);
 
