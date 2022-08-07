@@ -172,6 +172,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             target_info,
                             id,
                             tags,
+                            None,
                             *discriminant_size,
                             *discriminant_offset,
                             types,
@@ -194,6 +195,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             target_info,
                             id,
                             tags,
+                            None,
                             *discriminant_size,
                             *discriminant_offset,
                             types,
@@ -201,8 +203,30 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         );
                     }
                 }
-                RocTagUnion::NullableWrapped { .. } => {
-                    todo!();
+                RocTagUnion::NullableWrapped {
+                    name,
+                    index_of_null_tag,
+                    tags,
+                    discriminant_size,
+                    discriminant_offset,
+                } => {
+                    // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
+                    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+                    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+                    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+                    // and since Empty's tag id is 0, here nullable_id would be 0.
+                    add_tag_union(
+                        Recursiveness::Recursive,
+                        name,
+                        target_info,
+                        id,
+                        tags,
+                        Some(*index_of_null_tag as usize),
+                        *discriminant_size,
+                        *discriminant_offset,
+                        types,
+                        impls,
+                    )
                 }
                 RocTagUnion::NullableUnwrapped {
                     name,
@@ -364,6 +388,7 @@ fn add_tag_union(
     target_info: TargetInfo,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
+    null_tag_index: Option<usize>, // used only in the nullable-wrapped case
     discriminant_size: u32,
     discriminant_offset: u32,
     types: &Types,
@@ -585,7 +610,7 @@ pub struct {name} {{
             }
         }
 
-        for (tag_name, opt_payload_id) in tags {
+        for (tag_index, (tag_name, opt_payload_id)) in tags.iter().enumerate() {
             // Add a convenience constructor function to the impl, e.g.
             //
             // /// Construct a tag named Foo, with the appropriate payload
@@ -792,6 +817,21 @@ pub struct {name} {{
 
         {borrowed_ret}
     }}"#,
+                    ),
+                );
+            } else if Some(tag_index) == null_tag_index {
+                // The null tag index only occurs for nullable-wrapped tag unions,
+                // and it always has no payload. This is the one scenario where
+                // that constructor could come up!
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, which has no payload.
+    pub const {tag_name}: Self = Self {{
+        pointer: core::ptr::null_mut(),
+    }};"#,
                     ),
                 );
             } else {
@@ -2046,8 +2086,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
             })
         }
-        RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-            non_null_tags.iter().any(|(_, _, payloads)| {
+        RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+            tags.iter().any(|(_, payloads)| {
                 payloads
                     .iter()
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
