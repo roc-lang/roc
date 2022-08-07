@@ -101,6 +101,11 @@ mod glue_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
+        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
+            `Nil` is: StrConsList::Nil
+        "#),
         basic_recursive_union:"basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
