@@ -89,6 +89,11 @@ mod glue_cli_run {
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
+        nullable_wrapped:"nullable-wrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
+            `Nil` is: StrConsList::Nil
+        "#),
         nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
             tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
