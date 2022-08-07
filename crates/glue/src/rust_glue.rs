@@ -248,7 +248,11 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::NonNullableUnwrapped { .. } => {
                     todo!();
                 }
-                RocTagUnion::SingleTagUnion { name, tag_name } => {
+                RocTagUnion::NonRecursiveSingleTag {
+                    name,
+                    tag_name,
+                    payload: None,
+                } => {
                     // An enumeration with one tag is a zero-sized unit type, so
                     // represent it as a zero-sized struct (e.g. "struct Foo()").
                     let derive = derive_str(
@@ -1407,7 +1411,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
-        | RocType::TagUnion(RocTagUnion::SingleTagUnion { name, .. })
+        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
@@ -2030,7 +2034,7 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::TagUnion(RocTagUnion::SingleTagUnion { .. })
+        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { .. })
         | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
@@ -2082,7 +2086,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::TagUnion(RocTagUnion::SingleTagUnion { .. })
+        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { .. })
         | RocType::Function { .. } => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)

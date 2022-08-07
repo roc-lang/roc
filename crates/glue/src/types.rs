@@ -86,10 +86,10 @@ impl Types {
 
                 match (union_a, union_b) {
                     (
-                        SingleTagUnion {
+                        NonRecursiveSingleTag {
                             tag_name: tag_a, ..
                         },
-                        SingleTagUnion {
+                        NonRecursiveSingleTag {
                             tag_name: tag_b, ..
                         },
                     ) => tag_a == tag_b,
@@ -198,8 +198,8 @@ impl Types {
                     }
                     // These are all listed explicitly so that if we ever add a new variant,
                     // we'll get an exhaustiveness error here.
-                    (SingleTagUnion { .. }, _)
-                    | (_, SingleTagUnion { .. })
+                    (NonRecursiveSingleTag { .. }, _)
+                    | (_, NonRecursiveSingleTag { .. })
                     | (Enumeration { .. }, _)
                     | (_, Enumeration { .. })
                     | (NonRecursive { .. }, _)
@@ -516,9 +516,10 @@ pub enum RocTagUnion {
         tags: Vec<String>,
         size: u32,
     },
-    SingleTagUnion {
+    NonRecursiveSingleTag {
         name: String,
         tag_name: String,
+        payload: Option<TypeId>,
     },
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
@@ -539,10 +540,7 @@ pub enum RocTagUnion {
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-    NonNullableUnwrapped {
-        name: String,
-        content: TypeId,
-    },
+    NonNullableUnwrapped { name: String, content: TypeId },
 
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
@@ -1137,11 +1135,12 @@ fn add_tag_union<'a>(
             // This should be a single-tag union.
             debug_assert_eq!(tags.len(), 1);
 
-            let (tag_name, _) = tags.pop().unwrap();
+            let (tag_name, payload) = tags.pop().unwrap();
 
-            RocTagUnion::SingleTagUnion {
+            RocTagUnion::NonRecursiveSingleTag {
                 name: name.clone(),
                 tag_name,
+                payload,
             }
         }
         Layout::Builtin(_)
