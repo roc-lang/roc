@@ -4243,7 +4243,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
         opt_level,
         procedures,
         Some(entry_point),
-        Some(Path::new("/tmp/test.ll")),
+        Some(&std::env::temp_dir().join("test.ll")),
     );
 
     promote_to_wasm_test_wrapper(env, mod_solutions, entry_point.symbol, entry_point.layout)
@@ -4260,7 +4260,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
         opt_level,
         procedures,
         Some(entry_point),
-        Some(Path::new("/tmp/test.ll")),
+        Some(&std::env::temp_dir().join("test.ll")),
     );
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
@@ -4278,7 +4278,7 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
         opt_level,
         procedures,
         opt_entry_point,
-        Some(Path::new("/tmp/test.ll")),
+        Some(&std::env::temp_dir().join("test.ll")),
     );
 
     let captures_niche = CapturesNiche::no_niche();
