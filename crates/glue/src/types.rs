@@ -1066,7 +1066,15 @@ fn add_tag_union<'a>(
                 // Optimization: No need to store a tag ID (the payload is "unwrapped")
                 // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
                 NonNullableUnwrapped(_) => {
-                    todo!()
+                    debug_assert_eq!(1, tags.len());
+
+                    let (tag_name, payload) = tags.pop().unwrap();
+
+                    RocTagUnion::RecursiveSingleTag {
+                        name: name.clone(),
+                        tag_name,
+                        payload: payload.unwrap(),
+                    }
                 }
                 // A recursive tag union that has an empty variant
                 // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison

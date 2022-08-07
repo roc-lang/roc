@@ -248,14 +248,35 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::RecursiveSingleTag {
                     name,
                     tag_name,
-                    payload,
+                    payload: payload_id,
                 }
                 | RocTagUnion::NonRecursiveSingleTag {
                     name,
                     tag_name,
-                    payload: Some(payload),
+                    payload: Some(payload_id),
                 } => {
-                    todo!();
+                    // Store single-tag unions as structs rather than enums,
+                    // because they have only one alternative. However, still
+                    // offer the usual tag union APIs.
+                    {
+                        let derive = derive_str(
+                            &RocType::Struct {
+                                // Deriving doesn't depend on the struct's name,
+                                // so no need to clone name here.
+                                name: String::new(),
+                                fields: vec![(tag_name.clone(), *payload_id)],
+                            },
+                            types,
+                            false,
+                        );
+                        let mut buf = format!("#[repr(C)]\n{derive}\npub struct {name} {{");
+
+                        write_tag_union_field(tag_name, &Some(*payload_id), types, &mut buf);
+
+                        buf.push_str("}\n");
+
+                        add_decl(impls, None, target_info, buf);
+                    }
                 }
                 RocTagUnion::NonRecursiveSingleTag {
                     name,
@@ -465,27 +486,7 @@ pub struct {name} {{
         let mut buf = format!("#[repr(C)]\n{pub_str}union {decl_union_name} {{\n");
 
         for (tag_name, opt_payload_id) in tags {
-            // If there's no payload, we don't need a discriminant for it.
-            if let Some(payload_id) = opt_payload_id {
-                let payload_type = types.get_type(*payload_id);
-
-                write!(buf, "{INDENT}{tag_name}: ").unwrap();
-
-                if cannot_derive_copy(payload_type, types) {
-                    // types with pointers need ManuallyDrop
-                    // because rust unions don't (and can't)
-                    // know how to drop them automatically!
-                    writeln!(
-                        buf,
-                        "core::mem::ManuallyDrop<{}>,",
-                        type_name(*payload_id, types)
-                    )
-                    .unwrap();
-                } else {
-                    buf.push_str(&type_name(*payload_id, types));
-                    buf.push_str(",\n");
-                }
-            }
+            write_tag_union_field(tag_name, opt_payload_id, types, &mut buf);
         }
 
         if tags.len() > 1 {
@@ -1274,6 +1275,36 @@ pub struct {name} {{
         buf.push('}');
 
         add_decl(impls, opt_impl, target_info, buf);
+    }
+}
+
+#[inline(always)]
+fn write_tag_union_field(
+    tag_name: &str,
+    opt_payload_id: &Option<TypeId>,
+    types: &Types,
+    buf: &mut String,
+) {
+    // If there's no payload, we don't need a discriminant for it.
+    if let Some(payload_id) = opt_payload_id {
+        let payload_type = types.get_type(*payload_id);
+
+        write!(buf, "{INDENT}{tag_name}: ").unwrap();
+
+        if cannot_derive_copy(payload_type, types) {
+            // types with pointers need ManuallyDrop
+            // because rust unions don't (and can't)
+            // know how to drop them automatically!
+            writeln!(
+                buf,
+                "core::mem::ManuallyDrop<{}>,",
+                type_name(*payload_id, types)
+            )
+            .unwrap();
+        } else {
+            buf.push_str(&type_name(*payload_id, types));
+            buf.push_str(",\n");
+        }
     }
 }
 
