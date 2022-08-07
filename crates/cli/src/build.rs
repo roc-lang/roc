@@ -5,7 +5,7 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
-use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_load::{EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
@@ -55,14 +55,18 @@ pub fn build_file<'a>(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
+    let load_config = LoadConfig {
+        target_info,
+        // TODO: expose this from CLI?
+        render: RenderTarget::ColorTerminal,
+        threading,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
         subs_by_module,
-        target_info,
-        // TODO: expose this from CLI?
-        RenderTarget::ColorTerminal,
-        threading,
+        load_config,
     )?;
 
     use target_lexicon::Architecture;
@@ -74,36 +78,37 @@ pub fn build_file<'a>(
     // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
     //
     // and zig does not currently emit `.a` webassembly static libraries
-    let host_extension = if emit_wasm {
-        if matches!(opt_level, OptLevel::Development) {
-            "wasm"
-        } else {
-            "zig"
+    let (host_extension, app_extension, extension) = {
+        use roc_target::OperatingSystem::*;
+
+        match roc_target::OperatingSystem::from(target.operating_system) {
+            Wasi => {
+                if matches!(opt_level, OptLevel::Development) {
+                    ("wasm", "wasm", Some("wasm"))
+                } else {
+                    ("zig", "bc", Some("wasm"))
+                }
+            }
+            Unix => ("o", "o", None),
+            Windows => ("obj", "obj", Some("exe")),
         }
-    } else {
-        "o"
-    };
-    let app_extension = if emit_wasm {
-        if matches!(opt_level, OptLevel::Development) {
-            "wasm"
-        } else {
-            "bc"
-        }
-    } else {
-        "o"
     };
 
     let cwd = app_module_path.parent().unwrap();
-    let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut binary_path = cwd.join(&*loaded.output_path);
 
-    if emit_wasm {
-        binary_path.set_extension("wasm");
+    if let Some(extension) = extension {
+        binary_path.set_extension(extension);
     }
 
-    let host_input_path = cwd
-        .join(&*loaded.platform_path)
-        .with_file_name("host")
-        .with_extension(host_extension);
+    let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
+    {
+        cwd.join(platform_path)
+            .with_file_name("host")
+            .with_extension(host_extension)
+    } else {
+        unreachable!();
+    };
 
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
@@ -441,15 +446,15 @@ pub fn check_file(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let mut loaded = roc_load::load_and_typecheck(
-        arena,
-        roc_file_path,
-        subs_by_module,
+    let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
-        RenderTarget::ColorTerminal,
+        render: RenderTarget::ColorTerminal,
         threading,
-    )?;
+        exec_mode: ExecutionMode::Check,
+    };
+    let mut loaded =
+        roc_load::load_and_typecheck(arena, roc_file_path, subs_by_module, load_config)?;
 
     let buf = &mut String::with_capacity(1024);
 

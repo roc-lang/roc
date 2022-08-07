@@ -288,13 +288,18 @@ fn fmt_expect<'a, 'buf>(
     is_multiline: bool,
     indent: u16,
 ) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("expect");
+
     let return_indent = if is_multiline {
+        buf.newline();
         indent + INDENT
     } else {
+        buf.spaces(1);
         indent
     };
 
-    buf.push_str("expect");
     condition.format(buf, return_indent);
 }
 

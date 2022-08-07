@@ -437,7 +437,7 @@ mod encode_immediate {
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm"))]
+            #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
@@ -690,6 +690,31 @@ fn encode_derived_list_of_records() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
+fn encode_derived_list_of_lists_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                lst = [["a", "b"], ["c", "d", "e"], ["f"]]
+                encoded = Encode.toBytes lst Json.toUtf8
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[["a","b"],["c","d","e"],["f"]]"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
     not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
@@ -778,5 +803,158 @@ fn decode_use_stdlib_json_list() {
         ),
         RocList::from_slice(&[1u8, 2u8, 3u8]),
         RocList<u8>
+    )
+}
+
+mod decode_immediate {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn string() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.fromUtf8 is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("foo"),
+            RocStr
+        )
+    }
+
+    macro_rules! num_immediate {
+        ($($num:expr, $typ:ident)*) => {$(
+            #[test]
+            #[cfg(any(feature = "gen-llvm"))]
+            fn $typ() {
+                assert_evals_to!(
+                    &format!(indoc!(
+                        r#"
+                        app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                        main =
+                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                                Ok n -> n
+                                _ -> 101{}
+                        "#
+                    ), $num, stringify!($typ), stringify!($typ)),
+                    $num,
+                    $typ
+                )
+            }
+        )*}
+    }
+
+    num_immediate! {
+        17, i8
+        17, i16
+        17, i32
+        17, i64
+        17, i128
+        17, u8
+        17, u16
+        17, u32
+        17, u64
+        17, u128
+        17.23, f32
+        17.23, f64
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn dec() {
+        use roc_std::RocDec;
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Decode, Json] provides [main] to "./platform"
+
+                main =
+                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                        Ok n -> n
+                        _ -> 101dec
+                "#
+            ),
+            RocDec::from_str("17.23").unwrap(),
+            RocDec
+        )
+    }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm"), // currently fails on gen-wasm
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
+fn encode_then_decode_list_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    Ok l -> Str.joinWith l ","
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
+fn encode_then_decode_list_of_lists_of_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("a,b;c,d,e;f"),
+        RocStr
     )
 }

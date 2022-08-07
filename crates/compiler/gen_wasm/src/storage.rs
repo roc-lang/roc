@@ -621,7 +621,7 @@ impl<'a> Storage<'a> {
         to_symbol: Symbol,
         from_addr: AddressValue,
         from_offset: u32,
-    ) -> u32 {
+    ) {
         let to_storage = self.get(&to_symbol).to_owned();
         match to_storage {
             StoredValue::StackMemory {
@@ -656,7 +656,6 @@ impl<'a> Storage<'a> {
                         alignment_bytes,
                     },
                 );
-                size
             }
 
             StoredValue::VirtualMachineStack {
@@ -690,8 +689,6 @@ impl<'a> Storage<'a> {
                 if let StoredValue::Local { local_id, .. } = to_storage {
                     code_builder.set_local(local_id);
                 }
-
-                size
             }
         }
     }

@@ -120,6 +120,7 @@ pub fn build_zig_host_native(
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home);
+
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             "build-exe",
@@ -130,6 +131,7 @@ pub fn build_zig_host_native(
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
+
     command.args(&[
         zig_host_src,
         emit_bin,
@@ -160,6 +162,7 @@ pub fn build_zig_host_native(
     } else if matches!(opt_level, OptLevel::Size) {
         command.args(&["-O", "ReleaseSmall"]);
     }
+
     command.output().unwrap()
 }
 
@@ -425,7 +428,11 @@ pub fn rebuild_host(
         host_input_path.with_file_name(if shared_lib_path.is_some() {
             "dynhost"
         } else {
-            "host.o"
+            match roc_target::OperatingSystem::from(target.operating_system) {
+                roc_target::OperatingSystem::Windows => "host.obj",
+                roc_target::OperatingSystem::Unix => "host.o",
+                roc_target::OperatingSystem::Wasi => "host.o",
+            }
         })
     };
 
@@ -1095,11 +1102,58 @@ fn link_wasm32(
 
 fn link_windows(
     _target: &Triple,
-    _output_path: PathBuf,
-    _input_paths: &[&str],
-    _link_type: LinkType,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    todo!("Add windows support to the surgical linker. See issue #2608.")
+    let zig_str_path = find_zig_str_path();
+
+    match link_type {
+        LinkType::Dylib => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-lib"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                    "-dynamic",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::Executable => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::None => todo!(),
+    }
 }
 
 pub fn llvm_module_to_dylib(

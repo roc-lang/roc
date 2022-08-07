@@ -197,7 +197,7 @@ takeFloat = \bytes ->
 
     when List.get rest 0 is
         Ok 46 -> # 46 = .
-            { taken: floatPart, rest: afterAll } = takeDigits rest
+            { taken: floatPart, rest: afterAll } = takeDigits (List.split rest 1).others
             builtFloat =
                 List.concat (List.append intPart (asciiByte '.')) floatPart
 

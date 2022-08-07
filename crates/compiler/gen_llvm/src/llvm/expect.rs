@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_str_bitcode_fn;
-use crate::llvm::build::{get_tag_id, store_roc_value, Env};
+use crate::llvm::build::{get_tag_id, store_roc_value, tag_pointer_clear_tag_id, Env};
 use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use inkwell::builder::Builder;
@@ -503,6 +503,9 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     .unwrap();
 
                 let layout = Layout::struct_no_name_order(field_layouts);
+                let layout = Layout::struct_no_name_order(
+                    env.arena.alloc([layout, union_layout.tag_id_layout()]),
+                );
                 let basic_type = basic_type_from_layout(env, &layout);
 
                 let data_ptr = env.builder.build_pointer_cast(
@@ -533,7 +536,304 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        _ => todo!(),
+        Recursive(tags) => {
+            let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+            let switch_block = env.context.append_basic_block(parent, "switch_block");
+            env.builder.build_unconditional_branch(switch_block);
+
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_modify");
+                env.builder.position_at_end(block);
+
+                // write the "pointer" of the current offset
+                write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, tag_id);
+
+                let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
+
+                let raw_data_ptr = env
+                    .builder
+                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+                    .unwrap();
+
+                let layout = Layout::struct_no_name_order(field_layouts);
+                let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    layout
+                } else {
+                    Layout::struct_no_name_order(
+                        env.arena.alloc([layout, union_layout.tag_id_layout()]),
+                    )
+                };
+                let basic_type = basic_type_from_layout(env, &layout);
+
+                let data_ptr = env.builder.build_pointer_cast(
+                    raw_data_ptr,
+                    basic_type.ptr_type(AddressSpace::Generic),
+                    "data_ptr",
+                );
+
+                let data = env.builder.build_load(data_ptr, "load_data");
+
+                let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+                let cursors = Cursors {
+                    offset: extra_offset,
+                    extra_offset: env.builder.build_int_add(
+                        extra_offset,
+                        env.ptr_int().const_int(width as _, false),
+                        "new_offset",
+                    ),
+                };
+
+                let when_recursive = WhenRecursive::Loop(union_layout);
+                let answer =
+                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+                env.builder.build_return(Some(&answer));
+
+                cases.push((id.get_type().const_int(tag_id as u64, false), block));
+            }
+
+            env.builder.position_at_end(switch_block);
+
+            match cases.pop() {
+                Some((_, default)) => {
+                    env.builder.build_switch(id, default, &cases);
+                }
+                None => {
+                    // we're serializing an empty tag union; this code is effectively unreachable
+                    env.builder.build_unreachable();
+                }
+            }
+        }
+        NonNullableUnwrapped(fields) => {
+            //
+
+            let tag_value = tag_value.into_pointer_value();
+
+            build_copy(env, ptr, offset, extra_offset.into());
+
+            let layout = Layout::struct_no_name_order(fields);
+            let basic_type = basic_type_from_layout(env, &layout);
+
+            let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+            let cursors = Cursors {
+                offset: extra_offset,
+                extra_offset: env.builder.build_int_add(
+                    extra_offset,
+                    env.ptr_int().const_int(width as _, false),
+                    "new_offset",
+                ),
+            };
+
+            let raw_data_ptr = env
+                .builder
+                .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+                .unwrap();
+
+            let data_ptr = env.builder.build_pointer_cast(
+                raw_data_ptr,
+                basic_type.ptr_type(AddressSpace::Generic),
+                "data_ptr",
+            );
+
+            let data = env.builder.build_load(data_ptr, "load_data");
+
+            let when_recursive = WhenRecursive::Loop(union_layout);
+            let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+            env.builder.build_return(Some(&answer));
+        }
+        NullableWrapped {
+            nullable_id,
+            other_tags,
+        } => {
+            let switch_block = env.context.append_basic_block(parent, "switch_block");
+            let null_block = env.context.append_basic_block(parent, "null_block");
+
+            let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+            let comparison = env
+                .builder
+                .build_is_null(tag_value.into_pointer_value(), "is_null");
+
+            env.builder
+                .build_conditional_branch(comparison, null_block, switch_block);
+
+            {
+                let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
+
+                for i in 0..other_tags.len() + 1 {
+                    if i == nullable_id as _ {
+                        continue;
+                    }
+
+                    let block = env.context.append_basic_block(parent, "tag_id_modify");
+                    env.builder.position_at_end(block);
+
+                    // write the "pointer" of the current offset
+                    write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, i);
+
+                    let fields = if i >= nullable_id as _ {
+                        other_tags[i - 1]
+                    } else {
+                        other_tags[i]
+                    };
+
+                    let layout = Layout::struct_no_name_order(fields);
+                    let basic_type = basic_type_from_layout(env, &layout);
+
+                    let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+                    let cursors = Cursors {
+                        offset: extra_offset,
+                        extra_offset: env.builder.build_int_add(
+                            extra_offset,
+                            env.ptr_int().const_int(width as _, false),
+                            "new_offset",
+                        ),
+                    };
+
+                    let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
+
+                    let raw_data_ptr = env
+                        .builder
+                        .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+                        .unwrap();
+
+                    let data_ptr = env.builder.build_pointer_cast(
+                        raw_data_ptr,
+                        basic_type.ptr_type(AddressSpace::Generic),
+                        "data_ptr",
+                    );
+
+                    let data = env.builder.build_load(data_ptr, "load_data");
+
+                    let when_recursive = WhenRecursive::Loop(union_layout);
+                    let answer =
+                        build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+                    env.builder.build_return(Some(&answer));
+
+                    cases.push((id.get_type().const_int(i as u64, false), block));
+                }
+
+                env.builder.position_at_end(switch_block);
+
+                match cases.pop() {
+                    Some((_, default)) => {
+                        env.builder.build_switch(id, default, &cases);
+                    }
+                    None => {
+                        // we're serializing an empty tag union; this code is effectively unreachable
+                        env.builder.build_unreachable();
+                    }
+                }
+            }
+
+            {
+                env.builder.position_at_end(null_block);
+
+                let value = env.ptr_int().const_zero();
+                build_copy(env, ptr, offset, value.into());
+
+                env.builder.build_return(Some(&extra_offset));
+            }
+        }
+        NullableUnwrapped { other_fields, .. } => {
+            let other_block = env.context.append_basic_block(parent, "other_block");
+            let null_block = env.context.append_basic_block(parent, "null_block");
+
+            let comparison = env
+                .builder
+                .build_is_null(tag_value.into_pointer_value(), "is_null");
+
+            env.builder
+                .build_conditional_branch(comparison, null_block, other_block);
+
+            {
+                env.builder.position_at_end(null_block);
+
+                let value = env.ptr_int().const_zero();
+                build_copy(env, ptr, offset, value.into());
+
+                env.builder.build_return(Some(&extra_offset));
+            }
+
+            {
+                env.builder.position_at_end(other_block);
+
+                // write the "pointer" af the current offset
+                build_copy(env, ptr, offset, extra_offset.into());
+
+                let layout = Layout::struct_no_name_order(other_fields);
+                let basic_type = basic_type_from_layout(env, &layout);
+
+                let cursors = Cursors {
+                    offset: extra_offset,
+                    extra_offset: env.builder.build_int_add(
+                        extra_offset,
+                        env.ptr_int()
+                            .const_int(layout.stack_size(env.target_info) as _, false),
+                        "new_offset",
+                    ),
+                };
+
+                let raw_data_ptr = env
+                    .builder
+                    .build_struct_gep(
+                        tag_value.into_pointer_value(),
+                        RocUnion::TAG_DATA_INDEX,
+                        "tag_data",
+                    )
+                    .unwrap();
+
+                let data_ptr = env.builder.build_pointer_cast(
+                    raw_data_ptr,
+                    basic_type.ptr_type(AddressSpace::Generic),
+                    "data_ptr",
+                );
+
+                let data = env.builder.build_load(data_ptr, "load_data");
+
+                let when_recursive = WhenRecursive::Loop(union_layout);
+                let answer =
+                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+                env.builder.build_return(Some(&answer));
+            }
+        }
+    }
+}
+
+fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+    offset: IntValue<'ctx>,
+    extra_offset: IntValue<'ctx>,
+    union_layout: UnionLayout<'a>,
+    tag_id: usize,
+) {
+    if union_layout.stores_tag_id_in_pointer(env.target_info) {
+        // first, store tag id as u32
+        let tag_id_intval = env.context.i32_type().const_int(tag_id as _, false);
+        build_copy(env, ptr, offset, tag_id_intval.into());
+
+        // increment offset by 4
+        let four = env.ptr_int().const_int(4, false);
+        let offset = env.builder.build_int_add(offset, four, "");
+
+        // cast to u32
+        let extra_offset = env
+            .builder
+            .build_int_cast(extra_offset, env.context.i32_type(), "");
+
+        build_copy(env, ptr, offset, extra_offset.into());
+    } else {
+        build_copy(env, ptr, offset, extra_offset.into());
     }
 }
 

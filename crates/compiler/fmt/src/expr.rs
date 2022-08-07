@@ -815,16 +815,24 @@ fn fmt_expect<'a, 'buf>(
     is_multiline: bool,
     indent: u16,
 ) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("expect");
+
     let return_indent = if is_multiline {
+        buf.newline();
         indent + INDENT
     } else {
+        buf.spaces(1);
         indent
     };
 
-    buf.push_str("expect");
     condition.format(buf, return_indent);
-    buf.push('\n');
-    continuation.format(buf, return_indent);
+
+    // Always put a blank line after the `expect` line(s)
+    buf.ensure_ends_with_blank_line();
+
+    continuation.format(buf, indent);
 }
 
 fn fmt_if<'a, 'buf>(

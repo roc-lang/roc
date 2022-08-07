@@ -1,5 +1,34 @@
 # Frequently Asked Questions
 
+## Where did the name Roc come from?
+
+<img width="128" alt="The Roc logo, an origami bird" src="https://user-images.githubusercontent.com/1094080/92188927-e61ebd00-ee2b-11ea-97ef-2fc88e0094b0.png">
+
+The Roc programming language is named after [a mythical bird](<https://en.wikipedia.org/wiki/Roc_(mythology)>).
+
+That’s why the logo is a bird. It’s specifically an [_origami_ bird](https://youtu.be/9gni1t1k1uY) as an homage
+to [Elm](https://elm-lang.org/)’s tangram logo.
+
+Roc is a direct descendant of Elm. The languages are similar, but not the same.
+[Origami](https://en.wikipedia.org/wiki/Origami) likewise has similarities to [tangrams](https://en.wikipedia.org/wiki/Tangram), although they are not the same.
+Both involve making a surprising variety of things
+from simple primitives. [_Folds_](<https://en.wikipedia.org/wiki/Fold_(higher-order_function)>)
+are also common in functional programming.
+
+The logo was made by tracing triangles onto a photo of a physical origami bird.
+It’s made of triangles because triangles are a foundational primitive in
+computer graphics.
+
+The name was chosen because it makes for a three-letter file extension, it means something
+fantastical, and it has incredible potential for puns. Here are some different ways to spell it:
+
+- **Roc** - traditional
+- **roc** - low-key
+- **ROC** - [YELLING](https://package.elm-lang.org/packages/elm/core/latest/String#toUpper)
+- **Röc** - [metal 🤘](https://en.wikipedia.org/wiki/Metal_umlaut)
+
+Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
+
 # Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
 
 The Roc editor is one of the key areas where we want to innovate. Constraining ourselves to a plugin for existing editors would severely limit our possibilities for innovation.
@@ -418,6 +447,18 @@ The plan is to never implement Roc's compiler in Roc.
 The goal is for Roc's compiler to deliver the best user experience possible. Compiler performance is strongly influenced by how memory is used, and there are many performance benefits to be gained from using a systems language like Rust which offers more direct control over memory than Roc ever should.
 
 Roc isn't trying to be the best possible language for high-performance compiler development, but it is trying to have a high-performance compiler. The best tool for that job is a language other than Roc, so that's what we're using!
+
+## Why does Roc use the license it does?
+
+The short explanation for why Roc is released under the [Universal Permissive License](https://opensource.org/licenses/UPL):
+
+- Like [MIT](https://opensource.org/licenses/MIT), it's permissive and concise
+- Like [Apache2](https://opensource.org/licenses/Apache-2.0), it protects against contributors claiming software patents over contributed code after the fact (MIT and BSD do not include protections against this)
+- It's compatible with [GPLv2](https://opensource.org/licenses/GPL-2.0) (which [Apache2 is not](https://www.apache.org/licenses/GPL-compatibility.html))
+- It's one license, unlike "MIT or Apache2, at your choice" (which is how [Rust addressed the problem](https://internals.rust-lang.org/t/rationale-of-apache-dual-licensing/8952/4) of MIT not having patent protections but Apache2 not being GPLv2 compatible)
+- It's been approved by OSI, FSF, and Oracle's lawyers, so it has been not only vetted by three giants in the world of software licensing, but also three giants with competing interests - and they all approved it.
+
+There's also [a longer explanation](https://github.com/rtfeldman/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
 
 ## Why does Roc use both Rust and Zig?
 

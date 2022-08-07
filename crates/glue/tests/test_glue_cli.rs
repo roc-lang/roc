@@ -79,12 +79,22 @@ mod glue_cli_run {
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
+        single_tag_union:"single-tag-union" => indoc!(r#"
+            tag_union was: SingleTagUnion::OneTag
+        "#),
         union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
+        "#),
+        nullable_wrapped:"nullable-wrapped" => indoc!(r#"
+            tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
+            `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
+            `More "small str" Empty` is: StrFingerTree::More("small str", StrFingerTree::Empty)
+            `Single "small str"` is: StrFingerTree::Single("small str")
+            `Empty` is: StrFingerTree::Empty
         "#),
         nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
             tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
@@ -146,9 +156,6 @@ mod glue_cli_run {
             .parent()
             .unwrap()
             .join("fixture-templates");
-
-        dbg!(&platform_module_path);
-        dbg!(&glue_file);
 
         // Copy the rust template from the templates directory into the fixture dir.
         dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)

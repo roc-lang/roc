@@ -3,7 +3,7 @@ use crate::def::Def;
 use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive, WhenBranchPattern};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
-use roc_collections::{SendMap, VecSet};
+use roc_collections::{SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -201,7 +201,7 @@ fn build_effect_always(
     let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
-        aliases: SendMap::default(),
+        aliases: VecMap::default(),
         region: Region::zero(),
     };
 
@@ -393,7 +393,7 @@ fn build_effect_map(
     let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
-        aliases: SendMap::default(),
+        aliases: VecMap::default(),
         region: Region::zero(),
     };
 
@@ -601,7 +601,7 @@ fn build_effect_after(
     let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
-        aliases: SendMap::default(),
+        aliases: VecMap::default(),
         region: Region::zero(),
     };
 
@@ -833,7 +833,7 @@ fn build_effect_forever(
     let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
-        aliases: SendMap::default(),
+        aliases: VecMap::default(),
         region: Region::zero(),
     };
 
@@ -1090,7 +1090,7 @@ fn build_effect_loop(
     let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
-        aliases: SendMap::default(),
+        aliases: VecMap::default(),
         region: Region::zero(),
     };
 

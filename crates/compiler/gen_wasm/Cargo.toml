@@ -1,9 +1,9 @@
 [package]
 name = "roc_gen_wasm"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [dependencies]
 bitvec = "1"
