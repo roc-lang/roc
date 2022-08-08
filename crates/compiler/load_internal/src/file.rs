@@ -445,6 +445,7 @@ fn start_phase<'a>(
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
+                    execution_mode: state.exec_mode,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -1090,6 +1091,7 @@ enum BuildTask<'a> {
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
+        execution_mode: ExecutionMode,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
@@ -4736,6 +4738,7 @@ fn make_specializations<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
+    execution_mode: ExecutionMode,
     solved_subs: Solved<Subs>,
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
@@ -4993,6 +4996,12 @@ fn build_pending_specializations<'a>(
                 // the declarations of this group will be treaded individually by later iterations
             }
             Expectation => {
+                // skip expectations if we're not going to run them
+                match execution_mode {
+                    ExecutionMode::Test => { /* fall through */ }
+                    ExecutionMode::Check | ExecutionMode::Executable => continue,
+                }
+
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
@@ -5265,6 +5274,7 @@ fn run_task<'a>(
         )),
         BuildPendingSpecializations {
             module_id,
+            execution_mode,
             ident_ids,
             decls,
             module_timing,
@@ -5277,6 +5287,7 @@ fn run_task<'a>(
             derived_module,
         } => Ok(build_pending_specializations(
             arena,
+            execution_mode,
             solved_subs,
             imported_module_thunks,
             module_id,

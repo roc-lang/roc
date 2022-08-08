@@ -148,27 +148,15 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
-                RocTagUnion::Enumeration { tags, name, size } => {
-                    if tags.len() == 1 {
-                        // An enumeration with one tag is a zero-sized unit type, so
-                        // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        let derive = derive_str(types.get_type(id), types, true);
-                        let struct_name = type_name(id, types);
-                        let body = format!("{derive}\nstruct {struct_name}();");
-
-                        add_decl(impls, None, target_info, body);
-                    } else {
-                        add_enumeration(
-                            name,
-                            target_info,
-                            types.get_type(id),
-                            tags.iter(),
-                            *size,
-                            types,
-                            impls,
-                        )
-                    }
-                }
+                RocTagUnion::Enumeration { tags, name, size } => add_enumeration(
+                    name,
+                    target_info,
+                    types.get_type(id),
+                    tags.iter(),
+                    *size,
+                    types,
+                    impls,
+                ),
                 RocTagUnion::NonRecursive {
                     tags,
                     name,
@@ -184,6 +172,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             target_info,
                             id,
                             tags,
+                            None,
                             *discriminant_size,
                             *discriminant_offset,
                             types,
@@ -206,6 +195,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             target_info,
                             id,
                             tags,
+                            None,
                             *discriminant_size,
                             *discriminant_offset,
                             types,
@@ -213,8 +203,30 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         );
                     }
                 }
-                RocTagUnion::NullableWrapped { .. } => {
-                    todo!();
+                RocTagUnion::NullableWrapped {
+                    name,
+                    index_of_null_tag,
+                    tags,
+                    discriminant_size,
+                    discriminant_offset,
+                } => {
+                    // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
+                    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+                    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+                    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+                    // and since Empty's tag id is 0, here nullable_id would be 0.
+                    add_tag_union(
+                        Recursiveness::Recursive,
+                        name,
+                        target_info,
+                        id,
+                        tags,
+                        Some(*index_of_null_tag as usize),
+                        *discriminant_size,
+                        *discriminant_offset,
+                        types,
+                        impls,
+                    )
                 }
                 RocTagUnion::NullableUnwrapped {
                     name,
@@ -235,6 +247,75 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 ),
                 RocTagUnion::NonNullableUnwrapped { .. } => {
                     todo!();
+                }
+                RocTagUnion::SingleTagUnion { name, tag_name } => {
+                    // An enumeration with one tag is a zero-sized unit type, so
+                    // represent it as a zero-sized struct (e.g. "struct Foo()").
+                    let derive = derive_str(
+                        &RocType::Struct {
+                            // Deriving doesn't depend on the struct's name,
+                            // so no need to clone name here.
+                            name: String::new(),
+                            fields: Vec::new(),
+                        },
+                        types,
+                        false,
+                    );
+                    let body = format!("{derive}\npub struct {name}();");
+
+                    add_decl(impls, None, target_info, body);
+
+                    let opt_impl = Some(format!("impl {name}"));
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// A tag named {tag_name}, which has no payload.
+    pub const {tag_name}: Self = Self();"#,
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_{tag_name}(self) {{
+        ()
+    }}"#,
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl,
+                        target_info,
+                        format!(
+                            r#"/// Other `as` methods return a payload, but since the {tag_name} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_{tag_name}(&self) {{
+        ()
+    }}"#,
+                        ),
+                    );
+
+                    // The Debug impl for the single-tag union
+                    {
+                        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
+                        let buf = format!(
+                            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+                f.write_str("{name}::")?;
+
+                f.write_str("{tag_name}")
+            }}"#
+                        );
+
+                        add_decl(impls, opt_impl, target_info, buf);
+                    }
                 }
             }
         }
@@ -307,6 +388,7 @@ fn add_tag_union(
     target_info: TargetInfo,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
+    null_tag_index: Option<usize>, // used only in the nullable-wrapped case
     discriminant_size: u32,
     discriminant_offset: u32,
     types: &Types,
@@ -528,7 +610,7 @@ pub struct {name} {{
             }
         }
 
-        for (tag_name, opt_payload_id) in tags {
+        for (tag_index, (tag_name, opt_payload_id)) in tags.iter().enumerate() {
             // Add a convenience constructor function to the impl, e.g.
             //
             // /// Construct a tag named Foo, with the appropriate payload
@@ -558,8 +640,14 @@ pub struct {name} {{
                             owned_get_payload = format!(
                                 r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut (*ptr).{tag_name},
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
 
-            core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
+            core::mem::ManuallyDrop::into_inner(swapped)
         }}"#
                             );
                             borrowed_get_payload = format!(
@@ -592,8 +680,18 @@ pub struct {name} {{
                     }
                     Recursiveness::NonRecursive => {
                         if cannot_derive_copy(payload_type, types) {
-                            owned_get_payload =
-                                format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})");
+                            owned_get_payload = format!(
+                                r#"{{
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut self.{tag_name},
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        }}"#
+                            );
                             borrowed_get_payload = format!("&self.{tag_name}");
                             // we need `mut self` for the argument because of ManuallyDrop
                             self_for_into = "mut self";
@@ -737,6 +835,21 @@ pub struct {name} {{
     }}"#,
                     ),
                 );
+            } else if Some(tag_index) == null_tag_index {
+                // The null tag index only occurs for nullable-wrapped tag unions,
+                // and it always has no payload. This is the one scenario where
+                // that constructor could come up!
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, which has no payload.
+    pub const {tag_name}: Self = Self {{
+        pointer: core::ptr::null_mut(),
+    }};"#,
+                    ),
+                );
             } else {
                 add_decl(
                     impls,
@@ -774,7 +887,7 @@ pub struct {name} {{
                     format!(
                         r#"/// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{tag_name}(&self) {{
+    pub fn as_{tag_name}(&self) {{
         ()
     }}"#,
                     ),
@@ -1294,6 +1407,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
+        | RocType::TagUnion(RocTagUnion::SingleTagUnion { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
@@ -1501,7 +1615,16 @@ pub struct {name} {{
 
         {
             let assign_payload = if cannot_derive_copy {
-                "core::mem::ManuallyDrop::take(&mut *self.pointer)"
+                r#"{{
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut *self.pointer,
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        }}"#
             } else {
                 "*self.pointer"
             };
@@ -1518,8 +1641,6 @@ pub struct {name} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
-
-        core::mem::drop::<Self>(self);
 
         {owned_ret}
     }}"#,
@@ -1583,7 +1704,7 @@ pub struct {name} {{
             format!(
                 r#"/// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{null_tag}(&self) {{
+    pub fn as_{null_tag}(&self) {{
         ()
     }}"#,
             ),
@@ -1909,6 +2030,7 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
+        | RocType::TagUnion(RocTagUnion::SingleTagUnion { .. })
         | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
@@ -1960,6 +2082,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
+        | RocType::TagUnion(RocTagUnion::SingleTagUnion { .. })
         | RocType::Function { .. } => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
@@ -1986,8 +2109,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
             })
         }
-        RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-            non_null_tags.iter().any(|(_, _, payloads)| {
+        RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+            tags.iter().any(|(_, payloads)| {
                 payloads
                     .iter()
                     .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))

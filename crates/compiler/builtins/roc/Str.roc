@@ -330,6 +330,15 @@ splitLast = \haystack, needle ->
         None ->
             Err NotFound
 
+# splitLast when needle isn't in haystack
+expect Str.splitLast "foo" "z" == Err NotFound
+
+# splitLast when haystack ends with needle repeated
+expect Str.splitLast "foo" "o" == Ok { before: "fo", after: "" }
+
+# splitLast with multi-byte needle
+expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+
 lastMatch : Str, Str -> [Some Nat, None]
 lastMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack

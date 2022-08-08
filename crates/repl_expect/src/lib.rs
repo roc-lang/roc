@@ -108,7 +108,7 @@ mod test {
             target_info,
             render: RenderTarget::ColorTerminal,
             threading: Threading::Single,
-            exec_mode: ExecutionMode::Executable,
+            exec_mode: ExecutionMode::Test,
         };
         let loaded = roc_load::load_and_monomorphize_from_str(
             arena,

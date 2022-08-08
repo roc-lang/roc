@@ -10,8 +10,8 @@ use core::{
     ptr,
 };
 
-#[cfg(not(feature = "no_std"))]
-use std::ffi::{CStr, CString};
+#[cfg(feature = "std")]
+use core::ffi::{CStr, CString};
 
 use crate::RocList;
 
@@ -527,7 +527,7 @@ impl Deref for RocStr {
 }
 
 /// This can fail because a CStr may contain invalid UTF-8 characters
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 impl TryFrom<&CStr> for RocStr {
     type Error = core::str::Utf8Error;
 
@@ -537,7 +537,7 @@ impl TryFrom<&CStr> for RocStr {
 }
 
 /// This can fail because a CString may contain invalid UTF-8 characters
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 impl TryFrom<CString> for RocStr {
     type Error = core::str::Utf8Error;
 
