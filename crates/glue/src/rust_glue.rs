@@ -640,8 +640,14 @@ pub struct {name} {{
                             owned_get_payload = format!(
                                 r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut (*ptr).{tag_name},
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
 
-            core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
+            core::mem::ManuallyDrop::into_inner(swapped)
         }}"#
                             );
                             borrowed_get_payload = format!(
@@ -674,8 +680,18 @@ pub struct {name} {{
                     }
                     Recursiveness::NonRecursive => {
                         if cannot_derive_copy(payload_type, types) {
-                            owned_get_payload =
-                                format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})");
+                            owned_get_payload = format!(
+                                r#"{{
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut self.{tag_name},
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        }}"#
+                            );
                             borrowed_get_payload = format!("&self.{tag_name}");
                             // we need `mut self` for the argument because of ManuallyDrop
                             self_for_into = "mut self";
@@ -1599,7 +1615,16 @@ pub struct {name} {{
 
         {
             let assign_payload = if cannot_derive_copy {
-                "core::mem::ManuallyDrop::take(&mut *self.pointer)"
+                r#"{{
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = core::mem::replace(
+                &mut *self.pointer,
+                core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+            );
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        }}"#
             } else {
                 "*self.pointer"
             };
@@ -1616,8 +1641,6 @@ pub struct {name} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
-
-        core::mem::drop::<Self>(self);
 
         {owned_ret}
     }}"#,
