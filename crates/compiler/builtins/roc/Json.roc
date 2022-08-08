@@ -417,13 +417,13 @@ tryDecode = \{ result, rest }, mapper ->
         Err e -> { result: Err e, rest }
 
 decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
-        decodeFields : st, List U8 -> DecodeResult st
-        decodeFields = \state, kvBytes ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeFields = \stepper, state, kvBytes ->
             { val: key, rest } <- recordKey kvBytes |> tryDecode
             { rest: afterColonBytes } <- colon rest |> tryDecode
             { val: newState, rest: beforeCommaOrBreak } <- tryDecode
                     (
-                        when stepField state key is
+                        when stepper state key is
                             Skip ->
                                 { rest: beforeCommaOrBreak } <- afterColonBytes |> anything |> tryDecode
                                 { result: Ok state, rest: beforeCommaOrBreak }
@@ -435,12 +435,12 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
             { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
 
             when commaResult is
-                Ok {} -> decodeFields newState nextBytes
+                Ok {} -> decodeFields stepField newState nextBytes
                 Err _ -> { result: Ok newState, rest: nextBytes }
 
         { rest: afterBraceBytes } <- bytes |> openBrace |> tryDecode
 
-        { val: endStateResult, rest: beforeClosingBraceBytes } <- decodeFields initialState afterBraceBytes |> tryDecode
+        { val: endStateResult, rest: beforeClosingBraceBytes } <- decodeFields stepField initialState afterBraceBytes |> tryDecode
 
         { rest: afterRecordBytes } <- beforeClosingBraceBytes |> closingBrace |> tryDecode
 
