@@ -29,7 +29,7 @@ theDecoder =
                     Err NoField -> Err TooShort
             Err NoField -> Err TooShort
 
-    Decode.record initialState stepField finalizer
+    Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 
 main =
     when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.decodeWith theDecoder Json.fromUtf8 is
