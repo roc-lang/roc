@@ -843,8 +843,8 @@ pub struct {name} {{
                 core::mem::replace(
                     &mut self.{tag_name},
                     core::mem::ManuallyDrop::new(uninitialized.assume_init()),
-                );
-            }}
+                )
+            }};
 
             core::mem::forget(self);
 
