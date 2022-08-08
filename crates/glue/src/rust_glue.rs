@@ -245,122 +245,21 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     types,
                     impls,
                 ),
-                RocTagUnion::RecursiveSingleTag {
+                RocTagUnion::SingleTag {
                     name,
                     tag_name,
                     payload_fields,
+                    is_recursive,
                 } => {
-                    // TODO
-                    todo!();
-                }
-                RocTagUnion::NonRecursiveSingleTag {
-                    name,
-                    tag_name,
-                    payload: Some(payload_id),
-                } => {
-                    // Store single-tag unions as structs rather than enums,
-                    // because they have only one alternative. However, still
-                    // offer the usual tag union APIs.
-                    {
-                        let derive = derive_str(
-                            &RocType::Struct {
-                                // Deriving doesn't depend on the struct's name,
-                                // so no need to clone name here.
-                                name: String::new(),
-                                fields: vec![(tag_name.clone(), *payload_id)],
-                            },
-                            types,
-                            false,
-                        );
-
-                        add_decl(
-                            impls,
-                            None,
-                            target_info,
-                            format!(
-                                r#"#[repr(C)]
-{derive}
-pub struct {name} {{
-    {tag_name}: *mut {}
-}}
-"#,
-                                type_name(*payload_id, types)
-                            ),
-                        );
-                    }
-                }
-                RocTagUnion::NonRecursiveSingleTag {
-                    name,
-                    tag_name,
-                    payload: None,
-                } => {
-                    // A single tag with no payload is a zero-sized unit type, so
-                    // represent it as a zero-sized struct (e.g. "struct Foo()").
-                    let derive = derive_str(
-                        &RocType::Struct {
-                            // Deriving doesn't depend on the struct's name,
-                            // so no need to clone name here.
-                            name: String::new(),
-                            fields: Vec::new(),
-                        },
+                    add_single_tag_union(
+                        name,
+                        tag_name,
+                        payload_fields,
                         types,
-                        false,
-                    );
-                    let body = format!("{derive}\npub struct {name}();");
-
-                    add_decl(impls, None, target_info, body);
-
-                    let opt_impl = Some(format!("impl {name}"));
-
-                    add_decl(
                         impls,
-                        opt_impl.clone(),
                         target_info,
-                        format!(
-                            r#"/// A tag named {tag_name}, which has no payload.
-    pub const {tag_name}: Self = Self();"#,
-                        ),
+                        *is_recursive,
                     );
-
-                    add_decl(
-                        impls,
-                        opt_impl.clone(),
-                        target_info,
-                        format!(
-                            r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_{tag_name}(self) {{
-        ()
-    }}"#,
-                        ),
-                    );
-
-                    add_decl(
-                        impls,
-                        opt_impl,
-                        target_info,
-                        format!(
-                            r#"/// Other `as` methods return a payload, but since the {tag_name} tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_{tag_name}(&self) {{
-        ()
-    }}"#,
-                        ),
-                    );
-
-                    // The Debug impl for the single-tag union
-                    {
-                        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
-                        let buf = format!(
-                            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-                f.write_str("{name}::")?;
-
-                f.write_str("{tag_name}")
-            }}"#
-                        );
-
-                        add_decl(impls, opt_impl, target_info, buf);
-                    }
                 }
             }
         }
@@ -382,6 +281,173 @@ pub struct {name} {{
         RocType::Function { .. } => {
             // TODO actually generate glue functions!
         }
+    }
+}
+
+fn add_single_tag_union(
+    name: &str,
+    tag_name: &str,
+    payload_fields: &[TypeId],
+    types: &Types,
+    impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
+    target_info: TargetInfo,
+    is_recursive: bool,
+) {
+    // Store single-tag unions as structs rather than enums,
+    // because they have only one alternative. However, still
+    // offer the usual tag union APIs.
+    {
+        let derive = derive_str(
+            &RocType::Struct {
+                // Deriving doesn't depend on the struct's name,
+                // so no need to clone name here.
+                name: String::new(),
+                fields: payload_fields
+                    .iter()
+                    .map(|type_id| (String::new(), *type_id))
+                    .collect(),
+            },
+            types,
+            false,
+        );
+
+        let mut body = format!("#[repr(C)]\n{derive}\npub struct {name} ");
+
+        if payload_fields.is_empty() {
+            // If there are no payload fields, this should not have been labeled recursive!
+            debug_assert!(!is_recursive);
+
+            // A single tag with no payload is a zero-sized unit type, so
+            // represent it as a zero-sized struct (e.g. "struct Foo()").
+            body.push_str("();\n");
+        } else {
+            body.push_str("{\n");
+
+            for (index, field_id) in payload_fields.iter().enumerate() {
+                let field_type = type_name(*field_id, types);
+
+                // These are all private fields, since this is a tag union.
+                body.push_str(&format!("{INDENT}f{index}: {field_type},\n"));
+            }
+
+            body.push_str("}\n");
+        }
+
+        add_decl(impls, None, target_info, body);
+    }
+
+    // the impl for the single-tag union itself
+    {
+        let opt_impl = Some(format!("impl {name}"));
+
+        if payload_fields.is_empty() {
+            add_decl(
+                impls,
+                opt_impl.clone(),
+                target_info,
+                format!(
+                    r#"/// A tag named {tag_name}, which has no payload.
+        pub const {tag_name}: Self = Self();"#,
+                ),
+            );
+
+            add_decl(
+                impls,
+                opt_impl.clone(),
+                target_info,
+                format!(
+                    r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn into_{tag_name}(self) {{
+            ()
+        }}"#,
+                ),
+            );
+
+            add_decl(
+                impls,
+                opt_impl,
+                target_info,
+                format!(
+                    r#"/// Other `as` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn as_{tag_name}(&self) {{
+            ()
+        }}"#,
+                ),
+            );
+        } else {
+            {
+                let mut args: Vec<String> = Vec::with_capacity(payload_fields.len());
+                let mut fields: Vec<String> = Vec::with_capacity(payload_fields.len());
+
+                for (index, field_id) in payload_fields.iter().enumerate() {
+                    let field_type = type_name(*field_id, types);
+
+                    args.push(format!("f{index}: {field_type}"));
+                    fields.push(format!("{INDENT}{INDENT}{INDENT}f{index},"));
+                }
+
+                let args = args.join(", ");
+                let fields = fields.join("\n");
+
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, with the given payload.
+    pub fn {tag_name}({args}) -> Self {{
+        Self {{
+{fields}
+        }}
+    }}"#,
+                    ),
+                );
+            }
+            {
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn into_{tag_name}(self) {{
+            ()
+        }}"#,
+                    ),
+                );
+
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// Other `as` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn as_{tag_name}(&self) {{
+            ()
+        }}"#,
+                    ),
+                );
+            }
+        }
+    }
+
+    // The Debug impl for the single-tag union
+    {
+        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
+
+        let buf = format!(
+            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+                    f.write_str("{name}::")?;
+
+                    f.write_str("{tag_name}")
+                }}"#
+        );
+
+        add_decl(impls, opt_impl, target_info, buf);
     }
 }
 
@@ -1452,12 +1518,11 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
-        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag { name, .. }) => name.clone(),
+        | RocType::TagUnion(RocTagUnion::SingleTag { name, .. }) => name.clone(),
         RocType::RecursivePointer(content) => type_name(*content, types),
         RocType::Function { name, .. } => name.clone(),
     }
@@ -2075,18 +2140,26 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { .. })
         | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocBox(_)
-        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag { .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
         | RocType::TagUnion(RocTagUnion::Recursive { .. })
-        | RocType::RecursivePointer { .. } => true,
+        | RocType::RecursivePointer { .. }
+        | RocType::TagUnion(RocTagUnion::SingleTag {
+            is_recursive: true, ..
+        }) => true,
+        RocType::TagUnion(RocTagUnion::SingleTag {
+            is_recursive: false,
+            payload_fields,
+            ..
+        }) => payload_fields
+            .iter()
+            .any(|type_id| cannot_derive_copy(types.get_type(*type_id), types)),
         RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
             tags.iter().any(|(_, payloads)| {
                 payloads
@@ -2127,7 +2200,6 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursiveSingleTag { .. })
         | RocType::Function { .. } => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
@@ -2146,7 +2218,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         RocType::TagUnionPayload { fields, .. } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnion(RocTagUnion::RecursiveSingleTag { payload_fields, .. }) => payload_fields
+        RocType::TagUnion(RocTagUnion::SingleTag { payload_fields, .. }) => payload_fields
             .iter()
             .any(|type_id| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnion(RocTagUnion::Recursive { tags, .. })

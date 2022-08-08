@@ -24,8 +24,8 @@ pub extern "C" fn rust_main() -> i32 {
 
     // Verify that it has all the expected traits.
 
-    // assert!(tag_union == tag_union); // PartialEq
-    // assert!(tag_union.clone() == tag_union.clone()); // Clone
+    assert!(tag_union == tag_union); // PartialEq
+                                     // assert!(tag_union.clone() == tag_union.clone()); // Clone
 
     // assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
     // assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
