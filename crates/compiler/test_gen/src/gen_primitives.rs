@@ -1170,8 +1170,8 @@ fn io_poc_desugared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn return_wrapped_function_pointer() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn return_wrapped_function_a() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1186,15 +1186,14 @@ fn return_wrapped_function_pointer() {
             main = foo
             "#
         ),
-        1,
-        usize,
-        |_| 1
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn return_wrapped_function_pointer_b() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn return_wrapped_function_b() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1208,14 +1207,13 @@ fn return_wrapped_function_pointer_b() {
             main = foo
             "#
         ),
-        1,
-        usize,
-        |_| 1
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn return_wrapped_closure() {
     assert_evals_to!(
         indoc!(
@@ -1234,9 +1232,8 @@ fn return_wrapped_closure() {
             main = foo
             "#
         ),
-        1,
-        usize,
-        |_| 1
+        [5],
+        [i64; 1]
     );
 }
 
@@ -1844,7 +1841,7 @@ fn unified_empty_closure_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn task_always_twice() {
     assert_evals_to!(
         indoc!(
@@ -1882,14 +1879,14 @@ fn task_always_twice() {
 
             "#
         ),
-        0,
-        usize,
-        |_| 0
+        (),
+        (f64, u8),
+        |_| ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn wildcard_rigid() {
     assert_evals_to!(
         indoc!(
@@ -1912,14 +1909,13 @@ fn wildcard_rigid() {
             main = always {}
             "#
         ),
-        0,
-        usize,
-        |_| 0
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alias_of_alias_with_type_arguments() {
     assert_evals_to!(
         indoc!(
@@ -1941,9 +1937,9 @@ fn alias_of_alias_with_type_arguments() {
             main = always {}
             "#
         ),
-        0,
-        usize,
-        |_| 0
+        (),
+        (f64, u8),
+        |_| ()
     );
 }
 
