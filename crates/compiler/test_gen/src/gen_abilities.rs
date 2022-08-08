@@ -958,3 +958,26 @@ fn encode_then_decode_list_of_lists_of_strings() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn decode_list_of_strings_manual() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            listStringDecoder = Decode.list Decode.string
+
+            main =
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.decodeWith listStringDecoder Json.fromUtf8 is
+                    {result, rest: _} ->
+                        when result is
+                            Ok l -> Str.joinWith l ","
+                            _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("a,b,c"),
+        RocStr
+    )
+}

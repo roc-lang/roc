@@ -40,13 +40,13 @@ impl WorldAbilities {
         store: AbilitiesStore,
         exposed_types: ExposedTypesStorageSubs,
     ) {
-        let old_store = self
+        let _old_store = self
             .world
             .write()
             .unwrap()
             .insert(module, (store, exposed_types));
 
-        debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
+        // debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
     }
 
     #[inline(always)]
