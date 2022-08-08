@@ -248,9 +248,12 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::RecursiveSingleTag {
                     name,
                     tag_name,
-                    payload: payload_id,
+                    payload_fields,
+                } => {
+                    // TODO
+                    todo!();
                 }
-                | RocTagUnion::NonRecursiveSingleTag {
+                RocTagUnion::NonRecursiveSingleTag {
                     name,
                     tag_name,
                     payload: Some(payload_id),
@@ -269,13 +272,21 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             types,
                             false,
                         );
-                        let mut buf = format!("#[repr(C)]\n{derive}\npub struct {name} {{");
 
-                        write_tag_union_field(tag_name, &Some(*payload_id), types, &mut buf);
-
-                        buf.push_str("}\n");
-
-                        add_decl(impls, None, target_info, buf);
+                        add_decl(
+                            impls,
+                            None,
+                            target_info,
+                            format!(
+                                r#"#[repr(C)]
+{derive}
+pub struct {name} {{
+    {tag_name}: *mut {}
+}}
+"#,
+                                type_name(*payload_id, types)
+                            ),
+                        );
                     }
                 }
                 RocTagUnion::NonRecursiveSingleTag {
@@ -486,7 +497,27 @@ pub struct {name} {{
         let mut buf = format!("#[repr(C)]\n{pub_str}union {decl_union_name} {{\n");
 
         for (tag_name, opt_payload_id) in tags {
-            write_tag_union_field(tag_name, opt_payload_id, types, &mut buf);
+            // If there's no payload, we don't need a discriminant for it.
+            if let Some(payload_id) = opt_payload_id {
+                let payload_type = types.get_type(*payload_id);
+
+                write!(buf, "{INDENT}{tag_name}: ").unwrap();
+
+                if cannot_derive_copy(payload_type, types) {
+                    // types with pointers need ManuallyDrop
+                    // because rust unions don't (and can't)
+                    // know how to drop them automatically!
+                    writeln!(
+                        buf,
+                        "core::mem::ManuallyDrop<{}>,",
+                        type_name(*payload_id, types)
+                    )
+                    .unwrap();
+                } else {
+                    buf.push_str(&type_name(*payload_id, types));
+                    buf.push_str(",\n");
+                }
+            }
         }
 
         if tags.len() > 1 {
@@ -1275,36 +1306,6 @@ pub struct {name} {{
         buf.push('}');
 
         add_decl(impls, opt_impl, target_info, buf);
-    }
-}
-
-#[inline(always)]
-fn write_tag_union_field(
-    tag_name: &str,
-    opt_payload_id: &Option<TypeId>,
-    types: &Types,
-    buf: &mut String,
-) {
-    // If there's no payload, we don't need a discriminant for it.
-    if let Some(payload_id) = opt_payload_id {
-        let payload_type = types.get_type(*payload_id);
-
-        write!(buf, "{INDENT}{tag_name}: ").unwrap();
-
-        if cannot_derive_copy(payload_type, types) {
-            // types with pointers need ManuallyDrop
-            // because rust unions don't (and can't)
-            // know how to drop them automatically!
-            writeln!(
-                buf,
-                "core::mem::ManuallyDrop<{}>,",
-                type_name(*payload_id, types)
-            )
-            .unwrap();
-        } else {
-            buf.push_str(&type_name(*payload_id, types));
-            buf.push_str(",\n");
-        }
     }
 }
 
@@ -2145,6 +2146,9 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         RocType::TagUnionPayload { fields, .. } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
+        RocType::TagUnion(RocTagUnion::RecursiveSingleTag { payload_fields, .. }) => payload_fields
+            .iter()
+            .any(|type_id| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
         | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
             tags.iter().any(|(_, payloads)| {
@@ -2163,9 +2167,6 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         RocType::TagUnion(RocTagUnion::NullableUnwrapped {
             non_null_payload: content,
             ..
-        })
-        | RocType::TagUnion(RocTagUnion::RecursiveSingleTag {
-            payload: content, ..
         })
         | RocType::RecursivePointer(content) => {
             if do_not_recurse.contains(content) {

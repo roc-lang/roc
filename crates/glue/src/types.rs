@@ -147,12 +147,17 @@ impl Types {
                     }
                     (
                         RecursiveSingleTag {
-                            payload: content_a, ..
+                            name: _,
+                            tag_name: tag_name_a,
+                            payload_fields: payload_fields_a,
                         },
                         RecursiveSingleTag {
-                            payload: content_b, ..
+                            name: _,
+                            tag_name: tag_name_b,
+                            payload_fields: payload_fields_b,
                         },
-                    ) => content_a == content_b,
+                    ) => tag_name_a == tag_name_b && payload_fields_a == payload_fields_b,
+
                     (
                         NullableWrapped { tags: tags_a, .. },
                         NullableWrapped { tags: tags_b, .. },
@@ -543,7 +548,7 @@ pub enum RocTagUnion {
     RecursiveSingleTag {
         name: String,
         tag_name: String,
-        payload: TypeId,
+        payload_fields: Vec<TypeId>,
     },
 
     /// A recursive tag union that has an empty variant
@@ -972,6 +977,48 @@ fn add_tag_union<'a>(
     layout: Layout<'a>,
 ) -> TypeId {
     let subs = env.subs;
+    let name = match opt_name {
+        Some(sym) => sym.as_str(env.interns).to_string(),
+        None => env.enum_names.get_name(var),
+    };
+
+    // This one needs an early return. That's because the the outermost representation
+    // of an unwrapped, non-nullable tag union is a struct, not a pointer. We must not
+    // create structs for its payloads like we do with other tag union types,
+    // because this one *is* the struct!
+    if let Layout::Union(UnionLayout::NonNullableUnwrapped(payload_field_layouts)) = layout {
+        let mut iter = union_tags.iter_from_subs(subs);
+        let (tag_name, payload_vars) = iter.next().unwrap();
+
+        // NonNullableUnwrapped should always have exactly 1 payload.
+        debug_assert_eq!(iter.next(), None);
+
+        let payload_fields: Vec<TypeId> = payload_vars
+            .into_iter()
+            .zip(payload_field_layouts.into_iter())
+            .map(|(field_var, field_layout)| {
+                add_type_help(env, *field_layout, *field_var, None, types)
+            })
+            .collect();
+
+        // A recursive tag union with just one constructor
+        // Optimization: No need to store a tag ID (the payload is "unwrapped")
+        // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
+        let tag_union_type = RocTagUnion::RecursiveSingleTag {
+            name: name.clone(),
+            tag_name: tag_name.0.as_str().to_string(),
+            payload_fields,
+        };
+
+        let typ = RocType::TagUnion(tag_union_type);
+        let type_id = types.add_named(name, typ, layout);
+
+        env.known_recursive_types.insert(layout, type_id);
+
+        // Do an early return because we've already done everything we needed to do.
+        return type_id;
+    }
+
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
         .map(|(tag_name, payload_vars)| {
@@ -980,11 +1027,6 @@ fn add_tag_union<'a>(
             (name_str, payload_vars.to_vec())
         })
         .collect();
-
-    let name = match opt_name {
-        Some(sym) => sym.as_str(env.interns).to_string(),
-        None => env.enum_names.get_name(var),
-    };
 
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
@@ -1062,19 +1104,9 @@ fn add_tag_union<'a>(
                         discriminant_offset,
                     }
                 }
-                // A recursive tag union with just one constructor
-                // Optimization: No need to store a tag ID (the payload is "unwrapped")
-                // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
                 NonNullableUnwrapped(_) => {
-                    debug_assert_eq!(1, tags.len());
-
-                    let (tag_name, payload) = tags.pop().unwrap();
-
-                    RocTagUnion::RecursiveSingleTag {
-                        name: name.clone(),
-                        tag_name,
-                        payload: payload.unwrap(),
-                    }
+                    // This was already special-cased with an early return, above.
+                    unreachable!()
                 }
                 // A recursive tag union that has an empty variant
                 // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
