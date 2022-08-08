@@ -308,8 +308,6 @@ fn add_single_tag_struct(
     impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
     target_info: TargetInfo,
 ) {
-    let unused = (); // TODO need to make this work for more single-tag structs!
-
     // Store single-tag unions as structs rather than enums,
     // because they have only one alternative. However, still
     // offer the usual tag union APIs.
@@ -453,13 +451,26 @@ fn add_single_tag_struct(
     {
         let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
 
-        let buf = format!(
-            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-                    f.write_str("{name}::")?;
+        let mut buf =
+            "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {".to_string();
 
-                    f.write_str("{tag_name}")
-                }}"#
-        );
+        if payload_fields.is_empty() {
+            buf.push_str(&format!("f.write_str(\"{name}::{tag_name}\")"));
+        } else {
+            buf.push_str(&format!(
+                "\n{INDENT}{INDENT}{INDENT}f.debug_tuple(\"{name}::{tag_name}\")"
+            ));
+
+            for (index, _) in payload_fields.iter().enumerate() {
+                buf.push_str(&format!(
+                    "{INDENT}{INDENT}{INDENT}{INDENT}.field(&self.f{index})"
+                ));
+            }
+
+            buf.push_str(&format!("{INDENT}{INDENT}{INDENT}{INDENT}.finish()"));
+        }
+
+        buf.push_str("    }\n");
 
         add_decl(impls, opt_impl, target_info, buf);
     }
@@ -913,7 +924,6 @@ pub struct {name} {{
                 };
 
                 {
-                    let note_to_self = (); // IDEA: make Recursiveness be a 3-way tag, move discriminant info into there
                     let body = match recursiveness {
                         Recursiveness::Recursive => {
                             let pointer_val = if discriminant_size == 0 {
