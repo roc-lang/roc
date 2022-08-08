@@ -272,9 +272,7 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
-        // TODO: get this from a CLI parameter with some default
-        const STACK_SIZE: u32 = 1024 * 1024;
-        self.set_memory_layout(STACK_SIZE);
+        self.set_memory_layout(self.env.stack_bytes);
         self.export_globals();
 
         self.maybe_call_host_main();

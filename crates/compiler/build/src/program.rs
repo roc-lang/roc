@@ -474,6 +474,7 @@ fn gen_from_mono_module_dev_wasm32(
         arena,
         module_id,
         exposed_to_host,
+        stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
     };
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {

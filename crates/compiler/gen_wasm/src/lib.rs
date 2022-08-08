@@ -45,6 +45,11 @@ pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
+    pub stack_bytes: u32,
+}
+
+impl Env<'_> {
+    pub const DEFAULT_STACK_BYTES: u32 = 1024 * 1024;
 }
 
 /// Parse the preprocessed host binary

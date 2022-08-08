@@ -122,6 +122,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         arena,
         module_id,
         exposed_to_host,
+        stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
     };
 
     let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap_or_else(|e| {
