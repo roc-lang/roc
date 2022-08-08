@@ -89,19 +89,33 @@ impl Types {
 
                 match (union_a, union_b) {
                     (
-                        SingleTag {
+                        SingleTagStruct {
                             name: _,
                             tag_name: tag_name_a,
                             payload_fields: payload_fields_a,
-                            is_recursive: _,
                         },
-                        SingleTag {
+                        SingleTagStruct {
                             name: _,
                             tag_name: tag_name_b,
                             payload_fields: payload_fields_b,
-                            is_recursive: _,
                         },
                     ) => tag_name_a == tag_name_b && payload_fields_a == payload_fields_b,
+                    (
+                        NonNullableUnwrapped {
+                            name: _,
+                            tag_name: tag_name_a,
+                            payload: payload_a,
+                        },
+                        NonNullableUnwrapped {
+                            name: _,
+                            tag_name: tag_name_b,
+                            payload: payload_b,
+                        },
+                    ) => {
+                        tag_name_a == tag_name_b
+                            && self
+                                .is_equivalent(self.get_type(*payload_a), self.get_type(*payload_b))
+                    }
                     (Enumeration { tags: tags_a, .. }, Enumeration { tags: tags_b, .. }) => {
                         tags_a == tags_b
                     }
@@ -199,8 +213,10 @@ impl Types {
                     }
                     // These are all listed explicitly so that if we ever add a new variant,
                     // we'll get an exhaustiveness error here.
-                    (SingleTag { .. }, _)
-                    | (_, SingleTag { .. })
+                    (SingleTagStruct { .. }, _)
+                    | (_, SingleTagStruct { .. })
+                    | (NonNullableUnwrapped { .. }, _)
+                    | (_, NonNullableUnwrapped { .. })
                     | (Enumeration { .. }, _)
                     | (_, Enumeration { .. })
                     | (NonRecursive { .. }, _)
@@ -533,11 +549,17 @@ pub enum RocTagUnion {
     },
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-    SingleTag {
+    NonNullableUnwrapped {
+        name: String,
+        tag_name: String,
+        payload: TypeId, // These always have a payload.
+    },
+    /// Optimization: No need to store a tag ID (the payload is "unwrapped")
+    /// e.g. `[Foo Str Bool]`
+    SingleTagStruct {
         name: String,
         tag_name: String,
         payload_fields: Vec<TypeId>,
-        is_recursive: bool,
     },
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
@@ -1028,23 +1050,30 @@ fn add_tag_union<'a>(
                         discriminant_offset,
                     }
                 }
-                NonNullableUnwrapped(field_layouts) => {
+                NonNullableUnwrapped(_) => {
                     is_recursive = true;
 
-                    // The the outermost representation of an unwrapped, non-nullable tag union
-                    // is a struct, not a pointer. We must not create structs for its payloads
-                    // like we do with other tag union types, because this one *is* the struct!
-                    let (tag_name, payload_fields) =
-                        single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
+                    let mut tags = union_tags_to_types(
+                        &name,
+                        union_tags,
+                        subs,
+                        env,
+                        types,
+                        layout,
+                        is_recursive,
+                    );
+
+                    debug_assert_eq!(tags.len(), 1);
+
+                    let (tag_name, opt_payload) = tags.pop().unwrap();
 
                     // A recursive tag union with just one constructor
                     // Optimization: No need to store a tag ID (the payload is "unwrapped")
                     // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-                    RocTagUnion::SingleTag {
+                    RocTagUnion::NonNullableUnwrapped {
                         name: name.clone(),
                         tag_name,
-                        payload_fields,
-                        is_recursive,
+                        payload: opt_payload.unwrap(),
                     }
                 }
                 // A recursive tag union that has an empty variant
@@ -1156,11 +1185,10 @@ fn add_tag_union<'a>(
             // A recursive tag union with just one constructor
             // Optimization: No need to store a tag ID (the payload is "unwrapped")
             // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-            RocTagUnion::SingleTag {
+            RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name,
                 payload_fields,
-                is_recursive,
             }
         }
         Layout::Builtin(builtin) => {
@@ -1171,11 +1199,10 @@ fn add_tag_union<'a>(
             let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
             let (tag_name, _) = single_tag_payload(union_tags, subs);
 
-            RocTagUnion::SingleTag {
+            RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name,
                 payload_fields: vec![type_id],
-                is_recursive,
             }
         }
         Layout::Boxed(elem_layout) => {
@@ -1187,11 +1214,10 @@ fn add_tag_union<'a>(
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
 
-            RocTagUnion::SingleTag {
+            RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name,
                 payload_fields,
-                is_recursive,
             }
         }
         Layout::LambdaSet(_) => {
