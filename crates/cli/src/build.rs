@@ -48,6 +48,7 @@ pub fn build_file<'a>(
     precompiled: bool,
     target_valgrind: bool,
     threading: Threading,
+    wasm_dev_stack_bytes: Option<u32>,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
@@ -246,6 +247,7 @@ pub fn build_file<'a>(
         opt_level,
         emit_debug_info,
         &preprocessed_host_path,
+        wasm_dev_stack_bytes,
     );
 
     buf.push('\n');

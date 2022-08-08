@@ -166,6 +166,7 @@ pub fn gen_from_mono_module(
     opt_level: OptLevel,
     emit_debug_info: bool,
     preprocessed_host_path: &Path,
+    wasm_dev_stack_bytes: Option<u32>,
 ) -> CodeGenTiming {
     match opt_level {
         OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
@@ -177,9 +178,14 @@ pub fn gen_from_mono_module(
             opt_level,
             emit_debug_info,
         ),
-        OptLevel::Development => {
-            gen_from_mono_module_dev(arena, loaded, target, app_o_file, preprocessed_host_path)
-        }
+        OptLevel::Development => gen_from_mono_module_dev(
+            arena,
+            loaded,
+            target,
+            app_o_file,
+            preprocessed_host_path,
+            wasm_dev_stack_bytes,
+        ),
     }
 }
 
@@ -416,13 +422,18 @@ pub fn gen_from_mono_module_dev(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
     preprocessed_host_path: &Path,
+    wasm_dev_stack_bytes: Option<u32>,
 ) -> CodeGenTiming {
     use target_lexicon::Architecture;
 
     match target.architecture {
-        Architecture::Wasm32 => {
-            gen_from_mono_module_dev_wasm32(arena, loaded, app_o_file, preprocessed_host_path)
-        }
+        Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(
+            arena,
+            loaded,
+            app_o_file,
+            preprocessed_host_path,
+            wasm_dev_stack_bytes,
+        ),
         Architecture::X86_64 | Architecture::Aarch64(_) => {
             gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
         }
@@ -437,6 +448,7 @@ pub fn gen_from_mono_module_dev(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
     _host_input_path: &Path,
+    _wasm_dev_stack_bytes: Option<u32>,
 ) -> CodeGenTiming {
     use target_lexicon::Architecture;
 
@@ -454,6 +466,7 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
     preprocessed_host_path: &Path,
+    wasm_dev_stack_bytes: Option<u32>,
 ) -> CodeGenTiming {
     let code_gen_start = Instant::now();
     let MonomorphizedModule {
@@ -474,7 +487,7 @@ fn gen_from_mono_module_dev_wasm32(
         arena,
         module_id,
         exposed_to_host,
-        stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
+        stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
     };
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {

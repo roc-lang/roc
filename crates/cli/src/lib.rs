@@ -59,6 +59,7 @@ pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
+pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_FILE: &str = "GLUE_FILE";
@@ -117,6 +118,13 @@ pub fn build_app<'a>() -> Command<'a> {
         .possible_values(["true", "false"])
         .required(false);
 
+    let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
+        .long(FLAG_WASM_STACK_SIZE_KB)
+        .help("Stack size in kilobytes for wasm32 target. Only applies when --dev also provided.")
+        .takes_value(true)
+        .validator(|s| s.parse::<u32>())
+        .required(false);
+
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
         .allow_invalid_utf8(true)
@@ -145,6 +153,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
             .arg(flag_valgrind.clone())
+            .arg(flag_wasm_stack_size_kb.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
@@ -515,6 +524,11 @@ pub fn build(
         process::exit(1);
     }
 
+    let wasm_dev_stack_bytes: Option<u32> = matches
+        .value_of(FLAG_WASM_STACK_SIZE_KB)
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|x| x * 1024);
+
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
@@ -528,6 +542,7 @@ pub fn build(
         precompiled,
         target_valgrind,
         threading,
+        wasm_dev_stack_bytes,
     );
 
     match res_binary_path {
