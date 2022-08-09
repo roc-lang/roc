@@ -128,4 +128,7 @@ flags! {
 
     /// Print load phases as they complete.
     ROC_PRINT_LOAD_LOG
+
+    /// Don't build and use the subs cache (speeds up compilation of load and previous crates)
+    ROC_SKIP_SUBS_CACHE
 }
