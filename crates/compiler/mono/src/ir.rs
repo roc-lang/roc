@@ -3132,7 +3132,9 @@ fn specialize_external<'a>(
                         } => {
                             debug_assert!(matches!(
                                 union_layout,
-                                UnionLayout::NonRecursive(_) | UnionLayout::Recursive(_)
+                                UnionLayout::NonRecursive(_)
+                                    | UnionLayout::Recursive(_)
+                                    | UnionLayout::NullableUnwrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 

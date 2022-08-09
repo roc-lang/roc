@@ -898,7 +898,7 @@ impl<'a> LambdaSet<'a> {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 runtime_repr,
-                Layout::Union(UnionLayout::Recursive(_))
+                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
         } else {
@@ -909,7 +909,7 @@ impl<'a> LambdaSet<'a> {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 runtime_repr,
-                Layout::Union(UnionLayout::Recursive(_))
+                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
         } else {
@@ -964,14 +964,30 @@ impl<'a> LambdaSet<'a> {
                             union_layout: *union,
                         }
                     }
+                    UnionLayout::NullableUnwrapped {
+                        nullable_id: _,
+                        other_fields: _,
+                    } => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: *union,
+                        }
+                    }
                     UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
                         nullable_id: _,
                         other_tags: _,
-                    } => todo!("recursive closures"),
-                    UnionLayout::NullableUnwrapped {
-                        nullable_id: _,
-                        other_fields: _,
                     } => todo!("recursive closures"),
                 }
             }
@@ -1185,6 +1201,20 @@ impl<'a> LambdaSet<'a> {
                             tag_arguments.push(&tag_args[0..]);
                         }
                         Layout::Union(UnionLayout::Recursive(tag_arguments.into_bump_slice()))
+                    }
+
+                    NullableUnwrapped {
+                        nullable_id,
+                        nullable_name: _,
+                        other_name,
+                        other_fields,
+                    } => {
+                        debug_assert!(matches!(other_name, TagOrClosure::Closure(_)));
+
+                        Layout::Union(UnionLayout::NullableUnwrapped {
+                            nullable_id,
+                            other_fields,
+                        })
                     }
 
                     layout => panic!("handle recursive layout: {:?}", layout),

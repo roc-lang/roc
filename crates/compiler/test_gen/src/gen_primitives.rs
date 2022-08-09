@@ -3750,3 +3750,28 @@ fn recursive_lambda_set_toplevel_issue_3444() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclame = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            main =
+                res: Str -> Str
+                res = List.walk [ exclame, whisper ] identity compose
+                res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
