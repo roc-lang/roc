@@ -4,7 +4,7 @@ use roc_collections::{VecMap, VecSet};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
+use roc_solve_problem::{NotDerivableContext, TypeError, UnderivableReason, Unfulfilled};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
@@ -278,11 +278,14 @@ impl ObligationCache {
                 // can derive!
                 None
             }
-            Some(Err(DerivableError::NotDerivable(failure_var))) => Some(if failure_var == var {
-                UnderivableReason::SurfaceNotDerivable
+            Some(Err(NotDerivable {
+                var: failure_var,
+                context,
+            })) => Some(if failure_var == var {
+                UnderivableReason::SurfaceNotDerivable(context)
             } else {
                 let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
-                UnderivableReason::NestedNotDerivable(error_type)
+                UnderivableReason::NestedNotDerivable(error_type, context)
             }),
             None => Some(UnderivableReason::NotABuiltin),
         };
@@ -430,8 +433,9 @@ fn is_builtin_number_alias(symbol: Symbol) -> bool {
     )
 }
 
-enum DerivableError {
-    NotDerivable(Variable),
+struct NotDerivable {
+    var: Variable,
+    context: NotDerivableContext,
 }
 
 struct Descend(bool);
@@ -445,36 +449,51 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), DerivableError> {
+    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
         if ability != Self::ABILITY {
-            Err(DerivableError::NotDerivable(var))
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
         } else {
             Ok(())
         }
     }
 
     #[inline(always)]
-    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), DerivableError> {
+    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
         if ability != Self::ABILITY {
-            Err(DerivableError::NotDerivable(var))
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
         } else {
             Ok(())
         }
     }
 
     #[inline(always)]
-    fn visit_recursion(var: Variable) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_recursion(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_apply(var: Variable, _symbol: Symbol) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_apply(var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_func(var: Variable) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_func(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::Function,
+        })
     }
 
     #[inline(always)]
@@ -482,43 +501,67 @@ trait DerivableVisitor {
         _subs: &Subs,
         var: Variable,
         _fields: RecordFields,
-    ) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    ) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_tag_union(var: Variable) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_recursive_tag_union(var: Variable) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_recursive_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_function_or_tag_union(var: Variable) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_function_or_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_empty_record(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_empty_record(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_empty_tag_union(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_empty_tag_union(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_alias(var: Variable, _symbol: Symbol) -> Result<Descend, DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_alias(var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
-    fn visit_ranged_number(var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
+    fn visit_ranged_number(var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
     }
 
     #[inline(always)]
@@ -527,7 +570,7 @@ trait DerivableVisitor {
         abilities_store: &AbilitiesStore,
         subs: &mut Subs,
         var: Variable,
-    ) -> Result<(), DerivableError> {
+    ) -> Result<(), NotDerivable> {
         let mut stack = vec![var];
         let mut seen_recursion_vars = vec![];
 
@@ -545,14 +588,18 @@ trait DerivableVisitor {
             let content = subs.get_content_without_compacting(var);
 
             use Content::*;
-            use DerivableError::*;
             use FlatType::*;
             match *content {
                 FlexVar(opt_name) => {
                     // Promote the flex var to be bound to the ability.
                     subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
                 }
-                RigidVar(_) => return Err(NotDerivable(var)),
+                RigidVar(_) => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
                 FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
                 RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
                 RecursionVar {
@@ -622,7 +669,12 @@ trait DerivableVisitor {
                     EmptyRecord => Self::visit_empty_record(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
 
-                    Erroneous(_) => return Err(NotDerivable(var)),
+                    Erroneous(_) => {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        })
+                    }
                 },
                 Alias(
                     Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
@@ -639,7 +691,10 @@ trait DerivableVisitor {
                         .is_err()
                         && !Self::is_derivable_builtin_opaque(opaque)
                     {
-                        return Err(NotDerivable(var));
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::Opaque(opaque),
+                        });
                     }
                 }
                 Alias(symbol, _alias_variables, real_var, AliasKind::Structural) => {
@@ -650,9 +705,17 @@ trait DerivableVisitor {
                 }
                 RangedNumber(range) => Self::visit_ranged_number(var, range)?,
 
-                LambdaSet(..) => return Err(NotDerivable(var)),
+                LambdaSet(..) => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
                 Error => {
-                    return Err(NotDerivable(var));
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    });
                 }
             }
         }
@@ -671,19 +734,22 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if matches!(
             symbol,
             Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
         ) {
             Ok(Descend(true))
         } else {
-            Err(DerivableError::NotDerivable(var))
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
         }
     }
 
@@ -692,37 +758,37 @@ impl DerivableVisitor for DeriveEncoding {
         _subs: &Subs,
         _var: Variable,
         _fields: RecordFields,
-    ) -> Result<Descend, DerivableError> {
+    ) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_empty_record(_var: Variable) -> Result<(), DerivableError> {
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 
     #[inline(always)]
-    fn visit_empty_tag_union(_var: Variable) -> Result<(), DerivableError> {
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
             Ok(Descend(false))
         } else {
@@ -731,7 +797,7 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
 }
@@ -746,19 +812,22 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if matches!(
             symbol,
             Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
         ) {
             Ok(Descend(true))
         } else {
-            Err(DerivableError::NotDerivable(var))
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
         }
     }
 
@@ -767,46 +836,49 @@ impl DerivableVisitor for DeriveDecoding {
         subs: &Subs,
         var: Variable,
         fields: RecordFields,
-    ) -> Result<Descend, DerivableError> {
+    ) -> Result<Descend, NotDerivable> {
         let has_optional_field = subs
             .get_subs_slice(fields.record_fields())
             .iter()
             .any(|field| matches!(field, RecordField::Optional(..)));
 
         if has_optional_field {
-            Err(DerivableError::NotDerivable(var))
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
         } else {
             Ok(Descend(true))
         }
     }
 
     #[inline(always)]
-    fn visit_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
     #[inline(always)]
-    fn visit_empty_record(_var: Variable) -> Result<(), DerivableError> {
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 
     #[inline(always)]
-    fn visit_empty_tag_union(_var: Variable) -> Result<(), DerivableError> {
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
             Ok(Descend(false))
         } else {
@@ -815,7 +887,7 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
 }

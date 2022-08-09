@@ -4037,6 +4037,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_derive",
+ "roc_error_macros",
  "roc_exhaustive",
  "roc_fmt",
  "roc_load",
