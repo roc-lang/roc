@@ -129,7 +129,7 @@ pub fn load_types(
                 // handled by future iterations
                 None
             }
-            Expectation => {
+            Expectation | ExpectationFx => {
                 // not publicly visible
                 None
             }

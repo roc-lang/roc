@@ -52,6 +52,11 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
 
                 visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
             }
+            ExpectationFx => {
+                let loc_condition = &decls.expressions[index];
+
+                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+            }
             Function(function_index)
             | Recursive(function_index)
             | TailRecursive(function_index) => {
@@ -114,6 +119,12 @@ fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         }
 
         Declaration::Expects(expects) => {
+            let it = expects.regions.iter().zip(expects.conditions.iter());
+            for (region, condition) in it {
+                visitor.visit_expr(condition, *region, Variable::BOOL);
+            }
+        }
+        Declaration::ExpectsFx(expects) => {
             let it = expects.regions.iter().zip(expects.conditions.iter());
             for (region, condition) in it {
                 visitor.visit_expr(condition, *region, Variable::BOOL);

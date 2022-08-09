@@ -2311,6 +2311,24 @@ impl Declarations {
         index
     }
 
+    pub fn push_expect_fx(
+        &mut self,
+        preceding_comment: Region,
+        name: Symbol,
+        loc_expr: Loc<Expr>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Expectation);
+        self.variables.push(Variable::BOOL);
+        self.symbols.push(Loc::at(preceding_comment, name));
+        self.annotations.push(None);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -2491,6 +2509,12 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
+                ExpectationFx => {
+                    let loc_expr =
+                        toplevel_expect_to_inline_expect(self.expressions[index].clone());
+
+                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
+                }
             }
         }
 
@@ -2504,6 +2528,7 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
+    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -2516,14 +2541,14 @@ pub enum DeclarationTag {
 
 impl DeclarationTag {
     fn len(self) -> usize {
+        use DeclarationTag::*;
+
         match self {
-            DeclarationTag::Function(_) => 1,
-            DeclarationTag::Recursive(_) => 1,
-            DeclarationTag::TailRecursive(_) => 1,
-            DeclarationTag::Value => 1,
-            DeclarationTag::Expectation => 1,
-            DeclarationTag::Destructure(_) => 1,
-            DeclarationTag::MutualRecursion { length, .. } => length as usize + 1,
+            Function(_) | Recursive(_) | TailRecursive(_) => 1,
+            Value => 1,
+            Expectation | ExpectationFx => 1,
+            Destructure(_) => 1,
+            MutualRecursion { length, .. } => length as usize + 1,
         }
     }
 }
