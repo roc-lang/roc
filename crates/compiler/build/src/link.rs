@@ -1000,11 +1000,11 @@ fn link_macos(
     let (link_type_arg, output_path) = match link_type {
         LinkType::Executable => ("-execute", output_path),
         LinkType::Dylib => {
-            let mut output_path = output_path;
+            let mut file_name: PathBuf = output_path.file_name().unwrap_or_default().into();
 
-            output_path.set_extension("dylib");
+            file_name.set_extension("dylib");
 
-            ("-dylib", output_path)
+            ("-dylib", file_name)
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
