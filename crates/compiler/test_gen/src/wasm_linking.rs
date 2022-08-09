@@ -161,6 +161,7 @@ impl<'a> BackendInputs<'a> {
             arena,
             module_id,
             exposed_to_host,
+            stack_bytes: Env::DEFAULT_STACK_BYTES,
         };
 
         // Identifier stuff for the backend

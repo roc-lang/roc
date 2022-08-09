@@ -82,11 +82,7 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        // TODO: get this from a CLI parameter with some default
-        const STACK_SIZE: u32 = 1024 * 1024;
-        let can_relocate_heap = Self::set_memory_layout(env, &mut module, STACK_SIZE);
-
-        Self::export_globals(&mut module);
+        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok();
 
         // We don't want to import any Memory or Tables
         module.import.imports.retain(|import| {
@@ -140,8 +136,8 @@ impl<'a> WasmBackend<'a> {
     /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
     /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
     /// TODO: Detect stack overflow in function prologue... at least in Roc code...
-    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) -> bool {
-        let mut stack_heap_boundary = module.data.end_addr + stack_size;
+    fn set_memory_layout(&mut self, stack_size: u32) {
+        let mut stack_heap_boundary = self.module.data.end_addr + stack_size;
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
         // Stack pointer
@@ -155,12 +151,12 @@ impl<'a> WasmBackend<'a> {
             // Check that __stack_pointer is the only imported global
             // If there were more, we'd have to relocate them, and we don't
             let imported_globals = Vec::from_iter_in(
-                module
+                self.module
                     .import
                     .imports
                     .iter()
                     .filter(|import| matches!(import.description, ImportDesc::Global { .. })),
-                env.arena,
+                self.env.arena,
             );
             if imported_globals.len() != 1
                 || imported_globals[0]
@@ -173,49 +169,55 @@ impl<'a> WasmBackend<'a> {
                 panic!("I can't link this host file. I expected it to have one imported Global called env.__stack_pointer")
             }
         }
-        module
+        self.module
             .import
             .imports
             .retain(|import| !matches!(import.description, ImportDesc::Global { .. }));
-        module.global.append(Global {
+
+        self.module.global.append(Global {
             ty: sp_type,
             init: ConstExpr::I32(stack_heap_boundary as i32),
         });
 
         // Set the initial size of the memory
-        module.memory =
-            MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
+        self.module.memory = MemorySection::new(
+            self.env.arena,
+            stack_heap_boundary + MemorySection::PAGE_SIZE,
+        );
 
         // Export the memory so that JS can interact with it
-        module.export.append(Export {
+        self.module.export.append(Export {
             name: MEMORY_NAME,
             ty: ExportType::Mem,
             index: 0,
         });
 
         // Set the constant that malloc uses to know where the heap begins
-        module
-            .relocate_internal_symbol("__heap_base", stack_heap_boundary)
-            .is_ok()
+        // this should be done after we know how much constant data we have (e.g. string literals)
+        if self.can_relocate_heap {
+            self.module
+                .relocate_internal_symbol("__heap_base", stack_heap_boundary)
+                .unwrap();
+        }
     }
 
     /// If the host has some `extern` global variables, we need to create them in the final binary
     /// and make them visible to JavaScript by exporting them
-    fn export_globals(module: &mut WasmModule<'a>) {
-        for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
+    fn export_globals(&mut self) {
+        for (sym_index, sym) in self.module.linking.symbol_table.iter().enumerate() {
             match sym {
                 SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
-                    let global_value_addr = module.data.end_addr;
-                    module.data.end_addr += PTR_SIZE;
+                    let global_value_addr = self.module.data.end_addr;
+                    self.module.data.end_addr += PTR_SIZE;
 
-                    module.reloc_code.apply_relocs_u32(
-                        &mut module.code.preloaded_bytes,
+                    self.module.reloc_code.apply_relocs_u32(
+                        &mut self.module.code.preloaded_bytes,
                         sym_index as u32,
                         global_value_addr,
                     );
 
-                    let global_index = module.global.count;
-                    module.global.append(Global {
+                    let global_index = self.module.global.count;
+                    self.module.global.append(Global {
                         ty: GlobalType {
                             value_type: ValueType::I32,
                             is_mutable: false,
@@ -223,7 +225,7 @@ impl<'a> WasmBackend<'a> {
                         init: ConstExpr::I32(global_value_addr as i32),
                     });
 
-                    module.export.append(Export {
+                    self.module.export.append(Export {
                         name,
                         ty: ExportType::Global,
                         index: global_index,
@@ -270,6 +272,9 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
+        self.set_memory_layout(self.env.stack_bytes);
+        self.export_globals();
+
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
