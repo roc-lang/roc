@@ -2759,7 +2759,15 @@ fn diff_record<'b>(
             status: {
                 match (&t1, &t2) {
                     (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status {
+                    | (RecordField::Optional(_), RecordField::Demanded(_))
+                    | (
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                        RecordField::RigidOptional(_),
+                    )
+                    | (
+                        RecordField::RigidOptional(_),
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                    ) => match diff.status {
                         Status::Similar => {
                             Status::Different(vec![Problem::OptionalRequiredMismatch(
                                 field.clone(),
