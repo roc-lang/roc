@@ -47,12 +47,190 @@ fn decoder_record(env: &mut Env, def_symbol: Symbol, fields: Vec<Lowercase>) -> 
     // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 
     let initial_state = decoder_initial_state(&fields);
-    let finalizer = dbg!(decoder_finalizer(env, fields));
-
+    let finalizer = decoder_finalizer(env, fields);
+    let step_field = dbg!(decoder_step_field(env, fields));
     let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
                                    // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 
+    // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
     (dbg!(initial_state), expr_var)
+}
+
+/// Example:
+/// stepField = \state, field ->
+///     when field is
+///         "first" ->
+///             Keep (Decode.custom \bytes, fmt ->
+///                 rec = Decode.decodeWith bytes Decode.decoder fmt
+///
+///                 {
+///                     rest: rec.rest,
+///                     result: when rec.result is
+///                         Ok val -> Ok {state & f0: Ok val},
+///                         Err err -> Err err
+///                 }
+///             )
+///
+///         "second" ->
+///             Keep (Decode.custom \bytes, fmt ->
+///                 when Decode.decodeWith bytes Decode.decoder fmt is
+///                     {result, rest} ->
+///                         {result: Result.map result \val -> {state & f1: Ok val}, rest})
+///         _ -> Skip
+fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
+    let state_arg_symbol = env.new_symbol("stateRecord");
+    let field_arg_symbol = env.new_symbol("field");
+
+    // +1 because of the default branch.
+    let branches = Vec::with_capacity(fields.len() + 1);
+
+    for field in fields {
+        // Example:
+        // "first" ->
+        //     Keep (Decode.custom \bytes, fmt ->
+        //         when Decode.decodeWith bytes Decode.decoder fmt is
+        //             {result, rest} ->
+        //                 {result: Result.map result \val -> {state & f0: Ok val}, rest})
+
+        let custom_callback = {
+            // \bytes, fmt ->
+            //     when Decode.decodeWith bytes Decode.decoder fmt is
+            //         {result, rest} ->
+            //             {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            let bytes_arg_symbol = env.new_symbol("bytes");
+            let fmt_arg_symbol = env.new_symbol("fmt");
+
+            Expr::Closure(ClosureData {
+                function_type: Variable::NULL, // TODO
+                closure_type: Variable::NULL,  // TODO
+                return_type: Variable::NULL,   // TODO
+                name: env.unique_symbol(),
+                captured_symbols: vec![(
+                    state_arg_symbol,
+                    Variable::NULL, // TODO
+                )],
+                recursive: Recursive::NotRecursive,
+                arguments: vec![
+                    (
+                        Variable::NULL, // TODO
+                        AnnotatedMark::known_exhaustive(),
+                        Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
+                    ),
+                    (
+                        Variable::NULL, // TODO
+                        AnnotatedMark::known_exhaustive(),
+                        Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
+                    ),
+                ],
+                loc_body: Box::new(Loc::at_zero(custom_callback_body)),
+            })
+        };
+
+        let decode_custom = {
+            // Decode.custom \bytes, fmt ->
+            //     when Decode.decodeWith bytes Decode.decoder fmt is
+            //         {result, rest} ->
+            //             {result: Result.map result \val -> {state & f0: Ok val}, rest}
+            Expr::Call(
+                Box::new((
+                    Variable::NULL, // TODO
+                    Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
+                    Variable::NULL, // TODO
+                    Variable::NULL, // TODO
+                )),
+                vec![(
+                    Variable::NULL, // TODO
+                    Loc::at_zero(custom_callback),
+                )],
+                CalledVia::Space,
+            )
+        };
+
+        let keep = {
+            // Keep (Decode.custom \bytes, fmt ->
+            //     when Decode.decodeWith bytes Decode.decoder fmt is
+            //         {result, rest} ->
+            //             {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            Expr::Tag {
+                variant_var: Variable::NULL, // TODO
+                ext_var: Variable::EMPTY_TAG_UNION,
+                name: "Keep".into(),
+                arguments: vec![(
+                    Variable::NULL, // TODO
+                    Loc::at_zero(decode_custom),
+                )],
+            }
+        };
+
+        let branch = {
+            // "first" ->
+            //     Keep (Decode.custom \bytes, fmt ->
+            //         when Decode.decodeWith bytes Decode.decoder fmt is
+            //             {result, rest} ->
+            //                 {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            WhenBranch {
+                patterns: vec![WhenBranchPattern {
+                    pattern: Loc::at_zero(Pattern::StrLiteral(field.into())),
+                    degenerate: false,
+                }],
+                value: Loc::at_zero(keep),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            }
+        };
+
+        branches.push(branch);
+    }
+
+    // Example: `_ -> Skip`
+    let default_branch = WhenBranch {
+        patterns: vec![WhenBranchPattern {
+            pattern: Loc::at_zero(Pattern::Underscore),
+            degenerate: false,
+        }],
+        value: Loc::at_zero(Expr::Tag {
+            variant_var: Variable::NULL, // TODO
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: "Skip".into(),
+            arguments: Vec::new(),
+        }),
+        guard: None,
+        redundant: RedundantMark::known_non_redundant(),
+    };
+
+    branches.push(default_branch);
+
+    let body = Expr::When {
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(field_arg_symbol))),
+        cond_var: Variable::NULL, // TODO
+        expr_var: Variable::NULL, // TODO
+        region: Region::zero(),
+        branches,
+        branches_cond_var: Variable::NULL, // TODO
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    };
+
+    Expr::Closure(ClosureData {
+        function_type: Variable::NULL, // TODO
+        closure_type: Variable::NULL,  // TODO
+        return_type: Variable::NULL,   // TODO
+        name: env.unique_symbol(),
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments: vec![
+            (
+                Variable::NULL, // TODO
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
+            ),
+            (
+                Variable::NULL, // TODO
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(field_arg_symbol)),
+            ),
+        ],
+        loc_body: Box::new(Loc::at_zero(body)),
+    })
 }
 
 /// Example:
