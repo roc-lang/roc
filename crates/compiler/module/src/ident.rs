@@ -65,6 +65,12 @@ impl TagName {
     }
 }
 
+impl From<&str> for TagName {
+    fn from(string: &str) -> Self {
+        Self(string.into())
+    }
+}
+
 impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
     // add a corresponding ModuleId to there!
