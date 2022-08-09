@@ -3712,7 +3712,7 @@ fn recursive_lambda_set_issue_3444() {
     assert_evals_to!(
         indoc!(
             r#"
-            combine = \a, b -> (\x -> b (a x))
+            combine = \f, g -> \x -> g (f x)
             const = \x -> (\_y -> x)
 
             list = [const "a", const "b", const "c"]
@@ -3735,7 +3735,7 @@ fn recursive_lambda_set_toplevel_issue_3444() {
             r#"
             app "test" provides [main] to "./platform"
 
-            combine = \a, b -> (\x -> b (a x))
+            combine = \f, g -> \x -> g (f x)
             const = \x -> (\_y -> x)
 
             list = [const "a", const "b", const "c"]
