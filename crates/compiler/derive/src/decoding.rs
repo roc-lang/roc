@@ -1,14 +1,20 @@
 //! Derivers for the `Decoding` ability.
 
-use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Recursive};
+use bumpalo::collections::vec;
+use roc_can::expr::{
+    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+};
 use roc_can::pattern::Pattern;
+use roc_collections::SendMap;
 use roc_derive_key::decoding::FlatDecodableKey;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
+use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, FlatType, GetSubsSlice, LambdaSet, OptVariable, SubsSlice, UnionLambdas, Variable,
+    Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RedundantMark,
+    SubsSlice, UnionLambdas, Variable,
 };
 use roc_types::types::AliasKind;
 
@@ -22,7 +28,7 @@ pub(crate) fn derive_decoder(
 ) -> DerivedBody {
     let (body, body_type) = match key {
         FlatDecodableKey::List() => decoder_list(env, def_symbol),
-        FlatDecodableKey::Record(_) => todo!(),
+        FlatDecodableKey::Record(fields) => decoder_record(env, def_symbol, fields),
     };
 
     let specialization_lambda_sets =
@@ -32,6 +38,181 @@ pub(crate) fn derive_decoder(
         body,
         body_type,
         specialization_lambda_sets,
+    }
+}
+
+fn decoder_record(env: &mut Env, def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
+    use Expr::*;
+
+    // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+
+    let initial_state = decoder_initial_state(&fields);
+    let finalizer = dbg!(decoder_finalizer(env, fields));
+
+    let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
+                                   // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
+
+    (dbg!(initial_state), expr_var)
+}
+
+/// Example:
+/// finalizer = \{f0, f1} ->
+///     when f0 is
+///         Ok first ->
+///             when f1 is
+///                 Ok second -> Ok {first, second}
+///                 Err NoField -> Err TooShort
+///         Err NoField -> Err TooShort
+fn decoder_finalizer(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
+    let state_arg_symbol = env.new_symbol("stateRecord");
+    let mut fields_map = SendMap::default();
+    let mut pattern_symbols = Vec::with_capacity(fields.len());
+
+    for field_name in fields.iter() {
+        let symbol = env.new_symbol(field_name.as_str());
+
+        pattern_symbols.push(symbol);
+
+        let field_expr = Expr::Var(symbol);
+        let var = Variable::NULL; // TODO
+        let field = Field {
+            var,
+            region: Region::zero(),
+            loc_expr: Box::new(Loc::at_zero(field_expr)),
+        };
+
+        fields_map.insert(field_name.clone(), field);
+    }
+
+    let mut body = {
+        let done_record = Expr::Record {
+            record_var: Variable::NULL, // TODO this is the type of the entire record
+            fields: fields_map,
+        };
+        let variant_var = Variable::NULL; // TODO
+        let done_var = Variable::NULL; // TODO
+
+        Expr::Tag {
+            variant_var,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: "Ok".into(),
+            arguments: vec![(done_var, Loc::at_zero(done_record))],
+        }
+    };
+
+    for (symbol, field_name) in pattern_symbols.iter().rev().zip(fields.into_iter().rev()) {
+        let cond_expr = Expr::Access {
+            record_var: Variable::NULL, // TODO
+            ext_var: Variable::EMPTY_RECORD,
+            field_var: Variable::NULL, // TODO
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol))),
+            field: field_name,
+        };
+
+        // Example: `Ok x -> expr`
+        let ok_branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::AppliedTag {
+                    whole_var: Variable::NULL, // TODO
+                    ext_var: Variable::NULL,   // TODO
+                    tag_name: "Ok".into(),
+                    arguments: vec![(
+                        Variable::NULL, // TODO
+                        Loc::at_zero(Pattern::Identifier(*symbol)),
+                    )],
+                }),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(body),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        // Example: `_ -> Err TooShort`
+        let err_branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::Underscore),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(Expr::Tag {
+                variant_var: Variable::NULL, // TODO
+                ext_var: Variable::EMPTY_TAG_UNION,
+                name: "Err".into(),
+                arguments: vec![(
+                    Variable::NULL, // TODO
+                    Loc::at_zero(Expr::Tag {
+                        variant_var: Variable::NULL, // TODO
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        name: "TooShort".into(),
+                        arguments: Vec::new(),
+                    }),
+                )],
+            }),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        body = Expr::When {
+            loc_cond: Box::new(Loc::at_zero(cond_expr)),
+            cond_var: Variable::NULL, // TODO
+            expr_var: Variable::NULL, // TODO
+            region: Region::zero(),
+            branches: vec![ok_branch, err_branch],
+            branches_cond_var: Variable::NULL, // TODO
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        };
+    }
+
+    Expr::Closure(ClosureData {
+        function_type: Variable::NULL, // TODO
+        closure_type: Variable::NULL,  // TODO
+        return_type: Variable::NULL,   // TODO
+        name: env.unique_symbol(),
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            Variable::NULL, // TODO
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
+        )],
+        loc_body: Box::new(Loc::at_zero(body)),
+    })
+}
+
+/// Example:
+/// initialState : {f0: Result a [NoField], f1: Result b [NoField]}
+/// initialState = {f0: Err NoField, f1: Err NoField}
+fn decoder_initial_state(fields: &[Lowercase]) -> Expr {
+    let mut initial_state_fields = SendMap::default();
+    for field_name in fields {
+        let var = Variable::NULL; // TODO this is the type of the record field
+        let variant_var = Variable::NULL; // TODO
+        let no_field = Expr::Tag {
+            variant_var,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: "NoField".into(),
+            arguments: Vec::new(),
+        };
+        let no_field_var = Variable::NULL; // TODO
+        let variant_var = Variable::NULL; // TODO
+        let field_expr = Expr::Tag {
+            variant_var,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: "Err".into(),
+            arguments: vec![(no_field_var, Loc::at_zero(no_field))],
+        };
+        let field = Field {
+            var,
+            region: Region::zero(),
+            loc_expr: Box::new(Loc::at_zero(field_expr)),
+        };
+
+        initial_state_fields.insert(field_name.clone(), field);
+    }
+
+    Expr::Record {
+        record_var: Variable::NULL, // TODO this is the type of the entire record
+        fields: initial_state_fields,
     }
 }
 
