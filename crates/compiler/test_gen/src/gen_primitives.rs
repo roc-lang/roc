@@ -3705,3 +3705,48 @@ fn runtime_error_when_degenerate_pattern_reached() {
         true // allow errors
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_issue_3444() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            combine = \a, b -> (\x -> b (a x))
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res : Str -> Str
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+            res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_toplevel_issue_3444() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            combine = \a, b -> (\x -> b (a x))
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res : Str -> Str
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+
+            main = res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
