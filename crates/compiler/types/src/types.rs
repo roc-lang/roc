@@ -102,6 +102,10 @@ impl<T> RecordField<T> {
             RigidOptional(t) => RigidOptional(f(t)),
         }
     }
+
+    pub fn is_optional(&self) -> bool {
+        matches!(self, RecordField::Optional(..))
+    }
 }
 
 impl RecordField<Type> {

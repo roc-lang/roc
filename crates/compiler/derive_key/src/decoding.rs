@@ -1,7 +1,10 @@
-use roc_module::symbol::Symbol;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_module::{ident::Lowercase, symbol::Symbol};
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
-use crate::DeriveError;
+use crate::{
+    util::{check_empty_ext_var, debug_name_record},
+    DeriveError,
+};
 
 #[derive(Hash)]
 pub enum FlatDecodable {
@@ -12,12 +15,16 @@ pub enum FlatDecodable {
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub enum FlatDecodableKey {
     List(/* takes one variable */),
+
+    // Unfortunate that we must allocate here, c'est la vie
+    Record(Vec<Lowercase>),
 }
 
 impl FlatDecodableKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
             FlatDecodableKey::List() => "list".to_string(),
+            FlatDecodableKey::Record(fields) => debug_name_record(fields),
         }
     }
 }
@@ -33,8 +40,24 @@ impl FlatDecodable {
                     Symbol::STR_STR => Ok(Immediate(Symbol::DECODE_STRING)),
                     _ => Err(Underivable),
                 },
-                FlatType::Record(_fields, _ext) => {
-                    Err(Underivable) // yet
+                FlatType::Record(fields, ext) => {
+                    check_empty_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyRecord))
+                    })?;
+
+                    if subs
+                        .get_subs_slice(fields.record_fields())
+                        .iter()
+                        .any(|f| f.is_optional())
+                    {
+                        return Err(Underivable);
+                    }
+
+                    let mut field_names: Vec<_> =
+                        subs.get_subs_slice(fields.field_names()).to_vec();
+                    field_names.sort();
+
+                    Ok(Key(FlatDecodableKey::Record(field_names)))
                 }
                 FlatType::TagUnion(_tags, _ext) | FlatType::RecursiveTagUnion(_, _tags, _ext) => {
                     Err(Underivable) // yet

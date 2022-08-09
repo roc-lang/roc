@@ -4,7 +4,10 @@ use roc_module::{
 };
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
-use crate::{util::check_empty_ext_var, DeriveError};
+use crate::{
+    util::{check_empty_ext_var, debug_name_record},
+    DeriveError,
+};
 
 #[derive(Hash)]
 pub enum FlatEncodable {
@@ -28,17 +31,7 @@ impl FlatEncodableKey {
             FlatEncodableKey::List() => "list".to_string(),
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
-            FlatEncodableKey::Record(fields) => {
-                let mut str = String::from('{');
-                fields.iter().enumerate().for_each(|(i, f)| {
-                    if i > 0 {
-                        str.push(',');
-                    }
-                    str.push_str(f.as_str());
-                });
-                str.push('}');
-                str
-            }
+            FlatEncodableKey::Record(fields) => debug_name_record(fields),
             FlatEncodableKey::TagUnion(tags) => {
                 let mut str = String::from('[');
                 tags.iter().enumerate().for_each(|(i, (tag, arity))| {
