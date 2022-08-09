@@ -10342,7 +10342,7 @@ All branches in an `if` must have the same type!
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8)]
+        [Bad [DecodeProblem], Good (List U8) a]
 
     The branches must be cases of the `when` condition's type!
     "###

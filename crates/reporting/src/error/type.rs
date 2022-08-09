@@ -2888,15 +2888,14 @@ fn diff_record<'b>(
     }
 }
 
-fn diff_tag_union<'b>(
+fn same_tag_name_overlap_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    fields1: &SendMap<TagName, Vec<ErrorType>>,
-    ext1: TypeExt,
-    fields2: &SendMap<TagName, Vec<ErrorType>>,
-    ext2: TypeExt,
-) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        let diff = traverse(alloc, Parens::InTypeParam, t1, t2);
+    field: TagName,
+    args1: Vec<ErrorType>,
+    args2: Vec<ErrorType>,
+) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
+    if args1.len() == args2.len() {
+        let diff = traverse(alloc, Parens::InTypeParam, args1, args2);
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
@@ -2905,6 +2904,35 @@ fn diff_tag_union<'b>(
             left_able: diff.left_able,
             right_able: diff.right_able,
         }
+    } else {
+        let (left_doc, left_able): (_, Vec<AbleVariables>) = args1
+            .into_iter()
+            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+            .unzip();
+        let (right_doc, right_able): (_, Vec<AbleVariables>) = args2
+            .into_iter()
+            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+            .unzip();
+
+        Diff {
+            left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
+            right: (field.clone(), alloc.tag_name(field), right_doc),
+            status: Status::Similar,
+            left_able: left_able.into_iter().flatten().collect(),
+            right_able: right_able.into_iter().flatten().collect(),
+        }
+    }
+}
+
+fn diff_tag_union<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    fields1: &SendMap<TagName, Vec<ErrorType>>,
+    ext1: TypeExt,
+    fields2: &SendMap<TagName, Vec<ErrorType>>,
+    ext2: TypeExt,
+) -> Diff<RocDocBuilder<'b>> {
+    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        same_tag_name_overlap_diff(alloc, field, t1, t2)
     };
     let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
         TagName,
