@@ -1285,8 +1285,8 @@ fn single_tag_payload_fields<'a>(
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 
     let payload_fields: Vec<TypeId> = payload_vars
-        .into_iter()
-        .zip(field_layouts.into_iter())
+        .iter()
+        .zip(field_layouts.iter())
         .map(|(field_var, field_layout)| add_type_help(env, *field_layout, *field_var, None, types))
         .collect();
 

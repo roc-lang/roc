@@ -433,7 +433,7 @@ fn add_single_tag_struct(
 
                 add_decl(
                     impls,
-                    opt_impl.clone(),
+                    opt_impl,
                     target_info,
                     format!(
                         r#"/// Other `as` methods return a payload, but since the {tag_name} tag
@@ -664,13 +664,12 @@ pub struct {name} {{
                             impls,
                             opt_impl.clone(),
                             target_info,
-                            format!(
-                                r#"/// This is a single-tag union, so it has no alternatives
+                            r#"/// This is a single-tag union, so it has no alternatives
     /// to discriminate between. This method is only included for completeness.
-    pub fn discriminant(&self) -> () {{
+    pub fn discriminant(&self) -> () {
         ()
-    }}"#
-                            ),
+    }"#
+                            .to_string(),
                         );
                     } else {
                         add_decl(
@@ -1246,7 +1245,6 @@ pub struct {name} {{
     }}
 "#
             )
-            .to_string()
         } else {
             let mut buf = r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         match self.discriminant().partial_cmp(&other.discriminant()) {
@@ -1302,7 +1300,6 @@ pub struct {name} {{
     }}
 "#
             )
-            .to_string()
         } else {
             let mut buf = r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {
             match self.discriminant().cmp(&other.discriminant()) {
