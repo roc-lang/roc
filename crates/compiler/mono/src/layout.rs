@@ -843,6 +843,7 @@ impl<'a> LambdaSet<'a> {
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name
+                // Make sure all captures are equal
                 && other_captures_layouts
                     .iter()
                     .eq(lambda_name.captures_niche.0)
@@ -860,7 +861,11 @@ impl<'a> LambdaSet<'a> {
         debug_assert!(self.contains(function_symbol), "function symbol not in set");
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
-            other_name == function_symbol && other_captures_layouts.iter().eq(captures_layouts)
+            other_name == function_symbol
+                && other_captures_layouts
+                    .iter()
+                    .zip(captures_layouts)
+                    .all(|(other_layout, layout)| self.capture_layouts_eq(other_layout, layout))
         };
 
         let (name, layouts) = self
@@ -880,6 +885,38 @@ impl<'a> LambdaSet<'a> {
             name: *name,
             captures_niche: CapturesNiche(layouts),
         }
+    }
+
+    /// Checks if two captured layouts are equivalent under the current lambda set.
+    /// Resolves recursive pointers to the layout of the lambda set.
+    fn capture_layouts_eq(&self, left: &Layout, right: &Layout) -> bool {
+        if left == right {
+            return true;
+        }
+
+        let left = if left == &Layout::RecursivePointer {
+            let runtime_repr = self.runtime_representation();
+            debug_assert!(matches!(
+                runtime_repr,
+                Layout::Union(UnionLayout::Recursive(_))
+            ));
+            Layout::LambdaSet(*self)
+        } else {
+            *left
+        };
+
+        let right = if right == &Layout::RecursivePointer {
+            let runtime_repr = self.runtime_representation();
+            debug_assert!(matches!(
+                runtime_repr,
+                Layout::Union(UnionLayout::Recursive(_))
+            ));
+            Layout::LambdaSet(*self)
+        } else {
+            *right
+        };
+
+        left == right
     }
 
     fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
