@@ -666,7 +666,7 @@ pub struct {name} {{
                             target_info,
                             format!(
                                 r#"/// This is a single-tag union, so it has no alternatives
-    /// to discriminate bewteen. This method is only included for completeness.
+    /// to discriminate between. This method is only included for completeness.
     pub fn discriminant(&self) -> () {{
         ()
     }}"#
