@@ -693,6 +693,19 @@ fn gen_add_dec() {
 }
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1.1f32 + 2.4f32 + 3
+                "#
+        ),
+        6.5,
+        f32
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_add_f64() {
     assert_evals_to!(
         indoc!(
@@ -927,6 +940,90 @@ fn gen_wrap_int_neq() {
         ),
         true,
         bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1i8 + 2i8 + 3i8
+                "#
+        ),
+        6,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1u8 + 2u8 + 3u8
+                "#
+        ),
+        6,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1i16 + 2i16 + 3i16
+                "#
+        ),
+        6,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1u16 + 2u16 + 3u16
+                "#
+        ),
+        6,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1i32 + 2i32 + 3i32
+                "#
+        ),
+        6,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1u32 + 2u32 + 3u32
+                "#
+        ),
+        6,
+        u32
     );
 }
 
