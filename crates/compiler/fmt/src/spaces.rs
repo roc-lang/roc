@@ -547,6 +547,13 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment,
             },
+            ExpectFx {
+                condition,
+                preceding_comment,
+            } => ExpectFx {
+                condition: arena.alloc(condition.remove_spaces(arena)),
+                preceding_comment,
+            },
         }
     }
 }

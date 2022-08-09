@@ -92,6 +92,16 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
                 preceding_comment: *preceding_comment,
             }
         }
+        ExpectFx {
+            condition,
+            preceding_comment,
+        } => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            ExpectFx {
+                condition: desugared_condition,
+                preceding_comment: *preceding_comment,
+            }
+        }
     }
 }
 

@@ -106,6 +106,12 @@ impl Expects {
             preceding_comment: Vec::with_capacity(capacity),
         }
     }
+
+    fn push(&mut self, loc_can_condition: Loc<Expr>, preceding_comment: Region) {
+        self.conditions.push(loc_can_condition.value);
+        self.regions.push(loc_can_condition.region);
+        self.preceding_comment.push(preceding_comment);
+    }
 }
 
 /// A Def that has had patterns and type annnotations canonicalized,
@@ -907,6 +913,7 @@ fn canonicalize_value_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
+    let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
 
     for loc_pending_def in value_defs {
         match loc_pending_def.value {
@@ -920,6 +927,10 @@ fn canonicalize_value_defs<'a>(
             PendingValue::SignatureDefMismatch => { /* skip */ }
             PendingValue::Expect(pending_expect) => {
                 pending_expects.push(pending_expect);
+            }
+
+            PendingValue::ExpectFx(pending_expect) => {
+                pending_expect_fx.push(pending_expect);
             }
         }
     }
@@ -979,6 +990,7 @@ fn canonicalize_value_defs<'a>(
     }
 
     let mut expects = Expects::with_capacity(pending_expects.len());
+    let mut expect_fx = Expects::with_capacity(pending_expects.len());
 
     for pending in pending_expects {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -989,9 +1001,7 @@ fn canonicalize_value_defs<'a>(
             &pending.condition.value,
         );
 
-        expects.conditions.push(loc_can_condition.value);
-        expects.regions.push(loc_can_condition.region);
-        expects.preceding_comment.push(pending.preceding_comment);
+        expects.push(loc_can_condition, pending.preceding_comment);
 
         output.union(can_output);
     }
@@ -2391,6 +2401,7 @@ fn to_pending_type_def<'a>(
 enum PendingValue<'a> {
     Def(PendingValueDef<'a>),
     Expect(PendingExpect<'a>),
+    ExpectFx(PendingExpect<'a>),
     SignatureDefMismatch,
 }
 
@@ -2497,6 +2508,14 @@ fn to_pending_value_def<'a>(
         }
 
         Expect {
+            condition,
+            preceding_comment,
+        } => PendingValue::Expect(PendingExpect {
+            condition,
+            preceding_comment: *preceding_comment,
+        }),
+
+        ExpectFx {
             condition,
             preceding_comment,
         } => PendingValue::Expect(PendingExpect {
