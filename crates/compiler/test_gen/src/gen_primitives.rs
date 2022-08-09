@@ -3762,12 +3762,12 @@ fn compose_recursive_lambda_set_productive() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclame = \s -> "\(s)!"
+            exclaim = \s -> "\(s)!"
             whisper = \s -> "(\(s))"
 
             main =
                 res: Str -> Str
-                res = List.walk [ exclame, whisper ] identity compose
+                res = List.walk [ exclaim, whisper ] identity compose
                 res "hello"
             "#
         ),
