@@ -2152,8 +2152,6 @@ fn constrain_typed_def(
         Region::span_across(&annotation.region, &def.loc_expr.region),
     ));
 
-    dbg!(&signature);
-
     // when a def is annotated, and its body is a closure, treat this
     // as a named function (in elm terms) for error messages.
     //
