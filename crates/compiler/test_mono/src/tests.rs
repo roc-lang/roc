@@ -1922,3 +1922,22 @@ fn issue_3669() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_3444() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        combine = \a, b -> (\x -> x |> a |> b )
+        const = \x -> (\_y -> x)
+
+        list = []
+
+        res : Str -> Str
+        res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+
+        main = res "hello"
+        "#
+    )
+}
