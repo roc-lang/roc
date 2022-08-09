@@ -1053,7 +1053,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "host"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -2089,7 +2089,7 @@ checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 
 [[package]]
 name = "roc_std"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec",
  "static_assertions",
