@@ -1155,6 +1155,23 @@ impl<'a> LambdaSet<'a> {
         opt_rec_var: Option<Variable>,
         target_info: TargetInfo,
     ) -> Layout<'a> {
+        if let Some(rec_var) = opt_rec_var {
+            let tags: std::vec::Vec<_> = tags
+                .iter()
+                .map(|(sym, vars)| (sym, vars.as_slice()))
+                .collect();
+            let tags = UnsortedUnionLabels { tags };
+            let mut env = Env {
+                seen: Vec::new_in(arena),
+                target_info,
+                arena,
+                subs,
+            };
+
+            return layout_from_recursive_union(&mut env, rec_var, &tags)
+                .expect("unable to create lambda set representation");
+        }
+
         // otherwise, this is a closure with a payload
         let variant = union_sorted_tags_help(arena, tags, opt_rec_var, subs, target_info);
 
@@ -1190,34 +1207,12 @@ impl<'a> LambdaSet<'a> {
                         Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
                     }
 
-                    Recursive {
-                        sorted_tag_layouts: tags,
-                    } => {
-                        debug_assert!(tags.len() > 1);
-
-                        let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
-
-                        for (_, tag_args) in tags.iter() {
-                            tag_arguments.push(&tag_args[0..]);
-                        }
-                        Layout::Union(UnionLayout::Recursive(tag_arguments.into_bump_slice()))
+                    Recursive { .. }
+                    | NullableUnwrapped { .. }
+                    | NullableWrapped { .. }
+                    | NonNullableUnwrapped { .. } => {
+                        internal_error!("Recursive layouts should be produced in an earlier branch")
                     }
-
-                    NullableUnwrapped {
-                        nullable_id,
-                        nullable_name: _,
-                        other_name,
-                        other_fields,
-                    } => {
-                        debug_assert!(matches!(other_name, TagOrClosure::Closure(_)));
-
-                        Layout::Union(UnionLayout::NullableUnwrapped {
-                            nullable_id,
-                            other_fields,
-                        })
-                    }
-
-                    layout => panic!("handle recursive layout: {:?}", layout),
                 }
             }
         }
@@ -2802,9 +2797,6 @@ where
         seen: Vec::new_in(arena),
         target_info,
     };
-    if let Some(rec_var) = opt_rec_var {
-        env.insert_seen(rec_var);
-    }
 
     match tags_vec.len() {
         0 => {
