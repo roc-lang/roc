@@ -6,8 +6,10 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_types::num::NumericRange;
-use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
+use roc_types::subs::{
+    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
+};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, RecordField};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -476,7 +478,11 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_record(var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_record(
+        _subs: &Subs,
+        var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, DerivableError> {
         Err(DerivableError::NotDerivable(var))
     }
 
@@ -574,7 +580,7 @@ trait DerivableVisitor {
                         }
                     }
                     Record(fields, ext) => {
-                        let descend = Self::visit_record(var)?;
+                        let descend = Self::visit_record(subs, var, fields)?;
                         if descend.0 {
                             push_var_slice!(fields.variables());
                             if !matches!(
@@ -682,7 +688,11 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_record(_var: Variable) -> Result<Descend, DerivableError> {
+    fn visit_record(
+        _subs: &Subs,
+        _var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
@@ -753,8 +763,21 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_record(_var: Variable) -> Result<Descend, DerivableError> {
-        Ok(Descend(true))
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, DerivableError> {
+        let has_optional_field = subs
+            .get_subs_slice(fields.record_fields())
+            .iter()
+            .any(|field| matches!(field, RecordField::Optional(..)));
+
+        if has_optional_field {
+            Err(DerivableError::NotDerivable(var))
+        } else {
+            Ok(Descend(true))
+        }
     }
 
     #[inline(always)]

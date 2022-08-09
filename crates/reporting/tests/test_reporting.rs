@@ -10507,4 +10507,38 @@ All branches in an `if` must have the same type!
     Note: `Decoding` cannot be generated for functions.
     "###
     );
+
+    test_report!(
+        record_with_optional_field_types_cannot_derive_decoding,
+        indoc!(
+            r#"
+             app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+             main =
+                 myDecoder : Decoder {x : Str, y ? Str} fmt | fmt has DecoderFormatting
+                 myDecoder = decoder
+
+                 myDecoder
+             "#
+        ),
+        @r###"
+     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+     This expression has a type that does not implement the abilities it's expected to:
+
+     5│      myDecoder = decoder
+                         ^^^^^^^
+
+     Roc can't generate an implementation of the `Decode.Decoding` ability
+     for
+
+         { x : Str, y ? Str }
+
+     Note: I can't derive decoding for a record with an optional field,
+     which in this case is `.y`. Optional record fields are polymorphic over
+     records that may or may not contain them at compile time, but are not
+     a concept that extends to runtime!
+     Maybe you wanted to use a `Result`?
+     "###
+    );
 }
