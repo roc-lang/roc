@@ -10371,8 +10371,8 @@ All branches in an `if` must have the same type!
         create_value_with_optional_record_field_type,
         indoc!(
             r#"
-            f : {a: Str, b ? U64}
-            f = {a: "b", b: 1}
+            f : {a: Str, b ? Str}
+            f = {a: "b", b: ""}
             f
             "#
         ),
@@ -10381,17 +10381,17 @@ All branches in an `if` must have the same type!
 
     Something is off with the body of the `f` definition:
 
-    4│      f : {a: Str, b ? U64}
-    5│      f = {a: "b", b: 1}
-                ^^^^^^^^^^^^^^
+    4│      f : {a: Str, b ? Str}
+    5│      f = {a: "b", b: ""}
+                ^^^^^^^^^^^^^^^
 
     The body is a record of type:
 
-        { a : Str, b : Int Unsigned64 }
+        { a : Str, b : Str }
 
     But the type annotation on `f` says it should be:
 
-        { a : Str, b ? U64 }
+        { a : Str, b ? Str }
 
     Tip: To extract the `.b` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
