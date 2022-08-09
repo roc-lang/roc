@@ -193,6 +193,20 @@ impl Lowercase {
     }
 }
 
+impl From<Lowercase> for String {
+    fn from(lowercase: Lowercase) -> Self {
+        lowercase.0.into()
+    }
+}
+
+impl From<Lowercase> for Box<str> {
+    fn from(lowercase: Lowercase) -> Self {
+        let string: String = lowercase.0.into();
+
+        string.into()
+    }
+}
+
 impl<'a> From<&'a str> for Lowercase {
     fn from(string: &'a str) -> Self {
         Self(string.into())
