@@ -10347,4 +10347,17 @@ All branches in an `if` must have the same type!
     The branches must be cases of the `when` condition's type!
     "###
     );
+
+    test_report!(
+        create_value_with_optional_record_field_type,
+        indoc!(
+            r#"
+            f : {a: Str, b ? U64}
+            f = {a: "b", b: 1}
+            f
+            "#
+        ),
+        @r###"
+    "###
+    );
 }

@@ -804,7 +804,7 @@ impl Layout {
                 let it = slice.indices().zip(fields.iter_all());
                 for (target_index, (_, field_index, var_index)) in it {
                     match subs.record_fields[field_index.index as usize] {
-                        RecordField::Optional(_) => {
+                        RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             // do nothing
                         }
                         RecordField::Required(_) | RecordField::Demanded(_) => {

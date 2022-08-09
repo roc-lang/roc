@@ -1772,8 +1772,10 @@ fn unify_shared_fields<M: MetaCollector>(
             // Unification of optional fields
             //
             // Demanded does not unify with Optional
+            // RigidOptional does not unify with Required or Demanded
             // Unifying Required with Demanded => Demanded
             // Unifying Optional with Required => Required
+            // Unifying Optional with RigidOptional => RigidOptional
             // Unifying X with X => X
             let actual = match (actual, expected) {
                 (Demanded(_), Optional(_)) | (Optional(_), Demanded(_)) => {
@@ -1787,6 +1789,15 @@ fn unify_shared_fields<M: MetaCollector>(
                 (Required(val), Optional(_)) => Required(val),
                 (Optional(val), Required(_)) => Required(val),
                 (Optional(val), Optional(_)) => Optional(val),
+                (RigidOptional(val), Optional(_)) | (Optional(_), RigidOptional(val)) => {
+                    RigidOptional(val)
+                }
+                (RigidOptional(_), Demanded(_) | Required(_))
+                | (Demanded(_) | Required(_), RigidOptional(_)) => {
+                    // this is an error, but we continue to give better error messages
+                    continue;
+                }
+                (RigidOptional(val), RigidOptional(_)) => RigidOptional(val),
             };
 
             matching_fields.push((name, actual));

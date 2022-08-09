@@ -922,6 +922,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             for (name, content) in it {
                 let separator = match content {
                     RecordField::Optional(_) => '?',
+                    RecordField::RigidOptional(_) => '?',
                     RecordField::Required(_) => ':',
                     RecordField::Demanded(_) => ':',
                 };
@@ -3789,6 +3790,7 @@ fn flat_type_to_err_type(
                     Optional(_) => Optional(error_type),
                     Required(_) => Required(error_type),
                     Demanded(_) => Demanded(error_type),
+                    RigidOptional(_) => RigidOptional(error_type),
                 };
 
                 err_fields.insert(label, err_record_field);

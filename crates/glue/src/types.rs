@@ -698,7 +698,7 @@ fn add_type_help<'a>(
                         RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
                             Some((label.to_string(), field_var))
                         }
-                        RecordField::Optional(_) => {
+                        RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             // drop optional fields
                             None
                         }

@@ -419,6 +419,10 @@ pub fn to_type2<'a>(
                         let field_id = env.pool.add(field.into_inner());
                         RecordField::Optional(field_id)
                     }
+                    RecordField::RigidOptional(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::RigidOptional(field_id)
+                    }
                     RecordField::Demanded(_) => {
                         let field_id = env.pool.add(field.into_inner());
                         RecordField::Demanded(field_id)
