@@ -1789,6 +1789,20 @@ fn unify_shared_fields<M: MetaCollector>(
                 (Optional(val), Optional(_)) => Optional(val),
             };
 
+            {
+                let var1 = actual.into_inner();
+                let var2 = expected.into_inner();
+                let merged = choose_merged_var(env.subs, var1, var2);
+                let ctx = Context {
+                    first: var1,
+                    first_desc: env.subs.get(var1),
+                    second: var2,
+                    second_desc: env.subs.get(var2),
+                    mode: Mode::EQ,
+                };
+                merge::<M>(env, &ctx, *env.subs.get_content_without_compacting(merged));
+            }
+
             matching_fields.push((name, actual));
             whole_outcome.union(local_outcome);
         }

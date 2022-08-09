@@ -1044,3 +1044,21 @@ fn generalized_accessor() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3651() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            foo : { b : Str, c ? Str, a ? Str } -> [Arg { b : Str, c ? Str, a ? Str }]*
+            foo = \config -> Arg config
+
+            when foo { a: "blah", b: "foo" } is
+                Arg {a ? "", b} -> b
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
+}
