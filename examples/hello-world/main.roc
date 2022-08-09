@@ -3,9 +3,7 @@ app "helloWorld"
     imports [Decode, Decode.{Decoder, Decoding, DecoderFormatting}, Json]
     provides [main] to pf
 
-theDecoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 theDecoder =
-    initialState : {f0: Result a [NoField], f1: Result b [NoField]}
     initialState = {f0: Err NoField, f1: Err NoField}
 
     stepField = \state, field ->
