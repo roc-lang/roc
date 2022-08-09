@@ -892,7 +892,6 @@ struct State<'a> {
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub toplevel_expects: VecMap<Symbol, Region>,
     pub exposed_to_host: ExposedToHost,
-    pub goal_phase: Phase,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -934,6 +933,10 @@ struct State<'a> {
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
+    fn goal_phase(&self) -> Phase {
+        self.exec_mode.goal_phase()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
@@ -948,15 +951,13 @@ impl<'a> State<'a> {
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
-        let goal_phase = exec_mode.goal_phase();
-        let dependencies = Dependencies::new(goal_phase);
+        let dependencies = Dependencies::new(exec_mode.goal_phase());
 
         Self {
             root_id,
             root_subs: None,
             target_info,
             platform_data: None,
-            goal_phase,
             output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -2225,7 +2226,7 @@ fn update<'a>(
             work.extend(state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
-                state.goal_phase,
+                state.exec_mode.goal_phase(),
             ));
 
             state.module_cache.headers.insert(header.module_id, header);
@@ -2378,7 +2379,7 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
+            if is_host_exposed && state.goal_phase() == Phase::SolveTypes {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 
@@ -2420,7 +2421,7 @@ fn update<'a>(
                     },
                 );
 
-                if state.goal_phase > Phase::SolveTypes {
+                if state.goal_phase() > Phase::SolveTypes {
                     let layout_cache = state
                         .layout_caches
                         .pop()
@@ -2507,7 +2508,7 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
-            debug_assert!(state.goal_phase == Phase::MakeSpecializations);
+            debug_assert!(state.goal_phase() == Phase::MakeSpecializations);
 
             log!("made specializations for {:?}", module_id);
 

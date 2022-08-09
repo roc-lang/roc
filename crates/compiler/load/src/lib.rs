@@ -7,6 +7,13 @@ use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 use std::path::PathBuf;
 
+const SKIP_SUBS_CACHE: bool = {
+    match option_env!("ROC_SKIP_SUBS_CACHE") {
+        Some(s) => s.len() == 1 && s.as_bytes()[0] == b'1',
+        None => false,
+    }
+};
+
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
     EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadResult, LoadStart, LoadedModule,
@@ -147,7 +154,7 @@ fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
 
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
-    if !cfg!(target_family = "wasm") {
+    if !cfg!(target_family = "wasm") && !SKIP_SUBS_CACHE {
         output.insert(ModuleId::BOOL, deserialize_help(BOOL));
         output.insert(ModuleId::RESULT, deserialize_help(RESULT));
         output.insert(ModuleId::NUM, deserialize_help(NUM));
