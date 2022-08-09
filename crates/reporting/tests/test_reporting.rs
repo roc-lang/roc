@@ -5880,7 +5880,7 @@ All branches in an `if` must have the same type!
 
     This `map` call produces:
 
-        List [Foo Num a]
+        List [Foo (Num a)]
 
     But the type annotation on `x` says it should be:
 
@@ -10338,11 +10338,11 @@ All branches in an `if` must have the same type!
 
     This `u8` value is a:
 
-        [Bad [DecodeProblem], Good List U8]
+        [Bad [DecodeProblem], Good (List U8)]
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good List U8]
+        [Bad [DecodeProblem], Good (List U8)]
 
     The branches must be cases of the `when` condition's type!
     "###

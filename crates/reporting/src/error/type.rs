@@ -2896,7 +2896,7 @@ fn diff_tag_union<'b>(
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
     let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        let diff = traverse(alloc, Parens::Unnecessary, t1, t2);
+        let diff = traverse(alloc, Parens::InTypeParam, t1, t2);
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
