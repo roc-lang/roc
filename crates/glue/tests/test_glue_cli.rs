@@ -101,6 +101,10 @@ mod glue_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
+        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+            tag_union was: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "root", f1: [StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf1", f1: [] } }), StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf2", f1: [] } })] } })
+            Tree "foo" [] is: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "foo", f1: [] } })
+        "#),
         basic_recursive_union:"basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
@@ -110,7 +114,7 @@ mod glue_cli_run {
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
         list_recursive_union:"list-recursive-union" => indoc!(r#"
-            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool("test") }), inputFiles: ["foo"], job: [] }) }
         "#),
     }
 
