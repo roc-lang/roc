@@ -1265,19 +1265,6 @@ mod test_reporting {
         infinitely.
 
             List ∞ -> List a
-
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        I'm inferring a weird self-referential type for `main`:
-
-        3│  main =
-            ^^^^
-
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
-
-            List ∞ -> List a
         "###
     );
 

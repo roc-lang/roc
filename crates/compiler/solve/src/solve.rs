@@ -713,12 +713,13 @@ fn solve(
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 continue;
             }
@@ -831,12 +832,13 @@ fn solve(
 
                 // Now solve the body, using the new vars_by_symbol which includes
                 // the assignments' name-to-variable mappings.
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 state = state_for_ret_con;
 
