@@ -10397,4 +10397,34 @@ All branches in an `if` must have the same type!
     says this field is optional. Learn more about optional fields at TODO.
     "###
     );
+
+    test_report!(
+        create_value_with_conditionally_optional_record_field_type,
+        indoc!(
+            r#"
+            f : {a: Str, b ? Str}
+            f = if True then {a: ""} else {a: "b", b: ""}
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `then` branch of this `if` expression:
+
+    4│      f : {a: Str, b ? Str}
+    5│      f = if True then {a: ""} else {a: "b", b: ""}
+                             ^^^^^^^
+
+    The 1st branch is a record of type:
+
+        { a : Str }
+
+    But the type annotation on `f` says it should be:
+
+        { a : Str, b ? Str }
+
+    Tip: Looks like the b field is missing.
+    "###
+    );
 }
