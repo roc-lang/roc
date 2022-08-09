@@ -4,7 +4,9 @@ use roc_collections::{VecMap, VecSet};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_solve_problem::{NotDerivableContext, TypeError, UnderivableReason, Unfulfilled};
+use roc_solve_problem::{
+    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
@@ -837,19 +839,18 @@ impl DerivableVisitor for DeriveDecoding {
         var: Variable,
         fields: RecordFields,
     ) -> Result<Descend, NotDerivable> {
-        let has_optional_field = subs
-            .get_subs_slice(fields.record_fields())
-            .iter()
-            .any(|field| matches!(field, RecordField::Optional(..)));
-
-        if has_optional_field {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(Descend(true))
+        for (field_name, _, field) in fields.iter_all() {
+            if matches!(subs[field], RecordField::Optional(..)) {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                        subs[field_name].clone(),
+                    )),
+                });
+            }
         }
+
+        Ok(Descend(true))
     }
 
     #[inline(always)]
