@@ -6618,6 +6618,25 @@ All branches in an `if` must have the same type!
     Tip: To extract the `.inputs` field it must be non-optional, but the
     type says this field is optional. Learn more about optional fields at
     TODO.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `job` has an unexpected type:
+
+    9│      job { inputs: ["build", "test"] }
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The argument is a record of type:
+
+        { inputs : List Str }
+
+    But `job` needs its 1st argument to be:
+
+        { inputs ? List Str }
+
+    Tip: To extract the `.inputs` field it must be non-optional, but the
+    type says this field is optional. Learn more about optional fields at
+    TODO.
     "###
     );
 
@@ -10358,6 +10377,24 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : {a: Str, b ? U64}
+    5│      f = {a: "b", b: 1}
+                ^^^^^^^^^^^^^^
+
+    The body is a record of type:
+
+        { a : Str, b : Int Unsigned64 }
+
+    But the type annotation on `f` says it should be:
+
+        { a : Str, b ? U64 }
+
+    Tip: To extract the `.b` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
     "###
     );
 }
