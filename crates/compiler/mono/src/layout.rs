@@ -910,7 +910,23 @@ impl<'a> LambdaSet<'a> {
                             union_layout: *union,
                         }
                     }
-                    UnionLayout::Recursive(_) => todo!("recursive closures"),
+                    UnionLayout::Recursive(_) => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: *union,
+                        }
+                    }
                     UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
                         nullable_id: _,
