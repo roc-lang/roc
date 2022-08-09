@@ -3753,7 +3753,27 @@ fn recursive_lambda_set_toplevel_issue_3444() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn compose_recursive_lambda_set_productive() {
+fn recursive_lambda_set_issue_3444_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            combine = \f, g -> \x -> g (f x)
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+            res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_toplevel() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3769,6 +3789,49 @@ fn compose_recursive_lambda_set_productive() {
                 res: Str -> Str
                 res = List.walk [ exclaim, whisper ] identity compose
                 res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclaim = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            res: Str -> Str
+            res = List.walk [ exclaim, whisper ] identity compose
+            res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclaim = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            res = List.walk [ exclaim, whisper ] identity compose
+            res "hello"
             "#
         ),
         RocStr::from("(hello!)"),
