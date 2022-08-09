@@ -3130,7 +3130,10 @@ fn specialize_external<'a>(
                             tag_id,
                             ..
                         } => {
-                            debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
+                            debug_assert!(matches!(
+                                union_layout,
+                                UnionLayout::NonRecursive(_) | UnionLayout::Recursive(_)
+                            ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
                             // captured variables are in symbol-alphabetic order, but now we want
@@ -3149,7 +3152,9 @@ fn specialize_external<'a>(
                                 size2.cmp(&size1)
                             });
 
-                            for (index, (symbol, layout)) in combined.iter().enumerate() {
+                            for (index, (symbol, _)) in combined.iter().enumerate() {
+                                let layout = union_layout.layout_at(tag_id, index);
+
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
@@ -3162,7 +3167,7 @@ fn specialize_external<'a>(
                                 specialized_body = Stmt::Let(
                                     symbol,
                                     expr,
-                                    **layout,
+                                    layout,
                                     env.arena.alloc(specialized_body),
                                 );
                             }
