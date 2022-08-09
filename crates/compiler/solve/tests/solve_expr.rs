@@ -7657,4 +7657,34 @@ mod solve_expr {
             "Num *",
         );
     }
+
+    #[test]
+    fn issue_3444() {
+        infer_queries!(
+            indoc!(
+                r#"
+                combine = \a, b -> (\x -> x |> a |> b )
+                const = \x -> (\_y -> x)
+
+                list = []
+
+                res : Str -> Str
+                res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+                #                     ^^^^^                  ^^^^^^^
+                #                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+                #^^^{-1}
+
+                res "hello"
+                #^^^{-1}
+                "#
+            ),
+            @r###"
+        const : Str -[[const(2)]]-> (Str -[[7(7) (Str -a-> Str) (Str -[[]]-> Str), 10(10) Str] as a]-> Str)
+        combine : (Str -a-> Str), (Str -[[]]-> Str) -[[combine(1)]]-> (Str -a-> Str)
+        \c1, c2 -> combine c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        res : Str -[[7(7) (Str -a-> Str) (Str -[[]]-> Str), 10(10) Str] as a]-> Str
+        res : Str -[[7(7) (Str -a-> Str) (Str -[[]]-> Str), 10(10) Str] as a]-> Str
+        "###
+        );
+    }
 }
