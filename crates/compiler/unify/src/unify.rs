@@ -2518,10 +2518,12 @@ fn unify_flat_type<M: MetaCollector>(
             outcome.union(arg_outcome);
 
             if outcome.mismatches.is_empty() {
+                let merged_closure_var = choose_merged_var(env.subs, *l_closure, *r_closure);
+
                 outcome.union(merge(
                     env,
                     ctx,
-                    Structure(Func(*r_args, *r_closure, *r_ret)),
+                    Structure(Func(*r_args, merged_closure_var, *r_ret)),
                 ));
             }
 
