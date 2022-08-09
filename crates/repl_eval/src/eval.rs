@@ -573,18 +573,37 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 );
             }
         },
-        (_, Layout::RecursivePointer) => {
-            match (raw_content, when_recursive) {
-                (Content::RecursionVar {
+        (_, Layout::RecursivePointer) => match (raw_content, when_recursive) {
+            (
+                Content::RecursionVar {
                     structure,
                     opt_name: _,
-                }, WhenRecursive::Loop(union_layout)) => {
-                    let content = env.subs.get_content_without_compacting(*structure);
-                    addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
-                }
-                other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+                },
+                WhenRecursive::Loop(union_layout),
+            ) => {
+                let content = env.subs.get_content_without_compacting(*structure);
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
             }
-        }
+
+            (
+                Content::RecursionVar {
+                    structure,
+                    opt_name: _,
+                },
+                WhenRecursive::Unreachable,
+            ) => {
+                // It's possible to hit a recursive pointer before the full type layout; just
+                // figure out the actual recursive structure layout at this point.
+                let content = env.subs.get_content_without_compacting(*structure);
+                let union_layout = LayoutCache::new(env.target_info)
+                    .from_var(env.arena, *structure, env.subs)
+                    .expect("no layout for structure");
+                debug_assert!(matches!(union_layout, Layout::Union(..)));
+                let when_recursive = WhenRecursive::Loop(union_layout);
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
+            }
+            other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+        },
         (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
