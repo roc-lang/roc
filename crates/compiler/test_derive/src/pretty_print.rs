@@ -19,7 +19,10 @@ pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
 
 macro_rules! maybe_paren {
     ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
-        if $my_prec > $paren_if_above {
+        maybe_paren!($paren_if_above, $my_prec, || true, $doc)
+    };
+    ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {
+        if $my_prec > $paren_if_above && $extra_cond() {
             $doc.parens().group()
         } else {
             $doc
@@ -47,7 +50,7 @@ fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
 #[derive(PartialEq, PartialOrd)]
 enum EPrec {
     Free,
-    CallArg,
+    AppArg,
 }
 
 fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>> {
@@ -137,11 +140,11 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             maybe_paren!(
                 Free,
                 p,
-                expr(c, CallArg, f, &fun.value)
+                expr(c, AppArg, f, &fun.value)
                     .append(
                         f.concat(args.iter().map(|le| f.line().append(expr(
                             c,
-                            CallArg,
+                            AppArg,
                             f,
                             &le.1.value
                         ))))
@@ -193,7 +196,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         EmptyRecord => f.text("{}"),
         Access {
             loc_expr, field, ..
-        } => expr(c, CallArg, f, &loc_expr.value)
+        } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
@@ -201,7 +204,28 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         }
         Accessor(_) => todo!(),
         Update { .. } => todo!(),
-        Tag { .. } => todo!(),
+        Tag {
+            name, arguments, ..
+        } => maybe_paren!(
+            Free,
+            p,
+            || !arguments.is_empty(),
+            f.text(name.0.as_str())
+                .append(if arguments.is_empty() {
+                    f.nil()
+                } else {
+                    f.space()
+                })
+                .append(
+                    f.intersperse(
+                        arguments
+                            .iter()
+                            .map(|(_, le)| expr(c, AppArg, f, &le.value)),
+                        f.space(),
+                    )
+                )
+                .group()
+        ),
         ZeroArgumentTag { .. } => todo!(),
         OpaqueRef { .. } => todo!(),
         Expect { .. } => todo!(),
