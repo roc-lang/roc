@@ -15,6 +15,7 @@
 
 pub mod decoding;
 pub mod encoding;
+mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};

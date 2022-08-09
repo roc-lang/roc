@@ -4,7 +4,7 @@ use roc_module::{
 };
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
-use crate::DeriveError;
+use crate::{util::check_empty_ext_var, DeriveError};
 
 #[derive(Hash)]
 pub enum FlatEncodable {
@@ -56,22 +56,6 @@ impl FlatEncodableKey {
     }
 }
 
-fn check_ext_var(
-    subs: &Subs,
-    ext_var: Variable,
-    is_empty_ext: impl Fn(&Content) -> bool,
-) -> Result<(), DeriveError> {
-    let ext_content = subs.get_content_without_compacting(ext_var);
-    if is_empty_ext(ext_content) {
-        Ok(())
-    } else {
-        match ext_content {
-            Content::FlexVar(_) => Err(DeriveError::UnboundVar),
-            _ => Err(DeriveError::Underivable),
-        }
-    }
-}
-
 impl FlatEncodable {
     pub(crate) fn from_var(subs: &Subs, var: Variable) -> Result<FlatEncodable, DeriveError> {
         use DeriveError::*;
@@ -86,7 +70,7 @@ impl FlatEncodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    check_ext_var(subs, ext, |ext| {
+                    check_empty_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyRecord))
                     })?;
 
@@ -106,7 +90,7 @@ impl FlatEncodable {
                     //   [ A t1, B t1 t2 ] as R
                     // look the same on the surface, because `R` is only somewhere inside of the
                     // `t`-prefixed payload types.
-                    check_ext_var(subs, ext, |ext| {
+                    check_empty_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 
