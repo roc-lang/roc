@@ -49,3 +49,12 @@ fn list() {
         )
     })
 }
+
+#[test]
+fn record_2_fields() {
+    derive_test(Decoder, v!({first: v!(STR), second: v!(STR),}), |golden| {
+        assert_snapshot!(golden, @r###"
+        "###
+        )
+    })
+}
