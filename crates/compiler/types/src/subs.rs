@@ -921,10 +921,10 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             let (it, new_ext) = fields.sorted_iterator_and_ext(subs, *ext);
             for (name, content) in it {
                 let separator = match content {
-                    RecordField::Optional(_) => '?',
-                    RecordField::RigidOptional(_) => '?',
-                    RecordField::Required(_) => ':',
-                    RecordField::Demanded(_) => ':',
+                    RecordField::Optional(_) => "?",
+                    RecordField::RigidOptional(_) => "r?",
+                    RecordField::Required(_) => ":",
+                    RecordField::Demanded(_) => ":",
                 };
                 write!(
                     f,
