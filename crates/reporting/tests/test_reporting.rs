@@ -8537,7 +8537,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "TODO does not error yet"]
         ability_specialization_is_duplicated_with_type_mismatch,
         indoc!(
             r#"
@@ -8553,6 +8552,18 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    ── OVERLOADED SPECIALIZATION ───────────────────────────── /code/proj/Main.roc ─
+
+    This ability member specialization is already claimed to specialize
+    another opaque type:
+
+    7│  Two := {} has [Hash {hash}]
+                             ^^^^
+
+    Previously, we found it to specialize `hash` for `One`.
+
+    Ability specializations can only provide implementations for one
+    opauqe type, since all opaque types are different!
     "###
     );
 
