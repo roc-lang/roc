@@ -382,9 +382,10 @@ pub fn expr_to_expr2<'a>(
             // into a top-level procedure for code gen.
             //
             // In the Foo module, this will look something like Foo.$1 or Foo.$2.
-            let symbol = env
-                .closure_name_symbol
-                .unwrap_or_else(|| env.gen_unique_symbol());
+            let (symbol, is_anonymous) = match env.closure_name_symbol {
+                Some(symbol) => (symbol, false),
+                None => (env.gen_unique_symbol(), true),
+            };
             env.closure_name_symbol = None;
 
             // The body expression gets a new scope for canonicalization.
@@ -452,7 +453,12 @@ pub fn expr_to_expr2<'a>(
                 if !original_scope.contains_symbol(sub_symbol) {
                     if !output.references.has_lookup(sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(symbol, sub_symbol, region));
+                        env.problem(Problem::UnusedArgument(
+                            symbol,
+                            is_anonymous,
+                            sub_symbol,
+                            region,
+                        ));
                     }
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
