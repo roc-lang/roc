@@ -788,6 +788,12 @@ pub struct LambdaSet<'a> {
     representation: &'a Layout<'a>,
 }
 
+#[derive(Debug)]
+pub enum EnumDispatch {
+    Bool,
+    U8,
+}
+
 /// representation of the closure *for a particular function*
 #[derive(Debug)]
 pub enum ClosureRepresentation<'a> {
@@ -804,11 +810,11 @@ pub enum ClosureRepresentation<'a> {
     ///
     /// We MUST sort these according to their stack size before code gen!
     AlphabeticOrderStruct(&'a [Layout<'a>]),
-    /// The closure dispatches to multiple functions, but none of them capture anything, so this is
-    /// a boolean or integer flag.
-    MultiDispatch(Layout<'a>),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
     UnwrappedCapture(Layout<'a>),
+    /// The closure dispatches to multiple functions, but none of them capture anything, so this is
+    /// a boolean or integer flag.
+    EnumDispatch(EnumDispatch),
 }
 
 /// How the closure should be seen when determining a call-by-name.
@@ -823,10 +829,10 @@ pub enum ClosureCallOptions<'a> {
         field_layouts: &'a [Layout<'a>],
         field_order_hash: FieldOrderHash,
     },
-    /// The closure dispatches to multiple possible functions, none of which capture.
-    MultiDispatch(Layout<'a>),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
     UnwrappedCapture(Layout<'a>),
+    /// The closure dispatches to multiple possible functions, none of which capture.
+    EnumDispatch(EnumDispatch),
 }
 
 impl<'a> LambdaSet<'a> {
@@ -842,7 +848,7 @@ impl<'a> LambdaSet<'a> {
     pub fn is_represented(&self) -> Option<Layout<'a>> {
         if self.has_unwrapped_capture_repr() {
             Some(*self.representation)
-        } else if self.has_multi_dispatch_repr() {
+        } else if self.has_enum_dispatch_repr() {
             None
         } else {
             match self.representation {
@@ -1036,11 +1042,13 @@ impl<'a> LambdaSet<'a> {
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
             }
             layout => {
-                debug_assert!(
-                    self.has_multi_dispatch_repr(),
-                    "Expected this to be a multi-dispatching closure, but it was something else!"
-                );
-                ClosureRepresentation::MultiDispatch(*layout)
+                debug_assert!(self.has_enum_dispatch_repr(),);
+                let enum_repr = match layout {
+                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
+                };
+                ClosureRepresentation::EnumDispatch(enum_repr)
             }
         }
     }
@@ -1049,7 +1057,7 @@ impl<'a> LambdaSet<'a> {
         self.set.len() == 1 && self.set[0].1.len() == 1
     }
 
-    fn has_multi_dispatch_repr(&self) -> bool {
+    fn has_enum_dispatch_repr(&self) -> bool {
         self.set.len() > 1 && self.set.iter().all(|(_, captures)| captures.is_empty())
     }
 
@@ -1077,8 +1085,13 @@ impl<'a> LambdaSet<'a> {
                 }
             }
             layout => {
-                debug_assert!(self.has_multi_dispatch_repr());
-                ClosureCallOptions::MultiDispatch(*layout)
+                debug_assert!(self.has_enum_dispatch_repr());
+                let enum_repr = match layout {
+                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
+                };
+                ClosureCallOptions::EnumDispatch(enum_repr)
             }
         }
     }
@@ -1106,7 +1119,7 @@ impl<'a> LambdaSet<'a> {
 
                 arguments.into_bump_slice()
             }
-            ClosureCallOptions::MultiDispatch(_) => {
+            ClosureCallOptions::EnumDispatch(_) => {
                 // No captures, don't pass this along
                 argument_layouts
             }
