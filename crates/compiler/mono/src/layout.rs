@@ -791,20 +791,42 @@ pub struct LambdaSet<'a> {
 /// representation of the closure *for a particular function*
 #[derive(Debug)]
 pub enum ClosureRepresentation<'a> {
-    /// the closure is represented as a union. Includes the tag ID!
+    /// The closure is represented as a union. Includes the tag ID!
+    /// Each variant is a different function, and its payloads are the captures.
     Union {
         alphabetic_order_fields: &'a [Layout<'a>],
         closure_name: Symbol,
         tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
     },
-    /// The closure is represented as a struct. The layouts are sorted
-    /// alphabetically by the identifier that is captured.
+    /// The closure is one function, whose captures are represented as a struct.
+    /// The layouts are sorted alphabetically by the identifier that is captured.
     ///
     /// We MUST sort these according to their stack size before code gen!
     AlphabeticOrderStruct(&'a [Layout<'a>]),
-    /// the representation is anything but a union
-    Other(Layout<'a>),
+    /// The closure dispatches to multiple functions, but none of them capture anything, so this is
+    /// a boolean or integer flag.
+    MultiDispatch(Layout<'a>),
+    /// The closure is one function that captures a single identifier, whose value is unwrapped.
+    UnwrappedCapture(Layout<'a>),
+}
+
+/// How the closure should be seen when determining a call-by-name.
+#[derive(Debug)]
+pub enum ClosureCallOptions<'a> {
+    /// This is an empty lambda set, dispatching is an error
+    Void,
+    /// One of a few capturing functions can be called to
+    Union(UnionLayout<'a>),
+    /// The closure is one function, whose captures are represented as a struct.
+    Struct {
+        field_layouts: &'a [Layout<'a>],
+        field_order_hash: FieldOrderHash,
+    },
+    /// The closure dispatches to multiple possible functions, none of which capture.
+    MultiDispatch(Layout<'a>),
+    /// The closure is one function that captures a single identifier, whose value is unwrapped.
+    UnwrappedCapture(Layout<'a>),
 }
 
 impl<'a> LambdaSet<'a> {
@@ -923,6 +945,11 @@ impl<'a> LambdaSet<'a> {
     where
         F: Fn(Symbol, &[Layout]) -> bool,
     {
+        if self.has_unwrapped_capture_repr() {
+            // Only one function, that captures one identifier.
+            return ClosureRepresentation::UnwrappedCapture(*self.representation);
+        }
+
         match self.representation {
             Layout::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
@@ -1004,7 +1031,51 @@ impl<'a> LambdaSet<'a> {
 
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
             }
-            _ => ClosureRepresentation::Other(*self.representation),
+            layout => {
+                debug_assert!(
+                    self.has_multi_dispatch_repr(),
+                    "Expected this to be a multi-dispatching closure, but it was something else!"
+                );
+                ClosureRepresentation::MultiDispatch(*layout)
+            }
+        }
+    }
+
+    fn has_unwrapped_capture_repr(&self) -> bool {
+        self.set.len() == 1 && self.set[0].1.len() == 1
+    }
+
+    fn has_multi_dispatch_repr(&self) -> bool {
+        self.set.len() > 1 && self.set.iter().all(|(_, captures)| captures.is_empty())
+    }
+
+    pub fn call_by_name_options(&self) -> ClosureCallOptions<'a> {
+        if self.has_unwrapped_capture_repr() {
+            return ClosureCallOptions::UnwrappedCapture(*self.representation);
+        }
+
+        match self.representation {
+            Layout::Union(union_layout) => {
+                if self.representation == &Layout::VOID {
+                    debug_assert!(self.set.is_empty());
+                    return ClosureCallOptions::Void;
+                }
+                ClosureCallOptions::Union(*union_layout)
+            }
+            Layout::Struct {
+                field_layouts,
+                field_order_hash,
+            } => {
+                debug_assert_eq!(self.set.len(), 1);
+                ClosureCallOptions::Struct {
+                    field_layouts,
+                    field_order_hash: *field_order_hash,
+                }
+            }
+            layout => {
+                debug_assert!(self.has_multi_dispatch_repr());
+                ClosureCallOptions::MultiDispatch(*layout)
+            }
         }
     }
 

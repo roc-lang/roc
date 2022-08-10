@@ -1,11 +1,15 @@
 procedure Test.1 (Test.4):
-    let Test.5 : {Str} = Struct {Test.4};
+    let Test.5 : Str = StructAtIndex 0 Test.16;
+    inc Test.5;
+    dec Test.16;
+    let Test.16 : {Str} = Struct {Test.4};
     ret Test.5;
 
 procedure Test.5 (Test.12, #Attr.12):
-    let Test.4 : Str = StructAtIndex 0 #Attr.12;
+    let Test.4 : Str = StructAtIndex 0 Test.15;
     inc Test.4;
-    dec #Attr.12;
+    dec Test.15;
+    let Test.15 : {Str} = Struct {#Attr.12};
     let Test.14 : Str = "";
     ret Test.14;
 
@@ -14,13 +18,13 @@ procedure Test.0 ():
     joinpoint Test.9 Test.3:
         ret Test.3;
     in
-    let Test.19 : Int1 = true;
-    let Test.20 : Int1 = lowlevel Eq Test.19 Test.2;
-    if Test.20 then
-        let Test.15 : Str = "";
-        let Test.10 : {Str} = CallByName Test.1 Test.15;
+    let Test.21 : Int1 = true;
+    let Test.22 : Int1 = lowlevel Eq Test.21 Test.2;
+    if Test.22 then
+        let Test.17 : Str = "";
+        let Test.10 : Str = CallByName Test.1 Test.17;
         jump Test.9 Test.10;
     else
-        let Test.18 : Str = "";
-        let Test.16 : {Str} = CallByName Test.1 Test.18;
-        jump Test.9 Test.16;
+        let Test.20 : Str = "";
+        let Test.18 : Str = CallByName Test.1 Test.20;
+        jump Test.9 Test.18;
