@@ -7729,4 +7729,30 @@ mod solve_expr {
         @"h : {}* -[[h(1) Str]]-> Str"
         );
     }
+
+    #[test]
+    fn mutually_recursive_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = True
+                y = False
+
+                a = "foo"
+                b = "bar"
+
+                foo = \{} -> if x then a else bar {}
+                #^^^{-1}
+                bar = \{} -> if y then b else foo {}
+                #^^^{-1}
+
+                bar {}
+                "#
+            ),
+        @r###"
+        foo : {} -[[foo(5) [True]* [False]* Str Str]]-> Str
+        bar : {} -[[bar(6) [True]* [False]* Str Str]]-> Str
+        "###
+        );
+    }
 }

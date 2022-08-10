@@ -829,10 +829,33 @@ fn fix_values_captured_in_closure_defs(
         );
     }
 
-    // TODO mutually recursive functions should both capture the union of both their capture sets
-
     for def in defs.iter_mut() {
         fix_values_captured_in_closure_def(def, no_capture_symbols, closure_captures);
+    }
+
+    // Mutually recursive functions should both capture the union of all their capture sets
+    //
+    // Really unfortunate we make a lot of clones here, can this be done more efficiently?
+    let mut total_capture_set = Vec::default();
+    for def in defs.iter_mut() {
+        match &def.loc_expr.value {
+            Expr::Closure(ClosureData {
+                captured_symbols, ..
+            }) => total_capture_set.extend(captured_symbols.iter().copied()),
+            _ => {}
+        }
+    }
+    total_capture_set.sort_by_key(|(sym, _)| *sym);
+    total_capture_set.dedup_by_key(|(sym, _)| *sym);
+    for def in defs.iter_mut() {
+        match &mut def.loc_expr.value {
+            Expr::Closure(ClosureData {
+                captured_symbols, ..
+            }) => {
+                *captured_symbols = total_capture_set.clone();
+            }
+            _ => {}
+        }
     }
 }
 

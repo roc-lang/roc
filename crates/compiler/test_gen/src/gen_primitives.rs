@@ -3993,3 +3993,29 @@ fn transient_captures_from_outer_scope() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mutually_recursive_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Bool
+            x = True
+
+            y : Bool
+            y = False
+
+            a = "foo"
+            b = "bar"
+
+            foo = \{} -> if x then a else bar {}
+            bar = \{} -> if y then b else foo {}
+
+            bar {}
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
+}
