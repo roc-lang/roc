@@ -838,23 +838,21 @@ fn fix_values_captured_in_closure_defs(
     // Really unfortunate we make a lot of clones here, can this be done more efficiently?
     let mut total_capture_set = Vec::default();
     for def in defs.iter_mut() {
-        match &def.loc_expr.value {
-            Expr::Closure(ClosureData {
-                captured_symbols, ..
-            }) => total_capture_set.extend(captured_symbols.iter().copied()),
-            _ => {}
+        if let Expr::Closure(ClosureData {
+            captured_symbols, ..
+        }) = &def.loc_expr.value
+        {
+            total_capture_set.extend(captured_symbols.iter().copied());
         }
     }
     total_capture_set.sort_by_key(|(sym, _)| *sym);
     total_capture_set.dedup_by_key(|(sym, _)| *sym);
     for def in defs.iter_mut() {
-        match &mut def.loc_expr.value {
-            Expr::Closure(ClosureData {
-                captured_symbols, ..
-            }) => {
-                *captured_symbols = total_capture_set.clone();
-            }
-            _ => {}
+        if let Expr::Closure(ClosureData {
+            captured_symbols, ..
+        }) = &mut def.loc_expr.value
+        {
+            *captured_symbols = total_capture_set.clone();
         }
     }
 }
