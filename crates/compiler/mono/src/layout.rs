@@ -1053,7 +1053,7 @@ impl<'a> LambdaSet<'a> {
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
                 let mut set: Vec<(Symbol, &[Layout])> = Vec::with_capacity_in(lambdas.len(), arena);
-                let mut set_with_variables: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
+                let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
 
                 let mut last_function_symbol = None;
@@ -1090,7 +1090,7 @@ impl<'a> LambdaSet<'a> {
                     has_duplicate_lambda_names = has_duplicate_lambda_names || is_multimorphic;
 
                     set.push((*function_symbol, arguments));
-                    set_with_variables.push((*function_symbol, variables.to_vec()));
+                    set_with_variables.push((function_symbol, variables.as_slice()));
 
                     last_function_symbol = Some(function_symbol);
                 }
@@ -1151,70 +1151,23 @@ impl<'a> LambdaSet<'a> {
     fn make_representation(
         arena: &'a Bump,
         subs: &Subs,
-        tags: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
+        tags: std::vec::Vec<(&Symbol, &[Variable])>,
         opt_rec_var: Option<Variable>,
         target_info: TargetInfo,
     ) -> Layout<'a> {
-        if let Some(rec_var) = opt_rec_var {
-            let tags: std::vec::Vec<_> = tags
-                .iter()
-                .map(|(sym, vars)| (sym, vars.as_slice()))
-                .collect();
-            let tags = UnsortedUnionLabels { tags };
-            let mut env = Env {
-                seen: Vec::new_in(arena),
-                target_info,
-                arena,
-                subs,
-            };
+        let union_labels = UnsortedUnionLabels { tags };
+        let mut env = Env {
+            seen: Vec::new_in(arena),
+            target_info,
+            arena,
+            subs,
+        };
 
-            return layout_from_recursive_union(&mut env, rec_var, &tags)
-                .expect("unable to create lambda set representation");
-        }
+        match opt_rec_var {
+            Some(rec_var) => layout_from_recursive_union(&mut env, rec_var, &union_labels)
+                .expect("unable to create lambda set representation"),
 
-        // otherwise, this is a closure with a payload
-        let variant = union_sorted_tags_help(arena, tags, opt_rec_var, subs, target_info);
-
-        use UnionVariant::*;
-        match variant {
-            Never => Layout::VOID,
-            BoolUnion { .. } => Layout::bool(),
-            ByteUnion { .. } => Layout::u8(),
-            Unit | UnitWithArguments => {
-                // no useful information to store
-                Layout::UNIT
-            }
-            Newtype {
-                arguments: layouts, ..
-            } => Layout::struct_no_name_order(layouts.into_bump_slice()),
-            Wrapped(variant) => {
-                use WrappedVariant::*;
-
-                match variant {
-                    NonRecursive {
-                        sorted_tag_layouts: tags,
-                    } => {
-                        debug_assert!(tags.len() > 1);
-
-                        // if the closed-over value is actually a layout, it should be wrapped in a 1-element record
-                        debug_assert!(matches!(tags[0].0, TagOrClosure::Closure(_)));
-
-                        let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
-
-                        for (_, tag_args) in tags.iter() {
-                            tag_arguments.push(&tag_args[0..]);
-                        }
-                        Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
-                    }
-
-                    Recursive { .. }
-                    | NullableUnwrapped { .. }
-                    | NullableWrapped { .. }
-                    | NonNullableUnwrapped { .. } => {
-                        internal_error!("Recursive layouts should be produced in an earlier branch")
-                    }
-                }
-            }
+            None => layout_from_union(&mut env, &union_labels),
         }
     }
 
