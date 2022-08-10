@@ -11,6 +11,7 @@ version = "0.0.1"
 [dependencies]
 static_assertions = "1.1.0"
 arrayvec = "0.7.2"
+serde = { version = "1", optional = true }
 
 [dev-dependencies]
 indoc = "1.0.3"
@@ -21,3 +22,4 @@ libc = "0.2.106"
 
 [features]
 std = []
+serde = ["dep:serde"]
