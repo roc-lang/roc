@@ -1192,3 +1192,15 @@ fn opaque_wrap_function() {
         "[@A 1, @A 2, @A 3] : List (A U8)",
     );
 }
+
+#[test]
+fn dict_get_single() {
+    expect_success(
+        indoc!(
+            r#"
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0
+            "#
+        ),
+        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
+    )
+}
