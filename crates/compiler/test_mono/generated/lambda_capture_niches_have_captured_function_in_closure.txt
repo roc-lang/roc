@@ -3,10 +3,10 @@ procedure Test.11 (Test.37):
     ret Test.38;
 
 procedure Test.13 (Test.51, #Attr.12):
+    let Test.54 : {Str} = Struct {#Attr.12};
     let Test.12 : Str = StructAtIndex 0 Test.54;
     inc Test.12;
     dec Test.54;
-    let Test.54 : {Str} = Struct {#Attr.12};
     ret Test.12;
 
 procedure Test.15 (Test.39):
@@ -30,10 +30,10 @@ procedure Test.3 (Test.17):
     ret Test.36;
 
 procedure Test.4 (Test.18):
+    let Test.55 : {Str} = Struct {Test.18};
     let Test.50 : Str = StructAtIndex 0 Test.55;
     inc Test.50;
     dec Test.55;
-    let Test.55 : {Str} = Struct {Test.18};
     ret Test.50;
 
 procedure Test.9 (Test.29, #Attr.12):

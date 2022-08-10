@@ -1,15 +1,15 @@
 procedure Test.1 (Test.4):
+    let Test.16 : {Str} = Struct {Test.4};
     let Test.5 : Str = StructAtIndex 0 Test.16;
     inc Test.5;
     dec Test.16;
-    let Test.16 : {Str} = Struct {Test.4};
     ret Test.5;
 
 procedure Test.5 (Test.12, #Attr.12):
+    let Test.15 : {Str} = Struct {#Attr.12};
     let Test.4 : Str = StructAtIndex 0 Test.15;
     inc Test.4;
     dec Test.15;
-    let Test.15 : {Str} = Struct {#Attr.12};
     let Test.14 : Str = "";
     ret Test.14;
 

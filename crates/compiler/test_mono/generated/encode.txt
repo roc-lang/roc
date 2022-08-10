@@ -13,21 +13,23 @@ procedure List.71 (#Attr.2, #Attr.3):
     ret List.388;
 
 procedure Test.23 (Test.24, Test.35, #Attr.12):
-    let Test.22 : U8 = StructAtIndex 0 #Attr.12;
+    let Test.38 : {U8} = Struct {#Attr.12};
+    let Test.22 : U8 = StructAtIndex 0 Test.38;
     let Test.37 : List U8 = CallByName List.4 Test.24 Test.22;
     ret Test.37;
 
 procedure Test.8 (Test.22):
-    let Test.34 : {U8} = Struct {Test.22};
+    let Test.39 : {U8} = Struct {Test.22};
+    let Test.34 : U8 = StructAtIndex 0 Test.39;
     ret Test.34;
 
 procedure Test.9 (Test.27):
-    let Test.33 : {U8} = CallByName Test.8 Test.27;
+    let Test.33 : U8 = CallByName Test.8 Test.27;
     ret Test.33;
 
 procedure Test.0 ():
     let Test.32 : U8 = 15i64;
-    let Test.28 : {U8} = CallByName Test.9 Test.32;
+    let Test.28 : U8 = CallByName Test.9 Test.32;
     let Test.30 : List U8 = Array [];
     let Test.31 : {} = Struct {};
     let Test.29 : List U8 = CallByName Test.23 Test.30 Test.31 Test.28;

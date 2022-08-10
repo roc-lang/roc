@@ -1,16 +1,16 @@
 procedure #Derived.0 (#Derived.1):
+    let #Derived_gen.2 : {{Str, Str}} = Struct {#Derived.1};
     let #Derived_gen.1 : {Str, Str} = StructAtIndex 0 #Derived_gen.2;
     inc #Derived_gen.1;
     dec #Derived_gen.2;
-    let #Derived_gen.2 : {{Str, Str}} = Struct {#Derived.1};
     let #Derived_gen.0 : {Str, Str} = CallByName Encode.22 #Derived_gen.1;
     ret #Derived_gen.0;
 
 procedure #Derived.4 (#Derived.5, #Derived.6, #Attr.12):
+    let #Derived_gen.12 : {{Str, Str}} = Struct {#Attr.12};
     let #Derived.1 : {Str, Str} = StructAtIndex 0 #Derived_gen.12;
     inc #Derived.1;
     dec #Derived_gen.12;
-    let #Derived_gen.12 : {{Str, Str}} = Struct {#Attr.12};
     joinpoint #Derived_gen.6 #Derived_gen.5:
         let #Derived_gen.4 : List U8 = CallByName Encode.23 #Derived.5 #Derived_gen.5 #Derived.6;
         ret #Derived_gen.4;
@@ -121,10 +121,10 @@ procedure Json.119 (Json.331, Json.125):
         jump Json.345 Json.126;
 
 procedure Json.18 (Json.86):
+    let Json.329 : {Str} = Struct {Json.86};
     let Json.327 : Str = StructAtIndex 0 Json.329;
     inc Json.327;
     dec Json.329;
-    let Json.329 : {Str} = Struct {Json.86};
     let Json.326 : Str = CallByName Encode.22 Json.327;
     ret Json.326;
 
@@ -134,10 +134,10 @@ procedure Json.21 (Json.115, Json.116):
     ret Json.319;
 
 procedure Json.87 (Json.88, Json.324, #Attr.12):
+    let Json.377 : {Str} = Struct {#Attr.12};
     let Json.86 : Str = StructAtIndex 0 Json.377;
     inc Json.86;
     dec Json.377;
-    let Json.377 : {Str} = Struct {#Attr.12};
     let Json.376 : I32 = 34i64;
     let Json.375 : U8 = CallByName Num.123 Json.376;
     let Json.373 : List U8 = CallByName List.4 Json.88 Json.375;
@@ -149,15 +149,15 @@ procedure Json.87 (Json.88, Json.324, #Attr.12):
     ret Json.369;
 
 procedure List.133 (List.134, List.135, #Attr.12):
-    let List.132 : {} = StructAtIndex 0 List.449;
     let List.449 : {{}} = Struct {#Attr.12};
+    let List.132 : {} = StructAtIndex 0 List.449;
     let List.448 : {List U8, U64} = CallByName Json.119 List.134 List.135;
     let List.447 : [C [], C {List U8, U64}] = TagId(1) List.448;
     ret List.447;
 
 procedure List.18 (List.130, List.131, List.132):
-    let List.423 : {} = StructAtIndex 0 List.424;
     let List.424 : {{}} = Struct {List.132};
+    let List.423 : {} = StructAtIndex 0 List.424;
     let List.417 : [C [], C {List U8, U64}] = CallByName List.75 List.130 List.131 List.423;
     let List.420 : U8 = 1i64;
     let List.421 : U8 = GetTagId List.417;

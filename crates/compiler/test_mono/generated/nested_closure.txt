@@ -1,12 +1,12 @@
 procedure Test.1 (Test.5):
     let Test.2 : I64 = 42i64;
-    let Test.3 : I64 = StructAtIndex 0 Test.13;
     let Test.13 : {I64} = Struct {Test.2};
+    let Test.3 : I64 = StructAtIndex 0 Test.13;
     ret Test.3;
 
 procedure Test.3 (Test.9, #Attr.12):
-    let Test.2 : I64 = StructAtIndex 0 Test.12;
     let Test.12 : {I64} = Struct {#Attr.12};
+    let Test.2 : I64 = StructAtIndex 0 Test.12;
     ret Test.2;
 
 procedure Test.0 ():
