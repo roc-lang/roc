@@ -1004,16 +1004,16 @@ mod test_reporting {
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `f`:
 
     4│      f = \g -> g g
-                 ^
+            ^
 
     Here is my best effort at writing down the type. You will see ∞ for
     parts of the type that repeat something already printed out
     infinitely.
 
-        ∞ -> a
+        (∞ -> a) -> a
     "###
     );
 
@@ -1188,20 +1188,20 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `x`:
+        I'm inferring a weird self-referential type for `f`:
 
         5│      f = \x -> f [x]
-                     ^
+                ^
 
         Here is my best effort at writing down the type. You will see ∞ for
         parts of the type that repeat something already printed out
         infinitely.
 
-            List ∞
-        "#
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
@@ -1252,19 +1252,6 @@ mod test_reporting {
         infinitely.
 
             List ∞ -> List a
-
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        I'm inferring a weird self-referential type for `f`:
-
-        5│      f = \x -> g x
-                ^
-
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
-
-            List ∞ -> List a
         "###
     );
 
@@ -1279,20 +1266,33 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `x`:
+        I'm inferring a weird self-referential type for `f`:
 
-        6│      g = \x -> f [x]
-                     ^
+        4│      f = \x -> g x
+                ^
 
         Here is my best effort at writing down the type. You will see ∞ for
         parts of the type that repeat something already printed out
         infinitely.
 
-            List ∞
-        "#
+            List ∞ -> List a
+
+        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+        I'm inferring a weird self-referential type for `g`:
+
+        6│      g = \x -> f [x]
+                ^
+
+        Here is my best effort at writing down the type. You will see ∞ for
+        parts of the type that repeat something already printed out
+        infinitely.
+
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
