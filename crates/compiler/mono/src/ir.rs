@@ -3247,19 +3247,26 @@ fn specialize_external<'a>(
 
                             let wrap = Expr::Struct(arg_closure_slice);
                             let wrap_sym = env.unique_symbol();
-                            let hole = env.arena.alloc(Stmt::Let(
-                                wrap_sym,
-                                wrap,
-                                Layout::struct_no_name_order(layout_slice),
-                                env.arena.alloc(specialized_body),
-                            ));
 
                             let unwrap = Expr::StructAtIndex {
                                 index: 0,
                                 field_layouts: layout_slice,
                                 structure: wrap_sym,
                             };
-                            specialized_body = Stmt::Let(captured_symbol, unwrap, layout, hole);
+
+                            specialized_body = Stmt::Let(
+                                captured_symbol,
+                                unwrap,
+                                layout,
+                                env.arena.alloc(specialized_body),
+                            );
+
+                            specialized_body = Stmt::Let(
+                                wrap_sym,
+                                wrap,
+                                Layout::struct_no_name_order(layout_slice),
+                                env.arena.alloc(specialized_body),
+                            );
                         }
 
                         ClosureRepresentation::MultiDispatch(layout) => match layout {
@@ -5422,21 +5429,24 @@ where
             // It should be optimized away later on.
             let layout_slice = env.arena.alloc([layout]);
             let captured_slice = env.arena.alloc([*captured_symbol]);
+
             let wrap = Expr::Struct(captured_slice);
             let wrap_sym = env.unique_symbol();
-            let hole = env.arena.alloc(Stmt::Let(
-                wrap_sym,
-                wrap,
-                Layout::struct_no_name_order(layout_slice),
-                hole,
-            ));
 
             let unwrap = Expr::StructAtIndex {
                 index: 0,
                 field_layouts: layout_slice,
                 structure: wrap_sym,
             };
-            Stmt::Let(assigned, unwrap, layout, hole)
+
+            let hole = env.arena.alloc(Stmt::Let(assigned, unwrap, layout, hole));
+
+            Stmt::Let(
+                wrap_sym,
+                wrap,
+                Layout::struct_no_name_order(layout_slice),
+                hole,
+            )
         }
         ClosureRepresentation::MultiDispatch(layout) => match layout {
             Layout::Builtin(Builtin::Bool) => {
@@ -5903,10 +5913,7 @@ fn register_capturing_closure<'a>(
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
                 match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
-                        if let Layout::Struct {
-                            field_layouts: &[], ..
-                        } = lambda_set.runtime_representation()
-                        {
+                        if lambda_set.is_represented().is_none() {
                             CapturedSymbols::None
                         } else {
                             let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
@@ -9147,9 +9154,9 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
 where
     ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
-    match lambda_set.runtime_representation() {
-        Layout::VOID => empty_lambda_set_error(),
-        Layout::Union(union_layout) => {
+    match lambda_set.call_by_name_options() {
+        ClosureCallOptions::Void => empty_lambda_set_error(),
+        ClosureCallOptions::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = lowlevel_union_lambda_set_to_switch(
@@ -9178,7 +9185,7 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct { .. } => match lambda_set.iter_set().next() {
+        ClosureCallOptions::Struct { .. } => match lambda_set.iter_set().next() {
             Some(lambda_name) => {
                 let call_spec_id = env.next_call_specialization_id();
                 let update_mode = env.next_update_mode_id();
@@ -9203,39 +9210,59 @@ where
                 hole.clone()
             }
         },
-        Layout::Builtin(Builtin::Bool) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+        ClosureCallOptions::UnwrappedCapture(_) => {
+            let lambda_name = lambda_set
+                .iter_set()
+                .next()
+                .expect("no function in lambda set");
 
-            lowlevel_enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Bool),
+            let call_spec_id = env.next_call_specialization_id();
+            let update_mode = env.next_update_mode_id();
+            let call = to_lowlevel_call((
+                lambda_name,
                 closure_data_symbol,
                 lambda_set.is_represented(),
-                to_lowlevel_call,
-                return_layout,
-                assigned,
-                hole,
-            )
-        }
-        Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+                call_spec_id,
+                update_mode,
+            ));
 
-            lowlevel_enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int(IntWidth::U8)),
-                closure_data_symbol,
-                lambda_set.is_represented(),
-                to_lowlevel_call,
-                return_layout,
-                assigned,
-                hole,
-            )
+            build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
         }
-        other => todo!("{:?}", other),
+        ClosureCallOptions::MultiDispatch(layout) => match layout {
+            Layout::Builtin(Builtin::Bool) => {
+                let closure_tag_id_symbol = closure_data_symbol;
+
+                lowlevel_enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Bool),
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    to_lowlevel_call,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
+                let closure_tag_id_symbol = closure_data_symbol;
+
+                lowlevel_enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)),
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    to_lowlevel_call,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+            other => internal_error!("Unexpected multi-dispatch layout: {:?}", other),
+        },
     }
 }
 
@@ -9434,7 +9461,7 @@ fn match_on_lambda_set<'a>(
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Bool),
-                    closure_data_symbol,
+                    ClosureInfo::DoesNotCapture,
                     argument_symbols,
                     argument_layouts,
                     return_layout,
@@ -9450,7 +9477,7 @@ fn match_on_lambda_set<'a>(
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Int(IntWidth::U8)),
-                    closure_data_symbol,
+                    ClosureInfo::DoesNotCapture,
                     argument_symbols,
                     argument_layouts,
                     return_layout,
@@ -9566,6 +9593,7 @@ fn union_lambda_set_branch<'a>(
     )
 }
 
+#[derive(Clone, Copy)]
 enum ClosureInfo<'a> {
     Captures {
         closure_data_symbol: Symbol,
@@ -9592,16 +9620,11 @@ fn union_lambda_set_branch_help<'a>(
         ClosureInfo::Captures {
             lambda_set,
             closure_data_symbol,
-            closure_data_layout,
-        } => match closure_data_layout {
-            Layout::Struct {
-                field_layouts: &[], ..
-            }
-            | Layout::Builtin(Builtin::Bool)
-            | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
+            closure_data_layout: _,
+        } => {
+            if lambda_set.is_represented().is_none() {
                 (argument_layouts_slice, argument_symbols_slice)
-            }
-            _ => {
+            } else {
                 // extend layouts with the layout of the closure environment
                 let mut argument_layouts =
                     Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
@@ -9619,7 +9642,7 @@ fn union_lambda_set_branch_help<'a>(
                     argument_symbols.into_bump_slice(),
                 )
             }
-        },
+        }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything
             // to still get a lambda set that does store information. We must not pass a closure
@@ -9649,7 +9672,7 @@ fn enum_lambda_set_to_switch<'a>(
     lambda_set: impl ExactSizeIterator<Item = LambdaName<'a>>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
-    closure_data_symbol: Symbol,
+    closure_info: ClosureInfo<'a>,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
@@ -9662,15 +9685,12 @@ fn enum_lambda_set_to_switch<'a>(
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
-    let closure_layout = closure_tag_id_layout;
-
     for (i, lambda_name) in lambda_set.into_iter().enumerate() {
         let stmt = enum_lambda_set_branch(
             env,
             join_point_id,
             lambda_name,
-            closure_data_symbol,
-            closure_layout,
+            closure_info,
             argument_symbols,
             argument_layouts,
             return_layout,
@@ -9711,8 +9731,7 @@ fn enum_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
-    closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
+    closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
@@ -9723,32 +9742,34 @@ fn enum_lambda_set_branch<'a>(
 
     let assigned = result_symbol;
 
-    let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct {
-            field_layouts: &[], ..
-        }
-        | Layout::Builtin(Builtin::Bool)
-        | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            (argument_layouts_slice, argument_symbols_slice)
-        }
-        _ => {
-            // extend layouts with the layout of the closure environment
-            let mut argument_layouts =
-                Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-            argument_layouts.extend(argument_layouts_slice);
-            argument_layouts.push(closure_data_layout);
+    let (argument_layouts, argument_symbols) = match closure_info {
+        ClosureInfo::Captures {
+            closure_data_symbol,
+            closure_data_layout,
+            lambda_set,
+        } => {
+            if lambda_set.is_represented().is_none() {
+                (argument_layouts_slice, argument_symbols_slice)
+            } else {
+                // extend layouts with the layout of the closure environment
+                let mut argument_layouts =
+                    Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
+                argument_layouts.extend(argument_layouts_slice);
+                argument_layouts.push(closure_data_layout);
 
-            // extend symbols with the symbol of the closure environment
-            let mut argument_symbols =
-                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-            argument_symbols.extend(argument_symbols_slice);
-            argument_symbols.push(closure_data_symbol);
+                // extend symbols with the symbol of the closure environment
+                let mut argument_symbols =
+                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+                argument_symbols.extend(argument_symbols_slice);
+                argument_symbols.push(closure_data_symbol);
 
-            (
-                argument_layouts.into_bump_slice(),
-                argument_symbols.into_bump_slice(),
-            )
+                (
+                    argument_layouts.into_bump_slice(),
+                    argument_symbols.into_bump_slice(),
+                )
+            }
         }
+        ClosureInfo::DoesNotCapture => (argument_layouts_slice, argument_symbols_slice),
     };
 
     let call = self::Call {
