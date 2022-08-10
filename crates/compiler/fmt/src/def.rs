@@ -159,6 +159,7 @@ impl<'a> Formattable for ValueDef<'a> {
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
             AnnotatedBody { .. } => true,
             Expect { condition, .. } => condition.is_multiline(),
+            ExpectFx { condition, .. } => condition.is_multiline(),
         }
     }
 
@@ -233,6 +234,9 @@ impl<'a> Formattable for ValueDef<'a> {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
             Expect { condition, .. } => fmt_expect(buf, condition, self.is_multiline(), indent),
+            ExpectFx { condition, .. } => {
+                fmt_expect_fx(buf, condition, self.is_multiline(), indent)
+            }
             AnnotatedBody {
                 ann_pattern,
                 ann_type,
@@ -291,6 +295,27 @@ fn fmt_expect<'a, 'buf>(
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("expect");
+
+    let return_indent = if is_multiline {
+        buf.newline();
+        indent + INDENT
+    } else {
+        buf.spaces(1);
+        indent
+    };
+
+    condition.format(buf, return_indent);
+}
+
+fn fmt_expect_fx<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    condition: &'a Loc<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("expect-fx");
 
     let return_indent = if is_multiline {
         buf.newline();

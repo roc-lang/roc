@@ -203,6 +203,10 @@ fn generate_entry_docs<'a>(
                 ValueDef::Expect { .. } => {
                     // Don't generate docs for `expect`s
                 }
+
+                ValueDef::ExpectFx { .. } => {
+                    // Don't generate docs for `expect-fx`s
+                }
             },
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
                 TypeDef::Alias {

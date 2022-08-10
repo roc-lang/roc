@@ -279,6 +279,7 @@ fn to_pending_def<'a>(
         Type(TypeDef::Ability { .. }) => todo_abilities!(),
 
         Value(AstValueDef::Expect { .. }) => todo!(),
+        Value(AstValueDef::ExpectFx { .. }) => todo!(),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
             to_pending_def(env, sub_def, scope, pattern_type)

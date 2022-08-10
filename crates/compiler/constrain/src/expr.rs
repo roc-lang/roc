@@ -1997,6 +1997,23 @@ pub fn constrain_decls(
 
                 constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
             }
+            ExpectationFx => {
+                let loc_expr = &declarations.expressions[index];
+
+                let bool_type = Type::Variable(Variable::BOOL);
+                let expected =
+                    Expected::ForReason(Reason::ExpectCondition, bool_type, loc_expr.region);
+
+                let expect_constraint = constrain_expr(
+                    constraints,
+                    &mut env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    expected,
+                );
+
+                constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
+            }
             Function(function_def_index) => {
                 constraint = constrain_function_def(
                     constraints,

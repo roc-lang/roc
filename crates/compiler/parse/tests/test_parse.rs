@@ -251,6 +251,7 @@ mod test_parse {
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
         pass/standalone_module_defs.module,
+        pass/expect_fx.module,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,

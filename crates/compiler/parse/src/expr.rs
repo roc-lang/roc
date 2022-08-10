@@ -633,6 +633,11 @@ fn parse_defs_end<'a>(
 
         let start = state.pos();
 
+        let parse_expect_vanilla =
+            crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
+        let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
+        let parse_expect = either!(parse_expect_vanilla, parse_expect_fx);
+
         match space0_after_e(
             crate::pattern::loc_pattern_help(min_indent),
             min_indent,
@@ -641,14 +646,13 @@ fn parse_defs_end<'a>(
         .parse(arena, state.clone())
         {
             Err((NoProgress, _, _)) => {
-                match crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect)
-                    .parse(arena, state)
-                {
+                match parse_expect.parse(arena, state) {
                     Err((_, _, _)) => {
                         // a hacky way to get expression-based error messages. TODO fix this
                         return Ok((NoProgress, defs, initial));
                     }
-                    Ok((_, _, state)) => {
+
+                    Ok((_, expect_flavor, state)) => {
                         let parse_def_expr = space0_before_e(
                             move |a, s| parse_loc_expr(min_indent + 1, a, s),
                             min_indent,
@@ -677,10 +681,17 @@ fn parse_defs_end<'a>(
 
                         let preceding_comment = Region::new(spaces_before_current_start, start);
 
-                        let value_def = ValueDef::Expect {
-                            condition: arena.alloc(loc_def_expr),
-                            preceding_comment,
+                        let value_def = match expect_flavor {
+                            Either::First(_) => ValueDef::Expect {
+                                condition: arena.alloc(loc_def_expr),
+                                preceding_comment,
+                            },
+                            Either::Second(_) => ValueDef::ExpectFx {
+                                condition: arena.alloc(loc_def_expr),
+                                preceding_comment,
+                            },
                         };
+
                         defs.push_value_def(value_def, region, spaces_before_current, &[]);
 
                         global_state = state;

@@ -335,6 +335,11 @@ pub enum ValueDef<'a> {
         condition: &'a Loc<Expr<'a>>,
         preceding_comment: Region,
     },
+
+    ExpectFx {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
