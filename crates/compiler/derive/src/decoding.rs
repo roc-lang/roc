@@ -1,6 +1,5 @@
 //! Derivers for the `Decoding` ability.
 
-use bumpalo::collections::vec;
 use roc_can::expr::{
     AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
 };
@@ -41,19 +40,110 @@ pub(crate) fn derive_decoder(
     }
 }
 
-fn decoder_record(env: &mut Env, def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
-    use Expr::*;
-
-    // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-
+fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
     let initial_state = decoder_initial_state(&fields);
-    let finalizer = decoder_finalizer(env, fields);
-    let step_field = dbg!(decoder_step_field(env, fields));
+    let finalizer = decoder_finalizer(env, &fields);
+    let step_field = decoder_step_field(env, fields);
     let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
                                    // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 
+    // Decode.record initialState stepField finalizer
+    let call_decode_record = Expr::Call(
+        Box::new((
+            Variable::NULL, // TODO
+            Loc::at_zero(Expr::Var(Symbol::DECODE_RECORD)),
+            Variable::NULL, // TODO
+            Variable::NULL, // TODO
+        )),
+        vec![
+            (
+                Variable::NULL, // TODO
+                Loc::at_zero(initial_state),
+            ),
+            (
+                Variable::NULL, // TODO
+                Loc::at_zero(step_field),
+            ),
+            (
+                Variable::NULL, // TODO
+                Loc::at_zero(finalizer),
+            ),
+        ],
+        CalledVia::Space,
+    );
+
     // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-    (dbg!(initial_state), expr_var)
+    let call_decode_custom = {
+        let bytes_arg_symbol = env.new_symbol("bytes");
+        let fmt_arg_symbol = env.new_symbol("fmt");
+
+        // Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+        let callback_body = Expr::Call(
+            Box::new((
+                Variable::NULL, // TODO
+                Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
+                Variable::NULL, // TODO
+                Variable::NULL, // TODO
+            )),
+            vec![
+                (
+                    Variable::NULL, // TODO
+                    Loc::at_zero(Expr::Var(bytes_arg_symbol)),
+                ),
+                (
+                    Variable::NULL, // TODO
+                    Loc::at_zero(call_decode_record),
+                ),
+                (
+                    Variable::NULL, // TODO
+                    Loc::at_zero(Expr::Var(fmt_arg_symbol)),
+                ),
+            ],
+            CalledVia::Space,
+        );
+
+        // \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+        let custom_callback = {
+            Expr::Closure(ClosureData {
+                function_type: Variable::NULL, // TODO
+                closure_type: Variable::NULL,  // TODO
+                return_type: Variable::NULL,   // TODO
+                name: env.unique_symbol(),
+                captured_symbols: Vec::new(),
+                recursive: Recursive::NotRecursive,
+                arguments: vec![
+                    (
+                        Variable::NULL, // TODO
+                        AnnotatedMark::known_exhaustive(),
+                        Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
+                    ),
+                    (
+                        Variable::NULL, // TODO
+                        AnnotatedMark::known_exhaustive(),
+                        Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
+                    ),
+                ],
+                loc_body: Box::new(Loc::at_zero(callback_body)),
+            })
+        };
+
+        // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+        Expr::Call(
+            Box::new((
+                Variable::NULL, // TODO
+                Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
+                Variable::NULL, // TODO
+                Variable::NULL, // TODO
+            )),
+            vec![(
+                Variable::NULL, // TODO
+                Loc::at_zero(custom_callback),
+            )],
+            CalledVia::Space,
+        )
+    };
+
+    (call_decode_custom, expr_var)
 }
 
 /// Example:
@@ -61,44 +151,271 @@ fn decoder_record(env: &mut Env, def_symbol: Symbol, fields: Vec<Lowercase>) -> 
 ///     when field is
 ///         "first" ->
 ///             Keep (Decode.custom \bytes, fmt ->
-///                 rec = Decode.decodeWith bytes Decode.decoder fmt
-///
-///                 {
-///                     rest: rec.rest,
-///                     result: when rec.result is
-///                         Ok val -> Ok {state & f0: Ok val},
-///                         Err err -> Err err
-///                 }
+///                 # Uses a single-branch `when` because `let` is more expensive to monomorphize
+///                 # due to checks for polymorphic expressions, and `rec` would be polymorphic.
+///                 when Decode.decodeWith bytes Decode.decoder fmt is
+///                     rec ->
+///                         {
+///                             rest: rec.rest,
+///                             result: when rec.result is
+///                                 Ok val -> Ok {state & first: Ok val},
+///                                 Err err -> Err err
+///                         }
 ///             )
 ///
-///         "second" ->
+///         "second" -> # We actually use the first branch's structure, which is a desugared version of this
 ///             Keep (Decode.custom \bytes, fmt ->
 ///                 when Decode.decodeWith bytes Decode.decoder fmt is
 ///                     {result, rest} ->
-///                         {result: Result.map result \val -> {state & f1: Ok val}, rest})
+///                         {result: Result.map result \val -> {state & second: Ok val}, rest})
 ///         _ -> Skip
 fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let field_arg_symbol = env.new_symbol("field");
 
     // +1 because of the default branch.
-    let branches = Vec::with_capacity(fields.len() + 1);
+    let mut branches = Vec::with_capacity(fields.len() + 1);
 
-    for field in fields {
+    for field_name in fields {
         // Example:
         // "first" ->
         //     Keep (Decode.custom \bytes, fmt ->
+        //         # Uses a single-branch `when` because `let` is more expensive to monomorphize
+        //         # due to checks for polymorphic expressions, and `rec` would be polymorphic.
         //         when Decode.decodeWith bytes Decode.decoder fmt is
-        //             {result, rest} ->
-        //                 {result: Result.map result \val -> {state & f0: Ok val}, rest})
+        //             rec ->
+        //                 {
+        //                     rest: rec.rest,
+        //                     result: when rec.result is
+        //                         Ok val -> Ok {state & first: Ok val},
+        //                         Err err -> Err err
+        //                 }
+        //     )
 
         let custom_callback = {
             // \bytes, fmt ->
+            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
+            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //     when Decode.decodeWith bytes Decode.decoder fmt is
-            //         {result, rest} ->
-            //             {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            //         rec ->
+            //             {
+            //                 rest: rec.rest,
+            //                 result: when rec.result is
+            //                     Ok val -> Ok {state & first: Ok val},
+            //                     Err err -> Err err
+            //             }
             let bytes_arg_symbol = env.new_symbol("bytes");
             let fmt_arg_symbol = env.new_symbol("fmt");
+
+            let custom_callback_body = {
+                let rec_symbol = env.new_symbol("rec");
+
+                // # Uses a single-branch `when` because `let` is more expensive to monomorphize
+                // # due to checks for polymorphic expressions, and `rec` would be polymorphic.
+                // when Decode.decodeWith bytes Decode.decoder fmt is
+                //     rec ->
+                //         {
+                //             rest: rec.rest,
+                //             result: when rec.result is
+                //                 Ok val -> Ok {state & first: Ok val},
+                //                 Err err -> Err err
+                //         }
+                let branch_body = {
+                    // {
+                    //     rest: rec.rest,
+                    //     result: when rec.result is
+                    //         Ok val -> Ok {state & first: Ok val},
+                    //         Err err -> Err err
+                    // }
+                    let mut fields_map = SendMap::default();
+
+                    fields_map.insert(
+                        "rest".into(),
+                        Field {
+                            var: Variable::NULL, // TODO
+                            region: Region::zero(),
+                            loc_expr: Box::new(Loc::at_zero(Expr::Access {
+                                record_var: Variable::NULL, // TODO
+                                ext_var: Variable::EMPTY_RECORD,
+                                field_var: Variable::NULL, // TODO
+                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
+                                field: "rest".into(),
+                            })),
+                        },
+                    );
+
+                    let result_val = {
+                        // result: when rec.result is
+                        //     Ok val -> Ok {state & first: Ok val},
+                        //     Err err -> Err err
+                        let ok_val_symbol = env.new_symbol("val");
+                        let err_val_symbol = env.new_symbol("err");
+
+                        let ok_branch_expr = {
+                            // Ok {state & first: Ok val},
+                            let mut updates = SendMap::default();
+
+                            updates.insert(
+                                field_name.clone(),
+                                Field {
+                                    var: Variable::NULL, // TODO
+                                    region: Region::zero(),
+                                    loc_expr: Box::new(Loc::at_zero(Expr::Tag {
+                                        variant_var: Variable::NULL, // TODO
+                                        ext_var: Variable::NULL,     // TODO
+                                        name: "Ok".into(),
+                                        arguments: vec![(
+                                            Variable::NULL, // TODO
+                                            Loc::at_zero(Expr::Var(ok_val_symbol)),
+                                        )],
+                                    })),
+                                },
+                            );
+
+                            let updated_record = Expr::Update {
+                                record_var: Variable::NULL, // TODO
+                                ext_var: Variable::EMPTY_RECORD,
+                                symbol: state_arg_symbol,
+                                updates,
+                            };
+
+                            Expr::Tag {
+                                variant_var: Variable::NULL, // TODO
+                                ext_var: Variable::NULL,     // TODO
+                                name: "Ok".into(),
+                                arguments: vec![(
+                                    Variable::NULL, // TODO
+                                    Loc::at_zero(updated_record),
+                                )],
+                            }
+                        };
+
+                        let branches = vec![
+                            // Ok val -> Ok {state & first: Ok val},
+                            WhenBranch {
+                                patterns: vec![WhenBranchPattern {
+                                    pattern: Loc::at_zero(Pattern::AppliedTag {
+                                        whole_var: Variable::NULL, // TODO
+                                        ext_var: Variable::EMPTY_TAG_UNION,
+                                        tag_name: "Ok".into(),
+                                        arguments: vec![(
+                                            Variable::NULL, // TODO
+                                            Loc::at_zero(Pattern::Identifier(ok_val_symbol)),
+                                        )],
+                                    }),
+                                    degenerate: false,
+                                }],
+                                value: Loc::at_zero(ok_branch_expr),
+                                guard: None,
+                                redundant: RedundantMark::known_non_redundant(),
+                            },
+                            // Err err -> Err err
+                            WhenBranch {
+                                patterns: vec![WhenBranchPattern {
+                                    pattern: Loc::at_zero(Pattern::AppliedTag {
+                                        whole_var: Variable::NULL, // TODO
+                                        ext_var: Variable::EMPTY_TAG_UNION,
+                                        tag_name: "Err".into(),
+                                        arguments: vec![(
+                                            Variable::NULL, // TODO
+                                            Loc::at_zero(Pattern::Identifier(err_val_symbol)),
+                                        )],
+                                    }),
+                                    degenerate: false,
+                                }],
+                                value: Loc::at_zero(Expr::Tag {
+                                    variant_var: Variable::NULL, // TODO
+                                    ext_var: Variable::NULL,     // TODO
+                                    name: "Err".into(),
+                                    arguments: vec![(
+                                        Variable::NULL, // TODO
+                                        Loc::at_zero(Expr::Var(err_val_symbol)),
+                                    )],
+                                }),
+                                guard: None,
+                                redundant: RedundantMark::known_non_redundant(),
+                            },
+                        ];
+
+                        // when rec.result is
+                        //     Ok val -> Ok {state & first: Ok val},
+                        //     Err err -> Err err
+                        Expr::When {
+                            loc_cond: Box::new(Loc::at_zero(Expr::Access {
+                                record_var: Variable::NULL, // TODO
+                                ext_var: Variable::EMPTY_RECORD,
+                                field_var: Variable::NULL, // TODO
+                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
+                                field: "result".into(),
+                            })),
+                            cond_var: Variable::NULL, // TODO
+                            expr_var: Variable::NULL, // TODO
+                            region: Region::zero(),
+                            branches,
+                            branches_cond_var: Variable::NULL, // TODO
+                            exhaustive: ExhaustiveMark::known_exhaustive(),
+                        }
+                    };
+
+                    fields_map.insert(
+                        "result".into(),
+                        Field {
+                            var: Variable::NULL, // TODO
+                            region: Region::zero(),
+                            loc_expr: Box::new(Loc::at_zero(result_val)),
+                        },
+                    );
+
+                    Expr::Record {
+                        record_var: Variable::NULL, // TODO this is the type of the entire record
+                        fields: fields_map,
+                    }
+                };
+
+                let branch = WhenBranch {
+                    patterns: vec![WhenBranchPattern {
+                        pattern: Loc::at_zero(Pattern::Identifier(rec_symbol)),
+                        degenerate: false,
+                    }],
+                    value: Loc::at_zero(branch_body),
+                    guard: None,
+                    redundant: RedundantMark::known_non_redundant(),
+                };
+
+                let condition_expr = Expr::Call(
+                    Box::new((
+                        Variable::NULL, // TODO
+                        Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
+                        Variable::NULL, // TODO
+                        Variable::NULL, // TODO
+                    )),
+                    vec![
+                        (
+                            Variable::NULL, // TODO
+                            Loc::at_zero(Expr::Var(bytes_arg_symbol)),
+                        ),
+                        (
+                            Variable::NULL, // TODO
+                            Loc::at_zero(Expr::Var(Symbol::DECODE_DECODER)),
+                        ),
+                        (
+                            Variable::NULL, // TODO
+                            Loc::at_zero(Expr::Var(fmt_arg_symbol)),
+                        ),
+                    ],
+                    CalledVia::Space,
+                );
+
+                Expr::When {
+                    loc_cond: Box::new(Loc::at_zero(condition_expr)),
+                    cond_var: Variable::NULL, // TODO
+                    expr_var: Variable::NULL, // TODO
+                    region: Region::zero(),
+                    branches: vec![branch],
+                    branches_cond_var: Variable::NULL, // TODO
+                    exhaustive: ExhaustiveMark::known_exhaustive(),
+                }
+            };
 
             Expr::Closure(ClosureData {
                 function_type: Variable::NULL, // TODO
@@ -128,9 +445,16 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
 
         let decode_custom = {
             // Decode.custom \bytes, fmt ->
+            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
+            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //     when Decode.decodeWith bytes Decode.decoder fmt is
-            //         {result, rest} ->
-            //             {result: Result.map result \val -> {state & f0: Ok val}, rest}
+            //         rec ->
+            //             {
+            //                 rest: rec.rest,
+            //                 result: when rec.result is
+            //                     Ok val -> Ok {state & first: Ok val},
+            //                     Err err -> Err err
+            //             }
             Expr::Call(
                 Box::new((
                     Variable::NULL, // TODO
@@ -148,9 +472,17 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
 
         let keep = {
             // Keep (Decode.custom \bytes, fmt ->
+            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
+            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //     when Decode.decodeWith bytes Decode.decoder fmt is
-            //         {result, rest} ->
-            //             {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            //         rec ->
+            //             {
+            //                 rest: rec.rest,
+            //                 result: when rec.result is
+            //                     Ok val -> Ok {state & first: Ok val},
+            //                     Err err -> Err err
+            //             }
+            // )
             Expr::Tag {
                 variant_var: Variable::NULL, // TODO
                 ext_var: Variable::EMPTY_TAG_UNION,
@@ -165,12 +497,20 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
         let branch = {
             // "first" ->
             //     Keep (Decode.custom \bytes, fmt ->
+            //         # Uses a single-branch `when` because `let` is more expensive to monomorphize
+            //         # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //         when Decode.decodeWith bytes Decode.decoder fmt is
-            //             {result, rest} ->
-            //                 {result: Result.map result \val -> {state & f0: Ok val}, rest})
+            //             rec ->
+            //                 {
+            //                     rest: rec.rest,
+            //                     result: when rec.result is
+            //                         Ok val -> Ok {state & first: Ok val},
+            //                         Err err -> Err err
+            //                 }
+            //     )
             WhenBranch {
                 patterns: vec![WhenBranchPattern {
-                    pattern: Loc::at_zero(Pattern::StrLiteral(field.into())),
+                    pattern: Loc::at_zero(Pattern::StrLiteral(field_name.into())),
                     degenerate: false,
                 }],
                 value: Loc::at_zero(keep),
@@ -241,7 +581,7 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
 ///                 Ok second -> Ok {first, second}
 ///                 Err NoField -> Err TooShort
 ///         Err NoField -> Err TooShort
-fn decoder_finalizer(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
+fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
@@ -284,7 +624,7 @@ fn decoder_finalizer(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
             ext_var: Variable::EMPTY_RECORD,
             field_var: Variable::NULL, // TODO
             loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol))),
-            field: field_name,
+            field: field_name.clone(),
         };
 
         // Example: `Ok x -> expr`
@@ -358,8 +698,8 @@ fn decoder_finalizer(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
 }
 
 /// Example:
-/// initialState : {f0: Result a [NoField], f1: Result b [NoField]}
-/// initialState = {f0: Err NoField, f1: Err NoField}
+/// initialState : {first: Result a [NoField], second: Result b [NoField]}
+/// initialState = {first: Err NoField, second: Err NoField}
 fn decoder_initial_state(fields: &[Lowercase]) -> Expr {
     let mut initial_state_fields = SendMap::default();
     for field_name in fields {
