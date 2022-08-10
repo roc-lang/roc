@@ -139,6 +139,29 @@ mod test_roc_std {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
+    fn str_short_serde_roundtrip() {
+        let orig = RocStr::from("x");
+
+        let serialized = serde_json::to_string(&orig).expect("failed to serialize string");
+        let deserialized = serde_json::from_str(&serialized).expect("failed to deserialize string");
+
+        assert_eq!(orig, deserialized);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn str_long_serde_roundtrip() {
+        // How about a little philosophy to accompany test failures?
+        let orig = RocStr::from("If there's a remedy when trouble strikes, what reason is there for dejection? And if there is no help for it, what use is there in being glum? -- Shantideva, The Way of the Bodhisattva");
+
+        let serialized = serde_json::to_string(&orig).expect("failed to serialize string");
+        let deserialized = serde_json::from_str(&serialized).expect("failed to deserialize string");
+
+        assert_eq!(orig, deserialized);
+    }
+
+    #[test]
     fn reserve_small_list() {
         let mut roc_list = RocList::<RocStr>::empty();
 
