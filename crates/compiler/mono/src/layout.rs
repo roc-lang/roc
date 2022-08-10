@@ -1088,30 +1088,27 @@ impl<'a> LambdaSet<'a> {
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        if let [] = self.set {
-            // TERRIBLE HACK for builting functions
-            argument_layouts
-        } else {
-            match self.representation {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => {
-                    // this function does not have anything in its closure, and the lambda set is a
-                    // singleton, so we pass no extra argument
-                    argument_layouts
-                }
-                Layout::Builtin(Builtin::Bool)
-                | Layout::Builtin(Builtin::Int(IntWidth::I8 | IntWidth::U8)) => {
-                    // we don't pass this along either
-                    argument_layouts
-                }
-                _ => {
-                    let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
-                    arguments.extend(argument_layouts);
-                    arguments.push(Layout::LambdaSet(*self));
+        match self.call_by_name_options() {
+            ClosureCallOptions::Void => argument_layouts,
+            ClosureCallOptions::Struct {
+                field_layouts: &[], ..
+            } => {
+                // this function does not have anything in its closure, and the lambda set is a
+                // singleton, so we pass no extra argument
+                argument_layouts
+            }
+            ClosureCallOptions::Struct { .. }
+            | ClosureCallOptions::Union(_)
+            | ClosureCallOptions::UnwrappedCapture(_) => {
+                let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
+                arguments.extend(argument_layouts);
+                arguments.push(Layout::LambdaSet(*self));
 
-                    arguments.into_bump_slice()
-                }
+                arguments.into_bump_slice()
+            }
+            ClosureCallOptions::MultiDispatch(_) => {
+                // No captures, don't pass this along
+                argument_layouts
             }
         }
     }
