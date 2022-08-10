@@ -2880,12 +2880,12 @@ fn check_for_infinite_type(
         // walk the chain till we find a tag union or lambda set, starting from the variable that
         // occurred recursively, which is always at the end of the chain.
         for &var in chain.iter().rev() {
-            match subs.get_content_without_compacting(var) {
-                &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+            match *subs.get_content_without_compacting(var) {
+                Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                     subs.mark_tag_union_recursive(var, tags, ext_var);
                     continue 'next_occurs_check;
                 }
-                &Content::LambdaSet(subs::LambdaSet {
+                Content::LambdaSet(subs::LambdaSet {
                     solved,
                     recursion_var: _,
                     unspecialized,
