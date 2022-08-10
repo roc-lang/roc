@@ -2205,6 +2205,7 @@ fn from_can_let<'a>(
     if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
         return match def.loc_expr.value {
             Closure(closure_data) => {
+                dbg!((symbol, closure_data.name));
                 register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
 
                 lower_rest!(variable, cont.value)
@@ -2938,6 +2939,7 @@ fn specialize_external<'a>(
 
     let specialized =
         build_specialized_proc_from_var(env, layout_cache, lambda_name, pattern_symbols, fn_var)?;
+    dbg!((lambda_name, &specialized));
 
     let recursivity = if partial_proc.is_self_recursive {
         SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))

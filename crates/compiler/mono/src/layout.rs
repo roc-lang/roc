@@ -838,7 +838,7 @@ impl<'a> LambdaSet<'a> {
         &self,
         lambda_name: LambdaName,
     ) -> ClosureRepresentation<'a> {
-        debug_assert!(self.contains(lambda_name.name));
+        debug_assert!(self.contains(lambda_name.name), "{:?}", lambda_name);
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name

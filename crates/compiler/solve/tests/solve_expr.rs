@@ -7657,4 +7657,20 @@ mod solve_expr {
             "Num *",
         );
     }
+
+    #[test]
+    fn issue_2403() {
+        infer_queries!(
+            indoc!(
+                r#"
+                f =
+                      n = ""
+                      \{} -> n
+                f {}
+                #^{-1}
+                "#
+            ),
+        @""
+        );
+    }
 }
