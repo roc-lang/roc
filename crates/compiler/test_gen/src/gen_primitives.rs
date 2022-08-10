@@ -9,6 +9,8 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
+use roc_std::RocList;
+#[allow(unused_imports)]
 use roc_std::RocStr;
 
 #[test]
@@ -3836,5 +3838,49 @@ fn compose_recursive_lambda_set_productive_inferred() {
         ),
         RocStr::from("(hello!)"),
         RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f : {} -> List a
+            f = \_ -> []
+
+            main : List U8
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::<u8>::from_slice(&[]),
+        RocList<u8>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f = \_ -> []
+
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<std::convert::Infallible>
     );
 }
