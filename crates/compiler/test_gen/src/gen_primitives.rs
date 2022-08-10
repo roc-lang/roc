@@ -3971,3 +3971,25 @@ fn deep_transient_capture_chain_with_multiple_captures() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_from_outer_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            innerScope =
+                h = \{} -> getX {}
+                h {}
+
+            innerScope
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
