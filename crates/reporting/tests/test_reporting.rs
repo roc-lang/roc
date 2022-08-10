@@ -10307,4 +10307,26 @@ All branches in an `if` must have the same type!
         @r###"
     "###
     );
+
+    test_report!(
+        anonymous_function_does_not_use_param,
+        indoc!(
+            r#"
+            (\x -> 5) 1
+            "#
+        ),
+    @r###"
+    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    This function doesn't use `x`.
+
+    4│      (\x -> 5) 1
+              ^
+
+    If you don't need `x`, then you can just remove it. However, if you
+    really do need `x` as an argument of this function, prefix it with an
+    underscore, like this: "_`x`". Adding an underscore at the start of a
+    variable name is a way of saying that the variable is not used.
+    "###
+    );
 }

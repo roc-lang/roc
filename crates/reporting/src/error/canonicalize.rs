@@ -136,12 +136,16 @@ pub fn can_problem<'b>(
             title = UNKNOWN_GENERATES_WITH.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
+        Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.symbol_unqualified(closure_symbol),
+                    if is_anonymous {
+                        alloc.reflow("This function")
+                    } else {
+                        alloc.symbol_unqualified(closure_symbol)
+                    },
                     alloc.reflow(" doesn't use "),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.text("."),
@@ -153,7 +157,11 @@ pub fn can_problem<'b>(
                     alloc.reflow(", then you can just remove it. However, if you really do need "),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(" as an argument of "),
-                    alloc.symbol_unqualified(closure_symbol),
+                    if is_anonymous {
+                        alloc.reflow("this function")
+                    } else {
+                        alloc.symbol_unqualified(closure_symbol)
+                    },
                     alloc.reflow(", prefix it with an underscore, like this: \"_"),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(line),

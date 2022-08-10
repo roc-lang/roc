@@ -35,8 +35,9 @@ pub enum Problem {
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
+    /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
-    UnusedArgument(Symbol, Symbol, Region),
+    UnusedArgument(Symbol, bool, Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
