@@ -840,13 +840,17 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
-        match self.representation {
-            Layout::Struct {
-                field_layouts: &[], ..
+        if self.has_unwrapped_capture_repr() {
+            Some(*self.representation)
+        } else if self.has_multi_dispatch_repr() {
+            None
+        } else {
+            match self.representation {
+                Layout::Struct {
+                    field_layouts: &[], ..
+                } => None,
+                repr => Some(*repr),
             }
-            | Layout::Builtin(Builtin::Bool)
-            | Layout::Builtin(Builtin::Int(..)) => None,
-            repr => Some(*repr),
         }
     }
 
