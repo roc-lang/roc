@@ -783,7 +783,7 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    pub set: &'a [(Symbol, &'a [Layout<'a>])],
+    set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
     representation: &'a Layout<'a>,
 }
@@ -865,6 +865,16 @@ impl<'a> LambdaSet<'a> {
             name: *name,
             captures_niche: CapturesNiche(captures_layouts),
         })
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
     }
 
     pub fn layout_for_member_with_lambda_name(

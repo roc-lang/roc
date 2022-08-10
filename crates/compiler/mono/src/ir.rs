@@ -5439,7 +5439,7 @@ where
             EnumDispatch::Bool => {
                 debug_assert_eq!(symbols.len(), 0);
 
-                debug_assert_eq!(lambda_set.set.len(), 2);
+                debug_assert_eq!(lambda_set.len(), 2);
                 let tag_id = name.name() != lambda_set.iter_set().next().unwrap().name();
                 let expr = Expr::Literal(Literal::Bool(tag_id));
 
@@ -5448,7 +5448,7 @@ where
             EnumDispatch::U8 => {
                 debug_assert_eq!(symbols.len(), 0);
 
-                debug_assert!(lambda_set.set.len() > 2);
+                debug_assert!(lambda_set.len() > 2);
                 let tag_id = lambda_set
                     .iter_set()
                     .position(|s| s.name() == name.name())
@@ -9477,7 +9477,7 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    if lambda_set.set.is_empty() {
+    if lambda_set.is_empty() {
         // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
@@ -9487,7 +9487,7 @@ fn union_lambda_set_to_switch<'a>(
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
-    let mut branches = Vec::with_capacity_in(lambda_set.set.len(), env.arena);
+    let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
     for (i, lambda_name) in lambda_set.iter_set().enumerate() {
         let closure_info = if lambda_name.no_captures() {
