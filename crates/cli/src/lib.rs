@@ -525,7 +525,9 @@ pub fn build(
     }
 
     let wasm_dev_stack_bytes: Option<u32> = matches
-        .value_of(FLAG_WASM_STACK_SIZE_KB)
+        .try_get_one::<&str>(FLAG_WASM_STACK_SIZE_KB)
+        .ok()
+        .flatten()
         .and_then(|s| s.parse::<u32>().ok())
         .map(|x| x * 1024);
 
