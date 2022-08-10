@@ -9361,7 +9361,6 @@ fn match_on_lambda_set<'a>(
             let result = union_lambda_set_to_switch(
                 env,
                 lambda_set,
-                Layout::Union(union_layout),
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -9387,7 +9386,7 @@ fn match_on_lambda_set<'a>(
         }
         ClosureCallOptions::Struct {
             field_layouts,
-            field_order_hash,
+            field_order_hash: _,
         } => {
             let function_symbol = match lambda_set.iter_set().next() {
                 Some(function_symbol) => function_symbol,
@@ -9411,10 +9410,6 @@ fn match_on_lambda_set<'a>(
                 _ => ClosureInfo::Captures {
                     lambda_set,
                     closure_data_symbol,
-                    closure_data_layout: Layout::Struct {
-                        field_layouts,
-                        field_order_hash,
-                    },
                 },
             };
 
@@ -9429,7 +9424,7 @@ fn match_on_lambda_set<'a>(
                 hole,
             )
         }
-        ClosureCallOptions::UnwrappedCapture(layout) => {
+        ClosureCallOptions::UnwrappedCapture(_) => {
             let function_symbol = lambda_set
                 .iter_set()
                 .next()
@@ -9438,7 +9433,6 @@ fn match_on_lambda_set<'a>(
             let closure_info = ClosureInfo::Captures {
                 lambda_set,
                 closure_data_symbol,
-                closure_data_layout: layout,
             };
 
             union_lambda_set_branch_help(
@@ -9461,7 +9455,6 @@ fn match_on_lambda_set<'a>(
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Bool),
-                    ClosureInfo::DoesNotCapture,
                     argument_symbols,
                     argument_layouts,
                     return_layout,
@@ -9477,7 +9470,6 @@ fn match_on_lambda_set<'a>(
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Int(IntWidth::U8)),
-                    ClosureInfo::DoesNotCapture,
                     argument_symbols,
                     argument_layouts,
                     return_layout,
@@ -9494,7 +9486,6 @@ fn match_on_lambda_set<'a>(
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
-    closure_layout: Layout<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
@@ -9523,7 +9514,6 @@ fn union_lambda_set_to_switch<'a>(
             ClosureInfo::Captures {
                 lambda_set,
                 closure_data_symbol,
-                closure_data_layout: closure_layout,
             }
         };
 
@@ -9597,8 +9587,6 @@ fn union_lambda_set_branch<'a>(
 enum ClosureInfo<'a> {
     Captures {
         closure_data_symbol: Symbol,
-        /// The layout of this closure variant
-        closure_data_layout: Layout<'a>,
         /// The whole lambda set representation this closure is a variant of
         lambda_set: LambdaSet<'a>,
     },
@@ -9620,7 +9608,6 @@ fn union_lambda_set_branch_help<'a>(
         ClosureInfo::Captures {
             lambda_set,
             closure_data_symbol,
-            closure_data_layout: _,
         } => {
             if lambda_set.is_represented().is_none() {
                 (argument_layouts_slice, argument_symbols_slice)
@@ -9666,13 +9653,14 @@ fn union_lambda_set_branch_help<'a>(
     build_call(env, call, assigned, *return_layout, hole)
 }
 
+/// Switches over a enum lambda set, which may dispatch to different functions, none of which
+/// capture.
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
     lambda_set: impl ExactSizeIterator<Item = LambdaName<'a>>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
-    closure_info: ClosureInfo<'a>,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
@@ -9690,7 +9678,6 @@ fn enum_lambda_set_to_switch<'a>(
             env,
             join_point_id,
             lambda_name,
-            closure_info,
             argument_symbols,
             argument_layouts,
             return_layout,
@@ -9726,14 +9713,14 @@ fn enum_lambda_set_to_switch<'a>(
     }
 }
 
+/// A branch for an enum lambda set branch dispatch, which never capture!
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
-    closure_info: ClosureInfo<'a>,
-    argument_symbols_slice: &'a [Symbol],
-    argument_layouts_slice: &'a [Layout<'a>],
+    argument_symbols: &'a [Symbol],
+    argument_layouts: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
@@ -9741,36 +9728,6 @@ fn enum_lambda_set_branch<'a>(
     let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
     let assigned = result_symbol;
-
-    let (argument_layouts, argument_symbols) = match closure_info {
-        ClosureInfo::Captures {
-            closure_data_symbol,
-            closure_data_layout,
-            lambda_set,
-        } => {
-            if lambda_set.is_represented().is_none() {
-                (argument_layouts_slice, argument_symbols_slice)
-            } else {
-                // extend layouts with the layout of the closure environment
-                let mut argument_layouts =
-                    Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-                argument_layouts.extend(argument_layouts_slice);
-                argument_layouts.push(closure_data_layout);
-
-                // extend symbols with the symbol of the closure environment
-                let mut argument_symbols =
-                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-                argument_symbols.extend(argument_symbols_slice);
-                argument_symbols.push(closure_data_symbol);
-
-                (
-                    argument_layouts.into_bump_slice(),
-                    argument_symbols.into_bump_slice(),
-                )
-            }
-        }
-        ClosureInfo::DoesNotCapture => (argument_layouts_slice, argument_symbols_slice),
-    };
 
     let call = self::Call {
         call_type: CallType::ByName {
