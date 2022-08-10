@@ -261,8 +261,8 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                                     var: Variable::NULL, // TODO
                                     region: Region::zero(),
                                     loc_expr: Box::new(Loc::at_zero(Expr::Tag {
-                                        variant_var: Variable::NULL, // TODO
-                                        ext_var: Variable::NULL,     // TODO
+                                        tag_union_var: Variable::NULL, // TODO
+                                        ext_var: Variable::NULL,       // TODO
                                         name: "Ok".into(),
                                         arguments: vec![(
                                             Variable::NULL, // TODO
@@ -280,8 +280,8 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                             };
 
                             Expr::Tag {
-                                variant_var: Variable::NULL, // TODO
-                                ext_var: Variable::NULL,     // TODO
+                                tag_union_var: Variable::NULL, // TODO
+                                ext_var: Variable::NULL,       // TODO
                                 name: "Ok".into(),
                                 arguments: vec![(
                                     Variable::NULL, // TODO
@@ -324,8 +324,8 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                                     degenerate: false,
                                 }],
                                 value: Loc::at_zero(Expr::Tag {
-                                    variant_var: Variable::NULL, // TODO
-                                    ext_var: Variable::NULL,     // TODO
+                                    tag_union_var: Variable::NULL, // TODO
+                                    ext_var: Variable::NULL,       // TODO
                                     name: "Err".into(),
                                     arguments: vec![(
                                         Variable::NULL, // TODO
@@ -484,7 +484,7 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
             //             }
             // )
             Expr::Tag {
-                variant_var: Variable::NULL, // TODO
+                tag_union_var: Variable::NULL, // TODO
                 ext_var: Variable::EMPTY_TAG_UNION,
                 name: "Keep".into(),
                 arguments: vec![(
@@ -529,7 +529,7 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
             degenerate: false,
         }],
         value: Loc::at_zero(Expr::Tag {
-            variant_var: Variable::NULL, // TODO
+            tag_union_var: Variable::NULL, // TODO
             ext_var: Variable::EMPTY_TAG_UNION,
             name: "Skip".into(),
             arguments: Vec::new(),
@@ -611,7 +611,7 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
         let done_var = Variable::NULL; // TODO
 
         Expr::Tag {
-            variant_var,
+            tag_union_var: variant_var,
             ext_var: Variable::EMPTY_TAG_UNION,
             name: "Ok".into(),
             arguments: vec![(done_var, Loc::at_zero(done_record))],
@@ -653,13 +653,13 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
                 degenerate: false,
             }],
             value: Loc::at_zero(Expr::Tag {
-                variant_var: Variable::NULL, // TODO
+                tag_union_var: Variable::NULL, // TODO
                 ext_var: Variable::EMPTY_TAG_UNION,
                 name: "Err".into(),
                 arguments: vec![(
                     Variable::NULL, // TODO
                     Loc::at_zero(Expr::Tag {
-                        variant_var: Variable::NULL, // TODO
+                        tag_union_var: Variable::NULL, // TODO
                         ext_var: Variable::EMPTY_TAG_UNION,
                         name: "TooShort".into(),
                         arguments: Vec::new(),

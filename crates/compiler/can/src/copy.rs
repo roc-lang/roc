@@ -535,12 +535,12 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         },
 
         Tag {
-            variant_var,
+            tag_union_var: variant_var,
             ext_var,
             name,
             arguments,
         } => Tag {
-            variant_var: sub!(*variant_var),
+            tag_union_var: sub!(*variant_var),
             ext_var: sub!(*ext_var),
             name: name.clone(),
             arguments: arguments
@@ -1154,13 +1154,13 @@ mod test {
         let var2 = new_var(&mut subs, FlexVar(Some(b)));
 
         let expr = Expr::Tag {
-            variant_var: var1,
+            tag_union_var: var1,
             ext_var: Variable::EMPTY_TAG_UNION,
             name: TagName("F".into()),
             arguments: vec![(
                 var2,
                 Loc::at_zero(Expr::Tag {
-                    variant_var: var2,
+                    tag_union_var: var2,
                     ext_var: Variable::EMPTY_TAG_UNION,
                     name: TagName("G".into()),
                     arguments: vec![],
@@ -1175,7 +1175,7 @@ mod test {
 
         match expr {
             Expr::Tag {
-                variant_var,
+                tag_union_var: variant_var,
                 ext_var,
                 name,
                 mut arguments,
@@ -1209,7 +1209,7 @@ mod test {
 
                 match arg.value {
                     Expr::Tag {
-                        variant_var,
+                        tag_union_var: variant_var,
                         ext_var,
                         name,
                         arguments,
@@ -1240,13 +1240,13 @@ mod test {
         let var2 = new_var(&mut source, FlexVar(Some(b)));
 
         let expr = Expr::Tag {
-            variant_var: var1,
+            tag_union_var: var1,
             ext_var: Variable::EMPTY_TAG_UNION,
             name: TagName("F".into()),
             arguments: vec![(
                 var2,
                 Loc::at_zero(Expr::Tag {
-                    variant_var: var2,
+                    tag_union_var: var2,
                     ext_var: Variable::EMPTY_TAG_UNION,
                     name: TagName("G".into()),
                     arguments: vec![],
@@ -1261,7 +1261,7 @@ mod test {
 
         match expr {
             Expr::Tag {
-                variant_var,
+                tag_union_var: variant_var,
                 ext_var,
                 name,
                 mut arguments,
@@ -1290,7 +1290,7 @@ mod test {
 
                 match arg.value {
                     Expr::Tag {
-                        variant_var,
+                        tag_union_var: variant_var,
                         ext_var,
                         name,
                         arguments,
