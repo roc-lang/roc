@@ -203,7 +203,32 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
         Accessor(_) => todo!(),
-        Update { .. } => todo!(),
+        Update {
+            symbol, updates, ..
+        } => f
+            .reflow("{")
+            .append(f.line())
+            .append(f.text(symbol.as_str(c.interns).to_string()))
+            .append(f.reflow(" &"))
+            .append(
+                f.intersperse(
+                    updates.iter().map(|(name, field)| {
+                        let field = f
+                            .text(name.as_str())
+                            .append(f.reflow(": "))
+                            .append(expr(c, Free, f, &field.loc_expr.value))
+                            .nest(2)
+                            .group();
+                        f.line().append(field)
+                    }),
+                    f.reflow(","),
+                )
+                .nest(2)
+                .group(),
+            )
+            .append(f.line())
+            .append(f.text("}"))
+            .group(),
         Tag {
             name, arguments, ..
         } => maybe_paren!(
