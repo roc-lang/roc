@@ -12,10 +12,10 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RedundantMark,
-    SubsSlice, UnionLambdas, Variable,
+    Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
+    RedundantMark, SubsSlice, UnionLambdas, UnionTags, Variable,
 };
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, RecordField};
 
 use crate::util::Env;
 use crate::{synth_var, DerivedBody};
@@ -41,7 +41,8 @@ pub(crate) fn derive_decoder(
 }
 
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
-    let initial_state = decoder_initial_state(&fields);
+    let mut field_vars = Vec::with_capacity(fields.len());
+    let initial_state = decoder_initial_state(env, &fields, &mut field_vars);
     let finalizer = decoder_finalizer(env, &fields);
     let step_field = decoder_step_field(env, fields);
     let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
@@ -700,27 +701,45 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
 /// Example:
 /// initialState : {first: Result a [NoField], second: Result b [NoField]}
 /// initialState = {first: Err NoField, second: Err NoField}
-fn decoder_initial_state(fields: &[Lowercase]) -> Expr {
+fn decoder_initial_state(
+    env: &mut Env<'_>,
+    fields: &[Lowercase],
+    field_vars: &mut Vec<Variable>,
+) -> Expr {
+    let subs = &mut env.subs;
     let mut initial_state_fields = SendMap::default();
+
     for field_name in fields {
-        let var = Variable::NULL; // TODO this is the type of the record field
-        let variant_var = Variable::NULL; // TODO
+        let field_var = subs.fresh_unnamed_flex_var();
+
+        field_vars.push(field_var);
+
+        let no_field_label = "NoField";
+        let union_tags = UnionTags::tag_without_arguments(subs, no_field_label.into());
+        let no_field_var = synth_var(
+            subs,
+            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+        );
         let no_field = Expr::Tag {
-            variant_var,
+            tag_union_var: no_field_var,
             ext_var: Variable::EMPTY_TAG_UNION,
-            name: "NoField".into(),
+            name: no_field_label.into(),
             arguments: Vec::new(),
         };
-        let no_field_var = Variable::NULL; // TODO
-        let variant_var = Variable::NULL; // TODO
+        let err_label = "Err";
+        let union_tags = UnionTags::for_result(subs, field_var, no_field_var);
+        let result_var = synth_var(
+            subs,
+            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+        );
         let field_expr = Expr::Tag {
-            variant_var,
+            tag_union_var: result_var,
             ext_var: Variable::EMPTY_TAG_UNION,
-            name: "Err".into(),
+            name: err_label.into(),
             arguments: vec![(no_field_var, Loc::at_zero(no_field))],
         };
         let field = Field {
-            var,
+            var: field_var,
             region: Region::zero(),
             loc_expr: Box::new(Loc::at_zero(field_expr)),
         };
@@ -728,8 +747,17 @@ fn decoder_initial_state(fields: &[Lowercase]) -> Expr {
         initial_state_fields.insert(field_name.clone(), field);
     }
 
+    let record_field_iter = fields
+        .into_iter()
+        .zip(field_vars.iter())
+        .map(|(field_name, field_var)| (field_name.clone(), RecordField::Required(*field_var)));
+    let flat_type = FlatType::Record(
+        RecordFields::insert_into_subs(subs, record_field_iter),
+        Variable::EMPTY_RECORD,
+    );
+
     Expr::Record {
-        record_var: Variable::NULL, // TODO this is the type of the entire record
+        record_var: synth_var(subs, Content::Structure(flat_type)),
         fields: initial_state_fields,
     }
 }
