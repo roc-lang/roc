@@ -9609,26 +9609,19 @@ fn union_lambda_set_branch_help<'a>(
             lambda_set,
             closure_data_symbol,
         } => {
-            if lambda_set.is_represented().is_none() {
-                (argument_layouts_slice, argument_symbols_slice)
-            } else {
-                // extend layouts with the layout of the closure environment
-                let mut argument_layouts =
-                    Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-                argument_layouts.extend(argument_layouts_slice);
-                argument_layouts.push(Layout::LambdaSet(lambda_set));
-
+            let argument_layouts =
+                lambda_set.extend_argument_list(env.arena, argument_layouts_slice);
+            let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
                 // extend symbols with the symbol of the closure environment
                 let mut argument_symbols =
                     Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
                 argument_symbols.extend(argument_symbols_slice);
                 argument_symbols.push(closure_data_symbol);
-
-                (
-                    argument_layouts.into_bump_slice(),
-                    argument_symbols.into_bump_slice(),
-                )
-            }
+                argument_symbols.into_bump_slice()
+            } else {
+                argument_symbols_slice
+            };
+            (argument_layouts, argument_symbols)
         }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything
