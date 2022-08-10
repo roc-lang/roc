@@ -42,8 +42,10 @@ pub(crate) fn derive_decoder(
 
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
     let mut field_vars = Vec::with_capacity(fields.len());
-    let initial_state = decoder_initial_state(env, &fields, &mut field_vars);
-    let finalizer = decoder_finalizer(env, &fields);
+    let mut result_field_vars = Vec::with_capacity(fields.len());
+    let (record_var, initial_state) =
+        decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
+    let finalizer = decoder_finalizer(env, record_var, &fields, &field_vars, &result_field_vars);
     let step_field = decoder_step_field(env, fields);
     let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
                                    // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
@@ -575,27 +577,40 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
 }
 
 /// Example:
-/// finalizer = \{f0, f1} ->
-///     when f0 is
+/// finalizer = \rec ->
+///     when rec.first is
 ///         Ok first ->
 ///             when f1 is
 ///                 Ok second -> Ok {first, second}
 ///                 Err NoField -> Err TooShort
 ///         Err NoField -> Err TooShort
-fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
+fn decoder_finalizer(
+    env: &mut Env,
+    record_var: Variable,
+    fields: &[Lowercase],
+    field_vars: &[Variable],
+    result_field_vars: &[Variable],
+) -> Expr {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
+    let decode_err_var = {
+        let flat_type = FlatType::TagUnion(
+            UnionTags::tag_without_arguments(env.subs, "TooShort".into()),
+            Variable::EMPTY_TAG_UNION,
+        );
 
-    for field_name in fields.iter() {
+        synth_var(env.subs, Content::Structure(flat_type))
+    };
+
+    for (field_name, &field_var) in fields.iter().zip(field_vars.iter()) {
         let symbol = env.new_symbol(field_name.as_str());
 
         pattern_symbols.push(symbol);
 
         let field_expr = Expr::Var(symbol);
-        let var = Variable::NULL; // TODO
         let field = Field {
-            var,
+            var: field_var,
             region: Region::zero(),
             loc_expr: Box::new(Loc::at_zero(field_expr)),
         };
@@ -603,27 +618,52 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
         fields_map.insert(field_name.clone(), field);
     }
 
+    let return_type_var;
     let mut body = {
+        let subs = &mut env.subs;
+        let record_field_iter = fields
+            .into_iter()
+            .zip(field_vars.iter())
+            .map(|(field_name, &field_var)| (field_name.clone(), RecordField::Required(field_var)));
+        let flat_type = FlatType::Record(
+            RecordFields::insert_into_subs(subs, record_field_iter),
+            Variable::EMPTY_RECORD,
+        );
+        let done_record_var = synth_var(subs, Content::Structure(flat_type));
         let done_record = Expr::Record {
-            record_var: Variable::NULL, // TODO this is the type of the entire record
+            record_var: done_record_var,
             fields: fields_map,
         };
-        let variant_var = Variable::NULL; // TODO
-        let done_var = Variable::NULL; // TODO
+
+        return_type_var = {
+            let flat_type = FlatType::TagUnion(
+                UnionTags::for_result(subs, done_record_var, decode_err_var),
+                Variable::EMPTY_TAG_UNION,
+            );
+
+            synth_var(subs, Content::Structure(flat_type))
+        };
 
         Expr::Tag {
-            tag_union_var: variant_var,
+            tag_union_var: return_type_var,
             ext_var: Variable::EMPTY_TAG_UNION,
             name: "Ok".into(),
-            arguments: vec![(done_var, Loc::at_zero(done_record))],
+            arguments: vec![(record_var, Loc::at_zero(done_record))],
         }
     };
 
-    for (symbol, field_name) in pattern_symbols.iter().rev().zip(fields.into_iter().rev()) {
+    for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
+        .iter()
+        .rev()
+        .zip(fields.into_iter().rev())
+        .zip(field_vars.iter().rev())
+        .zip(result_field_vars.iter().rev())
+    {
+        // when rec.first is
         let cond_expr = Expr::Access {
-            record_var: Variable::NULL, // TODO
+            record_var,
             ext_var: Variable::EMPTY_RECORD,
-            field_var: Variable::NULL, // TODO
+            field_var: result_field_var,
             loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol))),
             field: field_name.clone(),
         };
@@ -632,13 +672,10 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
         let ok_branch = WhenBranch {
             patterns: vec![WhenBranchPattern {
                 pattern: Loc::at_zero(Pattern::AppliedTag {
-                    whole_var: Variable::NULL, // TODO
-                    ext_var: Variable::NULL,   // TODO
+                    whole_var: result_field_var,
+                    ext_var: Variable::EMPTY_TAG_UNION,
                     tag_name: "Ok".into(),
-                    arguments: vec![(
-                        Variable::NULL, // TODO
-                        Loc::at_zero(Pattern::Identifier(*symbol)),
-                    )],
+                    arguments: vec![(field_var, Loc::at_zero(Pattern::Identifier(*symbol)))],
                 }),
                 degenerate: false,
             }],
@@ -654,13 +691,13 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
                 degenerate: false,
             }],
             value: Loc::at_zero(Expr::Tag {
-                tag_union_var: Variable::NULL, // TODO
+                tag_union_var: return_type_var,
                 ext_var: Variable::EMPTY_TAG_UNION,
                 name: "Err".into(),
                 arguments: vec![(
-                    Variable::NULL, // TODO
+                    decode_err_var,
                     Loc::at_zero(Expr::Tag {
-                        tag_union_var: Variable::NULL, // TODO
+                        tag_union_var: decode_err_var,
                         ext_var: Variable::EMPTY_TAG_UNION,
                         name: "TooShort".into(),
                         arguments: Vec::new(),
@@ -673,24 +710,43 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
 
         body = Expr::When {
             loc_cond: Box::new(Loc::at_zero(cond_expr)),
-            cond_var: Variable::NULL, // TODO
-            expr_var: Variable::NULL, // TODO
+            cond_var: result_field_var,
+            expr_var: return_type_var,
             region: Region::zero(),
             branches: vec![ok_branch, err_branch],
-            branches_cond_var: Variable::NULL, // TODO
+            branches_cond_var: result_field_var,
             exhaustive: ExhaustiveMark::known_exhaustive(),
         };
     }
 
+    let function_var = synth_var(env.subs, Content::Error); // We'll fix this up in subs later.
+    let function_symbol = env.unique_symbol();
+    let lambda_set = LambdaSet {
+        solved: UnionLambdas::tag_without_arguments(env.subs, function_symbol),
+        recursion_var: OptVariable::NONE,
+        unspecialized: Default::default(),
+        ambient_function: function_var,
+    };
+    let closure_type = synth_var(env.subs, Content::LambdaSet(lambda_set));
+    let flat_type = FlatType::Func(
+        SubsSlice::insert_into_subs(env.subs, [record_var]),
+        closure_type,
+        return_type_var,
+    );
+
+    // Fix up function_var so it's not Content::Error anymore
+    env.subs
+        .set_content(function_var, Content::Structure(flat_type));
+
     Expr::Closure(ClosureData {
-        function_type: Variable::NULL, // TODO
-        closure_type: Variable::NULL,  // TODO
-        return_type: Variable::NULL,   // TODO
-        name: env.unique_symbol(),
+        function_type: function_var,
+        closure_type,
+        return_type: return_type_var,
+        name: function_symbol,
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments: vec![(
-            Variable::NULL, // TODO
+            record_var,
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
         )],
@@ -703,13 +759,14 @@ fn decoder_finalizer(env: &mut Env, fields: &[Lowercase]) -> Expr {
 /// initialState = {first: Err NoField, second: Err NoField}
 fn decoder_initial_state(
     env: &mut Env<'_>,
-    fields: &[Lowercase],
+    field_names: &[Lowercase],
     field_vars: &mut Vec<Variable>,
-) -> Expr {
+    result_field_vars: &mut Vec<Variable>,
+) -> (Variable, Expr) {
     let subs = &mut env.subs;
     let mut initial_state_fields = SendMap::default();
 
-    for field_name in fields {
+    for field_name in field_names {
         let field_var = subs.fresh_unnamed_flex_var();
 
         field_vars.push(field_var);
@@ -738,8 +795,9 @@ fn decoder_initial_state(
             name: err_label.into(),
             arguments: vec![(no_field_var, Loc::at_zero(no_field))],
         };
+        result_field_vars.push(result_var);
         let field = Field {
-            var: field_var,
+            var: result_var,
             region: Region::zero(),
             loc_expr: Box::new(Loc::at_zero(field_expr)),
         };
@@ -747,19 +805,24 @@ fn decoder_initial_state(
         initial_state_fields.insert(field_name.clone(), field);
     }
 
-    let record_field_iter = fields
-        .into_iter()
-        .zip(field_vars.iter())
-        .map(|(field_name, field_var)| (field_name.clone(), RecordField::Required(*field_var)));
+    let record_field_iter = field_names
+        .iter()
+        .zip(result_field_vars.iter())
+        .map(|(field_name, &var)| (field_name.clone(), RecordField::Required(var)));
     let flat_type = FlatType::Record(
         RecordFields::insert_into_subs(subs, record_field_iter),
         Variable::EMPTY_RECORD,
     );
 
-    Expr::Record {
-        record_var: synth_var(subs, Content::Structure(flat_type)),
-        fields: initial_state_fields,
-    }
+    let record_var = synth_var(subs, Content::Structure(flat_type));
+
+    (
+        record_var,
+        Expr::Record {
+            record_var,
+            fields: initial_state_fields,
+        },
+    )
 }
 
 fn decoder_list(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
