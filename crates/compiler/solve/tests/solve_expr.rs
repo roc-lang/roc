@@ -7691,4 +7691,42 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn transient_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = "abc"
+
+                getX = \{} -> x
+
+                h = \{} -> (getX {})
+                #^{-1}
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(3) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn transient_captures_after_def_ordering() {
+        infer_queries!(
+            indoc!(
+                r#"
+                h = \{} -> (getX {})
+                #^{-1}
+
+                getX = \{} -> x
+
+                x = "abc"
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(1) Str]]-> Str"
+        );
+    }
 }
