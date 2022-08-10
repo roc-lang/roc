@@ -178,15 +178,18 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         Record { fields, .. } => f
             .reflow("{")
             .append(
-                f.concat(fields.iter().map(|(name, field)| {
-                    let field = f
-                        .text(name.as_str())
-                        .append(f.reflow(": "))
-                        .append(expr(c, Free, f, &field.loc_expr.value))
-                        .nest(2)
-                        .group();
-                    f.line().append(field).append(",")
-                }))
+                f.intersperse(
+                    fields.iter().map(|(name, field)| {
+                        let field = f
+                            .text(name.as_str())
+                            .append(f.reflow(": "))
+                            .append(expr(c, Free, f, &field.loc_expr.value))
+                            .nest(2)
+                            .group();
+                        f.line().append(field)
+                    }),
+                    f.reflow(","),
+                )
                 .nest(2)
                 .group(),
             )

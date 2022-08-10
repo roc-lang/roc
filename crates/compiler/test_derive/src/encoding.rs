@@ -174,10 +174,7 @@ fn one_field_record() {
               \#Derived.bytes, #Derived.fmt ->
                 Encode.appendWith
                   #Derived.bytes
-                  (Encode.record
-                    [
-                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-                    ])
+                  (Encode.record [{ value: Encode.toEncoder #Derived.rcd.a, key: "a" }])
                   #Derived.fmt
         "###
         )
@@ -202,8 +199,8 @@ fn two_field_record() {
                   #Derived.bytes
                   (Encode.record
                     [
-                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-                      { value: Encode.toEncoder #Derived.rcd.b, key: "b", },
+                      { value: Encode.toEncoder #Derived.rcd.a, key: "a" },
+                      { value: Encode.toEncoder #Derived.rcd.b, key: "b" },
                     ])
                   #Derived.fmt
         "###
