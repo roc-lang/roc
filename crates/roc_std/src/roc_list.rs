@@ -147,6 +147,92 @@ impl<T> RocList<T>
 where
     T: Clone,
 {
+    pub fn from_slice(slice: &[T]) -> Self {
+        let mut list = Self::empty();
+        list.extend_from_slice(slice);
+        list
+    }
+
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        // TODO: Can we do better for ZSTs? Alignment might be a problem.
+        if slice.is_empty() {
+            return;
+        }
+
+        let new_len = self.len() + slice.len();
+        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
+            // Decrement the list's refence count.
+            let mut copy = storage.get();
+            let is_unique = copy.decrease();
+
+            if is_unique {
+                // If we have enough capacity, we can add to the existing elements in-place.
+                if self.capacity() >= slice.len() {
+                    elements
+                } else {
+                    // There wasn't enough capacity, so we need a new allocation.
+                    // Since this is a unique RocList, we can use realloc here.
+                    let new_ptr = unsafe {
+                        roc_realloc(
+                            storage.as_ptr().cast(),
+                            Self::alloc_bytes(new_len),
+                            Self::alloc_bytes(self.capacity),
+                            Self::alloc_alignment(),
+                        )
+                    };
+
+                    self.capacity = new_len;
+
+                    Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
+                        todo!("Reallocation failed");
+                    }))
+                }
+            } else {
+                if !copy.is_readonly() {
+                    // Write the decremented reference count back.
+                    storage.set(copy);
+                }
+
+                // Allocate new memory.
+                let new_elements = Self::elems_with_capacity(slice.len());
+
+                // Copy the old elements to the new allocation.
+                unsafe {
+                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
+                }
+
+                new_elements
+            }
+        } else {
+            Self::elems_with_capacity(slice.len())
+        };
+
+        self.elements = Some(non_null_elements);
+
+        let elements = self.elements.unwrap().as_ptr();
+
+        let append_ptr = unsafe { elements.add(self.len()) };
+
+        // Use .cloned() to increment the elements' reference counts, if needed.
+        for (i, new_elem) in slice.iter().cloned().enumerate() {
+            unsafe {
+                // Write the element into the slot, without dropping it.
+                append_ptr
+                    .add(i)
+                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
+            }
+
+            // It's important that the length is increased one by one, to
+            // make sure that we don't drop uninitialized elements, even when
+            // a incrementing the reference count panics.
+            self.length += 1;
+        }
+
+        self.capacity = self.length
+    }
+}
+
+impl<T> RocList<T> {
     /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new RocList, if the provided one was not unique.
@@ -230,90 +316,6 @@ where
             length: self.length,
             capacity: new_len,
         });
-    }
-
-    pub fn from_slice(slice: &[T]) -> Self {
-        let mut list = Self::empty();
-        list.extend_from_slice(slice);
-        list
-    }
-
-    pub fn extend_from_slice(&mut self, slice: &[T]) {
-        // TODO: Can we do better for ZSTs? Alignment might be a problem.
-        if slice.is_empty() {
-            return;
-        }
-
-        let new_len = self.len() + slice.len();
-        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrement the list's refence count.
-            let mut copy = storage.get();
-            let is_unique = copy.decrease();
-
-            if is_unique {
-                // If we have enough capacity, we can add to the existing elements in-place.
-                if self.capacity() >= slice.len() {
-                    elements
-                } else {
-                    // There wasn't enough capacity, so we need a new allocation.
-                    // Since this is a unique RocList, we can use realloc here.
-                    let new_ptr = unsafe {
-                        roc_realloc(
-                            storage.as_ptr().cast(),
-                            Self::alloc_bytes(new_len),
-                            Self::alloc_bytes(self.capacity),
-                            Self::alloc_alignment(),
-                        )
-                    };
-
-                    self.capacity = new_len;
-
-                    Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
-                        todo!("Reallocation failed");
-                    }))
-                }
-            } else {
-                if !copy.is_readonly() {
-                    // Write the decremented reference count back.
-                    storage.set(copy);
-                }
-
-                // Allocate new memory.
-                let new_elements = Self::elems_with_capacity(slice.len());
-
-                // Copy the old elements to the new allocation.
-                unsafe {
-                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
-                }
-
-                new_elements
-            }
-        } else {
-            Self::elems_with_capacity(slice.len())
-        };
-
-        self.elements = Some(non_null_elements);
-
-        let elements = self.elements.unwrap().as_ptr();
-
-        let append_ptr = unsafe { elements.add(self.len()) };
-
-        // Use .cloned() to increment the elements' reference counts, if needed.
-        for (i, new_elem) in slice.iter().cloned().enumerate() {
-            unsafe {
-                // Write the element into the slot, without dropping it.
-                append_ptr
-                    .add(i)
-                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
-            }
-
-            // It's important that the length is increased one by one, to
-            // make sure that we don't drop uninitialized elements, even when
-            // a incrementing the reference count panics.
-            self.length += 1;
-        }
-
-        self.capacity = self.length
     }
 
     /// Replace self with a new version, without letting `drop` run in between.
