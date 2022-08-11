@@ -295,9 +295,9 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" | "hello-gui" | "breakout" | "rocLovesWebAssembly"  => {
+                        "form" | "hello-gui" | "breakout" | "ruby" | "rocLovesWebAssembly"  => {
                             // Since these require things the build system often doesn't have
-                            // (e.g. GUIs open a window, WASM needs a browser)
+                            // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                             // we do `roc build` on them but don't run them.
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
                             return;
@@ -433,6 +433,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Roc <3 Zig!\n",
+            use_valgrind: true,
+        },
+        ruby:"ruby-interop" => Example {
+            filename: "main.roc",
+            executable_filename: "libhello",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"",
             use_valgrind: true,
         },
         fib:"algorithms" => Example {
