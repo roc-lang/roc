@@ -1194,6 +1194,18 @@ fn opaque_wrap_function() {
 }
 
 #[test]
+fn dict_get_single() {
+    expect_success(
+        indoc!(
+            r#"
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0
+            "#
+        ),
+        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
+    )
+}
+
+#[test]
 fn record_of_poly_function() {
     expect_success(
         indoc!(
