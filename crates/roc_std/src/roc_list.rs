@@ -621,9 +621,6 @@ where
     where
         D: Deserializer<'de>,
     {
-        // TODO: using deserialize_string here instead of deserialize_str here
-        // because I think we'd "benefit from taking ownership of buffered data
-        // owned by the Deserializer." is that correct?
         deserializer.deserialize_seq(RocListVisitor::new())
     }
 }
