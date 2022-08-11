@@ -295,7 +295,7 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" | "hello-gui" | "breakout" | "ruby" | "rocLovesWebAssembly"  => {
+                        "form" | "hello-gui" | "breakout" | "ruby" => {
                             // Since these require things the build system often doesn't have
                             // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                             // we do `roc build` on them but don't run them.
@@ -307,6 +307,11 @@ mod cli_run {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
                             }
+                        }
+                        "rocLovesWebAssembly" => {
+                            // this is a web assembly example, but we don't test with JS at the moment
+                            eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
+                            return;
                         }
                         _ => {}
                     }
