@@ -3812,3 +3812,18 @@ fn when_on_u128() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn condition_polymorphic_num_becomes_float() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = if True then 2 else 3
+            x * 5f32
+            "#
+        ),
+        10.,
+        f32
+    );
+}
