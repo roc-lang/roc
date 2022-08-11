@@ -45,8 +45,16 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
     let mut result_field_vars = Vec::with_capacity(fields.len());
     let (record_var, initial_state) =
         decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
-    let finalizer = decoder_finalizer(env, record_var, &fields, &field_vars, &result_field_vars);
-    let step_field = decoder_step_field(env, fields);
+    let (finalizer, decode_err_var) =
+        decoder_finalizer(env, record_var, &fields, &field_vars, &result_field_vars);
+    let step_field = decoder_step_field(
+        env,
+        fields,
+        &field_vars,
+        &result_field_vars,
+        record_var,
+        decode_err_var,
+    );
     let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
                                    // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 
@@ -172,14 +180,25 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
 ///                     {result, rest} ->
 ///                         {result: Result.map result \val -> {state & second: Ok val}, rest})
 ///         _ -> Skip
-fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
+fn decoder_step_field(
+    env: &mut Env,
+    fields: Vec<Lowercase>,
+    field_vars: &[Variable],
+    result_field_vars: &[Variable],
+    state_record_var: Variable,
+    decode_err_var: Variable,
+) -> Expr {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let field_arg_symbol = env.new_symbol("field");
 
     // +1 because of the default branch.
     let mut branches = Vec::with_capacity(fields.len() + 1);
 
-    for field_name in fields {
+    for ((field_name, &field_var), &result_field_var) in fields
+        .into_iter()
+        .zip(field_vars.iter())
+        .zip(result_field_vars.iter())
+    {
         // Example:
         // "first" ->
         //     Keep (Decode.custom \bytes, fmt ->
@@ -196,6 +215,8 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
         //     )
 
         let custom_callback = {
+            let rec_var = env.subs.fresh_unnamed_flex_var(); // TODO unify this
+
             // \bytes, fmt ->
             //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
             //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
@@ -209,6 +230,27 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
             //             }
             let bytes_arg_symbol = env.new_symbol("bytes");
             let fmt_arg_symbol = env.new_symbol("fmt");
+            let when_expr_var = {
+                let flat_type = FlatType::TagUnion(
+                    UnionTags::for_result(env.subs, state_record_var, decode_err_var),
+                    Variable::EMPTY_TAG_UNION,
+                );
+
+                synth_var(env.subs, Content::Structure(flat_type))
+            };
+            let custom_callback_ret_var = {
+                let rest_field = RecordField::Required(Variable::LIST_U8);
+                let result_field = RecordField::Required(when_expr_var);
+                let flat_type = FlatType::Record(
+                    RecordFields::insert_into_subs(
+                        env.subs,
+                        [("rest".into(), rest_field), ("result".into(), result_field)],
+                    ),
+                    Variable::EMPTY_RECORD,
+                );
+
+                synth_var(env.subs, Content::Structure(flat_type))
+            };
 
             let custom_callback_body = {
                 let rec_symbol = env.new_symbol("rec");
@@ -224,28 +266,17 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                 //                 Err err -> Err err
                 //         }
                 let branch_body = {
-                    // {
-                    //     rest: rec.rest,
-                    //     result: when rec.result is
-                    //         Ok val -> Ok {state & first: Ok val},
-                    //         Err err -> Err err
-                    // }
-                    let mut fields_map = SendMap::default();
+                    // when rec.result is
+                    //     Ok val -> Ok {state & first: Ok val},
+                    //     Err err -> Err err
+                    let rec_dot_result = {
+                        let flat_type = FlatType::TagUnion(
+                            UnionTags::for_result(env.subs, field_var, decode_err_var),
+                            Variable::EMPTY_TAG_UNION,
+                        );
 
-                    fields_map.insert(
-                        "rest".into(),
-                        Field {
-                            var: Variable::NULL, // TODO
-                            region: Region::zero(),
-                            loc_expr: Box::new(Loc::at_zero(Expr::Access {
-                                record_var: Variable::NULL, // TODO
-                                ext_var: Variable::EMPTY_RECORD,
-                                field_var: Variable::NULL, // TODO
-                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
-                                field: "rest".into(),
-                            })),
-                        },
-                    );
+                        synth_var(env.subs, Content::Structure(flat_type))
+                    };
 
                     let result_val = {
                         // result: when rec.result is
@@ -253,7 +284,6 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                         //     Err err -> Err err
                         let ok_val_symbol = env.new_symbol("val");
                         let err_val_symbol = env.new_symbol("err");
-
                         let ok_branch_expr = {
                             // Ok {state & first: Ok val},
                             let mut updates = SendMap::default();
@@ -261,14 +291,14 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                             updates.insert(
                                 field_name.clone(),
                                 Field {
-                                    var: Variable::NULL, // TODO
+                                    var: result_field_var,
                                     region: Region::zero(),
                                     loc_expr: Box::new(Loc::at_zero(Expr::Tag {
-                                        tag_union_var: Variable::NULL, // TODO
-                                        ext_var: Variable::NULL,       // TODO
+                                        tag_union_var: result_field_var,
+                                        ext_var: Variable::EMPTY_TAG_UNION,
                                         name: "Ok".into(),
                                         arguments: vec![(
-                                            Variable::NULL, // TODO
+                                            field_var,
                                             Loc::at_zero(Expr::Var(ok_val_symbol)),
                                         )],
                                     })),
@@ -276,20 +306,17 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                             );
 
                             let updated_record = Expr::Update {
-                                record_var: Variable::NULL, // TODO
+                                record_var: state_record_var,
                                 ext_var: Variable::EMPTY_RECORD,
                                 symbol: state_arg_symbol,
                                 updates,
                             };
 
                             Expr::Tag {
-                                tag_union_var: Variable::NULL, // TODO
-                                ext_var: Variable::NULL,       // TODO
+                                tag_union_var: when_expr_var,
+                                ext_var: Variable::EMPTY_TAG_UNION,
                                 name: "Ok".into(),
-                                arguments: vec![(
-                                    Variable::NULL, // TODO
-                                    Loc::at_zero(updated_record),
-                                )],
+                                arguments: vec![(state_record_var, Loc::at_zero(updated_record))],
                             }
                         };
 
@@ -298,11 +325,11 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                             WhenBranch {
                                 patterns: vec![WhenBranchPattern {
                                     pattern: Loc::at_zero(Pattern::AppliedTag {
-                                        whole_var: Variable::NULL, // TODO
+                                        whole_var: rec_dot_result,
                                         ext_var: Variable::EMPTY_TAG_UNION,
                                         tag_name: "Ok".into(),
                                         arguments: vec![(
-                                            Variable::NULL, // TODO
+                                            field_var,
                                             Loc::at_zero(Pattern::Identifier(ok_val_symbol)),
                                         )],
                                     }),
@@ -316,22 +343,22 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                             WhenBranch {
                                 patterns: vec![WhenBranchPattern {
                                     pattern: Loc::at_zero(Pattern::AppliedTag {
-                                        whole_var: Variable::NULL, // TODO
+                                        whole_var: rec_dot_result,
                                         ext_var: Variable::EMPTY_TAG_UNION,
                                         tag_name: "Err".into(),
                                         arguments: vec![(
-                                            Variable::NULL, // TODO
+                                            decode_err_var,
                                             Loc::at_zero(Pattern::Identifier(err_val_symbol)),
                                         )],
                                     }),
                                     degenerate: false,
                                 }],
                                 value: Loc::at_zero(Expr::Tag {
-                                    tag_union_var: Variable::NULL, // TODO
-                                    ext_var: Variable::NULL,       // TODO
+                                    tag_union_var: when_expr_var,
+                                    ext_var: Variable::EMPTY_TAG_UNION,
                                     name: "Err".into(),
                                     arguments: vec![(
-                                        Variable::NULL, // TODO
+                                        decode_err_var,
                                         Loc::at_zero(Expr::Var(err_val_symbol)),
                                     )],
                                 }),
@@ -345,32 +372,58 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                         //     Err err -> Err err
                         Expr::When {
                             loc_cond: Box::new(Loc::at_zero(Expr::Access {
-                                record_var: Variable::NULL, // TODO
+                                record_var: rec_var,
                                 ext_var: Variable::EMPTY_RECORD,
-                                field_var: Variable::NULL, // TODO
+                                field_var: rec_dot_result,
                                 loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
                                 field: "result".into(),
                             })),
-                            cond_var: Variable::NULL, // TODO
-                            expr_var: Variable::NULL, // TODO
+                            cond_var: rec_dot_result,
+                            expr_var: when_expr_var,
                             region: Region::zero(),
                             branches,
-                            branches_cond_var: Variable::NULL, // TODO
+                            branches_cond_var: rec_dot_result,
                             exhaustive: ExhaustiveMark::known_exhaustive(),
                         }
                     };
 
+                    // {
+                    //     rest: rec.rest,
+                    //     result: when rec.result is
+                    //         Ok val -> Ok {state & first: Ok val},
+                    //         Err err -> Err err
+                    // }
+                    let mut fields_map = SendMap::default();
+
+                    fields_map.insert(
+                        "rest".into(),
+                        Field {
+                            var: Variable::LIST_U8,
+                            region: Region::zero(),
+                            loc_expr: Box::new(Loc::at_zero(Expr::Access {
+                                record_var: rec_var,
+                                ext_var: Variable::EMPTY_RECORD,
+                                field_var: Variable::LIST_U8,
+                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
+                                field: "rest".into(),
+                            })),
+                        },
+                    );
+
+                    // result: when rec.result is
+                    //     Ok val -> Ok {state & first: Ok val},
+                    //     Err err -> Err err
                     fields_map.insert(
                         "result".into(),
                         Field {
-                            var: Variable::NULL, // TODO
+                            var: when_expr_var,
                             region: Region::zero(),
                             loc_expr: Box::new(Loc::at_zero(result_val)),
                         },
                     );
 
                     Expr::Record {
-                        record_var: Variable::NULL, // TODO this is the type of the entire record
+                        record_var: custom_callback_ret_var,
                         fields: fields_map,
                     }
                 };
@@ -412,7 +465,7 @@ fn decoder_step_field(env: &mut Env, fields: Vec<Lowercase>) -> Expr {
                 Expr::When {
                     loc_cond: Box::new(Loc::at_zero(condition_expr)),
                     cond_var: Variable::NULL, // TODO
-                    expr_var: Variable::NULL, // TODO
+                    expr_var: custom_callback_ret_var,
                     region: Region::zero(),
                     branches: vec![branch],
                     branches_cond_var: Variable::NULL, // TODO
@@ -590,7 +643,7 @@ fn decoder_finalizer(
     fields: &[Lowercase],
     field_vars: &[Variable],
     result_field_vars: &[Variable],
-) -> Expr {
+) -> (Expr, Variable) {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
@@ -738,7 +791,7 @@ fn decoder_finalizer(
     env.subs
         .set_content(function_var, Content::Structure(flat_type));
 
-    Expr::Closure(ClosureData {
+    let finalizer = Expr::Closure(ClosureData {
         function_type: function_var,
         closure_type,
         return_type: return_type_var,
@@ -751,7 +804,9 @@ fn decoder_finalizer(
             Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
         )],
         loc_body: Box::new(Loc::at_zero(body)),
-    })
+    });
+
+    (finalizer, decode_err_var)
 }
 
 /// Example:
