@@ -713,12 +713,13 @@ fn solve(
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 continue;
             }
@@ -831,12 +832,13 @@ fn solve(
 
                 // Now solve the body, using the new vars_by_symbol which includes
                 // the assignments' name-to-variable mappings.
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 state = state_for_ret_con;
 
@@ -2874,28 +2876,34 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    while let Err((recursive, _chain)) = subs.occurs(var) {
-        // try to make a union recursive, see if that helps
-        match subs.get_content_without_compacting(recursive) {
-            &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                subs.mark_tag_union_recursive(recursive, tags, ext_var);
-            }
-            &Content::LambdaSet(subs::LambdaSet {
-                solved,
-                recursion_var: _,
-                unspecialized,
-                ambient_function: ambient_function_var,
-            }) => {
-                subs.mark_lambda_set_recursive(
-                    recursive,
+    'next_occurs_check: while let Err((_, chain)) = subs.occurs(var) {
+        // walk the chain till we find a tag union or lambda set, starting from the variable that
+        // occurred recursively, which is always at the end of the chain.
+        for &var in chain.iter().rev() {
+            match *subs.get_content_without_compacting(var) {
+                Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                    subs.mark_tag_union_recursive(var, tags, ext_var);
+                    continue 'next_occurs_check;
+                }
+                Content::LambdaSet(subs::LambdaSet {
                     solved,
+                    recursion_var: _,
                     unspecialized,
-                    ambient_function_var,
-                );
+                    ambient_function: ambient_function_var,
+                }) => {
+                    subs.mark_lambda_set_recursive(
+                        var,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    continue 'next_occurs_check;
+                }
+                _ => { /* fall through */ }
             }
-
-            _other => circular_error(subs, problems, symbol, &loc_var),
         }
+
+        circular_error(subs, problems, symbol, &loc_var);
     }
 }
 
