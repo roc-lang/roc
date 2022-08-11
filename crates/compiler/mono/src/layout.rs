@@ -2260,7 +2260,7 @@ fn layout_from_flat_type<'a>(
                     RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
                         sortables.push((label, Layout::from_var(env, field_var)?));
                     }
-                    RecordField::Optional(_) => {
+                    RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                         // drop optional fields
                     }
                 }
@@ -2361,7 +2361,7 @@ fn sort_record_fields_help<'a>(
                 let layout = Layout::from_var(env, v)?;
                 sorted_fields.push((label, v, Ok(layout)));
             }
-            RecordField::Optional(v) => {
+            RecordField::Optional(v) | RecordField::RigidOptional(v) => {
                 let layout = Layout::from_var(env, v)?;
                 sorted_fields.push((label, v, Err(layout)));
             }

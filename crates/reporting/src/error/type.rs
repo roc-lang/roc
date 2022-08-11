@@ -2272,6 +2272,9 @@ fn to_doc_help<'b>(
                                     Parens::Unnecessary,
                                     v,
                                 )),
+                                RecordField::RigidOptional(v) => RecordField::RigidOptional(
+                                    to_doc_help(ctx, alloc, Parens::Unnecessary, v),
+                                ),
                                 RecordField::Required(v) => RecordField::Required(to_doc_help(
                                     ctx,
                                     alloc,
@@ -2738,6 +2741,7 @@ fn diff_record<'b>(
                 alloc.string(field.as_str().to_string()),
                 match t1 {
                     RecordField::Optional(_) => RecordField::Optional(diff.left),
+                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.left),
                     RecordField::Required(_) => RecordField::Required(diff.left),
                     RecordField::Demanded(_) => RecordField::Demanded(diff.left),
                 },
@@ -2747,6 +2751,7 @@ fn diff_record<'b>(
                 alloc.string(field.as_str().to_string()),
                 match t2 {
                     RecordField::Optional(_) => RecordField::Optional(diff.right),
+                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.right),
                     RecordField::Required(_) => RecordField::Required(diff.right),
                     RecordField::Demanded(_) => RecordField::Demanded(diff.right),
                 },
@@ -2754,7 +2759,15 @@ fn diff_record<'b>(
             status: {
                 match (&t1, &t2) {
                     (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status {
+                    | (RecordField::Optional(_), RecordField::Demanded(_))
+                    | (
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                        RecordField::RigidOptional(_),
+                    )
+                    | (
+                        RecordField::RigidOptional(_),
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                    ) => match diff.status {
                         Status::Similar => {
                             Status::Different(vec![Problem::OptionalRequiredMismatch(
                                 field.clone(),
@@ -3190,7 +3203,7 @@ mod report_text {
                         RecordField::Required(field) => {
                             field_name.append(alloc.text(" : ")).append(field)
                         }
-                        RecordField::Optional(field) => {
+                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
                             field_name.append(alloc.text(" ? ")).append(field)
                         }
                     }

@@ -1104,6 +1104,7 @@ fn write_flat_type<'a>(
                         Optional(_) => buf.push_str(" ? "),
                         Required(_) => buf.push_str(" : "),
                         Demanded(_) => buf.push_str(" : "),
+                        RigidOptional(_) => buf.push_str(" ? "),
                     };
 
                     write_content(

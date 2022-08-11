@@ -6605,6 +6605,25 @@ All branches in an `if` must have the same type!
     Tip: To extract the `.inputs` field it must be non-optional, but the
     type says this field is optional. Learn more about optional fields at
     TODO.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `job` has an unexpected type:
+
+    9│      job { inputs: ["build", "test"] }
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The argument is a record of type:
+
+        { inputs : List Str }
+
+    But `job` needs its 1st argument to be:
+
+        { inputs ? List Str }
+
+    Tip: To extract the `.inputs` field it must be non-optional, but the
+    type says this field is optional. Learn more about optional fields at
+    TODO.
     "###
     );
 
@@ -10354,6 +10373,67 @@ All branches in an `if` must have the same type!
         [Bad [DecodeProblem], Good (List U8) a]
 
     The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        create_value_with_optional_record_field_type,
+        indoc!(
+            r#"
+            f : {a: Str, b ? Str}
+            f = {a: "b", b: ""}
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : {a: Str, b ? Str}
+    5│      f = {a: "b", b: ""}
+                ^^^^^^^^^^^^^^^
+
+    The body is a record of type:
+
+        { a : Str, b : Str }
+
+    But the type annotation on `f` says it should be:
+
+        { a : Str, b ? Str }
+
+    Tip: To extract the `.b` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        create_value_with_conditionally_optional_record_field_type,
+        indoc!(
+            r#"
+            f : {a: Str, b ? Str}
+            f = if True then {a: ""} else {a: "b", b: ""}
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `then` branch of this `if` expression:
+
+    4│      f : {a: Str, b ? Str}
+    5│      f = if True then {a: ""} else {a: "b", b: ""}
+                             ^^^^^^^
+
+    The 1st branch is a record of type:
+
+        { a : Str }
+
+    But the type annotation on `f` says it should be:
+
+        { a : Str, b ? Str }
+
+    Tip: Looks like the b field is missing.
     "###
     );
 }

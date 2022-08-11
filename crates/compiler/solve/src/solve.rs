@@ -32,7 +32,7 @@ use roc_types::subs::{
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar, Reason,
-    TypeExtension, Uls,
+    RecordField, TypeExtension, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -2240,6 +2240,7 @@ fn type_to_variable<'a>(
                             Optional(t) => Optional(helper!(t)),
                             Required(t) => Required(helper!(t)),
                             Demanded(t) => Demanded(helper!(t)),
+                            RigidOptional(t) => RigidOptional(helper!(t)),
                         }
                     };
 
@@ -3486,11 +3487,35 @@ fn deep_copy_var_help(
                             let new_variables =
                                 copy_sequence!(fields.len(), fields.iter_variables());
 
+                            // When copying a let-generalized record to a specialized region, rigid
+                            // optionals just become optionals.
+                            let field_types = subs.get_subs_slice(fields.record_fields());
+                            let has_rigid_optional_field = field_types
+                                .iter()
+                                .any(|f| matches!(f, RecordField::RigidOptional(..)));
+
+                            let new_field_types_start = if has_rigid_optional_field {
+                                let field_types = field_types.to_vec();
+                                let slice = SubsSlice::extend_new(
+                                    &mut subs.record_fields,
+                                    field_types.into_iter().map(|f| match f {
+                                        RecordField::RigidOptional(()) => RecordField::Optional(()),
+
+                                        RecordField::Demanded(_)
+                                        | RecordField::Required(_)
+                                        | RecordField::Optional(_) => f,
+                                    }),
+                                );
+                                slice.start
+                            } else {
+                                fields.field_types_start
+                            };
+
                             RecordFields {
                                 length: fields.length,
                                 field_names_start: fields.field_names_start,
                                 variables_start: new_variables.start,
-                                field_types_start: fields.field_types_start,
+                                field_types_start: new_field_types_start,
                             }
                         };
 

@@ -1220,7 +1220,7 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
-                    field_types.insert(label.clone(), Optional(field_type));
+                    field_types.insert(label.clone(), RigidOptional(field_type));
 
                     break 'inner label;
                 }
