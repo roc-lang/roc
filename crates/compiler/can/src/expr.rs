@@ -1184,7 +1184,10 @@ fn canonicalize_closure_body<'a>(
 ) -> (ClosureData, Output) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
-    let symbol = opt_def_name.unwrap_or_else(|| scope.gen_unique_symbol());
+    let (symbol, is_anonymous) = match opt_def_name {
+        Some(name) => (name, false),
+        None => (scope.gen_unique_symbol(), true),
+    };
 
     let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
     let mut output = Output::default();
@@ -1245,7 +1248,12 @@ fn canonicalize_closure_body<'a>(
     for (sub_symbol, region) in bound_by_argument_patterns {
         if !output.references.has_value_lookup(sub_symbol) {
             // The body never referenced this argument we declared. It's an unused argument!
-            env.problem(Problem::UnusedArgument(symbol, sub_symbol, region));
+            env.problem(Problem::UnusedArgument(
+                symbol,
+                is_anonymous,
+                sub_symbol,
+                region,
+            ));
         } else {
             // We shouldn't ultimately count arguments as referenced locals. Otherwise,
             // we end up with weird conclusions like the expression (\x -> x + 1)

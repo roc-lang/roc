@@ -126,7 +126,7 @@ fn create_llvm_module<'a>(
             match problem {
                 // Ignore "unused" problems
                 UnusedDef(_, _)
-                | UnusedArgument(_, _, _)
+                | UnusedArgument(_, _, _, _)
                 | UnusedImport(_, _)
                 | RuntimeError(_)
                 | UnsupportedPattern(_, _)
