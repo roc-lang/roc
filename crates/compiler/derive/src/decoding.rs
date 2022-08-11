@@ -321,6 +321,8 @@ fn decoder_step_field(
         let this_custom_callback_var;
         let custom_callback_ret_var;
         let custom_callback = {
+            let rec_var = env.subs.fresh_unnamed_flex_var(); // TODO unify this
+
             // \bytes, fmt ->
             //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
             //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
