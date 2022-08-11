@@ -5880,7 +5880,7 @@ All branches in an `if` must have the same type!
 
     This `map` call produces:
 
-        List [Foo Num a]
+        List [Foo (Num a)]
 
     But the type annotation on `x` says it should be:
 
@@ -10305,6 +10305,46 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    "###
+    );
+
+    test_report!(
+        expected_tag_has_too_many_args,
+        indoc!(
+            r#"
+            app "test" provides [fromBytes] to "./platform"
+
+            u8 : [Good (List U8), Bad [DecodeProblem]]
+
+            fromBytes = 
+                when u8 is
+                    Good _ _ ->
+                        Ok "foo"
+
+                    Bad _ ->
+                        Ok "foo"
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+     6│>      when u8 is
+     7│           Good _ _ ->
+     8│               Ok "foo"
+     9│ 
+    10│           Bad _ ->
+
+    This `u8` value is a:
+
+        [Bad [DecodeProblem], Good (List U8)]
+
+    But the branch patterns have type:
+
+        [Bad [DecodeProblem], Good (List U8) a]
+
+    The branches must be cases of the `when` condition's type!
     "###
     );
 }
