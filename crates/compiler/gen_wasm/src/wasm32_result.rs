@@ -234,6 +234,14 @@ impl Wasm32Result for () {
     }
 }
 
+impl Wasm32Result for std::convert::Infallible {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        code_builder.call(main_function_index, 0, false);
+        code_builder.get_global(0);
+        code_builder.build_fn_header_and_footer(&[], 0, None);
+    }
+}
+
 impl<T, U> Wasm32Result for (T, U)
 where
     T: Wasm32Result + Wasm32Sized,
