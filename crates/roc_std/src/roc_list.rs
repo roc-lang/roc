@@ -596,6 +596,7 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<T: Serialize> Serialize for RocList<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -632,6 +633,7 @@ struct RocListVisitor<T> {
     marker: PhantomData<T>,
 }
 
+#[cfg(feature = "serde")]
 impl<T> RocListVisitor<T> {
     fn new() -> Self {
         RocListVisitor {
