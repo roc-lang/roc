@@ -1204,3 +1204,27 @@ fn dict_get_single() {
         r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
     )
 }
+
+#[test]
+fn record_of_poly_function() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a" }
+            "#
+        ),
+        r#"{ a: <function> } : { a : * -> Str }"#,
+    );
+}
+
+#[test]
+fn record_of_poly_function_and_string() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a", b: "b" }
+            "#
+        ),
+        r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
+    );
+}

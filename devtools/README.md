@@ -37,11 +37,7 @@ If your extension is not available on nix, you can add them [from the vscode mar
 ### for those with little to no Nix experience
 
 Instead of running `code` in the last step you can use the `--extensions-dir` flag to allow you to install extensions using the vscode GUI.
-On MacOS:
+On MacOS or Linux:
 ```
-code --extensions-dir="$HOME/dotfiles/vscode/extensions"
-```
-On Linux:
-```
-~/.vscode/extensions
+code --extensions-dir="$HOME/.vscode/extensions"
 ```

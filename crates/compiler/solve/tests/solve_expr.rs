@@ -7657,4 +7657,39 @@ mod solve_expr {
             "Num *",
         );
     }
+
+    #[test]
+    fn issue_3444() {
+        infer_queries!(
+            indoc!(
+                r#"
+                compose = \f, g ->
+                    closCompose = \x -> g (f x)
+                    closCompose
+
+                const = \x ->
+                    closConst = \_ -> x
+                    closConst
+
+                list = []
+
+                res : Str -> Str
+                res = List.walk list (const "z") (\c1, c2 -> compose c1 c2)
+                #                     ^^^^^                  ^^^^^^^
+                #                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+                #^^^{-1}
+
+                res "hello"
+                #^^^{-1}
+                "#
+            ),
+            @r###"
+        const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
+        compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
+        res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
+        "###
+        );
+    }
 }
