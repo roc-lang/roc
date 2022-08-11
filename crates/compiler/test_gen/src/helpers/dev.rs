@@ -143,7 +143,7 @@ pub fn helper(
         for problem in can_problems.into_iter() {
             // Ignore "unused" problems
             match problem {
-                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => {
+                UnusedDef(_, _) | UnusedArgument(_, _, _, _) | UnusedImport(_, _) => {
                     delayed_errors.push(problem);
                     continue;
                 }
