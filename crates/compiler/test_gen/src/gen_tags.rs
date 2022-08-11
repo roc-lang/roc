@@ -1913,3 +1913,23 @@ fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2165_recursive_tag_destructure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            SomeTag : [ Ctor { rec : List SomeTag } ]
+            
+            x : SomeTag
+            x = Ctor { rec: [] }
+            
+            when x is
+              Ctor { rec } -> Num.toStr (List.len rec)
+            "#
+        ),
+        RocStr::from("0"),
+        RocStr
+    )
+}

@@ -10,7 +10,8 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, Label, RecordFields, Subs, UnionTags, UnsortedUnionLabels, Variable,
+    self, Content, FlatType, Label, OptVariable, RecordFields, Subs, UnionTags,
+    UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::cmp::Ordering;
@@ -842,6 +843,7 @@ impl<'a> LambdaSet<'a> {
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name
+                // Make sure all captures are equal
                 && other_captures_layouts
                     .iter()
                     .eq(lambda_name.captures_niche.0)
@@ -859,19 +861,62 @@ impl<'a> LambdaSet<'a> {
         debug_assert!(self.contains(function_symbol), "function symbol not in set");
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
-            other_name == function_symbol && other_captures_layouts.iter().eq(captures_layouts)
+            other_name == function_symbol
+                && other_captures_layouts
+                    .iter()
+                    .zip(captures_layouts)
+                    .all(|(other_layout, layout)| self.capture_layouts_eq(other_layout, layout))
         };
 
         let (name, layouts) = self
             .set
             .iter()
             .find(|(name, layouts)| comparator(*name, layouts))
-            .expect("no lambda set found");
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "no lambda set found for ({:?}, {:#?}): {:#?}",
+                    function_symbol,
+                    captures_layouts,
+                    self
+                )
+            });
 
         LambdaName {
             name: *name,
             captures_niche: CapturesNiche(layouts),
         }
+    }
+
+    /// Checks if two captured layouts are equivalent under the current lambda set.
+    /// Resolves recursive pointers to the layout of the lambda set.
+    fn capture_layouts_eq(&self, left: &Layout, right: &Layout) -> bool {
+        if left == right {
+            return true;
+        }
+
+        let left = if left == &Layout::RecursivePointer {
+            let runtime_repr = self.runtime_representation();
+            debug_assert!(matches!(
+                runtime_repr,
+                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
+            ));
+            Layout::LambdaSet(*self)
+        } else {
+            *left
+        };
+
+        let right = if right == &Layout::RecursivePointer {
+            let runtime_repr = self.runtime_representation();
+            debug_assert!(matches!(
+                runtime_repr,
+                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
+            ));
+            Layout::LambdaSet(*self)
+        } else {
+            *right
+        };
+
+        left == right
     }
 
     fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
@@ -902,15 +947,47 @@ impl<'a> LambdaSet<'a> {
                             union_layout: *union,
                         }
                     }
-                    UnionLayout::Recursive(_) => todo!("recursive closures"),
+                    UnionLayout::Recursive(_) => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: *union,
+                        }
+                    }
+                    UnionLayout::NullableUnwrapped {
+                        nullable_id: _,
+                        other_fields: _,
+                    } => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: *union,
+                        }
+                    }
                     UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
                         nullable_id: _,
                         other_tags: _,
-                    } => todo!("recursive closures"),
-                    UnionLayout::NullableUnwrapped {
-                        nullable_id: _,
-                        other_fields: _,
                     } => todo!("recursive closures"),
                 }
             }
@@ -971,7 +1048,7 @@ impl<'a> LambdaSet<'a> {
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
         match resolve_lambda_set(subs, closure_var) {
-            ResolvedLambdaSet::Set(mut lambdas) => {
+            ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
@@ -992,6 +1069,9 @@ impl<'a> LambdaSet<'a> {
                         seen: Vec::new_in(arena),
                         target_info,
                     };
+                    if let Some(rec_var) = opt_recursion_var.into_variable() {
+                        env.insert_seen(rec_var);
+                    }
 
                     for var in variables {
                         arguments.push(Layout::from_var(&mut env, *var)?);
@@ -1048,6 +1128,7 @@ impl<'a> LambdaSet<'a> {
                     arena,
                     subs,
                     set_with_variables,
+                    opt_recursion_var.into_variable(),
                     target_info,
                 ));
 
@@ -1071,10 +1152,28 @@ impl<'a> LambdaSet<'a> {
         arena: &'a Bump,
         subs: &Subs,
         tags: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
+        opt_rec_var: Option<Variable>,
         target_info: TargetInfo,
     ) -> Layout<'a> {
+        if let Some(rec_var) = opt_rec_var {
+            let tags: std::vec::Vec<_> = tags
+                .iter()
+                .map(|(sym, vars)| (sym, vars.as_slice()))
+                .collect();
+            let tags = UnsortedUnionLabels { tags };
+            let mut env = Env {
+                seen: Vec::new_in(arena),
+                target_info,
+                arena,
+                subs,
+            };
+
+            return layout_from_recursive_union(&mut env, rec_var, &tags)
+                .expect("unable to create lambda set representation");
+        }
+
         // otherwise, this is a closure with a payload
-        let variant = union_sorted_tags_help(arena, tags, None, subs, target_info);
+        let variant = union_sorted_tags_help(arena, tags, opt_rec_var, subs, target_info);
 
         use UnionVariant::*;
         match variant {
@@ -1108,7 +1207,12 @@ impl<'a> LambdaSet<'a> {
                         Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
                     }
 
-                    _ => panic!("handle recursive layouts"),
+                    Recursive { .. }
+                    | NullableUnwrapped { .. }
+                    | NullableWrapped { .. }
+                    | NonNullableUnwrapped { .. } => {
+                        internal_error!("Recursive layouts should be produced in an earlier branch")
+                    }
                 }
             }
         }
@@ -1130,7 +1234,10 @@ impl<'a> LambdaSet<'a> {
 }
 
 enum ResolvedLambdaSet {
-    Set(std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>),
+    Set(
+        std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
+        OptVariable,
+    ),
     /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
     /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
     Unbound,
@@ -1142,7 +1249,7 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
         match subs.get_content_without_compacting(var) {
             Content::LambdaSet(subs::LambdaSet {
                 solved,
-                recursion_var: _,
+                recursion_var,
                 unspecialized,
                 ambient_function: _,
             }) => {
@@ -1153,7 +1260,7 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
                     subs.uls_of_var
                 );
                 roc_types::pretty_print::push_union(subs, solved, &mut set);
-                return ResolvedLambdaSet::Set(set);
+                return ResolvedLambdaSet::Set(set, *recursion_var);
             }
             Content::RecursionVar { structure, .. } => {
                 var = *structure;
@@ -2130,10 +2237,14 @@ fn layout_from_flat_type<'a>(
             }
         }
         Func(_, closure_var, _) => {
-            let lambda_set =
-                LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info)?;
+            if env.is_seen(closure_var) {
+                Ok(Layout::RecursivePointer)
+            } else {
+                let lambda_set =
+                    LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info)?;
 
-            Ok(Layout::LambdaSet(lambda_set))
+                Ok(Layout::LambdaSet(lambda_set))
+            }
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var

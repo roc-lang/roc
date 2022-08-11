@@ -1004,16 +1004,16 @@ mod test_reporting {
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `f`:
 
     4│      f = \g -> g g
-                 ^
+            ^
 
     Here is my best effort at writing down the type. You will see ∞ for
     parts of the type that repeat something already printed out
     infinitely.
 
-        ∞ -> a
+        (∞ -> a) -> a
     "###
     );
 
@@ -1188,20 +1188,20 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `x`:
+        I'm inferring a weird self-referential type for `f`:
 
         5│      f = \x -> f [x]
-                     ^
+                ^
 
         Here is my best effort at writing down the type. You will see ∞ for
         parts of the type that repeat something already printed out
         infinitely.
 
-            List ∞
-        "#
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
@@ -1252,32 +1252,6 @@ mod test_reporting {
         infinitely.
 
             List ∞ -> List a
-
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        I'm inferring a weird self-referential type for `f`:
-
-        5│      f = \x -> g x
-                ^
-
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
-
-            List ∞ -> List a
-
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        I'm inferring a weird self-referential type for `main`:
-
-        3│  main =
-            ^^^^
-
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
-
-            List ∞ -> List a
         "###
     );
 
@@ -1292,20 +1266,33 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
+        @r###"
         ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `x`:
+        I'm inferring a weird self-referential type for `f`:
 
-        6│      g = \x -> f [x]
-                     ^
+        4│      f = \x -> g x
+                ^
 
         Here is my best effort at writing down the type. You will see ∞ for
         parts of the type that repeat something already printed out
         infinitely.
 
-            List ∞
-        "#
+            List ∞ -> List a
+
+        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+        I'm inferring a weird self-referential type for `g`:
+
+        6│      g = \x -> f [x]
+                ^
+
+        Here is my best effort at writing down the type. You will see ∞ for
+        parts of the type that repeat something already printed out
+        infinitely.
+
+            List ∞ -> List a
+        "###
     );
 
     test_report!(
@@ -5880,7 +5867,7 @@ All branches in an `if` must have the same type!
 
     This `map` call produces:
 
-        List [Foo Num a]
+        List [Foo (Num a)]
 
     But the type annotation on `x` says it should be:
 
@@ -10327,6 +10314,46 @@ All branches in an `if` must have the same type!
     really do need `x` as an argument of this function, prefix it with an
     underscore, like this: "_`x`". Adding an underscore at the start of a
     variable name is a way of saying that the variable is not used.
+    "###
+    );
+
+    test_report!(
+        expected_tag_has_too_many_args,
+        indoc!(
+            r#"
+            app "test" provides [fromBytes] to "./platform"
+
+            u8 : [Good (List U8), Bad [DecodeProblem]]
+
+            fromBytes = 
+                when u8 is
+                    Good _ _ ->
+                        Ok "foo"
+
+                    Bad _ ->
+                        Ok "foo"
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+     6│>      when u8 is
+     7│           Good _ _ ->
+     8│               Ok "foo"
+     9│ 
+    10│           Bad _ ->
+
+    This `u8` value is a:
+
+        [Bad [DecodeProblem], Good (List U8)]
+
+    But the branch patterns have type:
+
+        [Bad [DecodeProblem], Good (List U8) a]
+
+    The branches must be cases of the `when` condition's type!
     "###
     );
 }

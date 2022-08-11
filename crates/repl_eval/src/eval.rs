@@ -503,8 +503,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         unroll_newtypes_and_aliases(env, content);
 
     let expr = match (raw_content, layout) {
-        (Content::Structure(FlatType::Func(_, _, _)), _)
-        | (_, Layout::LambdaSet(_)) => OPAQUE_FUNCTION,
+        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, Layout::LambdaSet(_)) => {
+            OPAQUE_FUNCTION
+        }
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
@@ -549,7 +550,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let arena_str = env.arena.alloc_str(string);
             Expr::Str(StrLiteral::PlainLine(arena_str))
         }
-        (_, Layout::Struct{field_layouts, ..}) => match raw_content {
+        (_, Layout::Struct { field_layouts, .. }) => match raw_content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, *fields)
             }
@@ -573,18 +574,37 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 );
             }
         },
-        (_, Layout::RecursivePointer) => {
-            match (raw_content, when_recursive) {
-                (Content::RecursionVar {
+        (_, Layout::RecursivePointer) => match (raw_content, when_recursive) {
+            (
+                Content::RecursionVar {
                     structure,
                     opt_name: _,
-                }, WhenRecursive::Loop(union_layout)) => {
-                    let content = env.subs.get_content_without_compacting(*structure);
-                    addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
-                }
-                other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+                },
+                WhenRecursive::Loop(union_layout),
+            ) => {
+                let content = env.subs.get_content_without_compacting(*structure);
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
             }
-        }
+
+            (
+                Content::RecursionVar {
+                    structure,
+                    opt_name: _,
+                },
+                WhenRecursive::Unreachable,
+            ) => {
+                // It's possible to hit a recursive pointer before the full type layout; just
+                // figure out the actual recursive structure layout at this point.
+                let content = env.subs.get_content_without_compacting(*structure);
+                let union_layout = LayoutCache::new(env.target_info)
+                    .from_var(env.arena, *structure, env.subs)
+                    .expect("no layout for structure");
+                debug_assert!(matches!(union_layout, Layout::Union(..)));
+                let when_recursive = WhenRecursive::Loop(union_layout);
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
+            }
+            other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+        },
         (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
@@ -608,8 +628,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let tag_id = tag_id_from_data(env, mem, union_layout, addr);
 
             // use the tag ID as an index, to get its name and layout of any arguments
-            let (tag_name, arg_layouts) =
-                &tags_and_layouts[tag_id as usize];
+            let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
 
             expr_of_tag(
                 env,
@@ -623,18 +642,19 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
             let (rec_var, tags) = match raw_content {
-                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                    (rec_var, tags)
+                }
                 _ => unreachable!("any other content would have a different layout"),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 
-            let (vars_of_tag, union_variant) =
-                get_tags_vars_and_variant(env, tags, Some(*rec_var));
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
 
             let tags_and_layouts = match union_variant {
-                UnionVariant::Wrapped(WrappedVariant::Recursive {
+                UnionVariant::Wrapped(WrappedVariant::Recursive { sorted_tag_layouts }) => {
                     sorted_tag_layouts
-                }) => sorted_tag_layouts,
+                }
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
@@ -653,7 +673,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
-                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                    (rec_var, tags)
+                }
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
             debug_assert_eq!(tags.len(), 1);
@@ -662,7 +684,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             let (tag_name, arg_layouts) = match union_variant {
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
-                    tag_name, fields,
+                    tag_name,
+                    fields,
                 }) => (tag_name.expect_tag(), fields),
                 _ => unreachable!("any other variant would have a different layout"),
             };
@@ -681,7 +704,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
-                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                    (rec_var, tags)
+                }
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
             debug_assert!(tags.len() <= 2);
@@ -694,7 +719,11 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                     nullable_name,
                     other_name,
                     other_fields,
-                }) => (nullable_name.expect_tag(), other_name.expect_tag(), other_fields),
+                }) => (
+                    nullable_name.expect_tag(),
+                    other_name.expect_tag(),
+                    other_fields,
+                ),
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
@@ -715,7 +744,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
-                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                    (rec_var, tags)
+                }
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
 
@@ -736,7 +767,11 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             } else {
                 let (tag_id, data_addr) = tag_id_from_recursive_ptr(env, mem, *union_layout, addr);
 
-                let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
+                let tag_id = if tag_id > nullable_id.into() {
+                    tag_id - 1
+                } else {
+                    tag_id
+                };
 
                 let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
                 expr_of_tag(
@@ -750,7 +785,10 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
-        (Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)), Layout::Boxed(inner_layout)) => {
+        (
+            Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
+            Layout::Boxed(inner_layout),
+        ) => {
             debug_assert_eq!(args.len(), 1);
 
             let inner_var_index = args.into_iter().next().unwrap();
@@ -758,17 +796,27 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let inner_content = env.subs.get_content_without_compacting(inner_var);
 
             let addr_of_inner = mem.deref_usize(addr);
-            let inner_expr = addr_to_ast(env, mem, addr_of_inner, inner_layout, WhenRecursive::Unreachable, inner_content);
+            let inner_expr = addr_to_ast(
+                env,
+                mem,
+                addr_of_inner,
+                inner_layout,
+                WhenRecursive::Unreachable,
+                inner_content,
+            );
 
             let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
-                module_name: "Box", ident: "box"
+                module_name: "Box",
+                ident: "box",
             }));
             let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
             let box_box_args = env.arena.alloc([box_box_arg]);
 
             Expr::Apply(box_box, box_box_args, CalledVia::Space)
         }
-        (_, Layout::Boxed(_)) => unreachable!("Box layouts can only be behind a `Box.Box` application"),
+        (_, Layout::Boxed(_)) => {
+            unreachable!("Box layouts can only be behind a `Box.Box` application")
+        }
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
