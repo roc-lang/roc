@@ -160,12 +160,11 @@ where
         }
 
         let new_len = self.len() + slice.len();
-        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrement the list's refence count.
-            let mut copy = storage.get();
-            let is_unique = copy.decrease();
+        let non_null_elements = if let Some((elements, storage_cell)) = self.elements_and_storage()
+        {
+            let storage = storage_cell.get();
 
-            if is_unique {
+            if storage.is_unique() {
                 // If we have enough capacity, we can add to the existing elements in-place.
                 if self.capacity() >= slice.len() {
                     elements
@@ -174,7 +173,7 @@ where
                     // Since this is a unique RocList, we can use realloc here.
                     let new_ptr = unsafe {
                         roc_realloc(
-                            storage.as_ptr().cast(),
+                            storage_cell.as_ptr().cast(),
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity),
                             Self::alloc_alignment(),
@@ -188,9 +187,9 @@ where
                     }))
                 }
             } else {
-                if !copy.is_readonly() {
+                if !storage.is_readonly() {
                     // Write the decremented reference count back.
-                    storage.set(copy);
+                    storage_cell.set(storage);
                 }
 
                 // Allocate new memory.
@@ -210,7 +209,6 @@ where
         self.elements = Some(non_null_elements);
 
         let elements = self.elements.unwrap().as_ptr();
-
         let append_ptr = unsafe { elements.add(self.len()) };
 
         // Use .cloned() to increment the elements' reference counts, if needed.
