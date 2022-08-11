@@ -15,6 +15,15 @@ use core::{
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
 
+#[cfg(feature = "serde")]
+use core::marker::PhantomData;
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserializer, Visitor},
+    ser::{SerializeSeq, Serializer},
+    Deserialize, Serialize,
+};
+
 #[repr(C)]
 pub struct RocList<T> {
     elements: Option<NonNull<ManuallyDrop<T>>>,
@@ -584,5 +593,78 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
         }
 
         list
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Serialize> Serialize for RocList<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for item in self {
+            seq.serialize_element(item)?;
+        }
+        seq.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> Deserialize<'de> for RocList<T>
+where
+    // TODO: I'm not sure about requiring clone here. Is that fine? Is that
+    // gonna mean lots of extra allocations?
+    T: Deserialize<'de> + core::clone::Clone,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(RocListVisitor::new())
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RocListVisitor<T> {
+    marker: PhantomData<T>,
+}
+
+#[cfg(feature = "serde")]
+impl<T> RocListVisitor<T> {
+    fn new() -> Self {
+        RocListVisitor {
+            marker: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> Visitor<'de> for RocListVisitor<T>
+where
+    T: Deserialize<'de> + core::clone::Clone,
+{
+    type Value = RocList<T>;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(formatter, "a list of strings")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut out = match seq.size_hint() {
+            Some(hint) => RocList::with_capacity(hint),
+            None => RocList::empty(),
+        };
+
+        while let Some(next) = seq.next_element()? {
+            // TODO: it would be ideal to call `out.push` here, but we haven't
+            // implemented that yet! I think this is also why we need Clone.
+            out.extend_from_slice(&[next])
+        }
+
+        Ok(out)
     }
 }

@@ -64,7 +64,7 @@ build-rust-test:
     RUN apt -y install gcc-10 g++-10 && rm /usr/bin/gcc && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
     RUN gcc --version
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
+        cargo test --locked --release --features with_sound serde --workspace --no-run && sccache --show-stats
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
@@ -82,7 +82,7 @@ test-rust:
     RUN gcc --version
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --workspace && sccache --show-stats
+        cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
     # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
@@ -99,7 +99,7 @@ test-rust:
     # NOTE: disabled until zig 0.9
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
-    #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+    #    cargo test --locked --release --features with_sound serde --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
     # make sure website deployment works (that is, make sure build.sh returns status code 0)
     ENV REPL_DEBUG=1
     RUN bash www/build.sh
@@ -126,7 +126,7 @@ build-nightly-release:
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
+    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound serde --release
     RUN ./ci/package_release.sh roc_linux_x86_64.tar.gz
     SAVE ARTIFACT ./roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 
