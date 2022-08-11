@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "host"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "reqwest",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "roc_std"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec",
  "static_assertions",

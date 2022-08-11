@@ -295,13 +295,10 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" => {
-                            // test is skipped until we upgrate to zig 0.9 / llvm 13
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
-                            return;
-                        }
-                        "hello-gui" | "breakout" => {
-                            // Since these require opening a window, we do `roc build` on them but don't run them.
+                        "form" | "hello-gui" | "breakout" | "rocLovesWebAssembly"  => {
+                            // Since these require things the build system often doesn't have
+                            // (e.g. GUIs open a window, WASM needs a browser)
+                            // we do `roc build` on them but don't run them.
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
                             return;
                         }
@@ -310,11 +307,6 @@ mod cli_run {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
                             }
-                        }
-                        "rocLovesWebAssembly" => {
-                            // this is a web assembly example, but we don't test with JS at the moment
-                            eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
-                            return;
                         }
                         _ => {}
                     }
