@@ -1192,3 +1192,27 @@ fn opaque_wrap_function() {
         "[@A 1, @A 2, @A 3] : List (A U8)",
     );
 }
+
+#[test]
+fn record_of_poly_function() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a" }
+            "#
+        ),
+        r#"{ a: <function> } : { a : * -> Str }"#,
+    );
+}
+
+#[test]
+fn record_of_poly_function_and_string() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a", b: "b" }
+            "#
+        ),
+        r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
+    );
+}
