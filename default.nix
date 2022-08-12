@@ -68,13 +68,13 @@ rustPlatform.buildRustPackage {
       xorg.libxcb
   ]
   ++ lib.optionals pkgs.stdenv.isDarwin [
-      AppKit
-      CoreFoundation
-      CoreServices
-      CoreVideo
-      Foundation
-      Metal
-      Security
+      pkgs.darwin.apple_sdk.frameworks.AppKit
+      pkgs.darwin.apple_sdk.frameworks.CoreFoundation
+      pkgs.darwin.apple_sdk.frameworks.CoreServices
+      pkgs.darwin.apple_sdk.frameworks.CoreVideo
+      pkgs.darwin.apple_sdk.frameworks.Foundation
+      pkgs.darwin.apple_sdk.frameworks.Metal
+      pkgs.darwin.apple_sdk.frameworks.Security
   ]);
 
   # cp: to copy str.zig,list.zig...
