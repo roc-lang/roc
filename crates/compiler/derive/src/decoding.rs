@@ -215,8 +215,6 @@ fn decoder_step_field(
         //     )
 
         let custom_callback = {
-            let rec_var = env.subs.fresh_unnamed_flex_var(); // TODO unify this
-
             // \bytes, fmt ->
             //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
             //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
@@ -230,6 +228,27 @@ fn decoder_step_field(
             //             }
             let bytes_arg_symbol = env.new_symbol("bytes");
             let fmt_arg_symbol = env.new_symbol("fmt");
+            let bytes_arg_var = env.subs.fresh_unnamed_flex_var();
+            let fmt_arg_var = env.subs.fresh_unnamed_flex_var();
+            let rec_var = env.subs.fresh_unnamed_flex_var();
+            let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
+            let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
+            let lambda_set_var = env.subs.fresh_unnamed_flex_var();
+            let this_decode_with_var = {
+                let subs_slice = SubsSlice::insert_into_subs(
+                    env.subs,
+                    [bytes_arg_var, decoder_var, fmt_arg_var],
+                );
+                let this_decode_with_var = synth_var(
+                    env.subs,
+                    Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+                );
+
+                env.unify(decode_with_var, this_decode_with_var);
+
+                this_decode_with_var
+            };
+
             let when_expr_var = {
                 let flat_type = FlatType::TagUnion(
                     UnionTags::for_result(env.subs, state_record_var, decode_err_var),
@@ -440,35 +459,34 @@ fn decoder_step_field(
 
                 let condition_expr = Expr::Call(
                     Box::new((
-                        Variable::NULL, // TODO
+                        this_decode_with_var,
                         Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
-                        Variable::NULL, // TODO
-                        Variable::NULL, // TODO
+                        lambda_set_var,
+                        rec_var,
                     )),
                     vec![
+                        (Variable::LIST_U8, Loc::at_zero(Expr::Var(bytes_arg_symbol))),
                         (
-                            Variable::NULL, // TODO
-                            Loc::at_zero(Expr::Var(bytes_arg_symbol)),
+                            decoder_var,
+                            Loc::at_zero(Expr::AbilityMember(
+                                Symbol::DECODE_DECODER,
+                                None,
+                                decoder_var,
+                            )),
                         ),
-                        (
-                            Variable::NULL, // TODO
-                            Loc::at_zero(Expr::Var(Symbol::DECODE_DECODER)),
-                        ),
-                        (
-                            Variable::NULL, // TODO
-                            Loc::at_zero(Expr::Var(fmt_arg_symbol)),
-                        ),
+                        (fmt_arg_var, Loc::at_zero(Expr::Var(fmt_arg_symbol))),
                     ],
                     CalledVia::Space,
                 );
 
+                // when Decode.decodeWith bytes Decode.decoder fmt is
                 Expr::When {
                     loc_cond: Box::new(Loc::at_zero(condition_expr)),
-                    cond_var: Variable::NULL, // TODO
+                    cond_var: rec_var,
                     expr_var: custom_callback_ret_var,
                     region: Region::zero(),
                     branches: vec![branch],
-                    branches_cond_var: Variable::NULL, // TODO
+                    branches_cond_var: rec_var,
                     exhaustive: ExhaustiveMark::known_exhaustive(),
                 }
             };
