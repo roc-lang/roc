@@ -21,13 +21,13 @@ pub fn run_expects<W: std::io::Write>(
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     shared_ptr: *mut u8,
-    expects: bumpalo::collections::Vec<'_, ToplevelExpect<'_>>,
+    expects: ExpectFunctions<'_>,
 ) -> std::io::Result<(usize, usize)> {
     let mut failed = 0;
     let mut passed = 0;
 
-    for expect in expects {
-        let result = run_expect(
+    for expect in expects.pure {
+        let result = run_expect_pure(
             writer,
             render_target,
             arena,
@@ -48,7 +48,7 @@ pub fn run_expects<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_expect<W: std::io::Write>(
+fn run_expect_pure<W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
     arena: &Bump,
@@ -251,13 +251,19 @@ pub struct ToplevelExpect<'a> {
     pub region: Region,
 }
 
+#[derive(Debug)]
+pub struct ExpectFunctions<'a> {
+    pub pure: BumpVec<'a, ToplevelExpect<'a>>,
+    pub fx: BumpVec<'a, ToplevelExpect<'a>>,
+}
+
 pub fn expect_mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, BumpVec<'a, ToplevelExpect<'a>>), libloading::Error> {
+) -> Result<(libloading::Library, ExpectFunctions<'a>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -306,18 +312,25 @@ pub fn expect_mono_module_to_dylib<'a>(
         EntryPoint::Test => None,
     };
 
+    let capacity = toplevel_expects.pure.len() + toplevel_expects.fx.len();
+    let mut expect_symbols = BumpVec::with_capacity_in(capacity, env.arena);
+
+    expect_symbols.extend(toplevel_expects.pure.keys().copied());
+    expect_symbols.extend(toplevel_expects.fx.keys().copied());
+
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
-        toplevel_expects.unzip_slices().0,
+        &expect_symbols,
         procedures,
         opt_entry_point,
     );
 
-    let expects = bumpalo::collections::Vec::from_iter_in(
+    let expects_fx = bumpalo::collections::Vec::from_iter_in(
         toplevel_expects
+            .fx
             .into_iter()
-            .zip(expect_names.into_iter())
+            .zip(expect_names.iter().skip(toplevel_expects.pure.len()))
             .map(|((symbol, region), name)| ToplevelExpect {
                 symbol,
                 region,
@@ -325,6 +338,24 @@ pub fn expect_mono_module_to_dylib<'a>(
             }),
         env.arena,
     );
+
+    let expects_pure = bumpalo::collections::Vec::from_iter_in(
+        toplevel_expects
+            .pure
+            .into_iter()
+            .zip(expect_names.iter())
+            .map(|((symbol, region), name)| ToplevelExpect {
+                symbol,
+                region,
+                name,
+            }),
+        env.arena,
+    );
+
+    let expects = ExpectFunctions {
+        pure: expects_pure,
+        fx: expects_fx,
+    };
 
     env.dibuilder.finalize();
 

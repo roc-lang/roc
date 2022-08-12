@@ -689,6 +689,12 @@ struct LateSpecializationsModule<'a> {
     procs_base: ProcsBase<'a>,
 }
 
+#[derive(Debug, Default)]
+pub struct ToplevelExpects {
+    pub pure: VecMap<Symbol, Region>,
+    pub fx: VecMap<Symbol, Region>,
+}
+
 #[derive(Debug)]
 pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
@@ -698,7 +704,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: VecMap<Symbol, Region>,
+    pub toplevel_expects: ToplevelExpects,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -803,7 +809,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
-        toplevel_expects: VecMap<Symbol, Region>,
+        toplevel_expects: ToplevelExpects,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -890,7 +896,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: VecMap<Symbol, Region>,
+    pub toplevel_expects: ToplevelExpects,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -963,7 +969,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies,
             procedures: MutMap::default(),
-            toplevel_expects: VecMap::default(),
+            toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -2465,7 +2471,8 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            state.toplevel_expects.extend(toplevel_expects);
+            state.toplevel_expects.pure.extend(toplevel_expects.pure);
+            state.toplevel_expects.fx.extend(toplevel_expects.fx);
 
             state
                 .module_cache
@@ -4756,7 +4763,7 @@ fn build_pending_specializations<'a>(
     let find_specializations_start = Instant::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
-    let mut toplevel_expects = VecMap::default();
+    let mut toplevel_expects = ToplevelExpects::default();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -5067,7 +5074,7 @@ fn build_pending_specializations<'a>(
                 let expr_region = declarations.expressions[index].region;
                 let region = Region::span_across(&name_region, &expr_region);
 
-                toplevel_expects.insert(symbol, region);
+                toplevel_expects.pure.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
             ExpectationFx => {
@@ -5141,7 +5148,7 @@ fn build_pending_specializations<'a>(
                 let expr_region = declarations.expressions[index].region;
                 let region = Region::span_across(&name_region, &expr_region);
 
-                toplevel_expects.insert(symbol, region);
+                toplevel_expects.fx.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
