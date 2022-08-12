@@ -193,6 +193,22 @@ fn decoder_step_field(
 
     // +1 because of the default branch.
     let mut branches = Vec::with_capacity(fields.len() + 1);
+    let keep_payload_var = env.subs.fresh_unnamed_flex_var();
+    let keep_or_skip_var = {
+        let keep_payload_subs_slice = SubsSlice::insert_into_subs(env.subs, [keep_payload_var]);
+        let flat_type = FlatType::TagUnion(
+            UnionTags::insert_slices_into_subs(
+                env.subs,
+                [
+                    ("Keep".into(), keep_payload_subs_slice),
+                    ("Skip".into(), Default::default()),
+                ],
+            ),
+            Variable::EMPTY_TAG_UNION,
+        );
+
+        synth_var(env.subs, Content::Structure(flat_type))
+    };
 
     for ((field_name, &field_var), &result_field_var) in fields
         .into_iter()
@@ -545,10 +561,10 @@ fn decoder_step_field(
             })
         };
 
+        let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
         let decode_custom = {
             let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
             let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
-            let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
             let this_decode_custom_var = {
                 let subs_slice = SubsSlice::insert_into_subs(env.subs, [this_custom_callback_var]);
                 let flat_type =
@@ -572,6 +588,8 @@ fn decoder_step_field(
             )
         };
 
+        env.unify(keep_payload_var, decode_custom_ret_var);
+
         let keep = {
             // Keep (Decode.custom \bytes, fmt ->
             //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
@@ -586,13 +604,10 @@ fn decoder_step_field(
             //             }
             // )
             Expr::Tag {
-                tag_union_var: Variable::NULL, // TODO
+                tag_union_var: keep_or_skip_var,
                 ext_var: Variable::EMPTY_TAG_UNION,
                 name: "Keep".into(),
-                arguments: vec![(
-                    Variable::NULL, // TODO
-                    Loc::at_zero(decode_custom),
-                )],
+                arguments: vec![(decode_custom_ret_var, Loc::at_zero(decode_custom))],
             }
         };
 
