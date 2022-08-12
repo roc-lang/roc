@@ -634,6 +634,8 @@ impl<'a> Env<'a> {
             self.add_type(var, &mut types);
         }
 
+        self.resolve_pending_recursive_types(&mut types);
+
         types
     }
 
@@ -643,16 +645,12 @@ impl<'a> Env<'a> {
             .from_var(self.arena, var, self.subs)
             .expect("Something weird ended up in the content");
 
-        let type_id = add_type_help(self, layout, var, None, types);
-
-        self.resolve_pending_recursive_types(types);
-
-        type_id
+        add_type_help(self, layout, var, None, types)
     }
 
     fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
-        // TODO if VecMap gets a drain() method, use that instead of doing replace() and into_iter
-        let pending = core::mem::replace(&mut self.pending_recursive_types, Default::default());
+        // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
+        let pending = core::mem::take(&mut self.pending_recursive_types);
 
         for (type_id, layout) in pending.into_iter() {
             let actual_type_id = self.known_recursive_types.get(&layout).unwrap_or_else(|| {
