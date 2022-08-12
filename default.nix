@@ -18,7 +18,7 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-Pd84GGtW1ecrP03uiCVcybIUtWCSDGfLl+fbbdmFyiE=";
+  cargoSha256 = "sha256-treL2sWPcZ1NBwdab3FOb2FI2wT/Vt9tD4XRfJ8rYWA=";
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
