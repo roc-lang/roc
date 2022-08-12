@@ -699,7 +699,7 @@ fn platform_parse_error() {
 }
 
 #[test]
-// See https://github.com/rtfeldman/roc/issues/2413
+// See https://github.com/roc-lang/roc/issues/2413
 fn platform_exposes_main_return_by_pointer_issue() {
     let modules = vec![
         (

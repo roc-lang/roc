@@ -23,7 +23,7 @@ If you encounter an error like `gfx_backend_vulkan ... Failed to detect any vali
 If the error persists, take a look [here](https://www.techpowerup.com/gpu-specs/) to see if your GPU supports vulkan.
 Use of OpenGL instead of vulkan should be available in several months.
 
-Make sure to [create an issue](https://github.com/rtfeldman/roc/issues/new/choose) if you encounter any problems not listed above.
+Make sure to [create an issue](https://github.com/roc-lang/roc/issues/new/choose) if you encounter any problems not listed above.
 
 ## Inspiration
 

@@ -12,13 +12,13 @@ use std::{
     process::{self, Command, Stdio},
 };
 
-const BENCH_FOLDER_TRUNK: &str = "bench-folder-trunk";
+const BENCH_FOLDER_MAIN: &str = "bench-folder-main";
 const BENCH_FOLDER_BRANCH: &str = "bench-folder-branch";
 
 fn main() {
     let optional_args: OptionalArgs = OptionalArgs::parse();
 
-    if Path::new(BENCH_FOLDER_TRUNK).exists() && Path::new(BENCH_FOLDER_BRANCH).exists() {
+    if Path::new(BENCH_FOLDER_MAIN).exists() && Path::new(BENCH_FOLDER_BRANCH).exists() {
         delete_old_bench_results();
 
         if optional_args.check_executables_changed {
@@ -26,7 +26,7 @@ fn main() {
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
-            do_benchmark("trunk");
+            do_benchmark("main");
             do_benchmark("branch");
 
             std::env::set_var("BENCH_DRY_RUN", "0");
@@ -49,9 +49,9 @@ fn main() {
         }
     } else {
         eprintln!(
-            r#"I can't find bench-folder-trunk and bench-folder-branch from the current directory.
+            r#"I can't find bench-folder-main and bench-folder-branch from the current directory.
         I should be executed from the repo root.
-        Use `./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder` to generate bench-folder-trunk.
+        Use `./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder` to generate bench-folder-main.
         Use `./ci/safe-earthly.sh +prep-bench-folder` to generate bench-folder-branch."#
         );
 
@@ -77,7 +77,7 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 // returns all benchmarks that have regressed
 fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     delete_old_bench_results();
-    do_benchmark("trunk");
+    do_benchmark("main");
     let mut all_regressed_benches = do_benchmark("branch");
 
     // if no benches regressed this round, abort early
@@ -87,7 +87,7 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
-        do_benchmark("trunk");
+        do_benchmark("main");
         let regressed_benches = do_benchmark("branch");
 
         // if no benches regressed this round, abort early
@@ -229,17 +229,17 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
 fn check_if_bench_executables_changed() -> bool {
     let bench_folder_str = "/examples/benchmarks/";
 
-    let trunk_benches_path_str = [BENCH_FOLDER_TRUNK, bench_folder_str].join("");
-    let trunk_bench_hashes = calc_hashes_for_folder(&trunk_benches_path_str);
+    let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
+    let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");
     let branch_bench_hashes = calc_hashes_for_folder(&branch_benches_path_str);
 
-    if trunk_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
-        for key in trunk_bench_hashes.keys() {
-            if let Some(trunk_hash_val) = trunk_bench_hashes.get(key) {
+    if main_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
+        for key in main_bench_hashes.keys() {
+            if let Some(main_hash_val) = main_bench_hashes.get(key) {
                 if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
-                    if !trunk_hash_val.eq(branch_hash_val) {
+                    if !main_hash_val.eq(branch_hash_val) {
                         return true;
                     }
                 } else {

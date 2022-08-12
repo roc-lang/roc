@@ -458,7 +458,7 @@ The short explanation for why Roc is released under the [Universal Permissive Li
 - It's one license, unlike "MIT or Apache2, at your choice" (which is how [Rust addressed the problem](https://internals.rust-lang.org/t/rationale-of-apache-dual-licensing/8952/4) of MIT not having patent protections but Apache2 not being GPLv2 compatible)
 - It's been approved by OSI, FSF, and Oracle's lawyers, so it has been not only vetted by three giants in the world of software licensing, but also three giants with competing interests - and they all approved it.
 
-There's also [a longer explanation](https://github.com/rtfeldman/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
+There's also [a longer explanation](https://github.com/roc-lang/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
 
 ## Why does Roc use both Rust and Zig?
 

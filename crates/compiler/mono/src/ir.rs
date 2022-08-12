@@ -1207,7 +1207,7 @@ impl<'a> Procs<'a> {
                 // (We had a bug around this before this system existed!)
                 self.specialized.mark_in_progress(symbol.name(), layout);
 
-                // See https://github.com/rtfeldman/roc/issues/1600
+                // See https://github.com/roc-lang/roc/issues/1600
                 //
                 // The annotation variable is the generic/lifted/top-level annotation.
                 // It is connected to the variables of the function's body
@@ -2482,7 +2482,7 @@ fn patterns_to_when<'a>(
     // are only stores anyway, no branches.
     //
     // NOTE this fails if the pattern contains rigid variables,
-    // see https://github.com/rtfeldman/roc/issues/786
+    // see https://github.com/roc-lang/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, annotated_mark, pattern) in patterns.into_iter() {
         if annotated_mark.exhaustive.is_non_exhaustive(env.subs) {
@@ -5849,7 +5849,7 @@ fn register_capturing_closure<'a>(
                         }
                     }
                     Err(_) => {
-                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                        // just allow this. see https://github.com/roc-lang/roc/issues/1585
                         if captured_symbols.is_empty() {
                             CapturedSymbols::None
                         } else {
@@ -7518,7 +7518,7 @@ fn build_call<'a>(
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
 }
 
-/// See https://github.com/rtfeldman/roc/issues/1549
+/// See https://github.com/roc-lang/roc/issues/1549
 ///
 /// What happened is that a function has a type error, but the arguments are not processed.
 /// That means specializations were missing. Normally that is not a problem, but because

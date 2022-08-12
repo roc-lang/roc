@@ -42,26 +42,26 @@ procedure Num.22 (#Attr.2, #Attr.3):
     ret Num.257;
 
 procedure Str.27 (Str.89):
-    let Str.195 : [C Int1, C I64] = CallByName Str.62 Str.89;
-    ret Str.195;
+    let Str.202 : [C Int1, C I64] = CallByName Str.62 Str.89;
+    ret Str.202;
 
 procedure Str.47 (#Attr.2):
-    let Str.203 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    ret Str.203;
+    let Str.210 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.210;
 
 procedure Str.62 (Str.190):
     let Str.191 : {I64, U8} = CallByName Str.47 Str.190;
-    let Str.201 : U8 = StructAtIndex 1 Str.191;
-    let Str.202 : U8 = 0i64;
-    let Str.198 : Int1 = CallByName Bool.7 Str.201 Str.202;
-    if Str.198 then
-        let Str.200 : I64 = StructAtIndex 0 Str.191;
-        let Str.199 : [C Int1, C I64] = TagId(1) Str.200;
-        ret Str.199;
+    let Str.208 : U8 = StructAtIndex 1 Str.191;
+    let Str.209 : U8 = 0i64;
+    let Str.205 : Int1 = CallByName Bool.7 Str.208 Str.209;
+    if Str.205 then
+        let Str.207 : I64 = StructAtIndex 0 Str.191;
+        let Str.206 : [C Int1, C I64] = TagId(1) Str.207;
+        ret Str.206;
     else
-        let Str.197 : Int1 = false;
-        let Str.196 : [C Int1, C I64] = TagId(0) Str.197;
-        ret Str.196;
+        let Str.204 : Int1 = false;
+        let Str.203 : [C Int1, C I64] = TagId(0) Str.204;
+        ret Str.203;
 
 procedure Test.0 ():
     let Test.4 : Int1 = true;

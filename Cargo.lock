@@ -1819,13 +1819,13 @@ checksum = "05a0bd019339e5d968b37855180087b7b9d512c5046fbd244cf8c95687927d6e"
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?branch=master)",
+ "inkwell 0.1.0 (git+https://github.com/roc-lang/inkwell?branch=master)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
+source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1838,7 +1838,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.5.0"
-source = "git+https://github.com/rtfeldman/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
+source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4208,7 +4208,7 @@ checksum = "a0a5f7c728f5d284929a1cccb5bc19884422bfe6ef4d6c409da2c41838983fcf"
 [[package]]
 name = "rustyline"
 version = "9.1.1"
-source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
+source = "git+https://github.com/roc-lang/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
@@ -4231,7 +4231,7 @@ dependencies = [
 [[package]]
 name = "rustyline-derive"
 version = "0.6.0"
-source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
+source = "git+https://github.com/roc-lang/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "quote",
  "syn",

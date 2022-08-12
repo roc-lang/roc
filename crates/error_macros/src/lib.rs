@@ -9,7 +9,7 @@ macro_rules! internal_error {
         eprintln!("An internal compiler expectation was broken.");
         eprintln!("This is definitely a compiler bug.");
         // TODO: update this to the new bug template.
-        eprintln!("Please file an issue here: https://github.com/rtfeldman/roc/issues/new/choose");
+        eprintln!("Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose");
         #[allow(clippy::panic)] {
             panic!($($arg)*);
         }
@@ -92,13 +92,13 @@ macro_rules! assert_copyable {
 macro_rules! _incomplete_project {
     ($project_name:literal, $tracking_issue_no:literal) => {
         panic!(
-            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}",
+            "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}",
             $project_name, $tracking_issue_no,
         )
     };
     ($project_name:literal, $tracking_issue_no:literal, $($arg:tt)+) => {
         panic!(
-            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}.\nAdditional information: {}",
+            "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}.\nAdditional information: {}",
             $project_name, $tracking_issue_no,
             format_args!($($arg)+),
         )

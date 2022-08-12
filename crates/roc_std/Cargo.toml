@@ -5,7 +5,7 @@ edition = "2021"
 license = "UPL-1.0"
 name = "roc_std"
 readme = "README.md"
-repository = "https://github.com/rtfeldman/roc"
+repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [dependencies]

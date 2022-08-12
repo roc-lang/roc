@@ -183,7 +183,7 @@ impl<'a> LowLevelCall<'a> {
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
     /// This may seem like deliberately introducing an error!
     /// But we want all targets to behave the same, and hash algos rely on wrapping.
-    /// Discussion: https://github.com/rtfeldman/roc/pull/2117#discussion_r760723063
+    /// Discussion: https://github.com/roc-lang/roc/pull/2117#discussion_r760723063
     fn wrap_small_int(&self, backend: &mut WasmBackend<'a>, int_width: IntWidth) {
         let bits = 8 * int_width.stack_size() as i32;
         let shift = 32 - bits;

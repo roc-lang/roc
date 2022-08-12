@@ -1023,7 +1023,7 @@ mod test_can {
                 # There was a bug where annotating a def meant that its
                 # references no longer got reported.
                 #
-                # https://github.com/rtfeldman/roc/issues/298
+                # https://github.com/roc-lang/roc/issues/298
                 x : List Booly
                 x = [y]
 
