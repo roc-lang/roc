@@ -2614,7 +2614,7 @@ pub mod test_constrain {
     #[test]
     fn inference_var_tag_union_ext() {
         // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
-        // See https://github.com/rtfeldman/roc/issues/2053
+        // See https://github.com/roc-lang/roc/issues/2053
         infer_eq(
             indoc!(
                 r#"

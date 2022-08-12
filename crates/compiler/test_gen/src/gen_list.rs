@@ -2831,7 +2831,7 @@ fn lists_with_incompatible_type_param_in_if() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn map_with_index_multi_record() {
-    // see https://github.com/rtfeldman/roc/issues/1700
+    // see https://github.com/roc-lang/roc/issues/1700
     assert_evals_to!(
         indoc!(
             r#"
@@ -2846,7 +2846,7 @@ fn map_with_index_multi_record() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_of_function_type() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
             r#"
@@ -3276,7 +3276,7 @@ fn monomorphized_lists() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn with_capacity() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
             r#"

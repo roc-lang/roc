@@ -3,6 +3,6 @@ name = "arena-pool"
 version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-repository = "https://github.com/rtfeldman/roc"
+repository = "https://github.com/roc-lang/roc"
 edition = "2021"
 description = "A CLI for Roc"

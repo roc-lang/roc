@@ -232,7 +232,7 @@ impl PendingTypeDef<'_> {
     }
 }
 
-// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+// See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {

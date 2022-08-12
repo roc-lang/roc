@@ -1,6 +1,6 @@
 #![cfg(test)]
 #![warn(clippy::dbg_macro)]
-// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+// See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 // we actually want to compare against the literal float bits
 #![allow(clippy::float_cmp)]
@@ -1084,7 +1084,7 @@ fn specialize_lowlevel() {
 
 #[mono_test]
 fn empty_list_of_function_type() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     indoc!(
         r#"
          app "test" provides [main] to "./platform"

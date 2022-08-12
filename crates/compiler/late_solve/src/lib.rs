@@ -358,7 +358,7 @@ pub fn unify(
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.
-            // After we land https://github.com/rtfeldman/roc/issues/3207 this concern should totally
+            // After we land https://github.com/roc-lang/roc/issues/3207 this concern should totally
             // go away.
             let _ = must_implement_constraints;
             // Pools are only used to keep track of variable ranks for generalization purposes.

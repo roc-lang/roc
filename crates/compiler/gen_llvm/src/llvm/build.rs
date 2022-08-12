@@ -3881,7 +3881,7 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
 pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let jmp_buf = get_sjlj_buffer(env);
     if cfg!(target_arch = "aarch64") {
-        // Due to https://github.com/rtfeldman/roc/issues/2965, we use a setjmp we linked in from Zig
+        // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.

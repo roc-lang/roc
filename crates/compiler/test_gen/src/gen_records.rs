@@ -964,7 +964,7 @@ fn update_the_only_field() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/1513
+// https://github.com/roc-lang/roc/issues/1513
 fn both_have_unique_fields() {
     assert_evals_to!(
         indoc!(
@@ -985,7 +985,7 @@ fn both_have_unique_fields() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2535
+// https://github.com/roc-lang/roc/issues/2535
 fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
         indoc!(

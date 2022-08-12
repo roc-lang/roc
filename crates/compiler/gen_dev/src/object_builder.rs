@@ -172,7 +172,7 @@ fn build_object<'a, B: Backend<'a>>(
     let arena = backend.env().arena;
 
     /*
-    // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/rtfeldman/roc/pull/1323
+    // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/roc-lang/roc/pull/1323
     let comment = output.add_section(vec![], b".comment".to_vec(), SectionKind::OtherString);
     output.append_section_data(
         comment,

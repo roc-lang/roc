@@ -1,11 +1,11 @@
-0. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
+0. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
 0. To prevent "roc can't be opened because Apple can't check it...":
     ```
-    xattr -d com.apple.quarantine roc_nightly-macos_x86_64-<VERSION>.tar.gz 
+    xattr -d com.apple.quarantine roc_nightly-macos_x86_64-<VERSION>.tar.gz
     ```
 0. Untar the archive:
     ```
-    roc_nightly-macos_x86_64-<VERSION>.tar.gz 
+    roc_nightly-macos_x86_64-<VERSION>.tar.gz
     ```
 0. To be able to run examples:
     - for the Rust example:

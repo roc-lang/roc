@@ -73,7 +73,7 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
             })
             .await
             .expect(r#"Request adapter
-            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/roc-lang/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
             "#);
 
         adapter

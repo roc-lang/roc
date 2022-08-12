@@ -4916,7 +4916,7 @@ mod solve_expr {
 
     #[test]
     fn rigid_type_variable_problem() {
-        // see https://github.com/rtfeldman/roc/issues/1162
+        // see https://github.com/roc-lang/roc/issues/1162
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -5024,7 +5024,7 @@ mod solve_expr {
     #[test]
     fn inference_var_tag_union_ext() {
         // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
-        // See https://github.com/rtfeldman/roc/issues/2053
+        // See https://github.com/roc-lang/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -5491,7 +5491,7 @@ mod solve_expr {
         )
     }
 
-    // https://github.com/rtfeldman/roc/issues/2379
+    // https://github.com/roc-lang/roc/issues/2379
     #[test]
     fn copy_vars_referencing_copied_vars() {
         infer_eq_without_problem(
@@ -5866,7 +5866,7 @@ mod solve_expr {
     }
 
     #[test]
-    // https://github.com/rtfeldman/roc/issues/2702
+    // https://github.com/roc-lang/roc/issues/2702
     fn tag_inclusion_behind_opaque() {
         infer_eq_without_problem(
             indoc!(

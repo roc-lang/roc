@@ -1,7 +1,7 @@
 # Dev Backend
 
 The dev backend is focused on generating decent binaries extremely fast.
-It goes from Roc's [mono ir](https://github.com/rtfeldman/roc/blob/trunk/compiler/mono/src/ir.rs) to an object file ready to be linked.
+It goes from Roc's [mono ir](https://github.com/roc-lang/roc/blob/trunk/compiler/mono/src/ir.rs) to an object file ready to be linked.
 
 ## General Process
 
@@ -22,14 +22,14 @@ rust should be abled compile each specific target (`linux-arm`, `darwin-x86_64`,
 
 ### Backend
 
-[Backend](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/lib.rs) is the core abstraction.
+[Backend](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/lib.rs) is the core abstraction.
 It understands Roc's mono ir and some high level ideas about the generation process.
 The main job of Backend is to do high level optimizatons (like lazy literal loading) and parse the mono ir.
 Every target specific backend must implement this trait.
 
 ### Backend64Bit
 
-[Backend64Bit](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is more or less what it sounds like.
+[Backend64Bit](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is more or less what it sounds like.
 It is the backend that understands 64 bit architectures.
 Currently it is the only backend implementation, but a 32 bit implementation will probably come in the future.
 This backend understands that the unit of data movement is 64 bit.
@@ -44,39 +44,39 @@ Backend64Bit is generic over these types instead of containing these types withi
 
 ### Assembler
 
-[Assembler](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the trait for generating assembly bytes.
+[Assembler](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the trait for generating assembly bytes.
 It defines a set of RISC-like assembly calls that must be implemented for each architecture.
 A lot of these calls may not map one to one with actual assembly instructions for each architecture.
 Instead, they are a general abstraction over functionality shared between all architectures.
 This will grow regularly as more Roc builtins are added.
-Here are example implementations for [arm](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/aarch64.rs) and [x86_64](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/x86_64.rs).
+Here are example implementations for [arm](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/aarch64.rs) and [x86_64](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/x86_64.rs).
 
 ### CallConv
 
-[CallConv](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the abstraction over calling conventions.
+[CallConv](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the abstraction over calling conventions.
 It deals with register and stack specific information related to passing and returning arguments.
-Here are example implementations for [arm](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/aarch64.rs) and [x86_64](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/x86_64.rs).
+Here are example implementations for [arm](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/aarch64.rs) and [x86_64](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/x86_64.rs).
 
 ## Adding New Features
 
 Adding a new builtin to the dev backend can be pretty simple.
-Here is [an example](https://github.com/rtfeldman/roc/pull/893/files) of adding `Num.Sub`.
+Here is [an example](https://github.com/roc-lang/roc/pull/893/files) of adding `Num.Sub`.
 
 This is the general procedure I follow with some helpful links:
 
 1. Find a feature that is just n+1.
    For example, since we already have integers, adding a builtin that functions on them should be n+1.
    On the other hand, since we don't yet have booleans/conditionals, adding if statements may not yet be n+1.
-   A good place to look for missing features is in the test files for generation in [test_gen](https://github.com/rtfeldman/roc/tree/trunk/compiler/test_gen). Any test that is not enabled for the `gen-dev` feature still needs to be added to the dev backend. Eventually all features should be enabled for the dev backend.
+   A good place to look for missing features is in the test files for generation in [test_gen](https://github.com/roc-lang/roc/tree/trunk/compiler/test_gen). Any test that is not enabled for the `gen-dev` feature still needs to be added to the dev backend. Eventually all features should be enabled for the dev backend.
 1. Pick/write the simplest test case you can find for the new feature.
    Just add `feature = "gen-dev"` to the `cfg` line for the test case.
-1. Uncomment the code to print out procedures [from here](https://github.com/rtfeldman/roc/blob/b03ed18553569314a420d5bf1fb0ead4b6b5ecda/compiler/test_gen/src/helpers/dev.rs#L76) and run the test.
+1. Uncomment the code to print out procedures [from here](https://github.com/roc-lang/roc/blob/b03ed18553569314a420d5bf1fb0ead4b6b5ecda/compiler/test_gen/src/helpers/dev.rs#L76) and run the test.
    It should fail and print out the mono ir for this test case.
    Seeing the actual mono ir tends to be very helpful for complex additions.
-1. Generally it will fail in one of the match statements in the [Backend](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/lib.rs) trait.
+1. Generally it will fail in one of the match statements in the [Backend](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/lib.rs) trait.
    Add the correct pattern matching and likely new function for your new builtin.
    This will break the compile until you add the same function to places that implement the trait,
-   like [Backend64Bit](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs).
+   like [Backend64Bit](https://github.com/roc-lang/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs).
 1. Keep following the chain down.
    To implement the function in Backend64Bit, you may need to add new assembly calls.
    Feel free to ignore backends that aren't x86_64 for now and just add `unimplemented!`.

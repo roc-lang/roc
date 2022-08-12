@@ -19,8 +19,8 @@ bumpalo = {version = "3.8.0", features = ["collections"]}
 const_format = { version = "0.2.23", features = ["const_generics"] }
 inkwell = {path = "../vendor/inkwell"}
 libloading = "0.7.1"
-rustyline = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
-rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
+rustyline = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
+rustyline-derive = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
 target-lexicon = "0.12.2"
 
 roc_build = {path = "../compiler/build"}

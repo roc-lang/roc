@@ -3113,7 +3113,7 @@ fn adjust_rank_content(
                     // inside a lambda set but not on the left or right of an arrow, and records should not
                     // force de-generalization in such cases.
                     //
-                    // See https://github.com/rtfeldman/roc/issues/3641 for a longer discussion and
+                    // See https://github.com/roc-lang/roc/issues/3641 for a longer discussion and
                     // example.
                     group_rank
                 }

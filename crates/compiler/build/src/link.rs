@@ -961,7 +961,7 @@ fn link_linux(
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args(&[
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
             "-lm",
@@ -1044,7 +1044,7 @@ fn link_macos(
     }
 
     ld_command.args(&[
-        // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+        // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
         "-lresolv",
@@ -1069,7 +1069,7 @@ fn link_macos(
         "QuartzCore",
         // "-lrt", // TODO shouldn't we need this?
         // "-lc_nonshared", // TODO shouldn't we need this?
-        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/roc-lang/roc/pull/554#discussion_r496370840
         "-framework",
         "Security",
         // Output

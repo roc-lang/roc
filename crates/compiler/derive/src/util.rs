@@ -130,7 +130,7 @@ impl Env<'_> {
                 // we only expect `bar` to polymorphic at this stage!
                 //
                 // TODO: it would be better if `unify` could prune these for us. See also
-                // https://github.com/rtfeldman/roc/issues/3207; that is a blocker for this TODO.
+                // https://github.com/roc-lang/roc/issues/3207; that is a blocker for this TODO.
                 #[cfg(debug_assertions)]
                 {
                     for (spec_var, lambda_sets) in _lambda_sets_to_specialize.drain() {

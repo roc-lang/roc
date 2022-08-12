@@ -3567,7 +3567,7 @@ fn to_float_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2696
+// https://github.com/roc-lang/roc/issues/2696
 fn upcast_of_int_is_zext() {
     assert_evals_to!(
         indoc!(
@@ -3582,7 +3582,7 @@ fn upcast_of_int_is_zext() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2696
+// https://github.com/roc-lang/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
         indoc!(

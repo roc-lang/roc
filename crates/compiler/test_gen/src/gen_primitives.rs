@@ -2643,12 +2643,12 @@ fn pattern_match_unit_tag() {
     );
 }
 
-// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+// see for why this is disabled on wasm32 https://github.com/roc-lang/roc/issues/1687
 #[cfg(not(feature = "gen-llvm-wasm"))]
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mirror_llvm_alignment_padding() {
-    // see https://github.com/rtfeldman/roc/issues/1569
+    // see https://github.com/roc-lang/roc/issues/1569
     assert_evals_to!(
         indoc!(
             r#"
@@ -2781,7 +2781,7 @@ fn lambda_set_enum_byte_byte() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_until() {
-    // see https://github.com/rtfeldman/roc/issues/1576
+    // see https://github.com/roc-lang/roc/issues/1576
     assert_evals_to!(
         indoc!(
             r#"
@@ -2807,7 +2807,7 @@ fn list_walk_until() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_with_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2835,7 +2835,7 @@ fn int_literal_not_specialized_with_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_no_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2862,7 +2862,7 @@ fn int_literal_not_specialized_no_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unresolved_tvar_when_capture_is_unused() {
-    // see https://github.com/rtfeldman/roc/issues/1585
+    // see https://github.com/roc-lang/roc/issues/1585
     assert_evals_to!(
         indoc!(
             r#"
@@ -2908,7 +2908,7 @@ fn value_not_exposed_hits_panic() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2934,7 +2934,7 @@ fn mix_function_and_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure_level_of_indirection() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2960,7 +2960,7 @@ fn mix_function_and_closure_level_of_indirection() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     // the distinction is actually important, dropping that info means some functions just get
     // skipped
     assert_evals_to!(
@@ -3422,7 +3422,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_conslist() {
-    // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
+    // this had an RC problem, https://github.com/roc-lang/roc/issues/2968
     assert_evals_to!(
         indoc!(
             r#"

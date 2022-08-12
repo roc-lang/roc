@@ -1005,7 +1005,7 @@ fn unify_lambda_set<M: MetaCollector>(
         FlexVar(_) => {
             if M::UNIFYING_SPECIALIZATION {
                 // TODO: It appears that this can happen in well-typed, reasonable programs, but it's
-                // open question as to why! See also https://github.com/rtfeldman/roc/issues/3163.
+                // open question as to why! See also https://github.com/roc-lang/roc/issues/3163.
                 let zero_lambda_set = LambdaSet {
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
@@ -1209,7 +1209,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                             // Lambda sets are effectively tags under another name, and their usage can also result
                             // in the arguments of a lambda name being recursive. It very well may happen that
                             // during unification, a lambda set previously marked as not recursive becomes
-                            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
+                            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/roc-lang/roc/pull/2307.
                             //
                             // Like with tag unions, if it has, we'll always pass through this branch. So, take
                             // this opportunity to promote the lambda set to recursive if need be.

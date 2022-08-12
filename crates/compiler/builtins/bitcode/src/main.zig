@@ -182,7 +182,7 @@ comptime {
 
 // Utils continued - SJLJ
 // For tests (in particular test_gen), roc_panic is implemented in terms of
-// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/rtfeldman/roc/issues/2965),
+// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),
 // so instead we ask Zig to please provide implementations for us, which is does
 // (seemingly via musl).
 pub extern fn setjmp([*c]c_int) c_int;

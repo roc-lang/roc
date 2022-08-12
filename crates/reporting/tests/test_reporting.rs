@@ -552,7 +552,7 @@ mod test_reporting {
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unrecognized_name,
         indoc!(
             r#"
@@ -5245,7 +5245,7 @@ mod test_reporting {
     "###
     );
 
-    // https://github.com/rtfeldman/roc/issues/1714
+    // https://github.com/roc-lang/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,
             indoc!(
@@ -7570,7 +7570,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
@@ -8843,7 +8843,7 @@ All branches in an `if` must have the same type!
         "#
     );
 
-    // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+    // from https://github.com/roc-lang/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
     // There was a bug where this reported UnusedArgument("val")
     // since it was used only in the returned function only.
     //
@@ -9123,7 +9123,7 @@ All branches in an `if` must have the same type!
             "#
         ),
         // TODO: this error message is quite unfortunate. We should remove the duplication, and
-        // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
+        // also support regions that point to things in other modules. See also https://github.com/roc-lang/roc/issues/3056.
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 

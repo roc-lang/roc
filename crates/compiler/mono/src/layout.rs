@@ -263,7 +263,7 @@ pub enum Layout<'a> {
         /// so keep a hash of the record order for disambiguation. This still of course may result
         /// in collisions, but it's unlikely.
         ///
-        /// See also https://github.com/rtfeldman/roc/issues/2535.
+        /// See also https://github.com/roc-lang/roc/issues/2535.
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
@@ -731,7 +731,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
 /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
 /// between such differences when constructing closure capture data.
 ///
-/// See also https://github.com/rtfeldman/roc/issues/3336.
+/// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
 
@@ -1139,7 +1139,7 @@ impl<'a> LambdaSet<'a> {
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
-                // See also https://github.com/rtfeldman/roc/issues/3163.
+                // See also https://github.com/roc-lang/roc/issues/3163.
                 Ok(LambdaSet {
                     set: &[],
                     representation: arena.alloc(Layout::UNIT),
@@ -1239,7 +1239,7 @@ enum ResolvedLambdaSet {
         OptVariable,
     ),
     /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
-    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    /// compiler. See https://github.com/roc-lang/roc/issues/3163.
     Unbound,
 }
 
