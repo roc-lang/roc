@@ -414,7 +414,7 @@ async fn create_device(
             })
             .await
             .expect(r#"Request adapter
-            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/roc-lang/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#editor
             "#);
 
     let color_format = surface.get_preferred_format(&adapter).unwrap();
