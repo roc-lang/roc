@@ -952,3 +952,26 @@ fn encode_then_decode_list_of_lists_of_strings() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm"), // currently fails on gen-wasm
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
+#[ignore]
+fn decode_record_two_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok { first, second } -> Str.concat first second
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("ab  "),
+        RocStr
+    )
+}

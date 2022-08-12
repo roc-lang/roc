@@ -1922,3 +1922,22 @@ fn issue_3669() {
         "#
     )
 }
+
+#[mono_test]
+#[ignore]
+fn decode_record_two_fields() {
+    indoc!(
+        r#"
+        app "helloWorld"
+            imports [Decode, Json]
+            provides [main] to "./platform"
+
+        main =
+            when Str.toUtf8 "{\"first\":\"ab\",\"second\":[\"cd\",\"ef\"]}" |> Decode.decodeWith Decode.decoder Json.fromUtf8 is
+                {result, rest: _} ->
+                    when result is
+                        Ok { first, second } -> Str.concat first (Str.joinWith second ",")
+                        Err _ -> "<bad>"
+        "#
+    )
+}

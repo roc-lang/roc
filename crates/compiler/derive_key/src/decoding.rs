@@ -41,9 +41,9 @@ impl FlatDecodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    check_empty_ext_var(subs, ext, |ext| {
-                        matches!(ext, Content::Structure(FlatType::EmptyRecord))
-                    })?;
+                    //check_empty_ext_var(subs, ext, |ext| {
+                    //    matches!(ext, Content::Structure(FlatType::EmptyRecord))
+                    //})?;
 
                     if subs
                         .get_subs_slice(fields.record_fields())
