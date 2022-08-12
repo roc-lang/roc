@@ -25,7 +25,6 @@ mod cli_run {
     use strum_macros::EnumIter;
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const VALGRIND_FLAG: &str = concatcp!("--", roc_cli::FLAG_VALGRIND);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
     const PRECOMPILED_HOST: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
@@ -137,13 +136,15 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
+        // valgrind does not yet support avx512 instructions, see #1963.
+        // we can't enable this only when testing with valgrind because of host re-use between tests
+        if is_x86_feature_detected!("avx512f") {
+            std::env::set_var("NO_AVX512", "1");
+        }
+
         for cli_mode in CliMode::iter() {
             let flags = {
                 let mut vec = flags.to_vec();
-
-                if use_valgrind {
-                    vec.push(VALGRIND_FLAG);
-                }
 
                 vec.push("--max-threads=1");
 
