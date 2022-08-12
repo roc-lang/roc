@@ -46,7 +46,6 @@ pub fn build_file<'a>(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     precompiled: bool,
-    target_valgrind: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
@@ -152,7 +151,6 @@ pub fn build_file<'a>(
         target,
         exposed_values,
         exposed_closure_types,
-        target_valgrind,
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
@@ -377,7 +375,6 @@ fn spawn_rebuild_thread(
     target: &Triple,
     exported_symbols: Vec<String>,
     exported_closure_types: Vec<String>,
-    target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -395,7 +392,6 @@ fn spawn_rebuild_thread(
                         &thread_local_target,
                         host_input_path.as_path(),
                         None,
-                        target_valgrind,
                     );
 
                     preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
@@ -408,7 +404,6 @@ fn spawn_rebuild_thread(
                         preprocessed_host_path.as_path(),
                         exported_symbols,
                         exported_closure_types,
-                        target_valgrind,
                     );
                 }
                 LinkingStrategy::Legacy => {
@@ -417,7 +412,6 @@ fn spawn_rebuild_thread(
                         &thread_local_target,
                         host_input_path.as_path(),
                         None,
-                        target_valgrind,
                     );
                 }
             }

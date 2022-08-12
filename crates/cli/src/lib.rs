@@ -57,7 +57,6 @@ pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
-pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -94,11 +93,6 @@ pub fn build_app<'a>() -> Command<'a> {
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
         .help("Store LLVM debug information in the generated program.")
-        .required(false);
-
-    let flag_valgrind = Arg::new(FLAG_VALGRIND)
-        .long(FLAG_VALGRIND)
-        .help("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
@@ -152,7 +146,6 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
             .arg(flag_wasm_stack_size_kb.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
@@ -192,7 +185,6 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -215,7 +207,6 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
@@ -282,7 +273,6 @@ pub fn build_app<'a>() -> Command<'a> {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_precompiled)
-        .arg(flag_valgrind)
         .arg(roc_file_to_run.required(false))
         .arg(args_for_app);
 
@@ -531,7 +521,6 @@ pub fn build(
         .and_then(|s| s.parse::<u32>().ok())
         .map(|x| x * 1024);
 
-    let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -542,7 +531,6 @@ pub fn build(
         link_type,
         linking_strategy,
         precompiled,
-        target_valgrind,
         threading,
         wasm_dev_stack_bytes,
     );
