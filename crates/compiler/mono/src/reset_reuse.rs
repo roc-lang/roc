@@ -216,6 +216,31 @@ fn function_s<'a, 'i>(
             }
         }
 
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            let continuation: &Stmt = *remainder;
+            let new_continuation = function_s(env, w, c, continuation);
+
+            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
+                stmt
+            } else {
+                let new_refcounting = ExpectFx {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: new_continuation,
+                };
+
+                arena.alloc(new_refcounting)
+            }
+        }
+
         Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
     }
 }
@@ -446,6 +471,39 @@ fn function_d_main<'a, 'i>(
                 (arena.alloc(refcounting), found)
             }
         }
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            let (b, found) = function_d_main(env, x, c, remainder);
+
+            if found || *condition != x {
+                let refcounting = ExpectFx {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                };
+
+                (arena.alloc(refcounting), found)
+            } else {
+                let b = try_function_s(env, x, c, b);
+
+                let refcounting = ExpectFx {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                };
+
+                (arena.alloc(refcounting), found)
+            }
+        }
         Join {
             id,
             parameters,
@@ -618,6 +676,26 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(expect)
         }
 
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            let b = function_r(env, remainder);
+
+            let expect = ExpectFx {
+                condition: *condition,
+                region: *region,
+                lookups,
+                layouts,
+                remainder: b,
+            };
+
+            arena.alloc(expect)
+        }
+
         Ret(_) | Jump(_, _) | RuntimeError(_) => {
             // terminals
             stmt
@@ -649,6 +727,11 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
             modify_rc.get_symbol() == needle || has_live_var(jp_live_vars, cont, needle)
         }
         Expect {
+            condition,
+            remainder,
+            ..
+        } => *condition == needle || has_live_var(jp_live_vars, remainder, needle),
+        ExpectFx {
             condition,
             remainder,
             ..

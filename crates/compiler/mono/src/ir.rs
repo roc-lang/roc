@@ -1430,6 +1430,14 @@ pub enum Stmt<'a> {
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
+    ExpectFx {
+        condition: Symbol,
+        region: Region,
+        lookups: &'a [Symbol],
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -2012,6 +2020,17 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
+                .append(symbol_to_doc(alloc, *condition))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc)),
+
+            ExpectFx {
+                condition,
+                remainder,
+                ..
+            } => alloc
+                .text("expect-fx ")
                 .append(symbol_to_doc(alloc, *condition))
                 .append(";")
                 .append(alloc.hardline())
@@ -6372,6 +6391,32 @@ fn substitute_in_stmt_help<'a>(
             );
 
             let expect = Expect {
+                condition: substitute(subs, *condition).unwrap_or(*condition),
+                region: *region,
+                lookups: new_lookups.into_bump_slice(),
+                layouts,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
+        }
+
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let new_lookups = Vec::from_iter_in(
+                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
+                arena,
+            );
+
+            let expect = ExpectFx {
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),

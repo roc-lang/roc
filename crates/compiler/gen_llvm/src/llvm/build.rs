@@ -2836,6 +2836,78 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             )
         }
 
+        ExpectFx {
+            condition: cond_symbol,
+            region,
+            lookups,
+            layouts: _,
+            remainder,
+        } => {
+            let bd = env.builder;
+            let context = env.context;
+
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                cond.into_int_value(),
+                context.bool_type().const_int(1, false),
+                "is_true",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            if env.mode.runs_expects() {
+                bd.position_at_end(throw_block);
+
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
+                        clone_to_shared_memory(
+                            env,
+                            scope,
+                            layout_ids,
+                            *cond_symbol,
+                            *region,
+                            lookups,
+                        );
+
+                        // NOTE: signals to the parent process that an expect failed
+                        if env.mode.runs_expects_in_separate_process() {
+                            let func = env
+                                .module
+                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+                                .unwrap();
+
+                            bd.build_call(func, &[], "call_expect_finalize_failed");
+                        }
+
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    roc_target::PtrWidth::Bytes4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                }
+            } else {
+                bd.position_at_end(throw_block);
+                bd.build_unconditional_branch(then_block);
+            }
+
+            bd.position_at_end(then_block);
+
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            )
+        }
+
         RuntimeError(error_msg) => {
             throw_exception(env, error_msg);
 
