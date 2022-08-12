@@ -40,14 +40,42 @@ pub(crate) fn derive_decoder(
     }
 }
 
+// theDecoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
+// theDecoder =
+//     initialState : {f0: Result a [NoField], f1: Result b [NoField]}
+//     initialState = {f0: Err NoField, f1: Err NoField}
+//
+//     stepField = \state, field ->
+//         when field is
+//             "first" ->
+//                 Keep (Decode.custom \bytes, fmt ->
+//                     when Decode.decodeWith bytes Decode.decoder fmt is
+//                         {result, rest} ->
+//                             {result: Result.map result \val -> {state & f0: Ok val}, rest})
+//             "second" ->
+//                 Keep (Decode.custom \bytes, fmt ->
+//                     when Decode.decodeWith bytes Decode.decoder fmt is
+//                         {result, rest} ->
+//                             {result: Result.map result \val -> {state & f1: Ok val}, rest})
+//             _ -> Skip
+//
+//     finalizer = \{f0, f1} ->
+//         when f0 is
+//             Ok first ->
+//                 when f1 is
+//                     Ok second -> Ok {first, second}
+//                     Err NoField -> Err TooShort
+//             Err NoField -> Err TooShort
+//
+//     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
     let mut field_vars = Vec::with_capacity(fields.len());
     let mut result_field_vars = Vec::with_capacity(fields.len());
     let (record_var, initial_state) =
         decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
-    let (finalizer, decode_err_var) =
+    let (finalizer, finalizer_var, decode_err_var) =
         decoder_finalizer(env, record_var, &fields, &field_vars, &result_field_vars);
-    let step_field = decoder_step_field(
+    let (step_field, step_var) = decoder_step_field(
         env,
         fields,
         &field_vars,
@@ -55,81 +83,125 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
         record_var,
         decode_err_var,
     );
-    let expr_var = Variable::NULL; // TODO type of entire expression, namely something like this:
-                                   // Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
+
+    let record_decoder_var = env.subs.fresh_unnamed_flex_var();
+    let decode_record_lambda_set = env.subs.fresh_unnamed_flex_var();
+    let decode_record_var = env.import_builtin_symbol_var(Symbol::DECODE_RECORD);
+    let this_decode_record_var = {
+        let flat_type = FlatType::Func(
+            SubsSlice::insert_into_subs(env.subs, [record_var, step_var, finalizer_var]),
+            decode_record_lambda_set,
+            record_decoder_var,
+        );
+
+        synth_var(env.subs, Content::Structure(flat_type))
+    };
+
+    env.unify(decode_record_var, this_decode_record_var);
 
     // Decode.record initialState stepField finalizer
     let call_decode_record = Expr::Call(
         Box::new((
-            Variable::NULL, // TODO
-            Loc::at_zero(Expr::Var(Symbol::DECODE_RECORD)),
-            Variable::NULL, // TODO
-            Variable::NULL, // TODO
+            this_decode_record_var,
+            Loc::at_zero(Expr::AbilityMember(
+                Symbol::DECODE_RECORD,
+                None,
+                this_decode_record_var,
+            )),
+            decode_record_lambda_set,
+            record_decoder_var,
         )),
         vec![
-            (
-                Variable::NULL, // TODO
-                Loc::at_zero(initial_state),
-            ),
-            (
-                Variable::NULL, // TODO
-                Loc::at_zero(step_field),
-            ),
-            (
-                Variable::NULL, // TODO
-                Loc::at_zero(finalizer),
-            ),
+            (record_var, Loc::at_zero(initial_state)),
+            (step_var, Loc::at_zero(step_field)),
+            (finalizer_var, Loc::at_zero(finalizer)),
         ],
         CalledVia::Space,
     );
+
+    let fmt_var = env.subs.fresh_unnamed_flex_var();
+    let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
 
     // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
     let call_decode_custom = {
         let bytes_arg_symbol = env.new_symbol("bytes");
         let fmt_arg_symbol = env.new_symbol("fmt");
 
+        let decode_with_ret_var = env.subs.fresh_unnamed_flex_var();
+        let decode_with_lambda_set = env.subs.fresh_unnamed_flex_var();
+        let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
+        let this_decode_with_var = {
+            let flat_type = FlatType::Func(
+                SubsSlice::insert_into_subs(
+                    env.subs,
+                    [Variable::LIST_U8, record_decoder_var, fmt_var],
+                ),
+                decode_with_lambda_set,
+                decode_with_ret_var,
+            );
+
+            synth_var(env.subs, Content::Structure(flat_type))
+        };
+
+        env.unify(decode_with_var, this_decode_with_var);
+
         // Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
         let callback_body = Expr::Call(
             Box::new((
-                Variable::NULL, // TODO
+                this_decode_with_var,
                 Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
-                Variable::NULL, // TODO
-                Variable::NULL, // TODO
+                decode_with_lambda_set,
+                decode_with_ret_var,
             )),
             vec![
-                (
-                    Variable::NULL, // TODO
-                    Loc::at_zero(Expr::Var(bytes_arg_symbol)),
-                ),
-                (
-                    Variable::NULL, // TODO
-                    Loc::at_zero(call_decode_record),
-                ),
-                (
-                    Variable::NULL, // TODO
-                    Loc::at_zero(Expr::Var(fmt_arg_symbol)),
-                ),
+                (Variable::LIST_U8, Loc::at_zero(Expr::Var(bytes_arg_symbol))),
+                (record_decoder_var, Loc::at_zero(call_decode_record)),
+                (fmt_var, Loc::at_zero(Expr::Var(fmt_arg_symbol))),
             ],
             CalledVia::Space,
         );
 
+        let callback_symbol = env.unique_symbol();
+        let callback_var = env.subs.fresh_unnamed_flex_var();
+        let callback_lambda_set_var = {
+            let lambda_set = LambdaSet {
+                solved: UnionLambdas::tag_without_arguments(env.subs, callback_symbol),
+                recursion_var: OptVariable::NONE,
+                unspecialized: Default::default(),
+                ambient_function: callback_var,
+            };
+
+            synth_var(env.subs, Content::LambdaSet(lambda_set))
+        };
+
+        {
+            let flat_type = FlatType::Func(
+                SubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, fmt_var]),
+                callback_lambda_set_var,
+                decode_with_ret_var,
+            );
+
+            env.subs
+                .set_content(callback_var, Content::Structure(flat_type));
+        }
+
         // \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
         let custom_callback = {
             Expr::Closure(ClosureData {
-                function_type: Variable::NULL, // TODO
-                closure_type: Variable::NULL,  // TODO
-                return_type: Variable::NULL,   // TODO
-                name: env.unique_symbol(),
+                function_type: callback_var,
+                closure_type: callback_lambda_set_var,
+                return_type: decode_with_ret_var,
+                name: callback_symbol,
                 captured_symbols: Vec::new(),
                 recursive: Recursive::NotRecursive,
                 arguments: vec![
                     (
-                        Variable::NULL, // TODO
+                        Variable::LIST_U8,
                         AnnotatedMark::known_exhaustive(),
                         Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
                     ),
                     (
-                        Variable::NULL, // TODO
+                        fmt_var,
                         AnnotatedMark::known_exhaustive(),
                         Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
                     ),
@@ -138,23 +210,34 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
             })
         };
 
+        let decode_custom_lambda_set = env.subs.fresh_unnamed_flex_var();
+        let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
+        let this_decode_custom_var = {
+            let flat_type = FlatType::Func(
+                SubsSlice::insert_into_subs(env.subs, [callback_var]),
+                decode_custom_lambda_set,
+                decode_custom_ret_var,
+            );
+
+            synth_var(env.subs, Content::Structure(flat_type))
+        };
+
+        env.unify(decode_custom_var, this_decode_custom_var);
+
         // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
         Expr::Call(
             Box::new((
-                Variable::NULL, // TODO
+                this_decode_custom_var,
                 Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
-                Variable::NULL, // TODO
-                Variable::NULL, // TODO
+                decode_custom_lambda_set,
+                decode_custom_ret_var,
             )),
-            vec![(
-                Variable::NULL, // TODO
-                Loc::at_zero(custom_callback),
-            )],
+            vec![(callback_var, Loc::at_zero(custom_callback))],
             CalledVia::Space,
         )
     };
 
-    (call_decode_custom, expr_var)
+    (call_decode_custom, decode_custom_ret_var)
 }
 
 // Example:
@@ -187,7 +270,7 @@ fn decoder_step_field(
     result_field_vars: &[Variable],
     state_record_var: Variable,
     decode_err_var: Variable,
-) -> Expr {
+) -> (Expr, Variable) {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let field_arg_symbol = env.new_symbol("field");
 
@@ -690,7 +773,7 @@ fn decoder_step_field(
         )
     };
 
-    Expr::Closure(ClosureData {
+    let expr = Expr::Closure(ClosureData {
         function_type,
         closure_type,
         return_type: keep_or_skip_var,
@@ -710,7 +793,9 @@ fn decoder_step_field(
             ),
         ],
         loc_body: Box::new(Loc::at_zero(body)),
-    })
+    });
+
+    (expr, function_type)
 }
 
 // Example:
@@ -727,7 +812,7 @@ fn decoder_finalizer(
     fields: &[Lowercase],
     field_vars: &[Variable],
     result_field_vars: &[Variable],
-) -> (Expr, Variable) {
+) -> (Expr, Variable, Variable) {
     let state_arg_symbol = env.new_symbol("stateRecord");
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
@@ -890,7 +975,7 @@ fn decoder_finalizer(
         loc_body: Box::new(Loc::at_zero(body)),
     });
 
-    (finalizer, decode_err_var)
+    (finalizer, function_var, decode_err_var)
 }
 
 // Example:
