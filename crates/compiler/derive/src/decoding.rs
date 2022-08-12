@@ -157,29 +157,29 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
     (call_decode_custom, expr_var)
 }
 
-/// Example:
-/// stepField = \state, field ->
-///     when field is
-///         "first" ->
-///             Keep (Decode.custom \bytes, fmt ->
-///                 # Uses a single-branch `when` because `let` is more expensive to monomorphize
-///                 # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-///                 when Decode.decodeWith bytes Decode.decoder fmt is
-///                     rec ->
-///                         {
-///                             rest: rec.rest,
-///                             result: when rec.result is
-///                                 Ok val -> Ok {state & first: Ok val},
-///                                 Err err -> Err err
-///                         }
-///             )
-///
-///         "second" -> # We actually use the first branch's structure, which is a desugared version of this
-///             Keep (Decode.custom \bytes, fmt ->
-///                 when Decode.decodeWith bytes Decode.decoder fmt is
-///                     {result, rest} ->
-///                         {result: Result.map result \val -> {state & second: Ok val}, rest})
-///         _ -> Skip
+// Example:
+// stepField = \state, field ->
+//     when field is
+//         "first" ->
+//             Keep (Decode.custom \bytes, fmt ->
+//                 # Uses a single-branch `when` because `let` is more expensive to monomorphize
+//                 # due to checks for polymorphic expressions, and `rec` would be polymorphic.
+//                 when Decode.decodeWith bytes Decode.decoder fmt is
+//                     rec ->
+//                         {
+//                             rest: rec.rest,
+//                             result: when rec.result is
+//                                 Ok val -> Ok {state & first: Ok val},
+//                                 Err err -> Err err
+//                         }
+//             )
+//
+//         "second" -> # We actually use the first branch's structure, which is a desugared version of this
+//             Keep (Decode.custom \bytes, fmt ->
+//                 when Decode.decodeWith bytes Decode.decoder fmt is
+//                     {result, rest} ->
+//                         {result: Result.map result \val -> {state & second: Ok val}, rest})
+//         _ -> Skip
 fn decoder_step_field(
     env: &mut Env,
     fields: Vec<Lowercase>,
@@ -647,14 +647,14 @@ fn decoder_step_field(
     })
 }
 
-/// Example:
-/// finalizer = \rec ->
-///     when rec.first is
-///         Ok first ->
-///             when f1 is
-///                 Ok second -> Ok {first, second}
-///                 Err NoField -> Err TooShort
-///         Err NoField -> Err TooShort
+// Example:
+// finalizer = \rec ->
+//     when rec.first is
+//         Ok first ->
+//             when f1 is
+//                 Ok second -> Ok {first, second}
+//                 Err NoField -> Err TooShort
+//         Err NoField -> Err TooShort
 fn decoder_finalizer(
     env: &mut Env,
     record_var: Variable,
@@ -827,9 +827,9 @@ fn decoder_finalizer(
     (finalizer, decode_err_var)
 }
 
-/// Example:
-/// initialState : {first: Result a [NoField], second: Result b [NoField]}
-/// initialState = {first: Err NoField, second: Err NoField}
+// Example:
+// initialState : {first: Result a [NoField], second: Result b [NoField]}
+// initialState = {first: Err NoField, second: Err NoField}
 fn decoder_initial_state(
     env: &mut Env<'_>,
     field_names: &[Lowercase],
