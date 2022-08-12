@@ -138,6 +138,7 @@ mod cli_run {
     ) {
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         if is_x86_feature_detected!("avx512f") {
             std::env::set_var("NO_AVX512", "1");
         }
