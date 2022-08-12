@@ -1,3 +1,5 @@
+use std::os::unix::process::parent_id;
+
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use inkwell::context::Context;
@@ -28,6 +30,24 @@ pub fn run_expects<W: std::io::Write>(
 
     for expect in expects.pure {
         let result = run_expect_pure(
+            writer,
+            render_target,
+            arena,
+            interns,
+            lib,
+            expectations,
+            shared_ptr,
+            expect,
+        )?;
+
+        match result {
+            true => passed += 1,
+            false => failed += 1,
+        }
+    }
+
+    for expect in expects.fx {
+        let result = run_expect_fx(
             writer,
             render_target,
             arena,
@@ -100,6 +120,100 @@ fn run_expect_pure<W: std::io::Write>(
         Ok(false)
     } else {
         Ok(true)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_expect_fx<W: std::io::Write>(
+    writer: &mut W,
+    render_target: RenderTarget,
+    arena: &Bump,
+    interns: &Interns,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    shared_ptr: *mut u8,
+    expect: ToplevelExpect<'_>,
+) -> std::io::Result<bool> {
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    match unsafe { libc::fork() } {
+        0 => unsafe {
+            // we are the child
+
+            use roc_gen_llvm::try_run_jit_function;
+
+            let sequence = ExpectSequence::new(shared_ptr.cast());
+
+            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+
+            if let Err(msg) = result {
+                panic!("roc panic {}", msg);
+            }
+
+            if sequence.count_failures() > 0 {
+                libc::kill(parent_id() as _, SIGUSR1);
+            }
+
+            std::process::exit(0)
+        },
+        -1 => {
+            // something failed
+
+            // Display a human-friendly error message
+            println!("Error {:?}", std::io::Error::last_os_error());
+
+            std::process::exit(1)
+        }
+        1.. => {
+            let mut has_failed = false;
+
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => {
+                        // done!
+                        return Ok(has_failed);
+                    }
+                    SIGUSR1 => {
+                        // this is the signal we use for an expect failure. Let's see what the child told us
+                        has_failed = true;
+
+                        let frame =
+                            ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
+                        let module_id = frame.module_id;
+
+                        let data = expectations.get_mut(&module_id).unwrap();
+                        let filename = data.path.to_owned();
+                        let source = std::fs::read_to_string(&data.path).unwrap();
+
+                        let renderer = Renderer::new(
+                            arena,
+                            interns,
+                            render_target,
+                            module_id,
+                            filename,
+                            &source,
+                        );
+
+                        render_expect_failure(
+                            writer,
+                            &renderer,
+                            arena,
+                            None,
+                            expectations,
+                            interns,
+                            shared_ptr,
+                            ExpectSequence::START_OFFSET,
+                        )?;
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+
+            Ok(true)
+        }
+        _ => unreachable!(),
     }
 }
 

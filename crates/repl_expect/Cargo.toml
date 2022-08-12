@@ -26,10 +26,11 @@ roc_build = { path = "../compiler/build" }
 
 libloading = "0.7.1"
 inkwell = { path = "../vendor/inkwell" }
+signal-hook = "0.3.14"
+libc = "0.2.106"
 
 [dev-dependencies]
 test_gen = { path = "../compiler/test_gen" }
-libc = "0.2.106"
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
 tempfile = "3.2.0"
 indoc = "1.0.3"
