@@ -71,16 +71,21 @@ pub(crate) fn derive_decoder(
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
     let mut field_vars = Vec::with_capacity(fields.len());
     let mut result_field_vars = Vec::with_capacity(fields.len());
-    let (record_var, initial_state) =
+    let (state_record_var, initial_state) =
         decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
-    let (finalizer, finalizer_var, decode_err_var) =
-        decoder_finalizer(env, record_var, &fields, &field_vars, &result_field_vars);
+    let (finalizer, finalizer_var, decode_err_var) = decoder_finalizer(
+        env,
+        state_record_var,
+        &fields,
+        &field_vars,
+        &result_field_vars,
+    );
     let (step_field, step_var) = decoder_step_field(
         env,
         fields,
         &field_vars,
         &result_field_vars,
-        record_var,
+        state_record_var,
         decode_err_var,
     );
 
@@ -89,7 +94,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
     let decode_record_var = env.import_builtin_symbol_var(Symbol::DECODE_RECORD);
     let this_decode_record_var = {
         let flat_type = FlatType::Func(
-            SubsSlice::insert_into_subs(env.subs, [record_var, step_var, finalizer_var]),
+            SubsSlice::insert_into_subs(env.subs, [state_record_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             record_decoder_var,
         );
@@ -112,7 +117,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
             record_decoder_var,
         )),
         vec![
-            (record_var, Loc::at_zero(initial_state)),
+            (state_record_var, Loc::at_zero(initial_state)),
             (step_var, Loc::at_zero(step_field)),
             (finalizer_var, Loc::at_zero(finalizer)),
         ],
@@ -808,7 +813,7 @@ fn decoder_step_field(
 //         Err NoField -> Err TooShort
 fn decoder_finalizer(
     env: &mut Env,
-    record_var: Variable,
+    state_record_var: Variable,
     fields: &[Lowercase],
     field_vars: &[Variable],
     result_field_vars: &[Variable],
@@ -868,9 +873,9 @@ fn decoder_finalizer(
 
         Expr::Tag {
             tag_union_var: return_type_var,
-            ext_var: Variable::EMPTY_TAG_UNION,
+            ext_var: env.subs.fresh_unnamed_flex_var(),
             name: "Ok".into(),
-            arguments: vec![(record_var, Loc::at_zero(done_record))],
+            arguments: vec![(done_record_var, Loc::at_zero(done_record))],
         }
     };
 
@@ -951,7 +956,7 @@ fn decoder_finalizer(
     };
     let closure_type = synth_var(env.subs, Content::LambdaSet(lambda_set));
     let flat_type = FlatType::Func(
-        SubsSlice::insert_into_subs(env.subs, [record_var]),
+        SubsSlice::insert_into_subs(env.subs, [state_record_var]),
         closure_type,
         return_type_var,
     );
@@ -968,7 +973,7 @@ fn decoder_finalizer(
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments: vec![(
-            record_var,
+            state_record_var,
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
         )],
@@ -1038,12 +1043,12 @@ fn decoder_initial_state(
         Variable::EMPTY_RECORD,
     );
 
-    let record_var = synth_var(subs, Content::Structure(flat_type));
+    let state_record_var = synth_var(subs, Content::Structure(flat_type));
 
     (
-        record_var,
+        state_record_var,
         Expr::Record {
-            record_var,
+            record_var: state_record_var,
             fields: initial_state_fields,
         },
     )
