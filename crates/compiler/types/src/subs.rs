@@ -2488,15 +2488,15 @@ pub type UnionLambdas = UnionLabels<Symbol>;
 impl UnionTags {
     pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
         let ok_tuple = {
-            let variables_slice = VariableSubsSlice::reserve_into_subs(subs, 1);
-            VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
 
             ("Ok".into(), variables_slice)
         };
 
         let err_tuple = {
-            let variables_slice = VariableSubsSlice::reserve_into_subs(subs, 1);
-            VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
 
             ("Err".into(), variables_slice)
         };
