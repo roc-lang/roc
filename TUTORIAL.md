@@ -1300,7 +1300,7 @@ calling a function named `line` which is exposed by a module named
 When we write `imports [pf.Stdout]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
-Since `pf` was the name we chose for the `examples/interactive/cli-platform/main.roc`
+Since `pf` was the name we chose for the `cli-platform`
 package (when we wrote `packages { pf: "examples/interactive/cli-platform/main.roc" }`),
 this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
