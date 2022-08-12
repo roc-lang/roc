@@ -646,7 +646,7 @@ fn decoder_step_field(
             degenerate: false,
         }],
         value: Loc::at_zero(Expr::Tag {
-            tag_union_var: Variable::NULL, // TODO
+            tag_union_var: keep_or_skip_var,
             ext_var: Variable::EMPTY_TAG_UNION,
             name: "Skip".into(),
             arguments: Vec::new(),
@@ -657,31 +657,54 @@ fn decoder_step_field(
 
     branches.push(default_branch);
 
+    // when field is
     let body = Expr::When {
         loc_cond: Box::new(Loc::at_zero(Expr::Var(field_arg_symbol))),
-        cond_var: Variable::NULL, // TODO
-        expr_var: Variable::NULL, // TODO
+        cond_var: Variable::STR,
+        expr_var: keep_or_skip_var,
         region: Region::zero(),
         branches,
-        branches_cond_var: Variable::NULL, // TODO
+        branches_cond_var: Variable::STR,
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
+    let step_field_closure = env.unique_symbol();
+    let function_type = env.subs.fresh_unnamed_flex_var();
+    let closure_type = {
+        let lambda_set = LambdaSet {
+            solved: UnionLambdas::tag_without_arguments(env.subs, step_field_closure),
+            recursion_var: OptVariable::NONE,
+            unspecialized: Default::default(),
+            ambient_function: function_type,
+        };
+
+        synth_var(env.subs, Content::LambdaSet(lambda_set))
+    };
+
+    {
+        let args_slice = SubsSlice::insert_into_subs(env.subs, [state_record_var, Variable::STR]);
+
+        env.subs.set_content(
+            function_type,
+            Content::Structure(FlatType::Func(args_slice, closure_type, keep_or_skip_var)),
+        )
+    };
+
     Expr::Closure(ClosureData {
-        function_type: Variable::NULL, // TODO
-        closure_type: Variable::NULL,  // TODO
-        return_type: Variable::NULL,   // TODO
-        name: env.unique_symbol(),
+        function_type,
+        closure_type,
+        return_type: keep_or_skip_var,
+        name: step_field_closure,
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments: vec![
             (
-                Variable::NULL, // TODO
+                state_record_var,
                 AnnotatedMark::known_exhaustive(),
                 Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
             ),
             (
-                Variable::NULL, // TODO
+                Variable::STR,
                 AnnotatedMark::known_exhaustive(),
                 Loc::at_zero(Pattern::Identifier(field_arg_symbol)),
             ),
@@ -1087,7 +1110,7 @@ fn decoder_list(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
         );
 
         // bytes, fmt -[[fn_name]]-> DecoderResult (List elem)
-        let args_slice = SubsSlice::insert_into_subs(env.subs, vec![bytes_var, fmt_var]);
+        let args_slice = SubsSlice::insert_into_subs(env.subs, [bytes_var, fmt_var]);
         env.subs.set_content(
             fn_var,
             Content::Structure(FlatType::Func(
