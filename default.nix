@@ -1,12 +1,12 @@
-{ }:
-# we only this file to release a nix package, use flake.nix for development
-let
-  rev = "541a3ca27c9a8220b46f4feb7dd8e94336a77f42"; # nixpkgs master
-  nixpkgs = builtins.fetchTarball {
+{ rev ? "541a3ca27c9a8220b46f4feb7dd8e94336a77f42", # nixpkgs master
+  nixpkgsSource ? builtins.fetchTarball {
     url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
     sha256 = "sha256:1mxv0zigm98pawf05kd4s8ipvk1pvvdsn1yh978c5an97kz0ck5w";
-  };
-  pkgs = import nixpkgs { };
+  },
+  pkgs ? import nixpkgsSource { },
+}:
+# we only this file to release a nix package, use flake.nix for development
+let
   rustPlatform = pkgs.rustPlatform;
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
