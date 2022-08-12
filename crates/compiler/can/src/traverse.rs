@@ -276,6 +276,19 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 Variable::NULL,
             );
         }
+        Expr::ExpectFx {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            // TODO: what type does an expect have? bool
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
+        }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
     }

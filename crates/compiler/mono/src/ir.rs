@@ -4077,6 +4077,7 @@ pub fn with_hole<'a>(
         EmptyRecord => let_empty_struct(assigned, hole),
 
         Expect { .. } => unreachable!("I think this is unreachable"),
+        ExpectFx { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,

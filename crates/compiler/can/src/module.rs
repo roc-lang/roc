@@ -872,6 +872,15 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_continuation.value, no_capture_symbols);
         }
 
+        ExpectFx {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            fix_values_captured_in_closure_expr(&mut loc_condition.value, no_capture_symbols);
+            fix_values_captured_in_closure_expr(&mut loc_continuation.value, no_capture_symbols);
+        }
+
         Closure(ClosureData {
             captured_symbols,
             name,
