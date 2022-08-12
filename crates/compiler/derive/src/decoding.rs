@@ -214,6 +214,8 @@ fn decoder_step_field(
         //                 }
         //     )
 
+        let this_custom_callback_var;
+        let custom_callback_ret_var;
         let custom_callback = {
             // \bytes, fmt ->
             //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
@@ -257,7 +259,7 @@ fn decoder_step_field(
 
                 synth_var(env.subs, Content::Structure(flat_type))
             };
-            let custom_callback_ret_var = {
+            custom_callback_ret_var = {
                 let rest_field = RecordField::Required(Variable::LIST_U8);
                 let result_field = RecordField::Required(when_expr_var);
                 let flat_type = FlatType::Record(
@@ -491,24 +493,50 @@ fn decoder_step_field(
                 }
             };
 
+            let custom_closure_symbol = env.unique_symbol();
+            this_custom_callback_var = env.subs.fresh_unnamed_flex_var();
+            let custom_callback_lambda_set_var = {
+                let content = Content::LambdaSet(LambdaSet {
+                    solved: UnionLambdas::insert_into_subs(
+                        env.subs,
+                        [(custom_closure_symbol, [state_record_var])],
+                    ),
+                    recursion_var: OptVariable::NONE,
+                    unspecialized: Default::default(),
+                    ambient_function: this_custom_callback_var,
+                });
+                let custom_callback_lambda_set_var = synth_var(env.subs, content);
+                let subs_slice =
+                    SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, fmt_arg_var]);
+
+                env.subs.set_content(
+                    this_custom_callback_var,
+                    Content::Structure(FlatType::Func(
+                        subs_slice,
+                        custom_callback_lambda_set_var,
+                        custom_callback_ret_var,
+                    )),
+                );
+
+                custom_callback_lambda_set_var
+            };
+
+            // \bytes, fmt -> …
             Expr::Closure(ClosureData {
-                function_type: Variable::NULL, // TODO
-                closure_type: Variable::NULL,  // TODO
-                return_type: Variable::NULL,   // TODO
-                name: env.unique_symbol(),
-                captured_symbols: vec![(
-                    state_arg_symbol,
-                    Variable::NULL, // TODO
-                )],
+                function_type: this_custom_callback_var,
+                closure_type: custom_callback_lambda_set_var,
+                return_type: custom_callback_ret_var,
+                name: custom_closure_symbol,
+                captured_symbols: vec![(state_arg_symbol, state_record_var)],
                 recursive: Recursive::NotRecursive,
                 arguments: vec![
                     (
-                        Variable::NULL, // TODO
+                        bytes_arg_var,
                         AnnotatedMark::known_exhaustive(),
                         Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
                     ),
                     (
-                        Variable::NULL, // TODO
+                        fmt_arg_var,
                         AnnotatedMark::known_exhaustive(),
                         Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
                     ),
@@ -518,28 +546,28 @@ fn decoder_step_field(
         };
 
         let decode_custom = {
-            // Decode.custom \bytes, fmt ->
-            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
-            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-            //     when Decode.decodeWith bytes Decode.decoder fmt is
-            //         rec ->
-            //             {
-            //                 rest: rec.rest,
-            //                 result: when rec.result is
-            //                     Ok val -> Ok {state & first: Ok val},
-            //                     Err err -> Err err
-            //             }
+            let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
+            let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
+            let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
+            let this_decode_custom_var = {
+                let subs_slice = SubsSlice::insert_into_subs(env.subs, [this_custom_callback_var]);
+                let flat_type =
+                    FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
+
+                synth_var(env.subs, Content::Structure(flat_type))
+            };
+
+            env.unify(decode_custom_var, this_decode_custom_var);
+
+            // Decode.custom \bytes, fmt -> …
             Expr::Call(
                 Box::new((
-                    Variable::NULL, // TODO
+                    this_decode_custom_var,
                     Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
-                    Variable::NULL, // TODO
-                    Variable::NULL, // TODO
+                    decode_custom_closure_var,
+                    decode_custom_ret_var,
                 )),
-                vec![(
-                    Variable::NULL, // TODO
-                    Loc::at_zero(custom_callback),
-                )],
+                vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
                 CalledVia::Space,
             )
         };
