@@ -141,6 +141,7 @@ mod test {
         const BUFFER_SIZE: usize = 1024;
 
         let mut shared_buffer = [0u8; BUFFER_SIZE];
+        let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
         let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
@@ -148,15 +149,15 @@ mod test {
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects(
+        let (_failed, _passed) = crate::run::run_expects_with_memory(
             &mut writer,
             RenderTarget::ColorTerminal,
             arena,
             interns,
             &lib,
             &mut expectations,
-            shared_buffer.as_mut_ptr(),
             expects,
+            &mut memory,
         )
         .unwrap();
 

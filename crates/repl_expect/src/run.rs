@@ -18,6 +18,67 @@ use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
 use target_lexicon::Triple;
 
+pub(crate) struct ExpectMemory<'a> {
+    ptr: *mut u8,
+    length: usize,
+    shm_name: Option<std::ffi::CString>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> ExpectMemory<'a> {
+    const SHM_SIZE: usize = 1024;
+
+    #[cfg(test)]
+    pub(crate) fn from_slice(slice: &mut [u8]) -> Self {
+        Self {
+            ptr: slice.as_mut_ptr(),
+            length: slice.len(),
+            shm_name: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn create_or_reuse_mmap(shm_name: &str) -> Self {
+        let cstring = std::ffi::CString::new(shm_name).unwrap();
+        Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
+    }
+
+    fn reuse_mmap(&mut self) -> Option<Self> {
+        let shm_name = self.shm_name.as_ref()?.clone();
+        Some(Self::mmap_help(shm_name, libc::O_RDWR))
+    }
+
+    fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
+        let ptr = unsafe {
+            let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
+
+            libc::ftruncate(shared_fd, Self::SHM_SIZE as _);
+
+            libc::mmap(
+                std::ptr::null_mut(),
+                Self::SHM_SIZE,
+                libc::PROT_WRITE | libc::PROT_READ,
+                libc::MAP_SHARED,
+                shared_fd,
+                0,
+            )
+        };
+
+        Self {
+            ptr: ptr.cast(),
+            length: Self::SHM_SIZE,
+            shm_name: Some(cstring),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn set_shared_buffer(&mut self, lib: &libloading::Library) {
+        let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+        let mut result = RocCallResult::default();
+        unsafe { set_shared_buffer((self.ptr, self.length), &mut result) };
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_expects<W: std::io::Write>(
     writer: &mut W,
@@ -26,8 +87,33 @@ pub fn run_expects<W: std::io::Write>(
     interns: &Interns,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    shared_ptr: *mut u8,
     expects: ExpectFunctions<'_>,
+) -> std::io::Result<(usize, usize)> {
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    run_expects_with_memory(
+        writer,
+        render_target,
+        arena,
+        interns,
+        lib,
+        expectations,
+        expects,
+        &mut memory,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_expects_with_memory<W: std::io::Write>(
+    writer: &mut W,
+    render_target: RenderTarget,
+    arena: &Bump,
+    interns: &Interns,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    expects: ExpectFunctions<'_>,
+    memory: &mut ExpectMemory,
 ) -> std::io::Result<(usize, usize)> {
     let mut failed = 0;
     let mut passed = 0;
@@ -40,7 +126,7 @@ pub fn run_expects<W: std::io::Write>(
             interns,
             lib,
             expectations,
-            shared_ptr,
+            memory,
             expect,
         )?;
 
@@ -50,6 +136,8 @@ pub fn run_expects<W: std::io::Write>(
         }
     }
 
+    memory.set_shared_buffer(lib);
+
     for expect in expects.pure {
         let result = run_expect_pure(
             writer,
@@ -58,7 +146,7 @@ pub fn run_expects<W: std::io::Write>(
             interns,
             lib,
             expectations,
-            shared_ptr,
+            memory,
             expect,
         )?;
 
@@ -79,16 +167,16 @@ fn run_expect_pure<W: std::io::Write>(
     interns: &Interns,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    shared_ptr: *mut u8,
+    shared_memory: &mut ExpectMemory,
     expect: ToplevelExpect<'_>,
 ) -> std::io::Result<bool> {
     use roc_gen_llvm::try_run_jit_function;
 
-    let sequence = ExpectSequence::new(shared_ptr.cast());
+    let sequence = ExpectSequence::new(shared_memory.ptr.cast());
 
     let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
-    let shared_memory_ptr: *const u8 = shared_ptr.cast();
+    let shared_memory_ptr: *const u8 = shared_memory.ptr.cast();
 
     if result.is_err() || sequence.count_failures() > 0 {
         let module_id = expect.symbol.module_id();
@@ -135,7 +223,7 @@ fn run_expect_fx<W: std::io::Write>(
     interns: &Interns,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    parent_shared_ptr: *mut u8,
+    parent_memory: &mut ExpectMemory,
     expect: ToplevelExpect<'_>,
 ) -> std::io::Result<bool> {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
@@ -148,33 +236,11 @@ fn run_expect_fx<W: std::io::Write>(
 
             use roc_gen_llvm::try_run_jit_function;
 
-            let shared_buffer_pointer = {
-                // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-                let name = "/roc_expect_buffer"; // format!("/roc_expect_buffer", std::process::id());
-                let cstring = std::ffi::CString::new(name).unwrap();
+            let mut child_memory = parent_memory.reuse_mmap().unwrap();
 
-                let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
+            let sequence = ExpectSequence::new(child_memory.ptr);
 
-                libc::ftruncate(shared_fd, 1024);
-
-                let shared_ptr = libc::mmap(
-                    std::ptr::null_mut(),
-                    1024,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    shared_fd,
-                    0,
-                );
-
-                shared_ptr.cast()
-            };
-
-            let sequence = ExpectSequence::new(shared_buffer_pointer);
-
-            let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
-            let mut result = RocCallResult::default();
-            let slice = (shared_buffer_pointer, 1024);
-            unsafe { set_shared_buffer(slice, &mut result) };
+            child_memory.set_shared_buffer(lib);
 
             let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
@@ -210,7 +276,7 @@ fn run_expect_fx<W: std::io::Write>(
                         has_succeeded = false;
 
                         let frame =
-                            ExpectFrame::at_offset(parent_shared_ptr, ExpectSequence::START_OFFSET);
+                            ExpectFrame::at_offset(parent_memory.ptr, ExpectSequence::START_OFFSET);
                         let module_id = frame.module_id;
 
                         let data = expectations.get_mut(&module_id).unwrap();
@@ -233,7 +299,7 @@ fn run_expect_fx<W: std::io::Write>(
                             None,
                             expectations,
                             interns,
-                            parent_shared_ptr,
+                            parent_memory.ptr,
                             ExpectSequence::START_OFFSET,
                         )?;
                     }
@@ -349,8 +415,8 @@ impl ExpectSequence {
     fn new(ptr: *mut u8) -> Self {
         unsafe {
             let ptr = ptr as *mut usize;
-            *ptr.add(Self::COUNT_INDEX) = 0;
-            *ptr.add(Self::OFFSET_INDEX) = Self::START_OFFSET;
+            std::ptr::write_unaligned(ptr.add(Self::COUNT_INDEX), 0);
+            std::ptr::write_unaligned(ptr.add(Self::OFFSET_INDEX), Self::START_OFFSET);
         }
 
         Self {
