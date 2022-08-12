@@ -71,11 +71,11 @@ pub(crate) fn derive_decoder(
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
     let mut field_vars = Vec::with_capacity(fields.len());
     let mut result_field_vars = Vec::with_capacity(fields.len());
-    let (state_record_var, initial_state) =
+    let (initial_state_var, initial_state) =
         decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
     let (finalizer, finalizer_var, decode_err_var) = decoder_finalizer(
         env,
-        state_record_var,
+        initial_state_var,
         &fields,
         &field_vars,
         &result_field_vars,
@@ -85,7 +85,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
         fields,
         &field_vars,
         &result_field_vars,
-        state_record_var,
+        initial_state_var,
         decode_err_var,
     );
 
@@ -94,7 +94,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
     let decode_record_var = env.import_builtin_symbol_var(Symbol::DECODE_RECORD);
     let this_decode_record_var = {
         let flat_type = FlatType::Func(
-            SubsSlice::insert_into_subs(env.subs, [state_record_var, step_var, finalizer_var]),
+            SubsSlice::insert_into_subs(env.subs, [initial_state_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             record_decoder_var,
         );
@@ -117,7 +117,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
             record_decoder_var,
         )),
         vec![
-            (state_record_var, Loc::at_zero(initial_state)),
+            (initial_state_var, Loc::at_zero(initial_state)),
             (step_var, Loc::at_zero(step_field)),
             (finalizer_var, Loc::at_zero(finalizer)),
         ],
