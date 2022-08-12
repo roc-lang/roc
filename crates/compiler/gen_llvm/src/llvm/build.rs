@@ -199,10 +199,6 @@ impl LlvmBackendMode {
             LlvmBackendMode::CliTest => true,
         }
     }
-
-    fn runs_expects_in_separate_process(self) -> bool {
-        false
-    }
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -2802,16 +2798,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             lookups,
                         );
 
-                        // NOTE: signals to the parent process that an expect failed
-                        if env.mode.runs_expects_in_separate_process() {
-                            let func = env
-                                .module
-                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
-                                .unwrap();
-
-                            bd.build_call(func, &[], "call_expect_finalize_failed");
-                        }
-
                         bd.build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
@@ -2873,16 +2859,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *region,
                             lookups,
                         );
-
-                        // NOTE: signals to the parent process that an expect failed
-                        if env.mode.runs_expects_in_separate_process() {
-                            let func = env
-                                .module
-                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
-                                .unwrap();
-
-                            bd.build_call(func, &[], "call_expect_finalize_failed");
-                        }
 
                         bd.build_unconditional_branch(then_block);
                     }

@@ -2357,7 +2357,7 @@ impl Declarations {
     ) -> usize {
         let index = self.declarations.len();
 
-        self.declarations.push(DeclarationTag::Expectation);
+        self.declarations.push(DeclarationTag::ExpectationFx);
         self.variables.push(Variable::BOOL);
         self.symbols.push(Loc::at(preceding_comment, name));
         self.annotations.push(None);
@@ -2813,14 +2813,21 @@ struct ExpectCollector {
 
 impl crate::traverse::Visitor for ExpectCollector {
     fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
-        if let Expr::Expect {
-            lookups_in_cond,
-            loc_condition,
-            ..
-        } = expr
-        {
-            self.expects
-                .insert(loc_condition.region, lookups_in_cond.to_vec());
+        match expr {
+            Expr::Expect {
+                lookups_in_cond,
+                loc_condition,
+                ..
+            }
+            | Expr::ExpectFx {
+                lookups_in_cond,
+                loc_condition,
+                ..
+            } => {
+                self.expects
+                    .insert(loc_condition.region, lookups_in_cond.to_vec());
+            }
+            _ => (),
         }
 
         walk_expr(self, expr, var)

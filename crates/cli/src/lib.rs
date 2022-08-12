@@ -401,11 +401,30 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let mut shared_buffer = vec![0u8; SHM_SIZE as usize];
+    // let mut shared_buffer = vec![0u8; SHM_SIZE as usize];
+    let shared_buffer_pointer = unsafe {
+        // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        let name = "/roc_expect_buffer"; // format!("/roc_expect_buffer", std::process::id());
+        let cstring = CString::new(name).unwrap();
+
+        let shared_fd =
+            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o777);
+
+        let shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            SHM_SIZE as usize,
+            libc::PROT_WRITE | libc::PROT_READ,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+
+        shared_ptr.cast()
+    };
 
     let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
     let mut result = RocCallResult::default();
-    let slice = (shared_buffer.as_mut_ptr(), shared_buffer.len());
+    let slice = (shared_buffer_pointer, SHM_SIZE as usize);
     unsafe { set_shared_buffer(slice, &mut result) };
 
     let (failed, passed) = roc_repl_expect::run::run_expects(
@@ -415,7 +434,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         interns,
         &lib,
         &mut expectations,
-        shared_buffer.as_mut_ptr(),
+        shared_buffer_pointer,
         expects,
     )
     .unwrap();

@@ -1,10 +1,5 @@
 const std = @import("std");
 
-extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
-extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
-extern fn kill(pid: c_int, sig: c_int) c_int;
-extern fn getppid() c_int;
-
 const SIGUSR1: c_int = 10;
 
 const O_RDWR: c_int = 2;
@@ -25,10 +20,4 @@ pub fn setSharedBuffer(ptr: [*]u8, length: usize) callconv(.C) usize {
 
 pub fn expectFailedStart() callconv(.C) [*]u8 {
     return SHARED_BUFFER.ptr;
-}
-
-pub fn expectFailedFinalize() callconv(.C) void {
-    const parent_pid = getppid();
-
-    _ = kill(parent_pid, SIGUSR1);
 }

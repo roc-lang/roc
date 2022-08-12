@@ -6038,6 +6038,45 @@ pub fn from_can<'a>(
             stmt
         }
 
+        ExpectFx {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
+            let cond_symbol = env.unique_symbol();
+
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout, "Expect");
+                layouts.push(layout);
+            }
+
+            let mut stmt = Stmt::ExpectFx {
+                condition: cond_symbol,
+                region: loc_condition.region,
+                lookups: lookups.into_bump_slice(),
+                layouts: layouts.into_bump_slice(),
+                remainder: env.arena.alloc(rest),
+            };
+
+            stmt = with_hole(
+                env,
+                loc_condition.value,
+                variable,
+                procs,
+                layout_cache,
+                cond_symbol,
+                env.arena.alloc(stmt),
+            );
+
+            stmt
+        }
+
         LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {

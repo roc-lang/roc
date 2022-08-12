@@ -5,7 +5,11 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::{MutSet, VecMap};
-use roc_gen_llvm::llvm::{build::LlvmBackendMode, externs::add_default_roc_externs};
+use roc_gen_llvm::{
+    llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
+    run_roc::RocCallResult,
+    run_roc_dylib,
+};
 use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::OptLevel;
@@ -28,8 +32,8 @@ pub fn run_expects<W: std::io::Write>(
     let mut failed = 0;
     let mut passed = 0;
 
-    for expect in expects.pure {
-        let result = run_expect_pure(
+    for expect in expects.fx {
+        let result = run_expect_fx(
             writer,
             render_target,
             arena,
@@ -46,8 +50,8 @@ pub fn run_expects<W: std::io::Write>(
         }
     }
 
-    for expect in expects.fx {
-        let result = run_expect_fx(
+    for expect in expects.pure {
+        let result = run_expect_pure(
             writer,
             render_target,
             arena,
@@ -131,7 +135,7 @@ fn run_expect_fx<W: std::io::Write>(
     interns: &Interns,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    shared_ptr: *mut u8,
+    parent_shared_ptr: *mut u8,
     expect: ToplevelExpect<'_>,
 ) -> std::io::Result<bool> {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
@@ -144,7 +148,33 @@ fn run_expect_fx<W: std::io::Write>(
 
             use roc_gen_llvm::try_run_jit_function;
 
-            let sequence = ExpectSequence::new(shared_ptr.cast());
+            let shared_buffer_pointer = {
+                // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+                let name = "/roc_expect_buffer"; // format!("/roc_expect_buffer", std::process::id());
+                let cstring = std::ffi::CString::new(name).unwrap();
+
+                let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
+
+                libc::ftruncate(shared_fd, 1024);
+
+                let shared_ptr = libc::mmap(
+                    std::ptr::null_mut(),
+                    1024,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    shared_fd,
+                    0,
+                );
+
+                shared_ptr.cast()
+            };
+
+            let sequence = ExpectSequence::new(shared_buffer_pointer);
+
+            let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+            let mut result = RocCallResult::default();
+            let slice = (shared_buffer_pointer, 1024);
+            unsafe { set_shared_buffer(slice, &mut result) };
 
             let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
@@ -167,20 +197,20 @@ fn run_expect_fx<W: std::io::Write>(
             std::process::exit(1)
         }
         1.. => {
-            let mut has_failed = false;
+            let mut has_succeeded = true;
 
             for sig in &mut signals {
                 match sig {
                     SIGCHLD => {
                         // done!
-                        return Ok(has_failed);
+                        return Ok(has_succeeded);
                     }
                     SIGUSR1 => {
                         // this is the signal we use for an expect failure. Let's see what the child told us
-                        has_failed = true;
+                        has_succeeded = false;
 
                         let frame =
-                            ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
+                            ExpectFrame::at_offset(parent_shared_ptr, ExpectSequence::START_OFFSET);
                         let module_id = frame.module_id;
 
                         let data = expectations.get_mut(&module_id).unwrap();
@@ -203,7 +233,7 @@ fn run_expect_fx<W: std::io::Write>(
                             None,
                             expectations,
                             interns,
-                            shared_ptr,
+                            parent_shared_ptr,
                             ExpectSequence::START_OFFSET,
                         )?;
                     }
