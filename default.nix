@@ -1,10 +1,10 @@
 { }:
 # we only this file to release a nix package, use flake.nix for development
 let
-  rev = "f6342b8b9e7a4177c7e775cdbf38e1c1b43e7ab3"; # nixpkgs master
+  rev = "541a3ca27c9a8220b46f4feb7dd8e94336a77f42"; # nixpkgs master
   nixpkgs = builtins.fetchTarball {
     url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
-    sha256 = "JTiKsBT1BwMbtSUsvtSl8ffkiirby8FaujJVGV766Q8=";
+    sha256 = "sha256:1mxv0zigm98pawf05kd4s8ipvk1pvvdsn1yh978c5an97kz0ck5w";
   };
   pkgs = import nixpkgs { };
   rustPlatform = pkgs.rustPlatform;
