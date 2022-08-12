@@ -599,8 +599,8 @@ pub struct Env<'a> {
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
-    pending_recursive_types: VecMap<TypeId, Layout<'a>>,
-    known_recursive_types: VecMap<Layout<'a>, TypeId>,
+    pending_recursive_types: VecMap<TypeId, Variable>,
+    known_recursive_types: VecMap<Variable, TypeId>,
     target: TargetInfo,
 }
 
@@ -652,13 +652,16 @@ impl<'a> Env<'a> {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
 
-        for (type_id, layout) in pending.into_iter() {
-            let actual_type_id = self.known_recursive_types.get(&layout).unwrap_or_else(|| {
-                unreachable!(
-                    "There was no known recursive TypeId for the pending recursive type {:?}",
-                    layout
-                );
-            });
+        for (type_id, root_var) in pending.into_iter() {
+            let actual_type_id = *self
+                .known_recursive_types
+                .get(&root_var)
+                .unwrap_or_else(|| {
+                    unreachable!(
+                        "There was no known recursive TypeId for the pending recursive type {:?}",
+                        root_var
+                    );
+                });
 
             debug_assert!(
                 matches!(types.get_type(type_id), RocType::RecursivePointer(TypeId::PENDING)),
@@ -668,7 +671,7 @@ impl<'a> Env<'a> {
 
             // size and alignment shouldn't change; this is still
             // a RecursivePointer, it's just pointing to something else.
-            types.replace(type_id, RocType::RecursivePointer(*actual_type_id));
+            types.replace(type_id, RocType::RecursivePointer(actual_type_id));
         }
     }
 }
@@ -717,12 +720,14 @@ fn add_type_help<'a>(
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tags, var, types, layout)
+            add_tag_union(env, opt_name, tags, var, types, layout, None)
         }
-        Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tag_vars, ext_var)) => {
+        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tag_vars, var, types, layout)
+            let rec_root = subs.get_root_key_without_compacting(*rec_var);
+
+            add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
         Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => {
@@ -865,13 +870,18 @@ fn add_type_help<'a>(
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
             let type_id = types.add_anonymous(RocType::RecursivePointer(TypeId::PENDING), layout);
-            let structure_layout = env
-                .layout_cache
-                .from_var(env.arena, *structure, subs)
-                .unwrap();
 
-            env.pending_recursive_types
-                .insert(type_id, structure_layout);
+            // These should be different Variables, but the same layout!
+            debug_assert_eq!(
+                layout,
+                env.layout_cache
+                    .from_var(env.arena, *structure, subs)
+                    .unwrap()
+            );
+
+            let root_var = subs.get_root_key_without_compacting(var);
+
+            env.pending_recursive_types.insert(type_id, root_var);
 
             type_id
         }
@@ -985,6 +995,7 @@ fn add_tag_union<'a>(
     var: Variable,
     types: &mut Types,
     layout: Layout<'a>,
+    rec_root: Option<Variable>,
 ) -> TypeId {
     let subs = env.subs;
     let name = match opt_name {
@@ -992,7 +1003,6 @@ fn add_tag_union<'a>(
         None => env.enum_names.get_name(var),
     };
 
-    let is_recursive;
     let tag_union_type = match layout {
         Layout::Union(union_layout) => {
             use UnionLayout::*;
@@ -1001,17 +1011,8 @@ fn add_tag_union<'a>(
                 // A non-recursive tag union
                 // e.g. `Result ok err : [Ok ok, Err err]`
                 NonRecursive(_) => {
-                    is_recursive = false;
-
-                    let tags = union_tags_to_types(
-                        &name,
-                        union_tags,
-                        subs,
-                        env,
-                        types,
-                        layout,
-                        is_recursive,
-                    );
+                    let tags =
+                        union_tags_to_types(&name, union_tags, subs, env, types, layout, false);
                     // TODO deal with empty tag union
                     let discriminant_size = Discriminant::from_number_of_tags(tags.len())
                         .stack_size()
@@ -1028,17 +1029,8 @@ fn add_tag_union<'a>(
                 // A recursive tag union (general case)
                 // e.g. `Expr : [Sym Str, Add Expr Expr]`
                 Recursive(_) => {
-                    is_recursive = true;
-
-                    let tags = union_tags_to_types(
-                        &name,
-                        union_tags,
-                        subs,
-                        env,
-                        types,
-                        layout,
-                        is_recursive,
-                    );
+                    let tags =
+                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     let discriminant_size =
                         Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
@@ -1051,17 +1043,8 @@ fn add_tag_union<'a>(
                     }
                 }
                 NonNullableUnwrapped(_) => {
-                    is_recursive = true;
-
-                    let mut tags = union_tags_to_types(
-                        &name,
-                        union_tags,
-                        subs,
-                        env,
-                        types,
-                        layout,
-                        is_recursive,
-                    );
+                    let mut tags =
+                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
 
                     debug_assert_eq!(tags.len(), 1);
 
@@ -1085,17 +1068,8 @@ fn add_tag_union<'a>(
                     nullable_id,
                     other_tags,
                 } => {
-                    is_recursive = true;
-
-                    let tags = union_tags_to_types(
-                        &name,
-                        union_tags,
-                        subs,
-                        env,
-                        types,
-                        layout,
-                        is_recursive,
-                    );
+                    let tags =
+                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     let discriminant_size =
                         Discriminant::from_number_of_tags(other_tags.len()).stack_size();
                     let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
@@ -1120,17 +1094,8 @@ fn add_tag_union<'a>(
                     nullable_id: null_represents_first_tag,
                     other_fields: _, // TODO use this!
                 } => {
-                    is_recursive = true;
-
-                    let mut tags = union_tags_to_types(
-                        &name,
-                        union_tags,
-                        subs,
-                        env,
-                        types,
-                        layout,
-                        is_recursive,
-                    );
+                    let mut tags =
+                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     // NullableUnwrapped tag unions should always have exactly 2 tags.
                     debug_assert_eq!(tags.len(), 2);
 
@@ -1161,8 +1126,6 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Builtin(Builtin::Int(int_width)) => {
-            is_recursive = false;
-
             let tags: Vec<String> = union_tags
                 .iter_from_subs(subs)
                 .map(|(tag_name, _)| tag_name.0.as_str().to_string())
@@ -1175,10 +1138,6 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Struct { field_layouts, .. } => {
-            // This is a single-tag union, but it's unclear whether it's recursive,
-            // since one of its fields could hold a recursive type.
-            is_recursive = is_recursive_tag_union(layout);
-
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
 
@@ -1192,10 +1151,6 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Builtin(builtin) => {
-            // This is a single-tag union, but it's unclear whether it's recursive,
-            // since it could be (for example) a single-tag union wrapping a List.
-            is_recursive = is_recursive_tag_union(layout);
-
             let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
             let (tag_name, _) = single_tag_payload(union_tags, subs);
 
@@ -1206,11 +1161,6 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Boxed(elem_layout) => {
-            // This is a single-tag union, but it's unclear whether it's recursive,
-            // since it could be (for example) a single-tag union wrapping a Box that contains
-            // the union somewhere in its eleemnt.
-            is_recursive = is_recursive_tag_union(layout);
-
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
 
@@ -1233,8 +1183,8 @@ fn add_tag_union<'a>(
     let typ = RocType::TagUnion(tag_union_type);
     let type_id = types.add_named(name, typ, layout);
 
-    if is_recursive {
-        env.known_recursive_types.insert(layout, type_id);
+    if let Some(rec_var) = rec_root {
+        env.known_recursive_types.insert(rec_var, type_id);
     }
 
     type_id
@@ -1335,21 +1285,6 @@ fn tags_to_types(
             }
         })
         .collect()
-}
-
-fn is_recursive_tag_union(layout: Layout) -> bool {
-    use roc_mono::layout::UnionLayout::*;
-
-    match layout {
-        Layout::Union(tag_union) => match tag_union {
-            NonRecursive(_) => false,
-            Recursive(_)
-            | NonNullableUnwrapped(_)
-            | NullableWrapped { .. }
-            | NullableUnwrapped { .. } => true,
-        },
-        _ => false,
-    }
 }
 
 fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, vars: I) -> usize {
