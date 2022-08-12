@@ -4,6 +4,7 @@
     sha256 = "sha256:1mxv0zigm98pawf05kd4s8ipvk1pvvdsn1yh978c5an97kz0ck5w";
   },
   pkgs ? import nixpkgsSource { },
+  cargoSha256 ? "sha256-treL2sWPcZ1NBwdab3FOb2FI2wT/Vt9tD4XRfJ8rYWA=",
 }:
 # we only this file to release a nix package, use flake.nix for development
 let
@@ -18,7 +19,7 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-treL2sWPcZ1NBwdab3FOb2FI2wT/Vt9tD4XRfJ8rYWA=";
+  inherit cargoSha256;
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
