@@ -719,10 +719,10 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout)
         }
-        Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tag_vars, ext_var)) => {
+        Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tag_vars, var, types, layout)
+            add_tag_union(env, opt_name, tags, var, types, layout)
         }
         Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => {
