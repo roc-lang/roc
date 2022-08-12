@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 mkdir -p $HOME/.cargo
 echo -e "[build]\nrustflags = [\"-C\", \"link-arg=-fuse-ld=lld\", \"-C\", \"target-cpu=native\"]" > $HOME/.cargo/config
