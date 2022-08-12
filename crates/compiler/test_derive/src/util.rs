@@ -324,7 +324,7 @@ fn check_derived_typechecks_and_golden(
     // run the solver, print and fail if we have errors
     dbg_do!(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
-        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
+        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "1")
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
@@ -337,6 +337,10 @@ fn check_derived_typechecks_and_golden(
         Default::default(),
         &exposed_for_module.exposed_by_module,
         Default::default(),
+    );
+    dbg_do!(
+        roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
+        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "0")
     );
     let subs = solved_subs.inner_mut();
 
