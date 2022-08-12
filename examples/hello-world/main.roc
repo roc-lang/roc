@@ -3,7 +3,6 @@ app "helloWorld"
     imports [Decode, Decode.{Decoder, Decoding, DecoderFormatting}, Json]
     provides [main] to pf
 
-theDecoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 theDecoder =
     Decode.custom \bytes, fmt ->
         Decode.decodeWith
