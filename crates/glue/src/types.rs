@@ -25,16 +25,6 @@ use std::fmt::Display;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
-impl TypeId {
-    /// Used when making recursive pointers, which need to temporarily
-    /// have *some* TypeId value until we later in the process determine
-    /// their real TypeId and can go back and fix them up.
-    pub(crate) const PENDING: Self = Self(usize::MAX);
-
-    /// When adding, we check for overflow based on whether we've exceeded this.
-    const MAX: Self = Self(Self::PENDING.0 - 1);
-}
-
 #[derive(Debug, Clone)]
 pub struct Types {
     // These are all indexed by TypeId
@@ -350,7 +340,8 @@ impl Types {
     pub fn add_anonymous(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
         let id = TypeId(self.types.len());
 
-        assert!(id.0 <= TypeId::MAX.0);
+        // Make sure we don't overflow
+        assert!(id.0 <= usize::MAX);
 
         self.types.push(typ);
         self.sizes
@@ -599,7 +590,6 @@ pub struct Env<'a> {
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
-    pending_recursive_types: VecMap<TypeId, Layout<'a>>,
     known_recursive_types: VecMap<Layout<'a>, TypeId>,
     target: TargetInfo,
 }
@@ -617,7 +607,6 @@ impl<'a> Env<'a> {
             interns,
             struct_names: Default::default(),
             enum_names: Default::default(),
-            pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
             layout_cache: LayoutCache::new(target),
             target,
@@ -634,8 +623,6 @@ impl<'a> Env<'a> {
             self.add_type(var, &mut types);
         }
 
-        self.resolve_pending_recursive_types(&mut types);
-
         types
     }
 
@@ -646,30 +633,6 @@ impl<'a> Env<'a> {
             .expect("Something weird ended up in the content");
 
         add_type_help(self, layout, var, None, types)
-    }
-
-    fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
-        // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
-        let pending = core::mem::take(&mut self.pending_recursive_types);
-
-        for (type_id, layout) in pending.into_iter() {
-            let actual_type_id = self.known_recursive_types.get(&layout).unwrap_or_else(|| {
-                unreachable!(
-                    "There was no known recursive TypeId for the pending recursive type {:?}",
-                    layout
-                );
-            });
-
-            debug_assert!(
-                matches!(types.get_type(type_id), RocType::RecursivePointer(TypeId::PENDING)),
-                "The TypeId {:?} was registered as a pending recursive pointer, but was not stored in Types as one.",
-                type_id
-            );
-
-            // size and alignment shouldn't change; this is still
-            // a RecursivePointer, it's just pointing to something else.
-            types.replace(type_id, RocType::RecursivePointer(*actual_type_id));
-        }
     }
 }
 
@@ -864,14 +827,19 @@ fn add_type_help<'a>(
         Content::RangedNumber(_) => todo!(),
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
-            let type_id = types.add_anonymous(RocType::RecursivePointer(TypeId::PENDING), layout);
-            let structure_layout = env
-                .layout_cache
-                .from_var(env.arena, *structure, subs)
-                .unwrap();
+            // These variables are different, but the layouts should always be the same!
+            debug_assert_eq!(
+                layout,
+                env.layout_cache
+                    .from_var(env.arena, *structure, subs)
+                    .unwrap()
+            );
 
-            env.pending_recursive_types
-                .insert(type_id, structure_layout);
+            // Temporarily insert an empty tag union, just so we can get a TypeId.
+            let type_id = types.add_anonymous(RocType::EmptyTagUnion, layout);
+
+            // Set the TypeId we got to be a RecursivePointer to itself
+            types.replace(type_id, RocType::RecursivePointer(type_id));
 
             type_id
         }
