@@ -3183,6 +3183,9 @@ fn specialize_external<'a>(
                         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
                             // captured variables are in symbol-alphabetic order, but now we want
                             // them ordered by their alignment requirements
+                            //
+                            // TODO: sort only the fields and apply the found permutation to the symbols
+                            // TODO: can we move this ordering to `layout_for_member`?
                             let mut combined = Vec::from_iter_in(
                                 captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
                                 env.arena,
@@ -3197,19 +3200,25 @@ fn specialize_external<'a>(
                                 size2.cmp(&size1)
                             });
 
+                            let ordered_field_layouts = Vec::from_iter_in(
+                                combined.iter().map(|(_, layout)| **layout),
+                                env.arena,
+                            );
+                            let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
+
                             debug_assert_eq!(
                                 captured.len(),
-                                field_layouts.len(),
+                                ordered_field_layouts.len(),
                                 "{:?} captures {:?} but has layout {:?}",
                                 lambda_name,
                                 &captured,
-                                &field_layouts
+                                &ordered_field_layouts
                             );
 
                             for (index, (symbol, layout)) in combined.iter().enumerate() {
                                 let expr = Expr::StructAtIndex {
                                     index: index as _,
-                                    field_layouts,
+                                    field_layouts: ordered_field_layouts,
                                     structure: Symbol::ARG_CLOSURE,
                                 };
 
@@ -3222,14 +3231,6 @@ fn specialize_external<'a>(
                                     env.arena.alloc(specialized_body),
                                 );
                             }
-                            //                                    let symbol = captured[0].0;
-                            //
-                            //                                    substitute_in_exprs(
-                            //                                        env.arena,
-                            //                                        &mut specialized_body,
-                            //                                        symbol,
-                            //                                        Symbol::ARG_CLOSURE,
-                            //                                    );
                         }
 
                         ClosureRepresentation::Other(layout) => match layout {
