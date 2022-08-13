@@ -140,6 +140,12 @@ impl<K: PartialEq, V> VecMap<K, V> {
             cur_idx: 0,
         }
     }
+
+    /// Removes all key/value pairs from the map, without affecting its allocated capacity.
+    pub fn clear(&mut self) {
+        self.keys.clear();
+        self.values.clear();
+    }
 }
 
 impl<K: PartialEq, V> Extend<(K, V)> for VecMap<K, V> {

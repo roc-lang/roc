@@ -7691,4 +7691,68 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn transient_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = "abc"
+
+                getX = \{} -> x
+
+                h = \{} -> (getX {})
+                #^{-1}
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(3) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn transient_captures_after_def_ordering() {
+        infer_queries!(
+            indoc!(
+                r#"
+                h = \{} -> (getX {})
+                #^{-1}
+
+                getX = \{} -> x
+
+                x = "abc"
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(1) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = True
+                y = False
+
+                a = "foo"
+                b = "bar"
+
+                foo = \{} -> if x then a else bar {}
+                #^^^{-1}
+                bar = \{} -> if y then b else foo {}
+                #^^^{-1}
+
+                bar {}
+                "#
+            ),
+        @r###"
+        foo : {} -[[foo(5) [True]* [False]* Str Str]]-> Str
+        bar : {} -[[bar(6) [True]* [False]* Str Str]]-> Str
+        "###
+        );
+    }
 }

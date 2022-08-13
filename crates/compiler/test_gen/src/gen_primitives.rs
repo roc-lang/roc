@@ -3726,7 +3726,7 @@ fn recursive_lambda_set_issue_3444() {
         ),
         RocStr::from("c"),
         RocStr
-    );
+    )
 }
 
 #[test]
@@ -3882,5 +3882,140 @@ fn local_binding_aliases_function_inferred() {
         ),
         RocList::from_slice(&[]),
         RocList<std::convert::Infallible>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_after_def_ordering() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = \{} -> getX {}
+
+            getX = \{} -> x
+
+            x = "abc"
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            z = "abc"
+
+            getX = \{} -> getY {}
+            getY = \{} -> getZ {}
+            getZ = \{} -> z
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain_with_multiple_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = "h"
+            x = "x"
+            y = "y"
+            z = "z"
+
+            getX = \{} -> Str.concat x (getY {})
+            getY = \{} -> Str.concat y (getZ {})
+            getZ = \{} -> z
+
+            getH = \{} -> Str.concat h (getX {})
+
+            getH {}
+            "#
+        ),
+        RocStr::from("hxyz"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_from_outer_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            innerScope =
+                h = \{} -> getX {}
+                h {}
+
+            innerScope
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mutually_recursive_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Bool
+            x = True
+
+            y : Bool
+            y = False
+
+            a = "foo"
+            b = "bar"
+
+            foo = \{} -> if x then a else bar {}
+            bar = \{} -> if y then b else foo {}
+
+            bar {}
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
     );
 }
