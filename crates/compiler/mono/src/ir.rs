@@ -343,10 +343,16 @@ impl<'a> Proc<'a> {
         D::Doc: Clone,
         A: Clone,
     {
-        let args_doc = self
-            .args
-            .iter()
-            .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
+        let args_doc = self.args.iter().map(|(layout, symbol)| {
+            let arg_doc = symbol_to_doc(alloc, *symbol);
+            if pretty_print_ir_symbols() {
+                arg_doc
+                    .append(alloc.reflow(": "))
+                    .append(layout.to_doc(alloc, Parens::NotNeeded))
+            } else {
+                arg_doc
+            }
+        });
 
         if pretty_print_ir_symbols() {
             alloc
