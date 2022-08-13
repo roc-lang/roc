@@ -988,9 +988,12 @@ fn fix_values_captured_in_closure_expr(
                 // initially `outer` captures [inner], but this is then replaced with just [x].
                 let (captured_symbol, _) = captured_symbols[i];
                 if let Some(captures) = closure_captures.get(&captured_symbol) {
-                    captured_symbols.remove(i);
+                    debug_assert!(!captures.is_empty());
+                    captured_symbols.swap_remove(i);
                     captured_symbols.extend(captures);
-                    // Don't advance because the next capture was shifted down.
+                    // Jump two, because the next element is now one of the newly-added captures,
+                    // which we don't need to check.
+                    i += 2;
                 } else {
                     i += 1;
                 }
