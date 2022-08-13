@@ -8,10 +8,8 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
   outputs = { self, roc, flake-utils }:
-    let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
-    in
-    flake-utils.lib.eachSystem supportedSystems (system:
+    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
+    in flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import roc.inputs.nixpkgs {
           inherit system;
@@ -19,28 +17,19 @@
         };
 
         rocShell = roc.devShell.${system};
-      in
-      {
+      in {
         devShell = pkgs.mkShell {
-          packages  = 
-              let
-                devInputs = (with pkgs; [
-                  less
-                  gdb
-                ]);
-                vscodeWithExtensions = pkgs.vscode-with-extensions.override {
-                  vscodeExtensions = with pkgs.vscode-extensions; [
-                    matklad.rust-analyzer
-                    eamodio.gitlens
-                    bbenoist.nix
-                    vadimcn.vscode-lldb
-                  ];
-                };
-              in
-                [
-                  vscodeWithExtensions
-                  devInputs
-                ];
+          packages = let
+            devInputs = (with pkgs; [ less gdb ]);
+            vscodeWithExtensions = pkgs.vscode-with-extensions.override {
+              vscodeExtensions = with pkgs.vscode-extensions; [
+                matklad.rust-analyzer
+                eamodio.gitlens
+                bbenoist.nix
+                vadimcn.vscode-lldb
+              ];
+            };
+          in [ vscodeWithExtensions devInputs ];
 
           inputsFrom = [ rocShell ];
 
