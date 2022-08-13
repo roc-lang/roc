@@ -2,6 +2,7 @@
 
 /// A polygon with 4 corners
 #[derive(Copy, Clone)]
+#[repr(C)]
 pub struct Quad {
     pub pos: [f32; 2],
     pub width: f32,
