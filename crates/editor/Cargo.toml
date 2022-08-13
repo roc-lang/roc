@@ -50,7 +50,7 @@ colored = "2.0.0"
 pest = "2.1.3"
 pest_derive = "2.1.0"
 copypasta = "0.8.1"
-palette = "0.6.0"
+palette = "0.6.1"
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
