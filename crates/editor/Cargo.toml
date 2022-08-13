@@ -55,7 +55,7 @@ confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
 serde = { version = "1.0.130", features = ["derive"] }
-nonempty = "0.7.0"
+nonempty = "0.8.0"
 fs_extra = "1.2.0"
 rodio = { version = "0.15.0", optional = true } # to play sounds
 threadpool = "1.8.1"
