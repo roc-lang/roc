@@ -1,0 +1,7 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    schedule:
+      interval: "daily"
+      time: "07:00"
+      timezone: "Europe/Brussels"
