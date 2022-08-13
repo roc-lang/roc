@@ -29,4 +29,4 @@ lazy_static = "1.4.0"
 indoc = "1.0.3"
 ven_pretty = { path = "../../vendor/pretty" }
 pretty_assertions = "1.0.0"
-insta = "1.15.0"
+insta = "1.18.2"
