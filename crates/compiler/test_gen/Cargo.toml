@@ -45,7 +45,7 @@ libloading = "0.7.1"
 tempfile = "3.2.0"
 indoc = "1.0.3"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }
-wasm3 = { git = "https://github.com/roc-lang/wasm3-rs", rev = "f0f807d1fc0a50d1d68e5799e54ee62c05af00f5", features = [ "build-bindgen" ] }
+wasm3 = { git = "https://github.com/roc-lang/wasm3-rs", rev = "f0f807d1fc0a50d1d68e5799e54ee62c05af00f5" }
 lazy_static = "1.4.0"
 
 [features]
