@@ -234,7 +234,7 @@ Culturally, to support HKP is to take a side, and to decline to support it is al
 Given this, language designers have three options:
 
 - Have HKP and have Monad in the standard library. Embrace them and build a culture and ecosystem around them.
-- Have HKP and don't have Monad in the standard library. An alternate standard lbirary built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
+- Have HKP and don't have Monad in the standard library. An alternate standard library built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
 - Don't have HKP; build a culture and ecosystem around other things.
 
 Considering that these are the only three options, I think the best choice for Roc—not only on a technical
