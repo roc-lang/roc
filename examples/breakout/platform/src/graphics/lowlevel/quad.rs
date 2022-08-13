@@ -12,6 +12,10 @@ pub struct Quad {
     pub border_width: f32,
 }
 
+// Safety: Pod's contract says the type must
+// not have any padding, and must be repr(C).
+// As currrently defined, Quad does not have
+// any padding.
 unsafe impl bytemuck::Pod for Quad {}
 unsafe impl bytemuck::Zeroable for Quad {}
 
