@@ -83,6 +83,11 @@ impl<T: PartialEq> VecSet<T> {
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.elements.iter_mut()
     }
+
+    /// Removes all elements from the set, without affecting its allocated capacity.
+    pub fn clear(&mut self) {
+        self.elements.clear()
+    }
 }
 
 impl<A: Ord> Extend<A> for VecSet<A> {

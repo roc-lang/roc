@@ -696,8 +696,15 @@ pub fn canonicalize_module_defs<'a>(
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
     referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
+    let mut fix_closures_no_capture_symbols = VecSet::default();
+    let mut fix_closures_closure_captures = VecMap::default();
     for index in 0..declarations.len() {
         use crate::expr::DeclarationTag::*;
+
+        // For each declaration, we need to fixup the closures inside its def.
+        // Reuse the fixup buffer allocations from the previous iteration.
+        fix_closures_no_capture_symbols.clear();
+        fix_closures_closure_captures.clear();
 
         match declarations.declarations[index] {
             Value => {
@@ -706,8 +713,8 @@ pub fn canonicalize_module_defs<'a>(
 
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,
-                    &mut VecSet::default(),
-                    &mut VecMap::default(),
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
             }
             Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
@@ -721,21 +728,20 @@ pub fn canonicalize_module_defs<'a>(
                 if function_def.captured_symbols.is_empty() {
                     no_capture_symbols.insert(name);
                 }
-                let mut closure_captures = VecMap::default();
 
                 // patterns can contain default expressions, so must go over them too!
                 for (_, _, loc_pat) in function_def.arguments.iter_mut() {
                     fix_values_captured_in_closure_pattern(
                         &mut loc_pat.value,
-                        &mut no_capture_symbols,
-                        &mut closure_captures,
+                        &mut fix_closures_no_capture_symbols,
+                        &mut fix_closures_closure_captures,
                     );
                 }
 
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,
-                    &mut no_capture_symbols,
-                    &mut closure_captures,
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
             }
             Destructure(d_index) => {
@@ -743,17 +749,15 @@ pub fn canonicalize_module_defs<'a>(
                 let loc_pat = &mut destruct_def.loc_pattern;
                 let loc_expr = &mut declarations.expressions[index];
 
-                let mut closure_captures = VecMap::default();
-
                 fix_values_captured_in_closure_pattern(
                     &mut loc_pat.value,
-                    &mut VecSet::default(),
-                    &mut closure_captures,
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,
-                    &mut VecSet::default(),
-                    &mut closure_captures,
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
             }
             MutualRecursion { .. } => {
@@ -761,20 +765,18 @@ pub fn canonicalize_module_defs<'a>(
             }
             Expectation => {
                 let loc_expr = &mut declarations.expressions[index];
-                let mut closure_captures = Default::default();
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,
-                    &mut VecSet::default(),
-                    &mut closure_captures,
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
             }
             ExpectationFx => {
                 let loc_expr = &mut declarations.expressions[index];
-                let mut closure_captures = Default::default();
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,
-                    &mut VecSet::default(),
-                    &mut closure_captures,
+                    &mut fix_closures_no_capture_symbols,
+                    &mut fix_closures_closure_captures,
                 );
             }
         }
