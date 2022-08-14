@@ -954,11 +954,7 @@ fn encode_then_decode_list_of_lists_of_strings() {
 }
 
 #[test]
-#[cfg(all(
-    any(feature = "gen-llvm"), // currently fails on gen-wasm
-    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
-))]
-#[ignore]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
@@ -967,11 +963,11 @@ fn decode_record_two_fields() {
 
             main =
                 when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
-                    Ok { first, second } -> Str.concat first second
+                    Ok {first: "ab", second: "cd"} -> "abcd"
                     _ -> "something went wrong"
             "#
         ),
-        RocStr::from("ab  "),
+        RocStr::from("abcd"),
         RocStr
     )
 }
