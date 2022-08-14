@@ -6,11 +6,14 @@
 use cgmath::Vector2;
 
 #[derive(Copy, Clone)]
+#[repr(C)]
 pub struct Vertex {
     pub position: Vector2<f32>,
     pub color: [f32; 4],
 }
 
+// Safety: As defined, there is no padding
+// the type is repr(C), and Vector2 is repr(C)
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
 

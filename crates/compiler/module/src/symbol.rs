@@ -152,6 +152,7 @@ impl Symbol {
     }
 
     pub const fn to_ne_bytes(self) -> [u8; 8] {
+        // repr(packed(4)) is repr(c), and with the fields as defined will not having padding.
         unsafe { std::mem::transmute(self) }
     }
 

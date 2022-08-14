@@ -66,6 +66,7 @@ struct ErrorTypeState {
     recursive_tag_unions_seen: Vec<Variable>,
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
     utable: u64,
@@ -99,10 +100,12 @@ impl SubsHeader {
     }
 
     fn to_array(self) -> [u8; std::mem::size_of::<Self>()] {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(self) }
     }
 
     fn from_array(array: [u8; std::mem::size_of::<Self>()]) -> Self {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(array) }
     }
 }
