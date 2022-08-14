@@ -6158,13 +6158,7 @@ fn from_can_when<'a>(
         // We can't know what to return!
         return Stmt::RuntimeError("Hit a 0-branch when expression");
     }
-    dbg!(&branches);
     let opt_branches = to_opt_branches(env, procs, branches, exhaustive_mark, layout_cache);
-
-    dbg!(roc_types::subs::SubsFmtContent(
-        env.subs.get_content_without_compacting(cond_var),
-        env.subs
-    ));
 
     let cond_layout = return_on_layout_error!(
         env,
