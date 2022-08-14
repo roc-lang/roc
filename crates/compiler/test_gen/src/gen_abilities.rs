@@ -715,10 +715,7 @@ fn encode_derived_list_of_lists_of_strings() {
 }
 
 #[test]
-#[cfg(all(
-    any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
-))]
+#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
@@ -877,7 +874,7 @@ mod decode_immediate {
     }
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn dec() {
         use roc_std::RocDec;
 
@@ -899,7 +896,7 @@ mod decode_immediate {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
@@ -918,10 +915,7 @@ fn decode_list_of_strings() {
 }
 
 #[test]
-#[cfg(all(
-    any(feature = "gen-llvm"), // currently fails on gen-wasm
-    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
-))]
+#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_then_decode_list_of_strings() {
     assert_evals_to!(
         indoc!(

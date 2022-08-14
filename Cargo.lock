@@ -5265,9 +5265,8 @@ dependencies = [
 
 [[package]]
 name = "wasm3"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd7dde97449e99be474a432bbb0b1ab40b8f7ce3e97aa7ac640e9ecd018bbf88"
+version = "0.5.0"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=f0f807d1fc0a50d1d68e5799e54ee62c05af00f5#f0f807d1fc0a50d1d68e5799e54ee62c05af00f5"
 dependencies = [
  "cty",
  "wasm3-sys",
@@ -5275,9 +5274,8 @@ dependencies = [
 
 [[package]]
 name = "wasm3-sys"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a4e5d10bf1ffe7753275d4bbae3dc135dd2d2decd90e615accf9fef8bc52bab"
+version = "0.5.0"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=f0f807d1fc0a50d1d68e5799e54ee62c05af00f5#f0f807d1fc0a50d1d68e5799e54ee62c05af00f5"
 dependencies = [
  "cc",
  "cty",
