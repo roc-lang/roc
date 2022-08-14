@@ -48,6 +48,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     output_path.extend(&[filename]);
     output_path.set_extension("dat");
 
+    #[cfg(not(windows))]
     if SKIP_SUBS_CACHE {
         // write out a dummy file
         std::fs::write(output_path, &[]).unwrap();
