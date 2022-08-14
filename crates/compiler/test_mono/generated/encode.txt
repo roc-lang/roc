@@ -12,16 +12,12 @@ procedure List.71 (#Attr.2, #Attr.3):
     let List.388 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
     ret List.388;
 
-procedure Test.23 (Test.24, Test.35, #Attr.12):
-    let Test.38 : {U8} = Struct {#Attr.12};
-    let Test.22 : U8 = StructAtIndex 0 Test.38;
+procedure Test.23 (Test.24, Test.35, Test.22):
     let Test.37 : List U8 = CallByName List.4 Test.24 Test.22;
     ret Test.37;
 
 procedure Test.8 (Test.22):
-    let Test.39 : {U8} = Struct {Test.22};
-    let Test.34 : U8 = StructAtIndex 0 Test.39;
-    ret Test.34;
+    ret Test.22;
 
 procedure Test.9 (Test.27):
     let Test.33 : U8 = CallByName Test.8 Test.27;

@@ -3115,6 +3115,8 @@ fn specialize_external<'a>(
             closure: opt_closure_layout,
             ret_layout,
         } => {
+            let mut proc_args = Vec::from_iter_in(proc_args.iter().copied(), env.arena);
+
             // unpack the closure symbols, if any
             match (opt_closure_layout, captured_symbols) {
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
@@ -3234,39 +3236,16 @@ fn specialize_external<'a>(
                             }
                         }
 
-                        ClosureRepresentation::UnwrappedCapture(layout) => {
+                        ClosureRepresentation::UnwrappedCapture(_layout) => {
                             debug_assert_eq!(captured.len(), 1);
                             let (captured_symbol, _) = captured[0];
 
+                            // The capture set is unwrapped, so simply replace the closure argument
+                            // to the function with the unwrapped capture name.
                             let captured_symbol = get_specialized_name(captured_symbol);
-
-                            // To avoid substitution, wrap in a struct and immediately unwrap.
-                            // It should be optimized away later on.
-                            let layout_slice = env.arena.alloc([layout]);
-                            let arg_closure_slice = env.arena.alloc([Symbol::ARG_CLOSURE]);
-
-                            let wrap = Expr::Struct(arg_closure_slice);
-                            let wrap_sym = env.unique_symbol();
-
-                            let unwrap = Expr::StructAtIndex {
-                                index: 0,
-                                field_layouts: layout_slice,
-                                structure: wrap_sym,
-                            };
-
-                            specialized_body = Stmt::Let(
-                                captured_symbol,
-                                unwrap,
-                                layout,
-                                env.arena.alloc(specialized_body),
-                            );
-
-                            specialized_body = Stmt::Let(
-                                wrap_sym,
-                                wrap,
-                                Layout::struct_no_name_order(layout_slice),
-                                env.arena.alloc(specialized_body),
-                            );
+                            let closure_arg = proc_args.last_mut().unwrap();
+                            debug_assert_eq!(closure_arg.1, Symbol::ARG_CLOSURE);
+                            closure_arg.1 = captured_symbol;
                         }
 
                         ClosureRepresentation::EnumDispatch(_) => {
@@ -3279,18 +3258,13 @@ fn specialize_external<'a>(
                 _ => unreachable!("to closure or not to closure?"),
             }
 
-            let proc_args: Vec<_> = proc_args
-                .iter()
-                .map(|&(layout, symbol)| {
-                    // Grab the specialization symbol, if it exists.
-                    let symbol = procs
-                        .symbol_specializations
-                        .remove_single(symbol)
-                        .unwrap_or(symbol);
-
-                    (layout, symbol)
-                })
-                .collect_in(env.arena);
+            proc_args.iter_mut().for_each(|(_layout, symbol)| {
+                // Grab the specialization symbol, if it exists.
+                *symbol = procs
+                    .symbol_specializations
+                    .remove_single(*symbol)
+                    .unwrap_or(*symbol);
+            });
 
             // reset subs, so we don't get type errors when specializing for a different signature
             layout_cache.rollback_to(cache_snapshot);
@@ -5406,34 +5380,17 @@ where
 
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
-        ClosureRepresentation::UnwrappedCapture(layout) => {
+        ClosureRepresentation::UnwrappedCapture(_layout) => {
             debug_assert_eq!(symbols.len(), 1);
 
             let mut symbols = symbols;
             let (captured_symbol, _) = symbols.next().unwrap();
 
-            // To avoid substitution, wrap in a struct and immediately unwrap.
-            // It should be optimized away later on.
-            let layout_slice = env.arena.alloc([layout]);
-            let captured_slice = env.arena.alloc([*captured_symbol]);
-
-            let wrap = Expr::Struct(captured_slice);
-            let wrap_sym = env.unique_symbol();
-
-            let unwrap = Expr::StructAtIndex {
-                index: 0,
-                field_layouts: layout_slice,
-                structure: wrap_sym,
-            };
-
-            let hole = env.arena.alloc(Stmt::Let(assigned, unwrap, layout, hole));
-
-            Stmt::Let(
-                wrap_sym,
-                wrap,
-                Layout::struct_no_name_order(layout_slice),
-                hole,
-            )
+            // The capture set is unwrapped, so just replaced the assigned capture symbol with the
+            // only capture.
+            let mut hole = hole.clone();
+            substitute_in_exprs(env.arena, &mut hole, assigned, *captured_symbol);
+            hole
         }
         ClosureRepresentation::EnumDispatch(repr) => match repr {
             EnumDispatch::Bool => {

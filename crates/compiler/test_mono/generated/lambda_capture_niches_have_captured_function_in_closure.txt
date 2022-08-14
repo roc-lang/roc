@@ -2,20 +2,16 @@ procedure Test.11 (Test.37):
     let Test.38 : Str = "";
     ret Test.38;
 
-procedure Test.13 (Test.51, #Attr.12):
-    let Test.54 : {Str} = Struct {#Attr.12};
-    let Test.12 : Str = StructAtIndex 0 Test.54;
-    inc Test.12;
-    dec Test.54;
+procedure Test.13 (Test.51, Test.12):
     ret Test.12;
 
 procedure Test.15 (Test.39):
     let Test.40 : Str = "";
     ret Test.40;
 
-procedure Test.16 (Test.56):
-    let Test.58 : Str = "s1";
-    ret Test.58;
+procedure Test.16 (Test.54):
+    let Test.56 : Str = "s1";
+    ret Test.56;
 
 procedure Test.2 (Test.7, Test.8):
     let Test.9 : [C {} {}, C {} {}] = TagId(0) Test.7 Test.8;
@@ -30,11 +26,8 @@ procedure Test.3 (Test.17):
     ret Test.36;
 
 procedure Test.4 (Test.18):
-    let Test.55 : {Str} = Struct {Test.18};
-    let Test.50 : Str = StructAtIndex 0 Test.55;
-    inc Test.50;
-    dec Test.55;
-    ret Test.50;
+    inc Test.18;
+    ret Test.18;
 
 procedure Test.9 (Test.29, #Attr.12):
     let Test.8 : {} = UnionAtIndex (Id 0) (Index 1) #Attr.12;
@@ -53,6 +46,7 @@ procedure Test.9 (Test.29, #Attr.12):
     let Test.49 : {} = Struct {};
     let Test.48 : Str = CallByName Test.16 Test.49;
     let Test.45 : Str = CallByName Test.4 Test.48;
+    dec Test.48;
     let Test.47 : {} = Struct {};
     let Test.46 : Str = CallByName Test.13 Test.47 Test.45;
     ret Test.46;
@@ -75,9 +69,9 @@ procedure Test.0 ():
                 jump Test.22 Test.24;
         
     in
-    let Test.59 : Int1 = true;
-    let Test.60 : Int1 = lowlevel Eq Test.59 Test.5;
-    if Test.60 then
+    let Test.57 : Int1 = true;
+    let Test.58 : Int1 = lowlevel Eq Test.57 Test.5;
+    if Test.58 then
         let Test.27 : {} = Struct {};
         let Test.28 : {} = Struct {};
         let Test.26 : [C {} {}, C {} {}] = CallByName Test.2 Test.27 Test.28;

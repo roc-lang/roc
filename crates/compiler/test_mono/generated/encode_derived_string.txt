@@ -16,27 +16,19 @@ procedure Json.1 ():
     ret Json.318;
 
 procedure Json.18 (Json.86):
-    let Json.322 : {Str} = Struct {Json.86};
-    let Json.320 : Str = StructAtIndex 0 Json.322;
-    inc Json.320;
-    dec Json.322;
-    let Json.319 : Str = CallByName Encode.22 Json.320;
+    let Json.319 : Str = CallByName Encode.22 Json.86;
     ret Json.319;
 
-procedure Json.87 (Json.88, Json.321, #Attr.12):
-    let Json.332 : {Str} = Struct {#Attr.12};
-    let Json.86 : Str = StructAtIndex 0 Json.332;
-    inc Json.86;
-    dec Json.332;
-    let Json.331 : I32 = 34i64;
-    let Json.330 : U8 = CallByName Num.123 Json.331;
-    let Json.328 : List U8 = CallByName List.4 Json.88 Json.330;
-    let Json.329 : List U8 = CallByName Str.12 Json.86;
-    let Json.325 : List U8 = CallByName List.8 Json.328 Json.329;
-    let Json.327 : I32 = 34i64;
-    let Json.326 : U8 = CallByName Num.123 Json.327;
-    let Json.324 : List U8 = CallByName List.4 Json.325 Json.326;
-    ret Json.324;
+procedure Json.87 (Json.88, Json.321, Json.86):
+    let Json.330 : I32 = 34i64;
+    let Json.329 : U8 = CallByName Num.123 Json.330;
+    let Json.327 : List U8 = CallByName List.4 Json.88 Json.329;
+    let Json.328 : List U8 = CallByName Str.12 Json.86;
+    let Json.324 : List U8 = CallByName List.8 Json.327 Json.328;
+    let Json.326 : I32 = 34i64;
+    let Json.325 : U8 = CallByName Num.123 Json.326;
+    let Json.323 : List U8 = CallByName List.4 Json.324 Json.325;
+    ret Json.323;
 
 procedure List.4 (List.101, List.102):
     let List.392 : U64 = 1i64;
