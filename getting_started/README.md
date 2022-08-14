@@ -8,7 +8,7 @@ The [tutorial](TUTORIAL.md) is the best place to learn about how to use the lang
 
 There's also a folder of [examples](https://github.com/roc-lang/roc/tree/main/examples) - the [CLI form example](https://github.com/roc-lang/roc/tree/main/examples/interactive/form.roc) in particular is a reasonable starting point to build on.
 
-If you have a specific question, the [FAQ](FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
+If you have a specific question, the [FAQ](../FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
 ## Installation
 
