@@ -18,7 +18,7 @@ console_error_panic_hook = {version = "0.1.7", optional = true}
 futures = {version = "0.3.17", optional = true}
 js-sys = "0.3.56"
 wasm-bindgen = "0.2.79"
-wasm-bindgen-futures = "0.4.29"
+wasm-bindgen-futures = "0.4.32"
 
 roc_collections = {path = "../compiler/collections"}
 roc_gen_wasm = {path = "../compiler/gen_wasm"}
