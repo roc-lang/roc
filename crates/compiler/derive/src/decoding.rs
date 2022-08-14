@@ -124,122 +124,20 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
         CalledVia::Space,
     );
 
-    let fmt_var = env.subs.fresh_unnamed_flex_var();
-    let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
+    let (call_decode_custom, decode_custom_ret_var) = {
+        let bytes_sym = env.new_symbol("bytes");
+        let fmt_sym = env.new_symbol("fmt");
+        let fmt_var = env.subs.fresh_unnamed_flex_var();
 
-    // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-    let call_decode_custom = {
-        let bytes_arg_symbol = env.new_symbol("bytes");
-        let fmt_arg_symbol = env.new_symbol("fmt");
-
-        let decode_with_ret_var = env.subs.fresh_unnamed_flex_var();
-        let decode_with_lambda_set = env.subs.fresh_unnamed_flex_var();
-        let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
-        let this_decode_with_var = {
-            let flat_type = FlatType::Func(
-                SubsSlice::insert_into_subs(
-                    env.subs,
-                    [Variable::LIST_U8, record_decoder_var, fmt_var],
-                ),
-                decode_with_lambda_set,
-                decode_with_ret_var,
-            );
-
-            synth_var(env.subs, Content::Structure(flat_type))
-        };
-
-        env.unify(decode_with_var, this_decode_with_var);
-
-        // Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-        let callback_body = Expr::Call(
-            Box::new((
-                this_decode_with_var,
-                Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
-                decode_with_lambda_set,
-                decode_with_ret_var,
-            )),
-            vec![
-                (Variable::LIST_U8, Loc::at_zero(Expr::Var(bytes_arg_symbol))),
-                (record_decoder_var, Loc::at_zero(call_decode_record)),
-                (fmt_var, Loc::at_zero(Expr::Var(fmt_arg_symbol))),
-            ],
-            CalledVia::Space,
+        let (decode_custom, decode_custom_var) = wrap_in_decode_custom_decode_with(
+            env,
+            bytes_sym,
+            (fmt_sym, fmt_var),
+            vec![],
+            (call_decode_record, record_decoder_var),
         );
 
-        let callback_symbol = env.new_symbol("customCallback");
-        let callback_var = env.subs.fresh_unnamed_flex_var();
-        let callback_lambda_set_var = {
-            let lambda_set = LambdaSet {
-                solved: UnionLambdas::tag_without_arguments(env.subs, callback_symbol),
-                recursion_var: OptVariable::NONE,
-                unspecialized: Default::default(),
-                ambient_function: callback_var,
-            };
-
-            synth_var(env.subs, Content::LambdaSet(lambda_set))
-        };
-
-        {
-            let flat_type = FlatType::Func(
-                SubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, fmt_var]),
-                callback_lambda_set_var,
-                decode_with_ret_var,
-            );
-
-            env.subs
-                .set_content(callback_var, Content::Structure(flat_type));
-        }
-
-        // \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-        let custom_callback = {
-            Expr::Closure(ClosureData {
-                function_type: callback_var,
-                closure_type: callback_lambda_set_var,
-                return_type: decode_with_ret_var,
-                name: callback_symbol,
-                captured_symbols: Vec::new(),
-                recursive: Recursive::NotRecursive,
-                arguments: vec![
-                    (
-                        Variable::LIST_U8,
-                        AnnotatedMark::known_exhaustive(),
-                        Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
-                    ),
-                    (
-                        fmt_var,
-                        AnnotatedMark::known_exhaustive(),
-                        Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
-                    ),
-                ],
-                loc_body: Box::new(Loc::at_zero(callback_body)),
-            })
-        };
-
-        let decode_custom_lambda_set = env.subs.fresh_unnamed_flex_var();
-        let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
-        let this_decode_custom_var = {
-            let flat_type = FlatType::Func(
-                SubsSlice::insert_into_subs(env.subs, [callback_var]),
-                decode_custom_lambda_set,
-                decode_custom_ret_var,
-            );
-
-            synth_var(env.subs, Content::Structure(flat_type))
-        };
-
-        env.unify(decode_custom_var, this_decode_custom_var);
-
-        // Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-        Expr::Call(
-            Box::new((
-                this_decode_custom_var,
-                Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
-                decode_custom_lambda_set,
-                decode_custom_ret_var,
-            )),
-            vec![(callback_var, Loc::at_zero(custom_callback))],
-            CalledVia::Space,
-        )
+        (decode_custom, decode_custom_var)
     };
 
     (call_decode_custom, decode_custom_ret_var)
@@ -1141,14 +1039,13 @@ fn decoder_list(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
     };
 
     let bytes_sym = env.new_symbol("bytes");
-    let bytes_var = env.subs.fresh_unnamed_flex_var();
     let fmt_sym = env.new_symbol("fmt");
     let fmt_var = env.subs.fresh_unnamed_flex_var();
     let captures = vec![];
 
     wrap_in_decode_custom_decode_with(
         env,
-        (bytes_sym, bytes_var),
+        bytes_sym,
         (fmt_sym, fmt_var),
         captures,
         (decode_list_call, this_decode_list_ret_var),
@@ -1159,7 +1056,7 @@ fn decoder_list(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
 // I think most can be removed when https://github.com/roc-lang/roc/issues/3724 is resolved.
 fn wrap_in_decode_custom_decode_with(
     env: &mut Env,
-    bytes: (Symbol, Variable),
+    bytes: Symbol,
     fmt: (Symbol, Variable),
     sorted_inner_decoder_captures: Vec<(Symbol, Variable)>,
     inner_decoder: (Expr, Variable),
@@ -1172,7 +1069,7 @@ fn wrap_in_decode_custom_decode_with(
         sorted == sorted_inner_decoder_captures
     });
 
-    let (bytes_sym, bytes_var) = bytes;
+    let (bytes_sym, bytes_var) = (bytes, Variable::LIST_U8);
     let (fmt_sym, fmt_var) = fmt;
     let (inner_decoder, inner_decoder_var) = inner_decoder;
 

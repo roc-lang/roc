@@ -56,9 +56,9 @@ fn record_2_fields() {
         assert_snapshot!(golden, @r###"
         # derived for { first : Str, second : Str }
         # Decoder { first : val, second : val1 } fmt | fmt has DecoderFormatting, val has Decoding, val1 has Decoding
-        # List U8, fmt -[[customCallback3(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } | fmt has DecoderFormatting, val has Decoding, val1 has Decoding
+        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } | fmt has DecoderFormatting, val has Decoding, val1 has Decoding
         # Specialization lambda sets:
-        #   @<1>: [[customCallback3(22)]]
+        #   @<1>: [[custom(22)]]
         #Derived.decoder_{first,second} =
           Decode.custom
             \#Derived.bytes3, #Derived.fmt3 ->
