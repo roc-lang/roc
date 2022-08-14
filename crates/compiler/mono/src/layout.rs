@@ -1825,6 +1825,13 @@ impl<'a> Layout<'a> {
             }
         }
     }
+
+    pub fn runtime_representation(&self) -> Self {
+        match self {
+            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+            other => *other,
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.

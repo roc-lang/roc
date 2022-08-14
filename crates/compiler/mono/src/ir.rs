@@ -3238,7 +3238,7 @@ fn specialize_external<'a>(
 
                         ClosureRepresentation::UnwrappedCapture(_layout) => {
                             debug_assert_eq!(captured.len(), 1);
-                            let (captured_symbol, _) = captured[0];
+                            let (captured_symbol, _captured_layout) = captured[0];
 
                             // The capture set is unwrapped, so simply replace the closure argument
                             // to the function with the unwrapped capture name.

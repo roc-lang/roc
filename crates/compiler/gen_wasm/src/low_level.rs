@@ -1857,11 +1857,15 @@ impl<'a> LowLevelCall<'a> {
     /// Equality and inequality
     /// These can operate on any data type (except functions) so they're more complex than other operators.
     fn eq_or_neq(&self, backend: &mut WasmBackend<'a>) {
-        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-        let other_arg_layout = backend.storage.symbol_layouts[&self.arguments[1]];
+        let arg_layout =
+            backend.storage.symbol_layouts[&self.arguments[0]].runtime_representation();
+        let other_arg_layout =
+            backend.storage.symbol_layouts[&self.arguments[1]].runtime_representation();
         debug_assert!(
             arg_layout == other_arg_layout,
-            "Cannot do `==` comparison on different types"
+            "Cannot do `==` comparison on different types: {:?} vs {:?}",
+            arg_layout,
+            other_arg_layout
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
