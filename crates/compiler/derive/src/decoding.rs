@@ -166,7 +166,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
             CalledVia::Space,
         );
 
-        let callback_symbol = env.unique_symbol();
+        let callback_symbol = env.new_symbol("customCallback");
         let callback_var = env.subs.fresh_unnamed_flex_var();
         let callback_lambda_set_var = {
             let lambda_set = LambdaSet {
@@ -597,7 +597,7 @@ fn decoder_step_field(
                 }
             };
 
-            let custom_closure_symbol = env.unique_symbol();
+            let custom_closure_symbol = env.new_symbol("customCallback");
             this_custom_callback_var = env.subs.fresh_unnamed_flex_var();
             let custom_callback_lambda_set_var = {
                 let content = Content::LambdaSet(LambdaSet {
@@ -756,7 +756,7 @@ fn decoder_step_field(
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
-    let step_field_closure = env.unique_symbol();
+    let step_field_closure = env.new_symbol("stepField");
     let function_type = env.subs.fresh_unnamed_flex_var();
     let closure_type = {
         let lambda_set = LambdaSet {
@@ -947,7 +947,7 @@ fn decoder_finalizer(
     }
 
     let function_var = synth_var(env.subs, Content::Error); // We'll fix this up in subs later.
-    let function_symbol = env.unique_symbol();
+    let function_symbol = env.new_symbol("finalizer");
     let lambda_set = LambdaSet {
         solved: UnionLambdas::tag_without_arguments(env.subs, function_symbol),
         recursion_var: OptVariable::NONE,
