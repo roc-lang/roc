@@ -322,8 +322,6 @@ fn decoder_step_field(
         let custom_callback_ret_var;
         let custom_callback = {
             // \bytes, fmt ->
-            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
-            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //     when Decode.decodeWith bytes Decode.decoder fmt is
             //         rec ->
             //             {
@@ -336,7 +334,30 @@ fn decoder_step_field(
             let fmt_arg_symbol = env.new_symbol("fmt");
             let bytes_arg_var = env.subs.fresh_unnamed_flex_var();
             let fmt_arg_var = env.subs.fresh_unnamed_flex_var();
-            let rec_var = env.subs.fresh_unnamed_flex_var();
+
+            // rec.result : [Ok field_var, Err DecodeError]
+            let rec_dot_result = {
+                let tag_union = FlatType::TagUnion(
+                    UnionTags::for_result(env.subs, field_var, decode_err_var),
+                    Variable::EMPTY_TAG_UNION,
+                );
+
+                synth_var(env.subs, Content::Structure(tag_union))
+            };
+            // rec : { rest: List U8, result: (typeof rec.result) }
+            let rec_var = {
+                let fields = RecordFields::insert_into_subs(
+                    env.subs,
+                    [
+                        ("rest".into(), RecordField::Required(Variable::LIST_U8)),
+                        ("result".into(), RecordField::Required(rec_dot_result)),
+                    ],
+                );
+                let record = FlatType::Record(fields, Variable::EMPTY_RECORD);
+
+                synth_var(env.subs, Content::Structure(record))
+            };
+
             let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
             let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
             let lambda_set_var = env.subs.fresh_unnamed_flex_var();
@@ -391,18 +412,6 @@ fn decoder_step_field(
                 //                 Err err -> Err err
                 //         }
                 let branch_body = {
-                    // when rec.result is
-                    //     Ok val -> Ok {state & first: Ok val},
-                    //     Err err -> Err err
-                    let rec_dot_result = {
-                        let flat_type = FlatType::TagUnion(
-                            UnionTags::for_result(env.subs, field_var, decode_err_var),
-                            Variable::EMPTY_TAG_UNION,
-                        );
-
-                        synth_var(env.subs, Content::Structure(flat_type))
-                    };
-
                     let result_val = {
                         // result: when rec.result is
                         //     Ok val -> Ok {state & first: Ok val},
