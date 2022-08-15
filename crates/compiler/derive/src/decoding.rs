@@ -40,8 +40,14 @@ pub(crate) fn derive_decoder(
     }
 }
 
-// theDecoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
-// theDecoder =
+// Implements decoding of a record. For example, for
+//
+//   {first: a, second: b}
+//
+// we'd like to generate an impl like
+//
+// decoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
+// decoder =
 //     initialState : {f0: Result a [NoField], f1: Result b [NoField]}
 //     initialState = {f0: Err NoField, f1: Err NoField}
 //
@@ -69,18 +75,26 @@ pub(crate) fn derive_decoder(
 //
 //     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
+    // The decoded type of each field in the record, e.g. {first: a, second: b}.
     let mut field_vars = Vec::with_capacity(fields.len());
+    // The type of each field in the decoding state, e.g. {first: Result a [NoField], second: Result b [NoField]}
     let mut result_field_vars = Vec::with_capacity(fields.len());
+
+    // initialState = ...
     let (initial_state_var, initial_state) =
-        decoder_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
-    let (finalizer, finalizer_var, decode_err_var) = decoder_finalizer(
+        decoder_record_initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
+
+    // finalizer = ...
+    let (finalizer, finalizer_var, decode_err_var) = decoder_record_finalizer(
         env,
         initial_state_var,
         &fields,
         &field_vars,
         &result_field_vars,
     );
-    let (step_field, step_var) = decoder_step_field(
+
+    // stepField = ...
+    let (step_field, step_var) = decoder_record_step_field(
         env,
         fields,
         &field_vars,
@@ -89,6 +103,7 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
         decode_err_var,
     );
 
+    // Build up the type of `Decode.record` we expect
     let record_decoder_var = env.subs.fresh_unnamed_flex_var();
     let decode_record_lambda_set = env.subs.fresh_unnamed_flex_var();
     let decode_record_var = env.import_builtin_symbol_var(Symbol::DECODE_RECORD);
@@ -157,16 +172,21 @@ fn decoder_record(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) ->
 //                             result: when rec.result is
 //                                 Ok val -> Ok {state & first: Ok val},
 //                                 Err err -> Err err
-//                         }
-//             )
+//                         })
 //
-//         "second" -> # We actually use the first branch's structure, which is a desugared version of this
+//         "second" ->
 //             Keep (Decode.custom \bytes, fmt ->
 //                 when Decode.decodeWith bytes Decode.decoder fmt is
-//                     {result, rest} ->
-//                         {result: Result.map result \val -> {state & second: Ok val}, rest})
+//                     rec ->
+//                         {
+//                             rest: rec.rest,
+//                             result: when rec.result is
+//                                 Ok val -> Ok {state & second: Ok val},
+//                                 Err err -> Err err
+//                         })
+//
 //         _ -> Skip
-fn decoder_step_field(
+fn decoder_record_step_field(
     env: &mut Env,
     fields: Vec<Lowercase>,
     field_vars: &[Variable],
@@ -242,6 +262,7 @@ fn decoder_step_field(
 
                 synth_var(env.subs, Content::Structure(tag_union))
             };
+
             // rec : { rest: List U8, result: (typeof rec.result) }
             let rec_var = {
                 let fields = RecordFields::insert_into_subs(
@@ -256,6 +277,7 @@ fn decoder_step_field(
                 synth_var(env.subs, Content::Structure(record))
             };
 
+            // `Decode.decoder` for the field's value
             let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
             let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
             let lambda_set_var = env.subs.fresh_unnamed_flex_var();
@@ -274,6 +296,7 @@ fn decoder_step_field(
                 this_decode_with_var
             };
 
+            // The result of decoding this field's value - either the updated state, or a decoding error.
             let when_expr_var = {
                 let flat_type = FlatType::TagUnion(
                     UnionTags::for_result(env.subs, state_record_var, decode_err_var),
@@ -282,6 +305,9 @@ fn decoder_step_field(
 
                 synth_var(env.subs, Content::Structure(flat_type))
             };
+
+            // What our decoder passed to `Decode.custom` returns - the result of decoding the
+            // field's value, and the remaining bytes.
             custom_callback_ret_var = {
                 let rest_field = RecordField::Required(Variable::LIST_U8);
                 let result_field = RecordField::Required(when_expr_var);
@@ -587,8 +613,6 @@ fn decoder_step_field(
 
         let keep = {
             // Keep (Decode.custom \bytes, fmt ->
-            //     # Uses a single-branch `when` because `let` is more expensive to monomorphize
-            //     # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //     when Decode.decodeWith bytes Decode.decoder fmt is
             //         rec ->
             //             {
@@ -609,8 +633,6 @@ fn decoder_step_field(
         let branch = {
             // "first" ->
             //     Keep (Decode.custom \bytes, fmt ->
-            //         # Uses a single-branch `when` because `let` is more expensive to monomorphize
-            //         # due to checks for polymorphic expressions, and `rec` would be polymorphic.
             //         when Decode.decodeWith bytes Decode.decoder fmt is
             //             rec ->
             //                 {
@@ -714,11 +736,11 @@ fn decoder_step_field(
 // finalizer = \rec ->
 //     when rec.first is
 //         Ok first ->
-//             when f1 is
+//             when rec.second is
 //                 Ok second -> Ok {first, second}
 //                 Err NoField -> Err TooShort
 //         Err NoField -> Err TooShort
-fn decoder_finalizer(
+fn decoder_record_finalizer(
     env: &mut Env,
     state_record_var: Variable,
     fields: &[Lowercase],
@@ -752,6 +774,8 @@ fn decoder_finalizer(
         fields_map.insert(field_name.clone(), field);
     }
 
+    // The bottom of the happy path - return the decoded record {first: a, second: b} wrapped with
+    // "Ok".
     let return_type_var;
     let mut body = {
         let subs = &mut env.subs;
@@ -786,6 +810,11 @@ fn decoder_finalizer(
         }
     };
 
+    // Unwrap each result in the decoded state
+    //
+    // when rec.first is
+    //     Ok first -> ...happy path...
+    //     Err NoField -> Err TooShort
     for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
         .iter()
         .rev()
@@ -893,7 +922,7 @@ fn decoder_finalizer(
 // Example:
 // initialState : {first: Result a [NoField], second: Result b [NoField]}
 // initialState = {first: Err NoField, second: Err NoField}
-fn decoder_initial_state(
+fn decoder_record_initial_state(
     env: &mut Env<'_>,
     field_names: &[Lowercase],
     field_vars: &mut Vec<Variable>,
