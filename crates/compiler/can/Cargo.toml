@@ -20,4 +20,4 @@ bitvec = "1"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-indoc = "1.0.3"
+indoc = "1.0.7"

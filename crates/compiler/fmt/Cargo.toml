@@ -14,6 +14,6 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-indoc = "1.0.3"
+indoc = "1.0.7"
 roc_test_utils = { path = "../../test_utils" }
 walkdir = "2.3.2"
