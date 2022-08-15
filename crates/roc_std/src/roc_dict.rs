@@ -8,6 +8,10 @@ use core::{
 pub struct RocDict<K, V>(RocList<(K, V)>);
 
 impl<K, V> RocDict<K, V> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self(RocList::with_capacity(capacity))
     }

@@ -24,6 +24,7 @@ pub extern "C" fn rust_main() -> i32 {
     // Verify that it has all the expected traits.
 
     assert!(dict == dict); // PartialEq
+    assert_eq!(dict.len(), 2); // len
     assert!(dict.clone() == dict.clone()); // Clone
 
     assert!(dict.partial_cmp(&dict) == Some(Ordering::Equal)); // PartialOrd

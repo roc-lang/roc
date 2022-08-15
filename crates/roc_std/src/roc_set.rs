@@ -8,6 +8,10 @@ use core::{
 pub struct RocSet<T>(RocDict<T, ()>);
 
 impl<T> RocSet<T> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     #[allow(unused)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self(RocDict::with_capacity(capacity))
