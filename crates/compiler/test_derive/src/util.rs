@@ -178,7 +178,7 @@ where
 }
 
 #[macro_export]
-macro_rules! test_hash_eq {
+macro_rules! test_key_eq {
     ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
@@ -188,7 +188,7 @@ macro_rules! test_hash_eq {
 }
 
 #[macro_export]
-macro_rules! test_hash_neq {
+macro_rules! test_key_neq {
     ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {

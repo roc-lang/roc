@@ -63,9 +63,7 @@ impl FlatDecodable {
                 FlatType::FunctionOrTagUnion(_name_index, _, _) => {
                     Err(Underivable) // yet
                 }
-                FlatType::EmptyRecord => {
-                    Err(Underivable) // yet
-                }
+                FlatType::EmptyRecord => Ok(Key(FlatDecodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }

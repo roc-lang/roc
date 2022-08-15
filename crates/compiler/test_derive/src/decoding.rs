@@ -5,6 +5,7 @@
 #![allow(non_snake_case)]
 
 use crate::{
+    test_key_eq, test_key_neq,
     util::{check_immediate, derive_test},
     v,
 };
@@ -13,6 +14,34 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
 use roc_derive_key::DeriveBuiltin::Decoder;
+
+test_key_eq! {
+    Decoder,
+
+    same_record:
+        v!({ a: v!(U8), }), v!({ a: v!(U8), })
+    same_record_fields_diff_types:
+        v!({ a: v!(U8), }), v!({ a: v!(STR), })
+    same_record_fields_any_order:
+        v!({ a: v!(U8), b: v!(U8), c: v!(U8), }),
+        v!({ c: v!(U8), a: v!(U8), b: v!(U8), })
+    explicit_empty_record_and_implicit_empty_record:
+        v!(EMPTY_RECORD), v!({})
+
+    list_list_diff_types:
+        v!(Symbol::LIST_LIST v!(STR)), v!(Symbol::LIST_LIST v!(U8))
+    str_str:
+        v!(Symbol::STR_STR), v!(Symbol::STR_STR)
+}
+
+test_key_neq! {
+    Decoder,
+
+    different_record_fields:
+        v!({ a: v!(U8), }), v!({ b: v!(U8), })
+    record_empty_vs_nonempty:
+        v!(EMPTY_RECORD), v!({ a: v!(U8), })
+}
 
 #[test]
 fn immediates() {
