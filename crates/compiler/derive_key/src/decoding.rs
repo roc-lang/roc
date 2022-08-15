@@ -1,10 +1,7 @@
 use roc_module::{ident::Lowercase, symbol::Symbol};
-use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
 
-use crate::{
-    util::{check_empty_ext_var, debug_name_record},
-    DeriveError,
-};
+use crate::{util::debug_name_record, DeriveError};
 
 #[derive(Hash)]
 pub enum FlatDecodable {
@@ -41,20 +38,21 @@ impl FlatDecodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    //check_empty_ext_var(subs, ext, |ext| {
-                    //    matches!(ext, Content::Structure(FlatType::EmptyRecord))
-                    //})?;
+                    let fields_iter = match fields.unsorted_iterator(subs, ext) {
+                        Ok(it) => it,
+                        Err(_) => return Err(Underivable),
+                    };
 
-                    if subs
-                        .get_subs_slice(fields.record_fields())
-                        .iter()
-                        .any(|f| f.is_optional())
-                    {
-                        return Err(Underivable);
+                    let mut field_names = Vec::with_capacity(fields.len());
+                    for (field_name, record_field) in fields_iter {
+                        if record_field.is_optional() {
+                            // Can't derive a concrete decoder for optional fields, since those are
+                            // compile-time-polymorphic
+                            return Err(Underivable);
+                        }
+                        field_names.push(field_name.clone());
                     }
 
-                    let mut field_names: Vec<_> =
-                        subs.get_subs_slice(fields.field_names()).to_vec();
                     field_names.sort();
 
                     Ok(Key(FlatDecodableKey::Record(field_names)))
