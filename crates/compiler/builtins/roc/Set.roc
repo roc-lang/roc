@@ -41,9 +41,38 @@ insert = \@Set dict, key ->
     |> Dict.insert key {}
     |> @Set
 
+# Inserting a duplicate key has no effect.
+expect
+    actual =
+        Set.empty
+        |> Set.insert "foo"
+        |> Set.insert "bar"
+        |> Set.insert "foo"
+        |> Set.insert "baz"
+
+    expected =
+        Set.empty
+        |> Set.insert "foo"
+        |> Set.insert "bar"
+        |> Set.insert "baz"
+
+    expected == actual
+
 len : Set k -> Nat
 len = \@Set dict ->
     Dict.len dict
+
+# Inserting a duplicate key has no effect on length.
+expect
+    actual =
+        Set.empty
+        |> Set.insert "foo"
+        |> Set.insert "bar"
+        |> Set.insert "foo"
+        |> Set.insert "baz"
+        |> Set.len
+
+    actual == 3
 
 ## Drops the given element from the set.
 remove : Set k, k -> Set k
