@@ -1,10 +1,10 @@
 mod test_glue;
 
-use roc_std::{RocDict, RocStr};
+use roc_std::{RocSet, RocStr};
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut RocDict<RocStr, RocStr>);
+    fn roc_main(_: *mut RocSet<RocStr>);
 }
 
 #[no_mangle]
@@ -12,9 +12,8 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let dict = unsafe {
-        let mut ret: core::mem::MaybeUninit<RocDict<RocStr, RocStr>> =
-            core::mem::MaybeUninit::uninit();
+    let set = unsafe {
+        let mut ret: core::mem::MaybeUninit<RocSet<RocStr>> = core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
 
@@ -23,20 +22,21 @@ pub extern "C" fn rust_main() -> i32 {
 
     // Verify that it has all the expected traits.
 
-    assert!(dict == dict); // PartialEq
-    assert!(dict.clone() == dict.clone()); // Clone
+    assert!(set == set); // PartialEq
+    assert_eq!(set.len(), 3); // len
+    assert!(set.clone() == set.clone()); // Clone
 
-    assert!(dict.partial_cmp(&dict) == Some(Ordering::Equal)); // PartialOrd
-    assert!(dict.cmp(&dict) == Ordering::Equal); // Ord
+    assert!(set.partial_cmp(&set) == Some(Ordering::Equal)); // PartialOrd
+    assert!(set.cmp(&set) == Ordering::Equal); // Ord
 
-    let mut set = HashSet::new();
+    let mut hash_set = HashSet::new();
 
-    set.insert(dict.clone()); // Eq, Hash
-    set.insert(dict.clone());
+    hash_set.insert(set.clone()); // Eq, Hash
+    hash_set.insert(set.clone());
 
-    assert_eq!(set.len(), 1);
+    assert_eq!(hash_set.len(), 1);
 
-    println!("dict was: {:?}", dict); // Debug
+    println!("set was: {:?}", set); // Debug
 
     // Exit code
     0

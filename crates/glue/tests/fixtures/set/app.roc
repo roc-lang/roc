@@ -4,6 +4,8 @@ app "app"
     provides [main] to pf
 
 main =
-    Dict.empty
-    |> Dict.insert "foo" "bar"
-    |> Dict.insert "baz" "blah"
+    Set.empty
+    |> Set.insert "foo"
+    |> Set.insert "bar"
+    |> Set.insert "foo"
+    |> Set.insert "baz"

@@ -5,5 +5,5 @@ platform "test-platform"
     imports []
     provides [mainForHost]
 
-mainForHost : Dict Str Str
+mainForHost : Set Str
 mainForHost = main

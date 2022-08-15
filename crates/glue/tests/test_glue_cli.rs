@@ -74,7 +74,7 @@ mod glue_cli_run {
             dict was: RocDict {"foo": "bar", "baz": "blah"}
         "#),
         set:"set" => indoc!(r#"
-            set was: RocSet ["foo", "bar", "baz"]
+            set was: RocSet {"foo", "bar", "baz"}
         "#),
         enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
         union_with_padding:"union-with-padding" => indoc!(r#"
