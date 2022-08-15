@@ -2161,7 +2161,7 @@ pub fn call_higher_order_lowlevel<'a>(
         let boxed_local_id = match backend.storage.ensure_value_has_local(
             &mut backend.code_builder,
             boxed_sym,
-            boxed_storage.clone(),
+            boxed_storage,
         ) {
             StoredValue::Local { local_id, .. } => local_id,
             _ => internal_error!("Expected a local"),
