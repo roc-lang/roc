@@ -2117,6 +2117,17 @@ pub fn call_higher_order_lowlevel<'a>(
         ..
     } = passed_function;
 
+    // The zig lowlevel builtins expect the passed functions' closure data to always
+    // be sent as an opaque pointer. On the Roc side, however, we need to call the passed function
+    // with the Roc representation of the closure data. There are three possible cases for that
+    // representation:
+    //
+    // 1. The closure data is a struct
+    // 2. The closure data is an unwrapped value
+    // 3. There is no closure data
+    //
+    // To uniformly deal with the first two cases, always box these layouts before calling the
+    // builtin; the wrapper around the passed function will unbox them.
     let (closure_data_layout, closure_data_exists) =
         match backend.storage.symbol_layouts[captured_environment] {
             Layout::LambdaSet(lambda_set) => {
@@ -2134,6 +2145,49 @@ pub fn call_higher_order_lowlevel<'a>(
             } => (Layout::UNIT, false),
             x => internal_error!("Closure data has an invalid layout\n{:?}", x),
         };
+
+    let (wrapped_captured_environment, wrapped_captures_layout) = if closure_data_exists {
+        // If there is closure data, make sure we box it before passing it to the external builtin
+        // impl.
+        let boxed_sym = backend.create_symbol("boxed_captures");
+        let boxed_captures_layout = Layout::Boxed(backend.env.arena.alloc(closure_data_layout));
+
+        // create a local variable for the box
+        let boxed_storage = backend.storage.allocate_var(
+            boxed_captures_layout,
+            boxed_sym,
+            crate::storage::StoredVarKind::Variable,
+        );
+        let boxed_local_id = match backend.storage.ensure_value_has_local(
+            &mut backend.code_builder,
+            boxed_sym,
+            boxed_storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("Expected a local"),
+        };
+
+        // allocate heap memory and load its data address onto the value stack
+        let (size, alignment) = closure_data_layout.stack_size_and_alignment(TARGET_INFO);
+        backend.allocate_with_refcount(Some(size), alignment, 1);
+
+        // store the pointer value from the value stack into the local variable
+        backend.code_builder.set_local(boxed_local_id);
+
+        // copy the argument to the pointer address
+        backend.storage.copy_value_to_memory(
+            &mut backend.code_builder,
+            boxed_local_id,
+            0,
+            *captured_environment,
+        );
+
+        (boxed_sym, boxed_captures_layout)
+    } else {
+        // If we don't capture anything, pass along the captured environment as-is - the wrapper
+        // function will take care not to unbox this.
+        (*captured_environment, closure_data_layout)
+    };
 
     // We create a wrapper around the passed function, which just unboxes the arguments.
     // This allows Zig builtins to have a generic pointer-based interface.
@@ -2168,7 +2222,7 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.len()
         };
 
-        wrapper_arg_layouts.push(closure_data_layout);
+        wrapper_arg_layouts.push(wrapped_captures_layout);
         wrapper_arg_layouts.extend(
             argument_layouts
                 .iter()
@@ -2208,7 +2262,7 @@ pub fn call_higher_order_lowlevel<'a>(
             .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
         backend.get_fn_ptr(inc_fn)
     } else {
-        let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::Inc);
         backend.get_fn_ptr(inc_fn)
     };
 
@@ -2222,7 +2276,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2235,7 +2289,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2248,7 +2302,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2261,7 +2315,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2284,7 +2338,9 @@ pub fn call_higher_order_lowlevel<'a>(
             backend.storage.load_symbol_zig(cb, *xs);
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
-                backend.storage.load_symbols(cb, &[*captured_environment]);
+                backend
+                    .storage
+                    .load_symbols(cb, &[wrapped_captured_environment]);
             } else {
                 // load_symbols assumes that a zero-size arg should be eliminated in code gen,
                 // but that's a specialization that our Zig code doesn't have! Pass a null pointer.

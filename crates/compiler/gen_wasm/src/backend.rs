@@ -517,7 +517,7 @@ impl<'a> WasmBackend<'a> {
 
         // Load all the arguments for the inner function
         for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
-            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner)
+            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner). We'll handle it below.
             let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
             if is_closure_data || is_return_pointer {
                 continue;
@@ -540,7 +540,16 @@ impl<'a> WasmBackend<'a> {
         // If the inner function has closure data, it's the last arg of the inner fn
         let closure_data_layout = wrapper_arg_layouts[0];
         if closure_data_layout.stack_size(TARGET_INFO) > 0 {
+            // The closure data exists, and will have been passed in to the wrapper as boxed.
+            let inner_closure_data_layout = match closure_data_layout {
+                Layout::Boxed(inner) => inner,
+                other => internal_error!(
+                    "Expected a boxed layout for wrapped closure data, got {:?}",
+                    other
+                ),
+            };
             self.code_builder.get_local(LocalId(0));
+            self.dereference_boxed_value(inner_closure_data_layout);
         }
 
         // Call the wrapped inner function
@@ -1870,7 +1879,7 @@ impl<'a> WasmBackend<'a> {
     /// If the data size is known at compile time, pass it in comptime_data_size.
     /// If size is only known at runtime, push *data* size to the VM stack first.
     /// Leaves the *data* address on the VM stack
-    fn allocate_with_refcount(
+    pub fn allocate_with_refcount(
         &mut self,
         comptime_data_size: Option<u32>,
         alignment_bytes: u32,
