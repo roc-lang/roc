@@ -422,8 +422,6 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RocList ")?;
-
         f.debug_list().entries(self.iter()).finish()
     }
 }
