@@ -4,7 +4,7 @@ use core::{
     cell::Cell,
     cmp::{self, Ordering},
     ffi::c_void,
-    fmt::{self, Debug},
+    fmt::Debug,
     hash::Hash,
     intrinsics::copy_nonoverlapping,
     iter::FromIterator,
@@ -421,8 +421,8 @@ impl<T> Debug for RocList<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.iter()).finish()
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.deref().fmt(f)
     }
 }
 
