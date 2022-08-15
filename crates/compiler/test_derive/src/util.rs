@@ -53,7 +53,7 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
     }
 }
 
-/// DSL for creating [`Content`][crate::subs::Content].
+/// DSL for creating [`Content`][roc_types::subs::Content].
 #[macro_export]
 macro_rules! v {
      ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }) => {{
