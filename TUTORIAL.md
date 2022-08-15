@@ -8,7 +8,7 @@ Enjoy!
 
 ## Getting started
 
-Learn how to install roc on your machine [here](https://github.com/roc-lang/roc#getting-started).
+Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
 ## Strings and Numbers
 
