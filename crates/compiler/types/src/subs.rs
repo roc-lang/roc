@@ -2261,13 +2261,13 @@ pub struct LambdaSet {
     ///
     /// ```text
     /// XEffect : A -> B
-    ///                                                   
+    ///
     /// after : ({} -> XEffect) -> XEffect
     /// after =
     ///     \cont ->
     ///         f = \A -[`f (typeof cont)]-> when cont {} is A -> B
     ///         f
-    ///                                                   
+    ///
     /// nestForever : {} -> XEffect
     /// nestForever = \{} -[`nestForever]-> after nestForever
     /// ^^^^^^^^^^^ {} -[`nestForever]-> A -[`f ({} -[`nestForever]-> A -[`f ...]-> B)]-> B
@@ -2998,7 +2998,7 @@ impl RecordFields {
         (it, ext)
     }
 
-    /// Get a sorted iterator over the fields of this record type
+    /// get a sorted iterator over the fields of this record type
     ///
     /// Implementation: When the record has an `ext` variable that is the empty record, then
     /// we read the (assumed sorted) fields directly from Subs. Otherwise we have to chase the
