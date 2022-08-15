@@ -13,7 +13,7 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
-encode_unicode = "0.3.6"
+encode_unicode = "1.0.0"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"]}
