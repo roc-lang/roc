@@ -1118,7 +1118,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3495912c9c1ccf2e18976439f4443f3fee0fd61f424ff99fde6a66b15ecb448f"
 dependencies = [
  "cfg-if 1.0.0",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "lock_api",
  "parking_lot_core 0.9.3",
 ]
@@ -1725,9 +1725,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "607c8a29735385251a339424dd462993c0fed8fa09d378f259377df08c126022"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
  "ahash",
  "bumpalo",
@@ -1817,7 +1817,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10a35a97730320ffe8e2d410b5d3b69279b98d2c14bdb8b70ea89ecf7888d41e"
 dependencies = [
  "autocfg",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "serde",
 ]
 
@@ -2568,7 +2568,7 @@ checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
 dependencies = [
  "crc32fast",
  "flate2",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "indexmap",
  "memchr",
 ]
@@ -3297,7 +3297,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cec2b3485b07d96ddfd3134767b8a447b45ea4eb91448d0a35180ec0ffd5ed15"
 dependencies = [
  "bytecheck",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "ptr_meta",
  "rend",
  "rkyv_derive",
@@ -3498,7 +3498,7 @@ version = "0.0.1"
 dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "im",
  "im-rc",
  "wyhash",
@@ -3863,7 +3863,7 @@ name = "roc_mono"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "hashbrown 0.12.2",
+ "hashbrown 0.12.3",
  "roc_builtins",
  "roc_can",
  "roc_collections",
