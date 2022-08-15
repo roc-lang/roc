@@ -17,7 +17,7 @@ use roc_types::subs::{
 };
 use roc_types::types::{AliasKind, RecordField};
 
-use crate::util::Env;
+use crate::util::{Env, ExtensionKind};
 use crate::{synth_var, DerivedBody};
 
 pub(crate) fn derive_decoder(
@@ -353,7 +353,7 @@ fn decoder_record_step_field(
                                     region: Region::zero(),
                                     loc_expr: Box::new(Loc::at_zero(Expr::Tag {
                                         tag_union_var: result_field_var,
-                                        ext_var: env.subs.fresh_unnamed_flex_var(),
+                                        ext_var: env.new_ext_var(ExtensionKind::TagUnion),
                                         name: "Ok".into(),
                                         arguments: vec![(
                                             field_var,
@@ -365,14 +365,14 @@ fn decoder_record_step_field(
 
                             let updated_record = Expr::Update {
                                 record_var: state_record_var,
-                                ext_var: env.subs.fresh_unnamed_flex_var(),
+                                ext_var: env.new_ext_var(ExtensionKind::Record),
                                 symbol: state_arg_symbol,
                                 updates,
                             };
 
                             Expr::Tag {
                                 tag_union_var: when_expr_var,
-                                ext_var: env.subs.fresh_unnamed_flex_var(),
+                                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
                                 name: "Ok".into(),
                                 arguments: vec![(state_record_var, Loc::at_zero(updated_record))],
                             }
@@ -413,7 +413,7 @@ fn decoder_record_step_field(
                                 }],
                                 value: Loc::at_zero(Expr::Tag {
                                     tag_union_var: when_expr_var,
-                                    ext_var: env.subs.fresh_unnamed_flex_var(),
+                                    ext_var: env.new_ext_var(ExtensionKind::TagUnion),
                                     name: "Err".into(),
                                     arguments: vec![(
                                         decode_err_var,
@@ -431,7 +431,7 @@ fn decoder_record_step_field(
                         Expr::When {
                             loc_cond: Box::new(Loc::at_zero(Expr::Access {
                                 record_var: rec_var,
-                                ext_var: env.subs.fresh_unnamed_flex_var(),
+                                ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: rec_dot_result,
                                 loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
                                 field: "result".into(),
@@ -460,7 +460,7 @@ fn decoder_record_step_field(
                             region: Region::zero(),
                             loc_expr: Box::new(Loc::at_zero(Expr::Access {
                                 record_var: rec_var,
-                                ext_var: env.subs.fresh_unnamed_flex_var(),
+                                ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: Variable::LIST_U8,
                                 loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
                                 field: "rest".into(),
@@ -624,7 +624,7 @@ fn decoder_record_step_field(
             // )
             Expr::Tag {
                 tag_union_var: keep_or_skip_var,
-                ext_var: env.subs.fresh_unnamed_flex_var(),
+                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
                 name: "Keep".into(),
                 arguments: vec![(decode_custom_ret_var, Loc::at_zero(decode_custom))],
             }
@@ -664,7 +664,7 @@ fn decoder_record_step_field(
         }],
         value: Loc::at_zero(Expr::Tag {
             tag_union_var: keep_or_skip_var,
-            ext_var: env.subs.fresh_unnamed_flex_var(),
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
             name: "Skip".into(),
             arguments: Vec::new(),
         }),
@@ -804,7 +804,7 @@ fn decoder_record_finalizer(
 
         Expr::Tag {
             tag_union_var: return_type_var,
-            ext_var: env.subs.fresh_unnamed_flex_var(),
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
             name: "Ok".into(),
             arguments: vec![(done_record_var, Loc::at_zero(done_record))],
         }
@@ -825,7 +825,7 @@ fn decoder_record_finalizer(
         // when rec.first is
         let cond_expr = Expr::Access {
             record_var: state_record_var,
-            ext_var: env.subs.fresh_unnamed_flex_var(),
+            ext_var: env.new_ext_var(ExtensionKind::Record),
             field_var: result_field_var,
             loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol))),
             field: field_name.clone(),
@@ -855,7 +855,7 @@ fn decoder_record_finalizer(
             }],
             value: Loc::at_zero(Expr::Tag {
                 tag_union_var: return_type_var,
-                ext_var: env.subs.fresh_unnamed_flex_var(),
+                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
                 name: "Err".into(),
                 arguments: vec![(
                     decode_err_var,
@@ -928,10 +928,10 @@ fn decoder_record_initial_state(
     field_vars: &mut Vec<Variable>,
     result_field_vars: &mut Vec<Variable>,
 ) -> (Variable, Expr) {
-    let subs = &mut env.subs;
     let mut initial_state_fields = SendMap::default();
 
     for field_name in field_names {
+        let subs = &mut env.subs;
         let field_var = subs.fresh_unnamed_flex_var();
 
         field_vars.push(field_var);
@@ -956,7 +956,7 @@ fn decoder_record_initial_state(
         );
         let field_expr = Expr::Tag {
             tag_union_var: result_var,
-            ext_var: subs.fresh_unnamed_flex_var(),
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
             name: err_label.into(),
             arguments: vec![(no_field_var, Loc::at_zero(no_field))],
         };
@@ -970,6 +970,7 @@ fn decoder_record_initial_state(
         initial_state_fields.insert(field_name.clone(), field);
     }
 
+    let subs = &mut env.subs;
     let record_field_iter = field_names
         .iter()
         .zip(result_field_vars.iter())
