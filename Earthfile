@@ -59,7 +59,7 @@ test-zig:
 
 build-rust-test:
     FROM +copy-dirs
-    RUN echo "deb http://deb.debian.org/debian testing main contrib non-free" >> /etc/apt/sources.list # to get gcc 10.3
+    RUN echo "deb http://deb.debian.org/debian testing" >> /etc/apt/sources.list # to get gcc 10.3
     RUN apt -y update
     RUN apt -y install gcc-10 g++-10 && rm /usr/bin/gcc && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
     RUN gcc --version
