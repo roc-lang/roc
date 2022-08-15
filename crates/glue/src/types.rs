@@ -934,7 +934,21 @@ fn add_builtin_type<'a>(
 
             list_id
         }
-        (layout, typ) => todo!("Handle builtin layout {:?} and type {:?}", layout, typ),
+        (
+            Builtin::List(elem_layout),
+            Alias(Symbol::DICT_DICT, alias_vars, alias_var, alias_kind),
+        ) => {
+            todo!();
+        }
+        (Builtin::List(elem_layout), Alias(Symbol::SET_SET, alias_vars, alias_var, alias_kind)) => {
+            todo!();
+        }
+        (Builtin::List(elem_layout), alias) => {
+            unreachable!(
+                "The type alias {:?} was not an Apply(Symbol::LIST_LIST) as expected, given that its builtin was Builtin::List({:?})",
+                alias, elem_layout
+            );
+        }
     }
 }
 
