@@ -441,19 +441,6 @@ fn start_phase<'a>(
                     }
                 }
 
-                let our_exposed_types = state
-                    .exposed_types
-                    .get(&module_id)
-                    .unwrap_or_else(|| internal_error!("Exposed types for {:?} missing", module_id))
-                    .clone();
-
-                // Add our abilities to the world.
-                state.world_abilities.insert(
-                    module_id,
-                    abilities_store.clone(),
-                    our_exposed_types.exposed_types_storage_subs,
-                );
-
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 BuildTask::BuildPendingSpecializations {
