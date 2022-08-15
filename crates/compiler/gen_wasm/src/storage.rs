@@ -721,7 +721,11 @@ impl<'a> Storage<'a> {
                 debug_assert!(to_size == from_size);
                 self.load_symbols(code_builder, &[from_symbol]);
                 code_builder.set_local(*to_local_id);
-                self.symbol_storage_map.insert(from_symbol, to.clone());
+
+                // Do not repoint the stack memory to the local variable, because it is
+                // possible that other code paths will use the stack memory before this copy.
+                // For example, if the copy happens behind a branch, the local variable may not be
+                // assigned the stack content.
             }
 
             (
