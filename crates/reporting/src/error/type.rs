@@ -422,16 +422,14 @@ fn underivable_hint<'b>(
         NotDerivableContext::Decode(reason) => match reason {
             NotDerivableDecode::OptionalRecordField(field) => {
                 Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Roc cannot derive decoding for a record with an optional field, which in this case is "),
+                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
                     alloc.record_field(field),
                     alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
                     alloc.reflow("but are not a concept that extends to runtime!"),
                     alloc.hardline(),
-                    alloc.reflow("That means Roc cannot derive a decoder for a record with an optional value "),
-                    alloc.reflow("by way of an optional record field. If you want to model the idea that a field may or may not be present at runtime, "),
-                    alloc.reflow("consider using a "),
+                    alloc.reflow("Maybe you wanted to use a "),
                     alloc.symbol_unqualified(Symbol::RESULT_RESULT),
-                    alloc.reflow("."),
+                    alloc.reflow("?"),
                 ])))
             }
         },
