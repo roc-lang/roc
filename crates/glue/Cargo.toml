@@ -28,7 +28,7 @@ fnv = "1.0.7"
 [dev-dependencies]
 pretty_assertions = "1.0.0"
 tempfile = "3.2.0"
-indoc = "1.0.3"
+indoc = "1.0.7"
 cli_utils = { path = "../cli_utils" }
 roc_test_utils = { path = "../test_utils" }
 dircpy = "0.3.12"

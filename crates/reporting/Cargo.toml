@@ -32,5 +32,5 @@ roc_target = { path = "../compiler/roc_target" }
 roc_test_utils = { path = "../test_utils" }
 roc_solve = { path = "../compiler/solve" }
 pretty_assertions = "1.0.0"
-indoc = "1.0.3"
+indoc = "1.0.7"
 insta = "1.18.2"
