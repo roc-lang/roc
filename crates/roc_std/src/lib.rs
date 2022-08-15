@@ -11,12 +11,16 @@ use core::ops::Drop;
 use core::str;
 
 mod roc_box;
+mod roc_dict;
 mod roc_list;
+mod roc_set;
 mod roc_str;
 mod storage;
 
 pub use roc_box::RocBox;
+pub use roc_dict::RocDict;
 pub use roc_list::RocList;
+pub use roc_set::RocSet;
 pub use roc_str::{InteriorNulError, RocStr};
 pub use storage::Storage;
 
