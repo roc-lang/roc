@@ -12,11 +12,11 @@ If you have a specific question, the [FAQ](../FAQ.md) might have an answer, alth
 
 ## Installation
 
-- [Linux x86](getting_started/linux_x86.md)
-- [MacOS Apple Silicon](getting_started/macos_apple_silicon.md)
-- [MacOS x86](getting_started/macos_x86.md)
-- [Windows](getting_started/windows.md)
-- [Other](getting_started/other.md)
+- [Linux x86](linux_x86.md)
+- [MacOS Apple Silicon](macos_apple_silicon.md)
+- [MacOS x86](macos_x86.md)
+- [Windows](windows.md)
+- [Other](other.md)
 
 ## Running Examples
 
