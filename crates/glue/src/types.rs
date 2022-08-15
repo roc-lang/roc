@@ -936,7 +936,7 @@ fn add_builtin_type<'a>(
         }
         (
             Builtin::List(elem_layout),
-            Alias(Symbol::DICT_DICT, alias_vars, alias_var, AliasKind::Opaque),
+            Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
                 elem_layout,
@@ -980,7 +980,10 @@ fn add_builtin_type<'a>(
                 _ => unreachable!("Unrecognized List element for Dict: {:?}", elem_layout),
             }
         }
-        (Builtin::List(elem_layout), Alias(Symbol::SET_SET, alias_vars, alias_var, alias_kind)) => {
+        (
+            Builtin::List(_elem_layout),
+            Alias(Symbol::SET_SET, _alias_vars, _alias_var, _alias_kind),
+        ) => {
             todo!();
         }
         (Builtin::List(elem_layout), alias) => {
