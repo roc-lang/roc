@@ -1,9 +1,9 @@
 platform "cli"
-    requires {} { main : Task {} [] * }
+    requires {} { glue : Str -> Str }
     exposes []
     packages {}
-    imports [Task.{ Task }, InternalTask, Effect.{ Effect }]
+    imports []
     provides [mainForHost]
 
-mainForHost : Effect (Result {} []) as Fx
-mainForHost = InternalTask.toEffect main
+mainForHost : Str -> Str
+mainForHost = \input -> glue input

@@ -11,7 +11,11 @@ use std::process;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
 
-pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
+pub fn generate(
+    input_path: &Path,
+    output_path: &Path,
+    opt_script: Option<&Path>,
+) -> io::Result<i32> {
     match load_types(input_path.to_path_buf(), Threading::AllAvailable) {
         Ok(types_and_targets) => {
             let mut file = File::create(output_path).unwrap_or_else(|err| {

@@ -64,6 +64,7 @@ pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_FILE: &str = "GLUE_FILE";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
+pub const FLAG_USING: &str = "using";
 
 const VERSION: &str = include_str!("../../../version.txt");
 
@@ -262,6 +263,14 @@ pub fn build_app<'a>() -> Command<'a> {
                     .help("The filename for the generated glue code. Currently, this must be a .rs file because only Rust glue generation is supported so far.")
                     .allow_invalid_utf8(true)
                     .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_USING)
+                    .long(FLAG_USING)
+                    .help("The .roc file used to generate the glue.")
+                    .allow_invalid_utf8(true)
+                    .takes_value(true)
+                    .required(false)
             )
         )
         .trailing_var_arg(true)
