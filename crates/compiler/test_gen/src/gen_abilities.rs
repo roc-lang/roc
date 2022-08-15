@@ -971,3 +971,22 @@ fn decode_record_two_fields() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_record_two_fields_string_and_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {first: "ab", second: 10u8} -> "ab10"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("ab10"),
+        RocStr
+    )
+}
