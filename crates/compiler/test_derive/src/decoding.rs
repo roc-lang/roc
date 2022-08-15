@@ -6,14 +6,14 @@
 
 use crate::{
     test_key_eq, test_key_neq,
-    util::{check_immediate, derive_test},
+    util::{check_immediate, check_underivable, derive_test},
     v,
 };
 use insta::assert_snapshot;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
-use roc_derive_key::DeriveBuiltin::Decoder;
+use roc_derive_key::{DeriveBuiltin::Decoder, DeriveError};
 
 test_key_eq! {
     Decoder,
@@ -41,6 +41,11 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+}
+
+#[test]
+fn optional_record_field_derive_error() {
+    check_underivable(Decoder, v!({ ?a: v!(U8), }), DeriveError::Underivable);
 }
 
 #[test]

@@ -18,7 +18,7 @@ use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
-use roc_derive_key::{DeriveBuiltin, DeriveKey, Derived};
+use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
@@ -65,7 +65,7 @@ macro_rules! v {
              $(let $opt_field = $make_opt_v(subs);)*
              let fields = vec![
                  $( (stringify!($field).into(), RecordField::Required($field)) ,)*
-                 $( (stringify!($opt_field).into(), RecordField::Required($opt_field)) ,)*
+                 $( (stringify!($opt_field).into(), RecordField::Optional($opt_field)) ,)*
              ];
              let fields = RecordFields::insert_into_subs(subs, fields);
              roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
@@ -195,6 +195,18 @@ macro_rules! test_key_neq {
             $crate::util::check_key($builtin, false, $synth1, $synth2)
         }
     )*};
+}
+
+pub(crate) fn check_underivable<Sy>(builtin: DeriveBuiltin, synth: Sy, err: DeriveError)
+where
+    Sy: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Err(err));
 }
 
 pub(crate) fn check_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
