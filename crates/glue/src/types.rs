@@ -18,7 +18,7 @@ use roc_mono::layout::{
 use roc_target::TargetInfo;
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Subs, UnionLabels, UnionTags, Variable},
-    types::RecordField,
+    types::{AliasKind, RecordField},
 };
 use std::fmt::Display;
 
@@ -936,9 +936,49 @@ fn add_builtin_type<'a>(
         }
         (
             Builtin::List(elem_layout),
-            Alias(Symbol::DICT_DICT, alias_vars, alias_var, alias_kind),
+            Alias(Symbol::DICT_DICT, alias_vars, alias_var, AliasKind::Opaque),
         ) => {
-            todo!();
+            match (
+                elem_layout,
+                env.subs.get_content_without_compacting(*alias_var),
+            ) {
+                (
+                    Layout::Struct { field_layouts, .. },
+                    Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
+                ) => {
+                    let args_tuple = env.subs.get_subs_slice(*args_subs_slice);
+
+                    debug_assert_eq!(args_tuple.len(), 1);
+
+                    let (key_var, val_var) =
+                        match env.subs.get_content_without_compacting(args_tuple[0]) {
+                            Content::Structure(FlatType::TagUnion(union_tags, ext_var)) => {
+                                let (mut iter, _) =
+                                    union_tags.sorted_iterator_and_ext(env.subs, *ext_var);
+                                let payloads = iter.next().unwrap().1;
+
+                                debug_assert_eq!(iter.next(), None);
+
+                                (payloads[0], payloads[1])
+                            }
+                            _ => {
+                                unreachable!()
+                            }
+                        };
+
+                    debug_assert_eq!(field_layouts.len(), 2);
+
+                    let key_id = add_type_help(env, field_layouts[0], key_var, opt_name, types);
+                    let val_id = add_type_help(env, field_layouts[1], val_var, opt_name, types);
+                    let dict_id = types.add_anonymous(RocType::RocDict(key_id, val_id), layout);
+
+                    types.depends(dict_id, key_id);
+                    types.depends(dict_id, val_id);
+
+                    dict_id
+                }
+                _ => unreachable!("Unrecognized List element for Dict: {:?}", elem_layout),
+            }
         }
         (Builtin::List(elem_layout), Alias(Symbol::SET_SET, alias_vars, alias_var, alias_kind)) => {
             todo!();
