@@ -8510,7 +8510,7 @@ All branches in an `if` must have the same type!
     Previously, we found it to specialize `hash` for `One`.
 
     Ability specializations can only provide implementations for one
-    opauqe type, since all opaque types are different!
+    opaque type, since all opaque types are different!
 
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -8563,7 +8563,7 @@ All branches in an `if` must have the same type!
     Previously, we found it to specialize `hash` for `One`.
 
     Ability specializations can only provide implementations for one
-    opauqe type, since all opaque types are different!
+    opaque type, since all opaque types are different!
     "###
     );
 
