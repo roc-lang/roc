@@ -780,7 +780,7 @@ fn decoder_record_finalizer(
     let mut body = {
         let subs = &mut env.subs;
         let record_field_iter = fields
-            .into_iter()
+            .iter()
             .zip(field_vars.iter())
             .map(|(field_name, &field_var)| (field_name.clone(), RecordField::Required(field_var)));
         let flat_type = FlatType::Record(
@@ -818,7 +818,7 @@ fn decoder_record_finalizer(
     for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
         .iter()
         .rev()
-        .zip(fields.into_iter().rev())
+        .zip(fields.iter().rev())
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
