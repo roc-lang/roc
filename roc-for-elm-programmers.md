@@ -377,18 +377,43 @@ when color is
     Green | Red | Yellow -> 4 # only gets run if totalColors < 3
 ```
 
-This gives you a way to use constants in patterns:
+This gives you a way to use local variables in patterns:
 
 ```rust
-pi = 3.14
-e = 2.72
+\min, max ->
+    when number is
+        0 -> "zero"
+        1 -> "one"
+        v if v == min -> "min"
+        v if v == max -> "max"
+        _ -> "other"
+```
+
+You can also use constants in pattern matches by fully-qualifying them:
+
+```rust
+when number is
+    0 -> "zero"
+    1 -> "one"
+    Num.pi -> "pi"
+    _ -> "other"
+```
+
+In Roc, you can also write `Foo.bar` inside the `Foo` module itself (and it even works for
+unexposed things in the current module), which gives you a way to refer to top-level constants
+in the same module.
+
+So so the following code would work as expected, assuming it's written at the top level of
+a module named `Foo`:
+
+```rust
+constant = 42
 
 when number is
     0 -> "zero"
     1 -> "one"
-    v if v == pi -> "pi"
-    v if v == e -> "e"
-    _ -> ""
+    Foo.constant -> "constant"
+    _ -> "other"
 ```
 
 ## Custom Types
