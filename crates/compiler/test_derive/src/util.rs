@@ -18,7 +18,7 @@ use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
-use roc_derive_key::{DeriveBuiltin, DeriveKey, Derived};
+use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
@@ -53,7 +53,7 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
     }
 }
 
-/// DSL for creating [`Content`][crate::subs::Content].
+/// DSL for creating [`Content`][roc_types::subs::Content].
 #[macro_export]
 macro_rules! v {
      ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }) => {{
@@ -65,7 +65,7 @@ macro_rules! v {
              $(let $opt_field = $make_opt_v(subs);)*
              let fields = vec![
                  $( (stringify!($field).into(), RecordField::Required($field)) ,)*
-                 $( (stringify!($opt_field).into(), RecordField::Required($opt_field)) ,)*
+                 $( (stringify!($opt_field).into(), RecordField::Optional($opt_field)) ,)*
              ];
              let fields = RecordFields::insert_into_subs(subs, fields);
              roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
@@ -178,7 +178,7 @@ where
 }
 
 #[macro_export]
-macro_rules! test_hash_eq {
+macro_rules! test_key_eq {
     ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
@@ -188,13 +188,25 @@ macro_rules! test_hash_eq {
 }
 
 #[macro_export]
-macro_rules! test_hash_neq {
+macro_rules! test_key_neq {
     ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
             $crate::util::check_key($builtin, false, $synth1, $synth2)
         }
     )*};
+}
+
+pub(crate) fn check_underivable<Sy>(builtin: DeriveBuiltin, synth: Sy, err: DeriveError)
+where
+    Sy: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Err(err));
 }
 
 pub(crate) fn check_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
@@ -324,7 +336,7 @@ fn check_derived_typechecks_and_golden(
     // run the solver, print and fail if we have errors
     dbg_do!(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
-        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
+        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "1")
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
@@ -337,6 +349,10 @@ fn check_derived_typechecks_and_golden(
         Default::default(),
         &exposed_for_module.exposed_by_module,
         Default::default(),
+    );
+    dbg_do!(
+        roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
+        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "0")
     );
     let subs = solved_subs.inner_mut();
 

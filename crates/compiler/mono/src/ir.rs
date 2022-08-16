@@ -3857,7 +3857,7 @@ pub fn with_hole<'a>(
             )
         }
         Tag {
-            variant_var,
+            tag_union_var: variant_var,
             name: tag_name,
             arguments: args,
             ..
@@ -5679,7 +5679,7 @@ fn tag_union_to_function<'a>(
     }
 
     let loc_body = Loc::at_zero(roc_can::expr::Expr::Tag {
-        variant_var: return_variable,
+        tag_union_var: return_variable,
         name: tag_name,
         arguments: loc_expr_args,
         ext_var,

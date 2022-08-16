@@ -19,3 +19,7 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 [features]
 default = []
 debug-derived-symbols = ["roc_module/debug-symbols"]
+# Enables open extension variables for constructed records and tag unions.
+# This is not necessary for code generation, but may be necessary if you are
+# constraining and solving generated derived bodies.
+open-extension-vars = []

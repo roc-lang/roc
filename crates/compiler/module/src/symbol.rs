@@ -1417,10 +1417,11 @@ define_builtins! {
         19 DECODE_BOOL: "bool"
         20 DECODE_STRING: "string"
         21 DECODE_LIST: "list"
-        22 DECODE_CUSTOM: "custom"
-        23 DECODE_DECODE_WITH: "decodeWith"
-        24 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
-        25 DECODE_FROM_BYTES: "fromBytes"
+        22 DECODE_RECORD: "record"
+        23 DECODE_CUSTOM: "custom"
+        24 DECODE_DECODE_WITH: "decodeWith"
+        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        26 DECODE_FROM_BYTES: "fromBytes"
     }
     13 JSON: "Json" => {
         0 JSON_JSON: "Json"

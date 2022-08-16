@@ -952,3 +952,61 @@ fn encode_then_decode_list_of_lists_of_strings() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_record_two_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {first: "ab", second: "cd"} -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_record_two_fields_string_and_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {first: "ab", second: 10u8} -> "ab10"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("ab10"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "json parsing impl must be fixed first"]
+fn decode_empty_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {} -> "empty"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("empty"),
+        RocStr
+    )
+}

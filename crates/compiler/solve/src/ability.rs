@@ -584,7 +584,15 @@ trait DerivableVisitor {
                         let descend = Self::visit_record(var)?;
                         if descend.0 {
                             push_var_slice!(fields.variables());
-                            stack.push(ext);
+                            if !matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::FlexVar(_) | Content::RigidVar(_)
+                            ) {
+                                // TODO: currently, just we suppose the presence of a flex var may
+                                // include more or less things which we can derive. But, we should
+                                // instead recurse here, and add a `t ~ u | u has Decode` constraint as needed.
+                                stack.push(ext);
+                            }
                         }
                     }
                     TagUnion(tags, ext) => {

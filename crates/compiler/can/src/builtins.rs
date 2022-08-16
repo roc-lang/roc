@@ -444,7 +444,7 @@ fn no_region<T>(value: T) -> Loc<T> {
 #[inline(always)]
 fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
-        variant_var: var_store.fresh(),
+        tag_union_var: var_store.fresh(),
         ext_var: var_store.fresh(),
         name: TagName(name.into()),
         arguments: args
