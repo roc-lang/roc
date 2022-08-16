@@ -10457,4 +10457,34 @@ All branches in an `if` must have the same type!
     "_foo", or replace it with just an "_".
     "###
     );
+
+    test_report!(
+        infer_decoded_record_error_with_function_field,
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                when decoded is
+                    Ok rcd -> rcd.first rcd.second
+                    _ -> "something went wrong"
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    6│          Ok rcd -> rcd.first rcd.second
+                          ^^^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        a -> b
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
 }
