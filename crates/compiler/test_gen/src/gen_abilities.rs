@@ -1012,6 +1012,26 @@ fn decode_record_two_fields_string_and_string_infer() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_record_two_fields_string_and_string_infer_local_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                when decoded is
+                    Ok rcd -> Str.concat rcd.first rcd.second
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore = "json parsing impl must be fixed first"]
 fn decode_empty_record() {
     assert_evals_to!(
