@@ -33,6 +33,8 @@ pub mod build;
 mod format;
 pub use format::format;
 
+use crate::build::BuildOrdering;
+
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
@@ -521,6 +523,10 @@ pub fn build(
         .and_then(|s| s.parse::<u32>().ok())
         .map(|x| x * 1024);
 
+    let build_ordering = match config {
+        BuildAndRunIfNoErrors => BuildOrdering::BuildIfChecks,
+        _ => BuildOrdering::AlwaysBuild,
+    };
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -533,6 +539,7 @@ pub fn build(
         precompiled,
         threading,
         wasm_dev_stack_bytes,
+        build_ordering,
     );
 
     match res_binary_path {

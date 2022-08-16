@@ -35,6 +35,13 @@ pub struct BuiltFile {
     pub interns: Interns,
 }
 
+pub enum BuildOrdering {
+    /// Run up through typechecking first; continue building iff that is successful.
+    BuildIfChecks,
+    /// Always build the Roc binary, even if there are type errors.
+    AlwaysBuild,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
@@ -48,6 +55,7 @@ pub fn build_file<'a>(
     precompiled: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
+    order: BuildOrdering,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
@@ -55,12 +63,17 @@ pub fn build_file<'a>(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
+    let exec_mode = match order {
+        BuildOrdering::BuildIfChecks => ExecutionMode::ExecutableIfCheck,
+        BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
+    };
+
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         threading,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode,
     };
     let loaded = roc_load::load_and_monomorphize(
         arena,

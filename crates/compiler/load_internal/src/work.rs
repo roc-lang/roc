@@ -166,11 +166,10 @@ impl<'a> Dependencies<'a> {
             }
         }
 
-        if goal_phase >= MakeSpecializations {
-            // Add make specialization dependents
-            self.make_specializations_dependents
-                .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
-        }
+        // Add "make specialization" dependents. Even if we're not targetting making
+        // specializations right now, we may re-enter to do so later.
+        self.make_specializations_dependents
+            .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
 
         // add dependencies for self
         // phase i + 1 of a file always depends on phase i being completed
@@ -372,6 +371,80 @@ impl<'a> Dependencies<'a> {
                 ),
             },
         }
+    }
+
+    /// Loads the dependency graph to find and make specializations, and returns the next jobs to
+    /// be run.
+    ///
+    /// This should be used when the compiler wants to build or run a Roc executable if and only if
+    /// previous stages succeed; in such cases we load the dependency graph dynamically.
+    pub fn load_find_and_make_specializations_after_check(&mut self) -> MutSet<(ModuleId, Phase)> {
+        let mut output = MutSet::default();
+
+        let mut make_specializations_dependents = MakeSpecializationsDependents::default();
+        let default_make_specializations_dependents_len = make_specializations_dependents.0.len();
+        std::mem::swap(
+            &mut self.make_specializations_dependents,
+            &mut make_specializations_dependents,
+        );
+
+        for (&module, info) in make_specializations_dependents.0.iter_mut() {
+            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::FindSpecializations)).is_none(), "should only have targetted solving types, but there is already a goal to find specializations");
+            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::MakeSpecializations)).is_none(), "should only have targetted solving types, but there is already a goal to make specializations");
+            debug_assert!(
+                module == ModuleId::DERIVED_GEN || info.succ.contains(&ModuleId::DERIVED_GEN),
+                "derived module not accounted for in {:?}",
+                (module, info)
+            );
+
+            let mut has_find_specialization_dep = false;
+            for &module_dep in info.succ.iter() {
+                // The modules in `succ` are the modules for which specializations should be made
+                // after the current one. But, their specializations should be found before the
+                // current one.
+                if module_dep != ModuleId::DERIVED_GEN {
+                    // We never find specializations for DERIVED_GEN
+                    self.add_dependency(module, module_dep, Phase::FindSpecializations);
+                    has_find_specialization_dep = true;
+                }
+
+                self.add_dependency(module_dep, module, Phase::MakeSpecializations);
+                self.add_dependency(ModuleId::DERIVED_GEN, module, Phase::MakeSpecializations);
+
+                // `module_dep` can't make its specializations until the current module does.
+                info.has_pred = true;
+            }
+
+            if module != ModuleId::DERIVED_GEN {
+                self.add_to_status_for_phase(module, Phase::FindSpecializations);
+                self.add_dependency_help(
+                    module,
+                    module,
+                    Phase::MakeSpecializations,
+                    Phase::FindSpecializations,
+                );
+            }
+            self.add_to_status_for_phase(module, Phase::MakeSpecializations);
+
+            if !has_find_specialization_dep && module != ModuleId::DERIVED_GEN {
+                // We don't depend on any other modules having their specializations found first,
+                // so start finding specializations from this module.
+                output.insert((module, Phase::FindSpecializations));
+            }
+        }
+
+        std::mem::swap(
+            &mut self.make_specializations_dependents,
+            &mut make_specializations_dependents,
+        );
+        debug_assert_eq!(
+            make_specializations_dependents.0.len(),
+            default_make_specializations_dependents_len,
+            "more modules were added to the graph: {:?}",
+            make_specializations_dependents
+        );
+
+        output
     }
 
     /// Load the entire "make specializations" dependency graph and start from the top.
