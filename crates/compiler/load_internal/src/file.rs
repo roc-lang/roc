@@ -441,6 +441,19 @@ fn start_phase<'a>(
                     }
                 }
 
+                let our_exposed_types = state
+                    .exposed_types
+                    .get(&module_id)
+                    .unwrap_or_else(|| internal_error!("Exposed types for {:?} missing", module_id))
+                    .clone();
+
+                // Add our abilities to the world.
+                state.world_abilities.insert(
+                    module_id,
+                    abilities_store.clone(),
+                    our_exposed_types.exposed_types_storage_subs,
+                );
+
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 BuildTask::BuildPendingSpecializations {
@@ -504,23 +517,7 @@ fn start_phase<'a>(
                             procs_base,
                             layout_cache,
                             module_timing,
-                            abilities_store,
                         } = found_specializations;
-
-                        let our_exposed_types = state
-                            .exposed_types
-                            .get(&module_id)
-                            .unwrap_or_else(|| {
-                                internal_error!("Exposed types for {:?} missing", module_id)
-                            })
-                            .clone();
-
-                        // Add our abilities to the world.
-                        state.world_abilities.insert(
-                            module_id,
-                            abilities_store,
-                            our_exposed_types.exposed_types_storage_subs,
-                        );
 
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     } else {
@@ -677,7 +674,6 @@ struct FoundSpecializationsModule<'a> {
     procs_base: ProcsBase<'a>,
     subs: Subs,
     module_timing: ModuleTiming,
-    abilities_store: AbilitiesStore,
 }
 
 #[derive(Debug)]
@@ -802,7 +798,6 @@ enum Msg<'a> {
         procs_base: ProcsBase<'a>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
         toplevel_expects: VecMap<Symbol, Region>,
     },
     MadeSpecializations {
@@ -2458,7 +2453,6 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             module_timing,
-            abilities_store,
             toplevel_expects,
         } => {
             log!("found specializations for {:?}", module_id);
@@ -2480,7 +2474,6 @@ fn update<'a>(
                 procs_base,
                 subs,
                 module_timing,
-                abilities_store,
             };
 
             state
@@ -5160,7 +5153,6 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs_base,
         module_timing,
-        abilities_store,
         toplevel_expects,
     }
 }
