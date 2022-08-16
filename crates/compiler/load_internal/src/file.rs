@@ -2408,6 +2408,24 @@ fn update<'a>(
 
                 state.timings.insert(module_id, module_timing);
 
+                if matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) {
+                    // We there may outstanding modules in the typecheked cache whose ident IDs
+                    // aren't registered; transfer all of their idents over to the state, since
+                    // we're now done and ready to report errors.
+                    for (
+                        module_id,
+                        TypeCheckedModule {
+                            ident_ids,
+                            module_timing,
+                            ..
+                        },
+                    ) in state.module_cache.typechecked.drain()
+                    {
+                        state.constrained_ident_ids.insert(module_id, ident_ids);
+                        state.timings.insert(module_id, module_timing);
+                    }
+                }
+
                 let documentation = {
                     let mut empty = MutMap::default();
                     std::mem::swap(&mut empty, &mut state.module_cache.documentation);
