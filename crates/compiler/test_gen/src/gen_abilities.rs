@@ -1010,3 +1010,22 @@ fn decode_empty_record() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_record_of_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("ab10"),
+        RocStr
+    )
+}
