@@ -4019,3 +4019,22 @@ fn mutually_recursive_captures() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn monomorphization_sees_polymorphic_recursion() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            foo : a, Bool -> Str
+            foo = \in, b -> if b then "done" else bar in
+
+            bar = \_ -> foo {} True
+
+            foo "" False
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    )
+}
