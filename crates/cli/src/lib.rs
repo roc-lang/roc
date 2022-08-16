@@ -39,6 +39,7 @@ const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
+pub const CMD_DEV: &str = "dev";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
@@ -201,6 +202,19 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
+            .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
+            .arg(roc_file_to_run.clone())
+            .arg(args_for_app.clone())
+        )
+        .subcommand(Command::new(CMD_DEV)
+            .about("`check` a .roc file, and then run it if there were no errors.")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
