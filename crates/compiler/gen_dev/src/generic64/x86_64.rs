@@ -1009,6 +1009,17 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         imul_reg64_reg64(buf, dst, src2);
     }
 
+    #[inline(always)]
+    fn umul_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        mov_reg64_reg64(buf, dst, src1);
+        mul_reg64_reg64(buf, dst, src2);
+    }
+
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
         dst: X86_64FloatReg,
@@ -1535,6 +1546,12 @@ fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gen
     // IMUL is strange, the parameters are reversed from must other binary ops.
     // The final encoding is (src, dst) instead of (dst, src).
     extended_binop_reg64_reg64(0x0F, 0xAF, buf, src, dst);
+}
+
+/// `MUL r/m64` -> Unsigned Multiply r/m64 to r64.
+#[inline(always)]
+fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    todo!()
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
