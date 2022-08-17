@@ -473,6 +473,7 @@ fn start_phase<'a>(
                 }
             }
             Phase::MakeSpecializations => {
+                eprintln!("making for {:?}", module_id);
                 let mut specializations_we_must_make = state
                     .module_cache
                     .external_specializations_requested

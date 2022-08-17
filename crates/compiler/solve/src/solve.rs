@@ -1695,6 +1695,9 @@ fn check_ability_specialization(
                                 })
                                 .collect();
 
+                            let set =
+                                std::env::var("ROC_TRACE_COMPACTION").unwrap_or("0".to_string());
+                            std::env::set_var("ROC_TRACE_COMPACTION", "0");
                             compact_lambdas_and_check_obligations(
                                 arena,
                                 pools,
@@ -1706,6 +1709,7 @@ fn check_ability_specialization(
                                 derived_env,
                                 lambda_sets_to_specialize,
                             );
+                            std::env::set_var("ROC_TRACE_COMPACTION", set);
 
                             let specialization =
                                 MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
@@ -2964,7 +2968,15 @@ fn generalize(
             if desc_rank < young_rank {
                 pools.get_mut(desc_rank).push(var);
             } else {
-                subs.set_rank(var, Rank::NONE);
+                if !matches!(subs.get_content_without_compacting(var), Content::LambdaSet(LambdaSet {unspecialized, ..}) if !unspecialized.is_empty())
+                {
+                    subs.set_rank(var, Rank::NONE);
+                } else {
+                    dbg!(roc_types::subs::SubsFmtContent(
+                        subs.get_content_without_compacting(var),
+                        subs
+                    ));
+                }
             }
         }
     }
@@ -3269,8 +3281,11 @@ fn adjust_rank_content(
             }
 
             for uls_index in *unspecialized {
-                let Uls(var, _, _) = subs[uls_index];
-                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                // Do we let them escape? I think not..
+                // dbg!(roc_types::subs::SubsFmtContent(content, subs), group_rank);
+                // rank = rank.max(group_rank);
+                // let Uls(var, _, _) = subs[uls_index];
+                // rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
 
             if let (true, Some(rec_var)) = (cfg!(debug_assertions), recursion_var.into_variable()) {
@@ -3647,10 +3662,10 @@ fn deep_copy_uls_precondition(subs: &Subs, original_var: Variable, new_var: Vari
             "var in unspecialized lamba set is not bound to an ability, it is {:?}",
             roc_types::subs::SubsFmtContent(content, subs)
         );
-        debug_assert!(
-            original_var != new_var,
-            "unspecialized lamba set var was not instantiated"
-        );
+        //debug_assert!(
+        //    original_var != new_var,
+        //    "unspecialized lamba set var was not instantiated"
+        //);
     }
 }
 

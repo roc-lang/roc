@@ -7755,4 +7755,118 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn foo1() {
+        infer_queries!(
+            indoc!(
+                r#"
+        app "test" imports [] provides [main] to "./platform"
+
+        Producer has
+            str : prod -> Str | prod has Producer
+            id : (prod -> elem) -> (prod -> elem) | prod has Producer
+
+        MyProducer := {} has [Producer {str: produceStr, id: produceId}]
+
+        produceStr = \@MyProducer {} -> "ab"
+
+        produceId = \produce ->
+        #^^^^^^^^^{-1}
+            thunk = \@MyProducer {} -> produce (@MyProducer {})
+            thunk
+
+        exampleProducer = id str
+        #                 ^^ ^^^
+        #^^^^^^^^^^^^^^^{-1}
+
+        main = exampleProducer (@MyProducer {})
+        #      ^^^^^^^^^^^^^^^
+                "#
+            ),
+            @""
+        );
+    }
+
+    #[test]
+    fn foo2() {
+        infer_queries!(
+            indoc!(
+                r#"
+        app "test" imports [] provides [main] to "./platform"
+
+        Use has
+            string : fmt -> Str | fmt has Use
+            indirect : (fmt -> elem) -> (fmt -> elem) | fmt has Use
+
+        SomeUse := {} has [Use {string: stringUse, indirect: indirectUse}]
+
+        stringUse = \@SomeUse {} -> "ab"
+
+        indirectUse = \forcer -> \@SomeUse {} -> forcer (@SomeUse {})
+        #^^^^^^^^^^^{-1}
+
+        theUnwrapper2 = indirectUse stringUse
+        #^^^^^^^^^^^^^{-1}
+
+        main = theUnwrapper2 (@SomeUse {})
+        #      ^^^^^^^^^^^^^
+                "#
+            ),
+            @""
+        );
+    }
+
+    #[test]
+    fn foo3() {
+        infer_queries!(
+            indoc!(
+                r#"
+        app "test" imports [] provides [main] to "./platform"
+
+        Use has
+            string : fmt -> Str | fmt has Use
+            indirect : fmt, (fmt -> elem) -> (fmt -> elem) | fmt has Use
+
+        SomeUse := {} has [Use {string: stringUse, indirect: indirectUse}]
+
+        stringUse = \@SomeUse {} -> "ab"
+
+        indirectUse = \@SomeUse {}, forcer -> \@SomeUse {} -> forcer (@SomeUse {})
+        #^^^^^^^^^^^{-1}
+
+        theUnwrapper1 = \fmt -> (indirect fmt string)
+        #                        ^^^^^^^^     ^^^^^^
+        #^^^^^^^^^^^^^{-1}
+
+        main = (theUnwrapper1 (@SomeUse {})) (@SomeUse {})
+        #       ^^^^^^^^^^^^^
+                "#
+            ),
+            @""
+        );
+    }
+
+    #[test]
+    fn foo4() {
+        infer_queries!(
+            indoc!(
+                r#"
+        app "test" imports [Decode, Json] provides [main] to "./platform"
+
+        theDecoder = Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.list Decode.string) fmt
+        #^^^^^^^^^^{-1}
+
+        main =
+            when Str.toUtf8 "dalist" |> Decode.decodeWith theDecoder Json.fromUtf8 is
+                {result, rest: _} ->
+                    when result is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "<bad>"
+                "#
+            ),
+            @""
+            print_only_under_alias: true
+        );
+    }
 }

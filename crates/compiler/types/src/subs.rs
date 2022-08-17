@@ -2115,6 +2115,10 @@ pub struct Rank(u32);
 impl Rank {
     pub const NONE: Rank = Rank(0);
 
+    pub fn last(self) -> Self {
+        Rank(self.0 - 1)
+    }
+
     pub fn is_none(&self) -> bool {
         *self == Self::NONE
     }

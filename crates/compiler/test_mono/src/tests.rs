@@ -1922,3 +1922,66 @@ fn issue_3669() {
         "#
     )
 }
+
+#[mono_test]
+fn decode_list_of_strings1() {
+    indoc!(
+        r#"
+        app "test" imports [Decode, Json] provides [main] to "./platform"
+
+        theDecoder = Decode.list Decode.string
+
+        main =
+            when Str.toUtf8 "dalist" |> Decode.decodeWith theDecoder Json.fromUtf8 is
+                {result, rest: _} ->
+                    when result is
+                        Ok l -> Str.concat l ""
+                        _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn decode_list_of_strings2() {
+    indoc!(
+        r#"
+        app "test" imports [Decode, Json] provides [main] to "./platform"
+
+        theDecoder = Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.list Decode.string) fmt
+
+        main =
+            when Str.toUtf8 "dalist" |> Decode.decodeWith theDecoder Json.fromUtf8 is
+                {result, rest: _} ->
+                    when result is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn repro1() {
+    indoc!(
+        r#"
+        app "test" imports [] provides [main] to "./platform"
+
+        Use has
+            string : fmt -> Str | fmt has Use
+            indirect : fmt, (fmt -> elem) -> (fmt -> elem) | fmt has Use
+
+        SomeUse := {} has [Use {string: stringUse, indirect: indirectUse}]
+
+        stringUse = \@SomeUse {} -> "ab"
+
+        indirectUse = \@SomeUse {}, forcer -> \@SomeUse {} -> forcer (@SomeUse {})
+        #^^^^^^^^^^^{-1}
+
+        theUnwrapper1 = \fmt -> (indirect fmt string)
+        #                        ^^^^^^^^     ^^^^^^
+        #^^^^^^^^^^^^^{-1}
+
+        main = (theUnwrapper1 (@SomeUse {})) (@SomeUse {})
+        #       ^^^^^^^^^^^^^
+        "#
+    )
+}
