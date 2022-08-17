@@ -540,15 +540,22 @@ impl<'a> WasmBackend<'a> {
         // If the inner function has closure data, it's the last arg of the inner fn
         let closure_data_layout = wrapper_arg_layouts[0];
         if closure_data_layout.stack_size(TARGET_INFO) > 0 {
-            // The closure data exists, and will have been passed in to the wrapper as boxed.
+            // The closure data exists, and will have been passed in to the wrapper as a
+            // one-element struct.
             let inner_closure_data_layout = match closure_data_layout {
-                Layout::Boxed(inner) => inner,
+                Layout::Struct {
+                    field_layouts: [inner],
+                    ..
+                } => inner,
                 other => internal_error!(
                     "Expected a boxed layout for wrapped closure data, got {:?}",
                     other
                 ),
             };
             self.code_builder.get_local(LocalId(0));
+            // Since the closure data is wrapped in a one-element struct, we've been passed in the
+            // pointer to that struct in the stack memory. To get the closure data we just need to
+            // dereference the pointer.
             self.dereference_boxed_value(inner_closure_data_layout);
         }
 

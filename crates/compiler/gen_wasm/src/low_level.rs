@@ -2126,8 +2126,9 @@ pub fn call_higher_order_lowlevel<'a>(
     // 2. The closure data is an unwrapped value
     // 3. There is no closure data
     //
-    // To uniformly deal with the first two cases, always box these layouts before calling the
-    // builtin; the wrapper around the passed function will unbox them.
+    // To uniformly deal with the first two cases, always put the closure data, when it exists,
+    // into a one-element struct. That way, we get a pointer (i32) that can be passed to the zig lowlevels.
+    // The wrapper around the passed function will access the actual closure data in the struct.
     let (closure_data_layout, closure_data_exists) =
         match backend.storage.symbol_layouts[captured_environment] {
             Layout::LambdaSet(lambda_set) => {
@@ -2147,45 +2148,42 @@ pub fn call_higher_order_lowlevel<'a>(
         };
 
     let (wrapped_captured_environment, wrapped_captures_layout) = if closure_data_exists {
-        // If there is closure data, make sure we box it before passing it to the external builtin
-        // impl.
-        let boxed_sym = backend.create_symbol("boxed_captures");
-        let boxed_captures_layout = Layout::Boxed(backend.env.arena.alloc(closure_data_layout));
+        // If there is closure data, make sure we put in a struct it before passing it to the
+        // external builtin impl. That way it's always an `i32` pointer.
+        let wrapped_closure_data_sym = backend.create_symbol("wrapped_captures");
+        let wrapped_captures_layout =
+            Layout::struct_no_name_order(backend.env.arena.alloc([closure_data_layout]));
 
-        // create a local variable for the box
-        let boxed_storage = backend.storage.allocate_var(
-            boxed_captures_layout,
-            boxed_sym,
+        // make sure that the wrapping struct is available in stack memory, so we can hand out a
+        // pointer to it.
+        let wrapped_storage = backend.storage.allocate_var(
+            wrapped_captures_layout,
+            wrapped_closure_data_sym,
             crate::storage::StoredVarKind::Variable,
         );
-        let boxed_local_id = match backend.storage.ensure_value_has_local(
-            &mut backend.code_builder,
-            boxed_sym,
-            boxed_storage,
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
-            _ => internal_error!("Expected a local"),
+
+        let (wrapped_storage_local_ptr, wrapped_storage_offset) = match wrapped_storage {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(backend.storage.stack_frame_pointer)
+            }
+            other => internal_error!(
+                "Struct should be allocated in stack memory, but it's in {:?}",
+                other
+            ),
         };
 
-        // allocate heap memory and load its data address onto the value stack
-        let (size, alignment) = closure_data_layout.stack_size_and_alignment(TARGET_INFO);
-        backend.allocate_with_refcount(Some(size), alignment, 1);
-
-        // store the pointer value from the value stack into the local variable
-        backend.code_builder.set_local(boxed_local_id);
-
-        // copy the argument to the pointer address
+        // copy the actual closure data into the first and only element of the wrapping struct.
         backend.storage.copy_value_to_memory(
             &mut backend.code_builder,
-            boxed_local_id,
-            0,
+            wrapped_storage_local_ptr,
+            wrapped_storage_offset,
             *captured_environment,
         );
 
-        (boxed_sym, boxed_captures_layout)
+        (wrapped_closure_data_sym, wrapped_captures_layout)
     } else {
         // If we don't capture anything, pass along the captured environment as-is - the wrapper
-        // function will take care not to unbox this.
+        // function will take care not to unwrap this.
         (*captured_environment, closure_data_layout)
     };
 
