@@ -56,7 +56,7 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
 /// DSL for creating [`Content`][roc_types::subs::Content].
 #[macro_export]
 macro_rules! v {
-     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }) => {{
+     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }$( $ext:tt )?) => {{
          #[allow(unused)]
          use roc_types::types::RecordField;
          use roc_types::subs::{Subs, RecordFields, Content, FlatType, Variable};
@@ -68,7 +68,12 @@ macro_rules! v {
                  $( (stringify!($opt_field).into(), RecordField::Optional($opt_field)) ,)*
              ];
              let fields = RecordFields::insert_into_subs(subs, fields);
-             roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
+
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_RECORD;
+             $( ext = $crate::v!($ext)(subs); )?
+
+             roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, ext)))
          }
      }};
      ([ $($tag:ident $($payload:expr)*),* ]$( $ext:tt )?) => {{
@@ -82,7 +87,7 @@ macro_rules! v {
              )*
              let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
 
-             #[allow(unused_mut)]
+             #[allow(unused_mut, unused)]
              let mut ext = Variable::EMPTY_TAG_UNION;
              $( ext = $crate::v!($ext)(subs); )?
 
@@ -195,6 +200,18 @@ macro_rules! test_key_neq {
             $crate::util::check_key($builtin, false, $synth1, $synth2)
         }
     )*};
+}
+
+pub(crate) fn check_derivable<Sy>(builtin: DeriveBuiltin, synth: Sy, key: DeriveKey)
+where
+    Sy: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let derived = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(derived, Ok(Derived::Key(key)));
 }
 
 pub(crate) fn check_underivable<Sy>(builtin: DeriveBuiltin, synth: Sy, err: DeriveError)

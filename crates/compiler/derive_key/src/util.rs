@@ -3,13 +3,15 @@ use roc_types::subs::{Content, Subs, Variable};
 
 use crate::DeriveError;
 
-pub(crate) fn check_empty_ext_var(
+pub(crate) fn check_derivable_ext_var(
     subs: &Subs,
     ext_var: Variable,
     is_empty_ext: impl Fn(&Content) -> bool,
 ) -> Result<(), DeriveError> {
     let ext_content = subs.get_content_without_compacting(ext_var);
-    if is_empty_ext(ext_content) {
+    if is_empty_ext(ext_content)
+        || matches!(ext_content, Content::FlexVar(_) | Content::RigidVar(_))
+    {
         Ok(())
     } else {
         match ext_content {
