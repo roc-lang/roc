@@ -67,7 +67,7 @@ APIs, you don't need to bother writing `getUsername = Debug.todo "implement"`.
 Imagine if Elm's `let`...`in` worked exactly the same way, except you removed
 the `let` and `in` keywords. That's how it works in Roc.
 
-For example, this Elm code computes `someNumber` to be `1234`:
+For example, this Elm code computes `numbers` to be `[123, 456]`:
 
 ```elm
 numbers =
