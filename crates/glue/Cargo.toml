@@ -25,6 +25,12 @@ strum_macros = "0.24"
 indexmap = "1.8.1"
 fnv = "1.0.7"
 
+libloading = "0.7.1"
+inkwell = {path = "../vendor/inkwell"}
+roc_gen_llvm = {path = "../compiler/gen_llvm"}
+roc_build = { path = "../compiler/build" }
+libc = "0.2.106"
+
 [dev-dependencies]
 pretty_assertions = "1.0.0"
 tempfile = "3.2.0"
