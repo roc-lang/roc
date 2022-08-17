@@ -55,8 +55,7 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
 }
 
 fn is_roc_file(path: &Path) -> bool {
-    let ext = path.extension().and_then(OsStr::to_str);
-    return matches!(ext, Some("roc"));
+    matches!(path.extension().and_then(OsStr::to_str), Some("roc"))
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {

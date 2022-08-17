@@ -55,7 +55,7 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            let element = jit_to_ast(
+            jit_to_ast(
                 arena,
                 app,
                 "expect_repl_main_fn",
@@ -64,9 +64,7 @@ pub fn get_values<'a>(
                 subs,
                 interns,
                 target_info,
-            )?;
-
-            element
+            )?
         };
 
         result.push(expr);
