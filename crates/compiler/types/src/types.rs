@@ -2789,10 +2789,10 @@ pub fn gather_tags_unsorted_iter(
             }
 
             Structure(EmptyTagUnion) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(_, _) => break,
 
             // TODO investigate, this likely can happen when there is a type error
-            RigidVar(_) => break,
+            RigidVar(_) | RigidAbleVar(_, _) => break,
 
             Error => break,
 

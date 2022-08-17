@@ -2863,7 +2863,7 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
 
     loop {
         match subs.get_content_without_compacting(var) {
-            FlexVar(_) => return true,
+            FlexVar(_) | FlexAbleVar(..) => return true,
             Structure(EmptyTagUnion) => return true,
             Structure(TagUnion(sub_fields, sub_ext)) => {
                 if !sub_fields.is_empty() {

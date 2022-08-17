@@ -921,7 +921,10 @@ impl<'a> ExtContent<'a> {
             Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
             Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
 
-            Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
+            Content::FlexVar(_)
+            | Content::FlexAbleVar(..)
+            | Content::RigidVar(_)
+            | Content::RigidAbleVar(..) => ExtContent::Content(ext, content),
 
             other => unreachable!("something weird ended up in an ext var: {:?}", other),
         }
