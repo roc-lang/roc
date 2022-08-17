@@ -6,14 +6,14 @@
 
 use crate::{
     test_key_eq, test_key_neq,
-    util::{check_immediate, check_underivable, derive_test},
+    util::{check_derivable, check_immediate, check_underivable, derive_test},
     v,
 };
 use insta::assert_snapshot;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
-use roc_derive_key::{DeriveBuiltin::Decoder, DeriveError};
+use roc_derive_key::{decoding::FlatDecodableKey, DeriveBuiltin::Decoder, DeriveError, DeriveKey};
 
 test_key_eq! {
     Decoder,
@@ -44,11 +44,6 @@ test_key_neq! {
 }
 
 #[test]
-fn optional_record_field_derive_error() {
-    check_underivable(Decoder, v!({ ?a: v!(U8), }), DeriveError::Underivable);
-}
-
-#[test]
 fn immediates() {
     check_immediate(Decoder, v!(U8), Symbol::DECODE_U8);
     check_immediate(Decoder, v!(U16), Symbol::DECODE_U16);
@@ -64,6 +59,29 @@ fn immediates() {
     check_immediate(Decoder, v!(F32), Symbol::DECODE_F32);
     check_immediate(Decoder, v!(F64), Symbol::DECODE_F64);
     check_immediate(Decoder, v!(STR), Symbol::DECODE_STRING);
+}
+
+#[test]
+fn optional_record_field_derive_error() {
+    check_underivable(Decoder, v!({ ?a: v!(U8), }), DeriveError::Underivable);
+}
+
+#[test]
+fn derivable_record_ext_flex_var() {
+    check_derivable(
+        Decoder,
+        v!({ a: v!(STR), }* ),
+        DeriveKey::Decoder(FlatDecodableKey::Record(vec!["a".into()])),
+    );
+}
+
+#[test]
+fn derivable_record_with_record_ext() {
+    check_derivable(
+        Decoder,
+        v!({ b: v!(STR), }{ a: v!(STR), } ),
+        DeriveKey::Decoder(FlatDecodableKey::Record(vec!["a".into(), "b".into()])),
+    );
 }
 
 #[test]
