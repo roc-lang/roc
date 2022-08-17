@@ -4019,3 +4019,24 @@ fn mutually_recursive_captures() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn int_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> I32 
+            manyAux = \_ ->
+                output = \_ -> 42
+
+                output {}
+
+            when manyAux {} is
+                _ -> "done"
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
+}
