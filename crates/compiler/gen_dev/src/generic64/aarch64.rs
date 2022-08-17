@@ -444,6 +444,25 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mul_freg32_freg32_freg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("multiplication for floats for AArch64");
+    }
+    #[inline(always)]
+    fn mul_freg64_freg64_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("multiplication for floats for AArch64");
+    }
+
+    #[inline(always)]
     fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
         todo!("jump instructions for AArch64");
     }

@@ -210,6 +210,18 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn mul_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn mul_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
@@ -749,6 +761,18 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumMul: layout, {:?}", x),
         }

@@ -1130,6 +1130,18 @@ fn gen_mul_quadword_and_lower() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_mul_f64() {
+    assert_evals_to!("2f64 * 4 * 6", 48.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_mul_f32() {
+    assert_evals_to!("2f32 * 4 * 6", 48.0, f32);
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_i64() {
     assert_evals_to!(
