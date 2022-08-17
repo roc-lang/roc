@@ -483,6 +483,12 @@ where
     }
 }
 
+impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T> {
+    fn from(array: [T; SIZE]) -> Self {
+        Self::from_iter(array)
+    }
+}
+
 impl<'a, T> IntoIterator for &'a RocList<T> {
     type Item = &'a T;
     type IntoIter = core::slice::Iter<'a, T>;
