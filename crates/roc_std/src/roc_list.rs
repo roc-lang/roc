@@ -555,7 +555,7 @@ impl<T: Hash> Hash for RocList<T> {
     }
 }
 
-impl<T: Clone> FromIterator<T> for RocList<T> {
+impl<T> FromIterator<T> for RocList<T> {
     fn from_iter<I>(into: I) -> Self
     where
         I: IntoIterator<Item = T>,
