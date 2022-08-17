@@ -56,7 +56,7 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
 /// DSL for creating [`Content`][roc_types::subs::Content].
 #[macro_export]
 macro_rules! v {
-     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }$( $ext:tt )?) => {{
+     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }$( $($ext:tt)+ )?) => {{
          #[allow(unused)]
          use roc_types::types::RecordField;
          use roc_types::subs::{Subs, RecordFields, Content, FlatType, Variable};
@@ -71,27 +71,9 @@ macro_rules! v {
 
              #[allow(unused_mut, unused)]
              let mut ext = Variable::EMPTY_RECORD;
-             $( ext = $crate::v!($ext)(subs); )?
+             $( ext = $crate::v!($($ext)+)(subs); )?
 
              roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, ext)))
-         }
-     }};
-     ([ $($tag:ident $($payload:expr)*),* ]$( $ext:tt )?) => {{
-         #[allow(unused)]
-         use roc_types::subs::{Subs, UnionTags, Content, FlatType, Variable};
-         #[allow(unused)]
-         use roc_module::ident::TagName;
-         |subs: &mut Subs| {
-             $(
-             let $tag = vec![ $( $payload(subs), )* ];
-             )*
-             let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
-
-             #[allow(unused_mut, unused)]
-             let mut ext = Variable::EMPTY_TAG_UNION;
-             $( ext = $crate::v!($ext)(subs); )?
-
-             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
          }
      }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
@@ -116,6 +98,24 @@ macro_rules! v {
                  },
              );
              tag_union_var
+         }
+     }};
+     ([ $($tag:ident $($payload:expr)*),* ]$( $($ext:tt)+ )?) => {{
+         #[allow(unused)]
+         use roc_types::subs::{Subs, UnionTags, Content, FlatType, Variable};
+         #[allow(unused)]
+         use roc_module::ident::TagName;
+         |subs: &mut Subs| {
+             $(
+             let $tag = vec![ $( $payload(subs), )* ];
+             )*
+             let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
+
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_TAG_UNION;
+             $( ext = $crate::v!($($ext)+)(subs); )?
+
+             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
          }
      }};
      (Symbol::$sym:ident $($arg:expr)*) => {{
@@ -152,6 +152,15 @@ macro_rules! v {
      (*) => {{
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
+     }};
+     ($name:ident has $ability:path) => {{
+         use roc_types::subs::{Subs, SubsIndex,  Content};
+         |subs: &mut Subs| {
+             let name_index =
+                 SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
+
+             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), $ability))
+         }
      }};
      (^$rec_var:ident) => {{
          use roc_types::subs::{Subs};

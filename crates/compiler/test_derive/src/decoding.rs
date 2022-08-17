@@ -76,6 +76,15 @@ fn derivable_record_ext_flex_var() {
 }
 
 #[test]
+fn derivable_record_ext_flex_able_var() {
+    check_derivable(
+        Decoder,
+        v!({ a: v!(STR), }a has Symbol::DECODE_DECODER ),
+        DeriveKey::Decoder(FlatDecodableKey::Record(vec!["a".into()])),
+    );
+}
+
+#[test]
 fn derivable_record_with_record_ext() {
     check_derivable(
         Decoder,

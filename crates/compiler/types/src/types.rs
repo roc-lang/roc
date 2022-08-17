@@ -2689,10 +2689,10 @@ pub fn gather_fields_unsorted_iter(
             }
 
             Structure(EmptyRecord) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(..) => break,
 
             // TODO investigate apparently this one pops up in the reporting tests!
-            RigidVar(_) => break,
+            RigidVar(_) | RigidAbleVar(..) => break,
 
             // Stop on errors in the record
             Error => break,

@@ -128,6 +128,15 @@ fn derivable_record_ext_flex_var() {
 }
 
 #[test]
+fn derivable_record_ext_flex_able_var() {
+    check_derivable(
+        ToEncoder,
+        v!({ a: v!(STR), }a has Symbol::ENCODE_TO_ENCODER),
+        DeriveKey::ToEncoder(FlatEncodableKey::Record(vec!["a".into()])),
+    );
+}
+
+#[test]
 fn derivable_record_with_record_ext() {
     check_derivable(
         ToEncoder,
@@ -141,6 +150,15 @@ fn derivable_tag_ext_flex_var() {
     check_derivable(
         ToEncoder,
         v!([ A v!(STR) ]* ),
+        DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_able_var() {
+    check_derivable(
+        ToEncoder,
+        v!([ A v!(STR) ]a has Symbol::ENCODE_TO_ENCODER),
         DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![("A".into(), 1)])),
     );
 }
