@@ -1216,16 +1216,7 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Builtin(Builtin::Int(int_width)) => {
-            let tags: Vec<String> = union_tags
-                .iter_from_subs(subs)
-                .map(|(tag_name, _)| tag_name.0.as_str().to_string())
-                .collect();
-
-            RocTagUnion::Enumeration {
-                name: name.clone(),
-                tags,
-                size: int_width.stack_size(),
-            }
+            add_int_enumeration(union_tags, subs, &name, int_width)
         }
         Layout::Struct { field_layouts, .. } => {
             let (tag_name, payload_fields) =
@@ -1239,6 +1230,12 @@ fn add_tag_union<'a>(
                 tag_name,
                 payload_fields,
             }
+        }
+        Layout::Builtin(Builtin::Bool) => {
+            // This isn't actually a Bool, but rather a 2-tag union with no payloads
+            // (so it has the same layout as a Bool, but actually isn't one; if it were
+            // a real Bool, it would have been handled elsewhere already!)
+            add_int_enumeration(union_tags, subs, &name, IntWidth::U8)
         }
         Layout::Builtin(builtin) => {
             let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
@@ -1278,6 +1275,23 @@ fn add_tag_union<'a>(
     }
 
     type_id
+}
+
+fn add_int_enumeration(
+    union_tags: &UnionLabels<TagName>,
+    subs: &Subs,
+    name: &String,
+    int_width: IntWidth,
+) -> RocTagUnion {
+    let tags: Vec<String> = union_tags
+        .iter_from_subs(subs)
+        .map(|(tag_name, _)| tag_name.0.as_str().to_string())
+        .collect();
+    RocTagUnion::Enumeration {
+        name: name.clone(),
+        tags,
+        size: int_width.stack_size(),
+    }
 }
 
 fn union_tags_to_types(
