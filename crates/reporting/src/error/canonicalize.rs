@@ -171,6 +171,27 @@ pub fn can_problem<'b>(
             title = UNUSED_ARG.to_string();
             severity = Severity::Warning;
         }
+        Problem::UnusedBranchDef(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" is not used in this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch."),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("If you don't need to use "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(", prefix it with an underscore, like \"_"),
+                    alloc.reflow(symbol.as_str(alloc.interns)),
+                    alloc.reflow("\", or replace it with just an \"_\"."),
+                ]),
+            ]);
+
+            title = UNUSED_DEF.to_string();
+            severity = Severity::Warning;
+        }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
             doc = alloc.stack([
                 if left_bin_op.value == right_bin_op.value {

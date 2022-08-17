@@ -1414,7 +1414,7 @@ fn canonicalize_when_branch<'a>(
         if output.references.has_value_lookup(symbol) {
             pattern_bound_symbols_body_needs.insert(symbol);
         } else {
-            env.problem(Problem::UnusedDef(symbol, region));
+            env.problem(Problem::UnusedBranchDef(symbol, region));
         }
     }
 
