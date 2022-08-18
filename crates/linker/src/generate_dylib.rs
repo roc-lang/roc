@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 use std::error::Error;
 
-use object::elf;
+use object::elf::{self, SectionHeader64};
 use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rel, Rela, SectionHeader, Sym};
 use object::Endianness;
 
@@ -19,8 +19,7 @@ pub fn generate(custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
     };
 
     match kind {
-        object::FileKind::Elf32 => copy_file::<elf::FileHeader32<Endianness>>(DUMMY, custom_names),
-        object::FileKind::Elf64 => copy_file::<elf::FileHeader64<Endianness>>(DUMMY, custom_names),
+        object::FileKind::Elf64 => copy_file(DUMMY, custom_names),
         _ => {
             internal_error!("Not an ELF file");
         }
@@ -55,22 +54,62 @@ struct DynamicSymbol {
     gnu_hash: Option<u32>,
 }
 
+struct Sections {
+    hash: SectionHeader64<object::Endianness>,
+    gnu_hash: SectionHeader64<object::Endianness>,
+    dynsym: SectionHeader64<object::Endianness>,
+    dynstr: SectionHeader64<object::Endianness>,
+    eh_frame: SectionHeader64<object::Endianness>,
+    dynamic: SectionHeader64<object::Endianness>,
+}
+
+impl Sections {
+    fn iter(&self) -> impl Iterator<Item = (usize, &'_ SectionHeader64<object::Endianness>)> + '_ {
+        [
+            &self.hash,
+            &self.gnu_hash,
+            &self.dynsym,
+            &self.dynstr,
+            &self.eh_frame,
+            &self.dynamic,
+        ]
+        .into_iter()
+        .enumerate()
+    }
+}
+
 enum Origin {
     Real,
     Fake,
 }
 
-fn copy_file<Elf: FileHeader<Endian = Endianness>>(
-    in_data: &[u8],
-    custom_names: &[String],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let in_elf = Elf::parse(in_data)?;
+fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
+    //    use object::read::Object;
+    //    let in_elf = ElfFile64::parse(in_data)?;
+
+    let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
     let is_mips64el = in_elf.is_mips64el(endian);
     let in_segments = in_elf.program_headers(endian, in_data)?;
     let in_sections = in_elf.sections(endian, in_data)?;
     let in_syms = in_sections.symbols(endian, in_data, elf::SHT_SYMTAB)?;
     let in_dynsyms = in_sections.symbols(endian, in_data, elf::SHT_DYNSYM)?;
+
+    let help = |name: &[u8]| {
+        *in_sections
+            .section_by_name(Endianness::Little, name)
+            .unwrap()
+            .1
+    };
+
+    let sections = Sections {
+        hash: help(b".hash" as &[_]),
+        gnu_hash: help(b".gnu.hash" as &[_]),
+        dynsym: help(b".dynsym" as &[_]),
+        dynstr: help(b".dynstr" as &[_]),
+        eh_frame: help(b".eh_frame" as &[_]),
+        dynamic: help(b".dynamic" as &[_]),
+    };
 
     let mut out_data = Vec::new();
     let mut writer = object::write::elf::Writer::new(endian, in_elf.is_class_64(), &mut out_data);
@@ -113,6 +152,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                 }
             }
             elf::SHT_SYMTAB => {
+                dbg!("strtab");
                 if i == in_syms.section().0 {
                     index = writer.reserve_symtab_section_index();
                 } else {
@@ -142,6 +182,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
             elf::SHT_HASH => {
                 assert!(in_hash.is_none());
                 in_hash = in_section.hash_header(endian, in_data)?;
+                dbg!(in_hash);
                 debug_assert!(in_hash.is_some());
                 index = writer.reserve_hash_section_index();
             }
@@ -180,8 +221,8 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         out_dynamic.reserve(in_dynamic.len());
         let in_dynamic_strings = in_sections.strings(endian, in_data, link)?;
         for d in in_dynamic {
-            let tag = d.d_tag(endian).into().try_into()?;
-            let val = d.d_val(endian).into();
+            let tag: u32 = d.d_tag(endian) as u32;
+            let val: u64 = d.d_val(endian);
             let string = if d.is_string(endian) {
                 let s = in_dynamic_strings
                     .get(val.try_into()?)
@@ -263,7 +304,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
 
     // We must sort for GNU hash before allocating symbol indices.
     if let Some(in_gnu_hash) = in_gnu_hash.as_ref() {
-        // TODO: recalculate bucket_count
+        //        // TODO: recalculate bucket_count
         out_dynsyms.sort_by_key(|(_, sym)| match sym.gnu_hash {
             None => (0, 0),
             Some(hash) => (1, hash % in_gnu_hash.bucket_count.get(endian)),
@@ -274,12 +315,19 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         out_dynsyms_index[out_dynsym.in_sym] = writer.reserve_dynamic_symbol_index();
     }
 
+    dbg!(
+        in_dynsyms.len() + custom_names.len(),
+        in_dynsyms.len(),
+        custom_names.len()
+    );
+
     // Hash parameters.
     let hash_index_base = out_dynsyms
         .first()
         .map(|(_, sym)| out_dynsyms_index[sym.in_sym].0)
         .unwrap_or(0);
     let hash_chain_count = writer.dynamic_symbol_count();
+    dbg!(hash_index_base, hash_chain_count);
 
     // GNU hash parameters.
     let gnu_hash_index_base = out_dynsyms
@@ -388,8 +436,8 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
             match in_section.sh_type(endian) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
                     out_sections[i].offset = writer.reserve(
-                        in_section.sh_size(endian).into() as usize,
-                        in_section.sh_addralign(endian).into() as usize,
+                        in_section.sh_size(endian) as usize,
+                        in_section.sh_addralign(endian) as usize,
                     );
                 }
                 _ => {}
@@ -397,24 +445,26 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         }
     } else {
         // We don't support moving program headers.
-        assert_eq!(in_elf.e_phoff(endian).into(), writer.reserved_len() as u64);
+        assert_eq!(in_elf.e_phoff(endian), writer.reserved_len() as u64);
         writer.reserve_program_headers(in_segments.len() as u32);
 
         // Reserve alloc sections at original offsets.
         alloc_sections = in_sections
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.sh_flags(endian).into() & u64::from(elf::SHF_ALLOC) != 0)
+            .filter(|(_, s)| s.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0)
             .collect();
         // The data for alloc sections may need to be written in a different order
         // from their section headers.
-        alloc_sections.sort_by_key(|(_, x)| x.sh_offset(endian).into());
+        alloc_sections.sort_by_key(|(_, x)| x.sh_offset(endian));
+        dbg!(alloc_sections.len());
         for (i, in_section) in alloc_sections.iter() {
-            writer.reserve_until(in_section.sh_offset(endian).into() as usize);
-            match in_section.sh_type(endian) {
+            dbg!(i, in_section);
+            writer.reserve_until(in_section.sh_offset(endian) as usize);
+            match dbg!(in_section.sh_type(endian)) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
                     out_sections[*i].offset =
-                        writer.reserve(in_section.sh_size(endian).into() as usize, 1);
+                        writer.reserve(in_section.sh_size(endian) as usize, 1);
                 }
                 elf::SHT_NOBITS => {
                     out_sections[*i].offset = writer.reserved_len();
@@ -436,16 +486,22 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                     writer.reserve_dynsym();
                 }
                 elf::SHT_STRTAB if *i == in_dynsyms.string_section().0 => {
+                    dbg!("strtab");
                     dynstr_addr = in_section.sh_addr(endian).into();
                     writer.reserve_dynstr();
                 }
                 elf::SHT_HASH => {
                     hash_addr = in_section.sh_addr(endian).into();
+                    dbg!(writer.reserved_len());
+                    dbg!(hash_addr);
                     let hash = in_hash.as_ref().unwrap();
-                    writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
+                    // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
+                    writer.reserve_hash(3, 13);
                 }
                 elf::SHT_GNU_HASH => {
                     gnu_hash_addr = in_section.sh_addr(endian).into();
+                    dbg!(writer.reserved_len());
+                    dbg!(gnu_hash_addr);
                     let hash = in_gnu_hash.as_ref().unwrap();
                     writer.reserve_gnu_hash(
                         hash.bloom_count.get(endian),
@@ -473,14 +529,14 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
 
         // Reserve non-alloc sections at any offset.
         for (i, in_section) in in_sections.iter().enumerate() {
-            if in_section.sh_flags(endian).into() & u64::from(elf::SHF_ALLOC) != 0 {
+            if in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
                 continue;
             }
             match in_section.sh_type(endian) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE => {
                     out_sections[i].offset = writer.reserve(
-                        in_section.sh_size(endian).into() as usize,
-                        in_section.sh_addralign(endian).into() as usize,
+                        in_section.sh_size(endian) as usize,
+                        in_section.sh_addralign(endian) as usize,
                     );
                 }
                 _ => {}
@@ -493,9 +549,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
     writer.reserve_strtab();
 
     for (i, in_section) in in_sections.iter().enumerate() {
-        if !in_segments.is_empty()
-            && in_section.sh_flags(endian).into() & u64::from(elf::SHF_ALLOC) != 0
-        {
+        if !in_segments.is_empty() && in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
             continue;
         }
         match in_section.sh_type(endian) {
@@ -527,7 +581,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         for (i, in_section) in in_sections.iter().enumerate() {
             match in_section.sh_type(endian) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
-                    writer.write_align(in_section.sh_addralign(endian).into() as usize);
+                    writer.write_align(in_section.sh_addralign(endian) as usize);
                     debug_assert_eq!(out_sections[i].offset, writer.len());
                     writer.write(in_section.data(endian, in_data)?);
                 }
@@ -550,7 +604,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         }
 
         for (i, in_section) in alloc_sections.iter() {
-            writer.pad_until(in_section.sh_offset(endian).into() as usize);
+            writer.pad_until(in_section.sh_offset(endian) as usize);
             match in_section.sh_type(endian) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
                     debug_assert_eq!(out_sections[*i].offset, writer.len());
@@ -630,7 +684,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                     writer.write_dynstr();
                 }
                 elf::SHT_HASH => {
-                    dbg!("here");
+                    dbg!("here at the hash");
                     let hash = in_hash.as_ref().unwrap();
                     writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |index| {
                         out_dynsyms
@@ -712,12 +766,12 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
         }
 
         for (i, in_section) in in_sections.iter().enumerate() {
-            if in_section.sh_flags(endian).into() & u64::from(elf::SHF_ALLOC) != 0 {
+            if in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
                 continue;
             }
             match in_section.sh_type(endian) {
                 elf::SHT_PROGBITS | elf::SHT_NOTE => {
-                    writer.write_align(in_section.sh_addralign(endian).into() as usize);
+                    writer.write_align(in_section.sh_addralign(endian) as usize);
                     debug_assert_eq!(out_sections[i].offset, writer.len());
                     writer.write(in_section.data(endian, in_data)?);
                 }
@@ -757,9 +811,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
     writer.write_strtab();
 
     for in_section in in_sections.iter() {
-        if !in_segments.is_empty()
-            && in_section.sh_flags(endian).into() & u64::from(elf::SHF_ALLOC) != 0
-        {
+        if !in_segments.is_empty() && in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
             continue;
         }
         let out_syms = if in_section.sh_link(endian) as usize == in_syms.section().0 {
@@ -781,7 +833,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                     writer.write_relocation(
                         false,
                         &object::write::elf::Rel {
-                            r_offset: rel.r_offset(endian).into(),
+                            r_offset: rel.r_offset(endian),
                             r_sym: out_sym,
                             r_type: rel.r_type(endian),
                             r_addend: 0,
@@ -802,10 +854,10 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                     writer.write_relocation(
                         true,
                         &object::write::elf::Rel {
-                            r_offset: rel.r_offset(endian).into(),
+                            r_offset: rel.r_offset(endian),
                             r_sym: out_sym,
                             r_type: rel.r_type(endian, is_mips64el),
-                            r_addend: rel.r_addend(endian).into(),
+                            r_addend: rel.r_addend(endian),
                         },
                     );
                 }
@@ -830,7 +882,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                 let out_section = &out_sections[i];
                 let sh_link = out_sections_index[in_section.sh_link(endian) as usize].0 as u32;
                 let mut sh_info = in_section.sh_info(endian);
-                if in_section.sh_flags(endian).into() as u32 & elf::SHF_INFO_LINK != 0 {
+                if in_section.sh_flags(endian) as u32 & elf::SHF_INFO_LINK != 0 {
                     sh_info = out_sections_index[sh_info as usize].0 as u32;
                 }
 
@@ -884,6 +936,7 @@ fn copy_file<Elf: FileHeader<Endian = Endianness>>(
                 writer.write_dynamic_section_header(dynamic_addr);
             }
             elf::SHT_HASH => {
+                dbg!("this hash");
                 writer.write_hash_section_header(hash_addr);
             }
             elf::SHT_GNU_HASH => {

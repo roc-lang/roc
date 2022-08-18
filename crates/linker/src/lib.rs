@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use target_lexicon::Triple;
 use tempfile::Builder;
 
-mod metadata;
 mod generate_dylib;
+mod metadata;
 use metadata::VirtualOffset;
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -147,8 +147,8 @@ fn generate_dynamic_lib(
         }
     }
 
-    let bytes = crate::generate_dylib::generate(&custom_names)
-        .unwrap_or_else(|e| internal_error!("{}", e));
+    let bytes =
+        crate::generate_dylib::generate(&custom_names).unwrap_or_else(|e| internal_error!("{}", e));
 
     std::fs::write(dummy_lib_path, &bytes);
 
