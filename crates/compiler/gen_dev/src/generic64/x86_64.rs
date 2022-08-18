@@ -1017,7 +1017,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src2: X86_64GeneralReg,
     ) {
         mov_reg64_reg64(buf, dst, src1);
-        mul_reg64_reg64(buf, dst, src2);
+        mul_reg64_reg64(buf, src2);
     }
 
     fn mul_freg32_freg32_freg32(
@@ -1550,8 +1550,8 @@ fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gen
 
 /// `MUL r/m64` -> Unsigned Multiply r/m64 to r64.
 #[inline(always)]
-fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    todo!()
+fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0xF7, buf, X86_64GeneralReg::RAX, src);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
@@ -2171,6 +2171,15 @@ mod tests {
             imul_reg64_reg64,
             |reg1, reg2| format!("imul {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mul_reg64_reg64() {
+        disassembler_test!(
+            mul_reg64_reg64,
+            |reg| format!("mul {}", reg),
             ALL_GENERAL_REGS
         );
     }

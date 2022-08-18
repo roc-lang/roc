@@ -21,7 +21,7 @@ mod disassembler_test_macro;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 
-use storage::StorageManager;
+use storage::{RegStorage, StorageManager};
 
 const REFCOUNT_ONE: u64 = i64::MIN as u64;
 // TODO: on all number functions double check and deal with over/underflow.
@@ -773,14 +773,24 @@ impl<
             Layout::Builtin(Builtin::Int(
                 IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
             )) => {
+                // TODO find a general way to do this
+                let rax = CC::GENERAL_RETURN_REGS[0];
+                let rdx = CC::GENERAL_RETURN_REGS[1];
+
+                self.storage_manager
+                    .ensure_reg_free(&mut self.buf, RegStorage::General(rax));
+
+                self.storage_manager
+                    .ensure_reg_free(&mut self.buf, RegStorage::General(rdx));
+
+                self.storage_manager
+                    .load_to_specified_general_reg(&mut self.buf, src1, rax);
+
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::umul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::umul_reg64_reg64_reg64(&mut self.buf, dst_reg, rax, src2_reg);
             }
             Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);

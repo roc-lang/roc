@@ -22,7 +22,7 @@ use StackStorage::*;
 use Storage::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
+pub enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     General(GeneralReg),
     Float(FloatReg),
 }
@@ -756,7 +756,7 @@ impl<
 
     #[allow(dead_code)]
     /// Ensures that a register is free. If it is not free, data will be moved to make it free.
-    fn ensure_reg_free(
+    pub fn ensure_reg_free(
         &mut self,
         buf: &mut Vec<'a, u8>,
         wanted_reg: RegStorage<GeneralReg, FloatReg>,

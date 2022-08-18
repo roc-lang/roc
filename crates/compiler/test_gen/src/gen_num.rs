@@ -1124,7 +1124,7 @@ fn gen_mul_quadword_and_lower() {
     assert_evals_to!("2i8 * 4 * 6", 48, i8);
 
     // make sure we're doing unsigned multiplication for unsigned types
-    // assert_evals_to!("255u8 * 255", 255u8.wrapping_add(255), u8);
+    assert_evals_to!("123 * 456", 123 * 456, u64);
 
     //    assert_evals_to!("2u64 * 4 * 6", 48, u64);
     //    assert_evals_to!("2u32 * 4 * 6", 48, u32);
