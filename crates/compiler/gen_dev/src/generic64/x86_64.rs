@@ -2176,6 +2176,26 @@ mod tests {
     }
 
     #[test]
+    fn test_mulsd_freg64_freg64() {
+        disassembler_test!(
+            mulsd_freg64_freg64,
+            |reg1, reg2| format!("mulsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_mulss_freg32_freg32() {
+        disassembler_test!(
+            mulss_freg32_freg32,
+            |reg1, reg2| format!("mulss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
     fn test_jmp_imm32() {
         const INST_SIZE: i32 = 5;
         disassembler_test!(
