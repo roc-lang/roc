@@ -1280,7 +1280,7 @@ fn add_tag_union<'a>(
 fn add_int_enumeration(
     union_tags: &UnionLabels<TagName>,
     subs: &Subs,
-    name: &String,
+    name: &str,
     int_width: IntWidth,
 ) -> RocTagUnion {
     let tags: Vec<String> = union_tags
@@ -1288,7 +1288,7 @@ fn add_int_enumeration(
         .map(|(tag_name, _)| tag_name.0.as_str().to_string())
         .collect();
     RocTagUnion::Enumeration {
-        name: name.clone(),
+        name: name.to_string(),
         tags,
         size: int_width.stack_size(),
     }

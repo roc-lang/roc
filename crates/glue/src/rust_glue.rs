@@ -2437,7 +2437,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
 }
 
 // Based on https://doc.rust-lang.org/reference/keywords.html
-const RESERVED_KEYWORDS: &[&'static str] = &[
+const RESERVED_KEYWORDS: &[&str] = &[
     "try", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof",
     "unsized", "virtual", "yield", "async", "await", "dyn", "as", "break", "const", "continue",
     "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
