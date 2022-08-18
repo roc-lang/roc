@@ -6,7 +6,7 @@ This is an example of calling Roc code from [Ruby](https://www.ruby-lang.org).
 
 To run this example, you will need these to be installed already (in addition to Roc):
 
-- [`ruby`](https://www.ruby-lang.org/en/downloads) version 3.1.0 or later
+- [`ruby`](https://www.ruby-lang.org/en/downloads) version 2.7.6 or later
 - [`clang`](https://clang.llvm.org/) version 11.0.0 or later
 - [`make`](https://www.gnu.org/software/make/) version 4.0 or later
 
@@ -24,7 +24,7 @@ This compiles your Roc code into a binary library in the current directory. The 
 
 ## Generating the Makefile
 
-Next, run this: (remember that you need Ruby 3.1.0 or higher - otherwise later steps will fail!)
+Next, run this: (remember that you need Ruby 2.7.6 or higher - otherwise later steps will fail!)
 
 ```
 ruby extconf.rb
