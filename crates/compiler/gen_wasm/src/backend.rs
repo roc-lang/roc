@@ -1886,7 +1886,7 @@ impl<'a> WasmBackend<'a> {
     /// If the data size is known at compile time, pass it in comptime_data_size.
     /// If size is only known at runtime, push *data* size to the VM stack first.
     /// Leaves the *data* address on the VM stack
-    pub fn allocate_with_refcount(
+    fn allocate_with_refcount(
         &mut self,
         comptime_data_size: Option<u32>,
         alignment_bytes: u32,
