@@ -308,6 +308,8 @@ fn add_single_tag_struct(
     impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
     target_info: TargetInfo,
 ) {
+    let name = escape_kw(name.to_string());
+
     // Store single-tag unions as structs rather than enums,
     // because they have only one alternative. However, still
     // offer the usual tag union APIs.
@@ -530,6 +532,8 @@ fn add_tag_union(
     types: &Types,
     impls: &mut Impls,
 ) {
+    let name = escape_kw(name.to_string());
+
     // We should never be attempting to generate glue for empty tag unions;
     // RocType should not have let this happen.
     debug_assert_ne!(tags.len(), 0);
@@ -537,7 +541,7 @@ fn add_tag_union(
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = if discriminant_size > 0 {
         add_discriminant(
-            name,
+            name.as_str(),
             target_info,
             tag_names,
             discriminant_size,
@@ -585,7 +589,7 @@ pub struct {name} {{
             }
             Recursiveness::NonRecursive => {
                 pub_str = "pub ";
-                decl_union_name = name;
+                decl_union_name = &name;
             }
         };
 
@@ -1100,7 +1104,7 @@ pub struct {name} {{
     }
 
     // The Drop impl for the tag union
-    {
+    if cannot_derive_copy(typ, types) {
         let opt_impl = Some(format!("impl Drop for {name}"));
         let mut drop_payload = String::new();
 
@@ -1584,6 +1588,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     types: &Types,
     impls: &mut Impls,
 ) {
+    let name = escape_kw(name.to_string());
     let derive = derive_str(typ, types, false);
     let repr_bits = tag_bytes * 8;
 
@@ -1624,6 +1629,7 @@ fn add_struct<S: Display>(
     impls: &mut Impls,
     is_tag_union_payload: bool,
 ) {
+    let name = escape_kw(name.to_string());
     let derive = derive_str(types.get_type(struct_id), types, true);
     let pub_str = if is_tag_union_payload { "" } else { "pub " };
     let repr = if fields.len() == 1 {
@@ -1641,7 +1647,7 @@ fn add_struct<S: Display>(
         let label = if is_tag_union_payload {
             format!("f{label}")
         } else {
-            format!("{label}")
+            escape_kw(label.to_string())
         };
 
         writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
@@ -1695,9 +1701,9 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. })
-        | RocType::TagUnion(RocTagUnion::SingleTagStruct { name, .. }) => name.clone(),
+        | RocType::TagUnion(RocTagUnion::SingleTagStruct { name, .. }) => escape_kw(name.clone()),
         RocType::RecursivePointer(content) => type_name(*content, types),
-        RocType::Function { name, .. } => name.clone(),
+        RocType::Function { name, .. } => escape_kw(name.clone()),
     }
 }
 
@@ -2181,7 +2187,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
             // because they're numbers
             format!("f{}", label)
         } else {
-            format!("{}", label)
+            escape_kw(format!("{}", label))
         };
 
         ret_values.push(format!("payload.{label}"));
@@ -2214,9 +2220,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
                 // Tag union payload fields need "f" prefix
                 // because they're numbers
-                let label = format!("f{}", label);
-
-                format!("{indents}{label}: arg{index},")
+                format!("{indents}f{label}: arg{index},")
             })
             .collect::<Vec<String>>()
             .join("\n")
@@ -2422,5 +2426,28 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                 has_float_help(types.get_type(*payload), types, &do_not_recurse)
             }
         }
+    }
+}
+
+// Based on https://doc.rust-lang.org/reference/keywords.html
+const RESERVED_KEYWORDS: &[&'static str] = &[
+    "try", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof",
+    "unsized", "virtual", "yield", "async", "await", "dyn", "as", "break", "const", "continue",
+    "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
+    "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct",
+    "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+];
+
+/// Escape a Rust reserved keyword, if necessary.
+fn escape_kw(input: String) -> String {
+    let is_reserved_keyword = RESERVED_KEYWORDS.contains(&input.as_str());
+
+    if is_reserved_keyword {
+        // Use a raw identifier for this, to prevent a syntax error due to using a reserved keyword.
+        // https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html
+        // Another design would be to add an underscore after it; this is an experiment!
+        format!("r#{input}")
+    } else {
+        input
     }
 }
