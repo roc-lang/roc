@@ -2206,9 +2206,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         .collect::<Vec<String>>()
         .join(", ");
     let args_to_payload = if is_tag_union_payload {
-        format!(
-        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
-        sorted_fields
+        let prefixed_fields = sorted_fields
             .iter()
             .enumerate()
             .map(|(index, (label, _))| {
@@ -2223,8 +2221,17 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
                 format!("{indents}f{label}: arg{index},")
             })
             .collect::<Vec<String>>()
-            .join("\n")
-    )
+            .join("\n");
+
+        if cannot_derive_copy(types.get_type(payload_id), types) {
+            format!(
+        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",prefixed_fields)
+        } else {
+            format!(
+                "{payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}}",
+                prefixed_fields
+            )
+        }
     } else {
         "core::mem::ManuallyDrop::new(arg0)".to_string()
     };

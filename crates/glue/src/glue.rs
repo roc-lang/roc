@@ -1165,10 +1165,10 @@ impl RocType {
     /// Construct a tag named `RocDict`, with the appropriate payload
     pub fn RocDict(arg0: u32, arg1: u32) -> Self {
             let mut answer = Self {
-                RocDict: core::mem::ManuallyDrop::new(RocType_RocDict {
+                RocDict: RocType_RocDict {
                     f0: arg0,
                     f1: arg1,
-                })
+                }
             };
 
             answer.set_discriminant(discriminant_RocType::RocDict);
@@ -1266,10 +1266,10 @@ impl RocType {
     /// Construct a tag named `RocResult`, with the appropriate payload
     pub fn RocResult(arg0: u32, arg1: u32) -> Self {
             let mut answer = Self {
-                RocResult: core::mem::ManuallyDrop::new(RocType_RocResult {
+                RocResult: RocType_RocResult {
                     f0: arg0,
                     f1: arg1,
-                })
+                }
             };
 
             answer.set_discriminant(discriminant_RocType::RocResult);
@@ -1780,10 +1780,10 @@ impl RocType {
     /// Construct a tag named `RocDict`, with the appropriate payload
     pub fn RocDict(arg0: u64, arg1: u64) -> Self {
             let mut answer = Self {
-                RocDict: core::mem::ManuallyDrop::new(RocType_RocDict {
+                RocDict: RocType_RocDict {
                     f0: arg0,
                     f1: arg1,
-                })
+                }
             };
 
             answer.set_discriminant(discriminant_RocType::RocDict);
@@ -1875,10 +1875,10 @@ impl RocType {
     /// Construct a tag named `RocResult`, with the appropriate payload
     pub fn RocResult(arg0: u64, arg1: u64) -> Self {
             let mut answer = Self {
-                RocResult: core::mem::ManuallyDrop::new(RocType_RocResult {
+                RocResult: RocType_RocResult {
                     f0: arg0,
                     f1: arg1,
-                })
+                }
             };
 
             answer.set_discriminant(discriminant_RocType::RocResult);
