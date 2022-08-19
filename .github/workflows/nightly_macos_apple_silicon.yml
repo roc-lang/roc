@@ -32,10 +32,9 @@ jobs:
         run: git rev-parse --short "$GITHUB_SHA"
       - name: print date
         run: date
-
-       - name: 'Upload artifact. Actually uploading to github releases has to be done manually.'
-         uses: actions/upload-artifact@v3
-         with:
+      - name: Upload artifact Actually uploading to github releases has to be done manually
+        uses: actions/upload-artifact@v3
+        with:
            name: nightly_roc_darwin_apple_silicon
            path: roc_darwin_apple_silicon.tar.gz
            retention-days: 4
