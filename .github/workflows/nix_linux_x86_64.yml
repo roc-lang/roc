@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           clean: "true"
 
