@@ -1,0 +1,29 @@
+on: [pull_request]
+
+name: CI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-zig-rust-wasm:
+    name: test zig, rust, wasm
+    runs-on: [self-hosted, i5-4690K]
+    timeout-minutes: 90
+    env:
+      RUST_BACKTRACE: 1
+      RUSTC_WRAPPER: /usr/local/cargo/bin/sccache
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: zig fmt check, zig tests
+        run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+
+      - name: zig wasm tests
+        run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
