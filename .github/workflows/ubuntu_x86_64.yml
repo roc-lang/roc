@@ -27,3 +27,26 @@ jobs:
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+
+      - name: regular rust tests
+        run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
+
+      - name: test the dev and wasm backend # these tests require an explicit feature flag
+        run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+
+      - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
+        run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+
+      - name: run `roc test` on Str builtins
+        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
+      
+      #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
+      - name: wasm repl test
+        run: crates/repl_test/test_wasm.sh && sccache --show-stats
+
+      #TODO i386 (32-bit linux) cli tests
+
+      #TODO verify-no-git-changes
+
+      - name: test website build script
+        run: REPL_DEBUG=1 bash www/build.sh
