@@ -27,6 +27,9 @@ jobs:
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+        
+      - name: sanity check
+        run: rustc --version
 
       - name: regular rust tests
         run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
