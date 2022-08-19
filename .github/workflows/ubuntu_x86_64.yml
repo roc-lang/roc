@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 90
     env:
       RUST_BACKTRACE: 1
-      RUSTC_WRAPPER: /usr/local/cargo/bin/sccache
+      RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
     steps:
       - uses: actions/checkout@v2
         with:
@@ -27,9 +27,6 @@ jobs:
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
-        
-      - name: sanity check
-        run: rustc --version
 
       - name: regular rust tests
         run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
