@@ -67,7 +67,7 @@ APIs, you don't need to bother writing `getUsername = Debug.todo "implement"`.
 Imagine if Elm's `let`...`in` worked exactly the same way, except you removed
 the `let` and `in` keywords. That's how it works in Roc.
 
-For example, this Elm code computes `someNumber` to be `1234`:
+For example, consider this Elm code:
 
 ```elm
 numbers =
@@ -299,16 +299,16 @@ has the fields `x` and `y`.
 
 In Roc, you can do this like so:
 
-```elm
+```javascript
 table { height: 800, width: 600 }
 ```
 
 ...and the `table` function will fill in its default values for `x` and `y`.
 There is no need to use a `defaultConfig` record.
 
-Here's how `table` would be defined in Roc:
+Here's how that `table` function would be implemented in Roc:
 
-```
+```elixir
 table = \{ height, width, title ? "", description ? "" } ->
 ```
 
@@ -316,7 +316,7 @@ This is using *optional field destructuring* to destructure a record while
 also providing default values for any fields that might be missing.
 Here's the type of `table`:
 
-```
+```elixir
 table :
     {
         height : Pixels,
@@ -691,16 +691,6 @@ In Elm, you can choose to expose (or not) custom types' constructors in order to
 Since Roc's _tags_ can be constructed in any module without importing anything, Roc has a separate
 _opaque type_ language feature to enable information hiding.
 
-Opaque types in Roc have some similarities to type aliases, but also some important differences.
-
-* Opaque type are defined with `:=` (e.g. `Username := Str` instead of `Username : Str`)
-* You can get an _opaque wrapper_ by writing an `@` symbol before the name of an opaque type. For example, `@Username` would be an opaque wrapper for the opaque type `Username`.
-* Applying an _opaque wrapper_ to another value creates an _opaque value_, whose type is the one referred to by the opaque wrapper. So the expression `@Username "Sasha"` has the type `Username`.
-* Applying and destructuring opaque wrappers works like tags; you can write `@Username str = user` to unwrap an opaque wrapper's payload, just like you would with a tag payload.
-* Opaque types can only be wrapped and unwrapped in the same module where the opaque type itself is defined.
-* You can export opaque type names (e.g. `Username`) to other modules, allowing them to be used in type annotations, but there is no way to export the opaque wrappers themselves. This means that an opaque type can only be wrapped and unwrapped (using `@` syntax) in the same module where it was defined.
-* Opaque types are only equal if their names are the same _and_ they were defined in the same module.
-
 As an example, suppose I define these inside the `Username` module:
 
 ```elm
@@ -715,10 +705,14 @@ toStr = \@Username str ->
     str
 ```
 
-I can now expose the `Username` opaque type, which other modules can use in type annotations.
-However, it's not even syntactically possible for me to expose the `@Username` opaque wrapper,
-because `@` is not allowed in the `exposing` list. Only code written in this `Username` module
-can use the `@Username` wrapper.
+Here, `Username` is an opaque type. The `fromStr` function turns a string into a `Username`
+by "calling" `@Username` on that string. The `toStr` function turns a `Username` back into
+a string by pattern matching `@Username str ->` to unwrap the string from the `Username`.
+
+Now that I've defined the `Username` opaque type, I can expose it so that other modules can use
+it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap
+`Username` values. That operation is only available in the same scope where `Username` itself was
+defined; trying to use it outside that scope will give an error.
 
 > If I were to define `Username := Str` inside another module (e.g. `Main`) and use `@Username`,
 > it would compile, but that `Username` opaque type would not be considered equal to the one defined in
@@ -1138,16 +1132,11 @@ GPUs tend to heavily prefer 32-bit floats because a serious bottleneck is how
 long it takes data to transfer from CPU to GPU, so having to send half as many
 bytes per render (compared to 64-bit floats) can be huge for performance.
 
-Roc also supports `D64` and `D32`, which are [IEEE 754 decimal floating point numbers](https://en.wikipedia.org/wiki/IEEE_754#Decimal). The upside of these is that they are decimal-based, so
-`0.1 + 0.2 == 0.3` (whereas in binary floats [this is not true](https://0.30000000000000004.com/)),
-which makes them much better for calculations involving currency, among others.
-The downside of decimal floats is that they do not have hardware support
-(except on certain [highly uncommon processors](https://en.wikipedia.org/wiki/IEEE_754#See_also)),
-so calculations involving them take longer.
-
-Roc does not let floating point calculations result in `Infinity`, `-Infinity`,
-or `NaN`.  Any operation which would result in one of these
-(such as `sqrt` or `/`) will panic.
+Roc also supports `Dec`, which is a 128-bit [fixed-point decimal](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) number. `Dec` is decimal-based, so `0.1 + 0.2 == 0.3`
+(whereas in binary floats [this is not true](https://0.30000000000000004.com/)),
+which makes it much better for calculations involving currency, among other use cases.
+The downside of `Dec` is that it does not have hardware support, so calculations involving
+them take longer than they do with floats.
 
 Similarly to how there are different sizes of floating point numbers,
 there are also different sizes of integer to choose from:
@@ -1190,42 +1179,33 @@ for `Num` types. For example:
 
 * `I64` is a type alias for `Num (Integer Signed64)`
 * `U8` is a type alias for `Num (Integer Unsigned8)`
-* `F32` is a type alias for `Num (FloatingPoint Binary32)`
-* `D64` is a type alias for `Num (FloatingPoint Decimal64)`
+* `F32` is a type alias for `Num (Fraction Binary32)`
+* `Dec` is a type alias for `Num (Fraction Decimal)`
 
-(Those types like `Integer`, `FloatingPoint`, and `Signed64` are all defined like `Never`; you can never instantiate one.
-They are used only as phantom types.)
+(Those types like `Integer`, `Fraction`, and `Signed64` are all defined like `Never`;
+you can never instantiate one. They are used only as phantom types.)
 
 So Roc does not use `number`, but rather uses `Num` - which works more like `List`.
 Either way, you get `+` being able to work on both integers and floats!
 
 Separately, there's also `Int a`, which is a type alias for `Num (Integer a)`,
-and `Float a`, which is a type alias for `Num (FloatingPoint a)`. These allow functions
-that can work on any integer or any float. For example,
+and `Frac a`, which is a type alias for `Num (Fraction a)`. These allow functions
+that can work on any integer or any fractional number. For example,
 `Num.bitwiseAnd : Int a, Int a -> Int a`.
 
-In Roc, number literals with decimal points are `Float *` values.
+In Roc, number literals with decimal points are `Frac *` values.
 Number literals *without* a decimal point are `Num *` values. Almost always these
 will end up becoming something more specific, but in the unlikely event
 (most often in a REPL) that you actually do end up with an operation that runs
 on either an `Int *` or a `Num *` value, it will default to being treated as
-an `I64`. Similarly, a `Float *` value will default to being treated as a `D64`,
+an `I64`. Similarly, a `Frac *` value will default to being treated as a `D64`,
 which means if someone is learning Roc as their first programming language and
 they type `0.1 + 0.2` into a REPL, they won't be confused by the answer.
 
-If you encounter overflow with either integers or floats in Roc, you get a runtime
-exception rather than wrapping overflow behavior (or a float becoming `Infinity`
-or `-Infinity`). You can opt into wrapping overflow instead with functions like
+If you encounter integer or `Dec` overflow in Roc, by default you get a runtime
+exception. You can opt into wrapping integer overflow instead with functions like
 `Num.addWrap : Int a, Int a -> Int a`, or use a function that gives `Err` if it
 overflows, like `Num.addChecked : Num a, Num a -> Result (Num a) [Overflow]*`.
-
-## `comparable`, `appendable`, and `number`
-
-These don't exist in Roc.
-
-* `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
-* `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a "sorting function" argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), and their keys only need the functionless restriction.
-* `number` is replaced by `Num`, as described previously.
 
 Also [like Python](https://www.python.org/dev/peps/pep-0515/)
 Roc permits underscores in number literals for readability purposes. Roc also supports
@@ -1239,17 +1219,28 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 2048 : Num *
 
 > 1 + 2.14
-3.14 : Float *
+3.14 : Frac *
 
 > 1.0 + 1
-2.0 : Float *
+2.0 : Frac *
 
 > 1.1 + 0x11
-<type mismatch between `1.1 : Float *` and `0x11 : Int *`>
+<type mismatch between `1.1 : Frac *` and `0x11 : Int *`>
 
 > 11 + 0x11
 28 : Int *
 ```
+
+## Abilities
+
+`comparable`, `appendable`, and `number` don't exist in Roc.
+
+* `number` is replaced by `Num`, as described previously.
+* `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
+* `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
+
+That said, Roc's `Dict` and `Set` do have a restriction on their keys, just not `comparable`.
+See the section on Abilities in [the tutorial](TUTORIAL.md) for details.
 
 ## Standard library
 
