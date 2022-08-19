@@ -1,6 +1,6 @@
-on:
-  schedule:
-    - cron:  '0 9 * * *'
+on: [pull_request]
+#  schedule:
+#    - cron:  '0 9 * * *'
 
 name: Nightly Release macOS Apple Silicon
 
@@ -15,23 +15,27 @@ jobs:
         run: zig version
       - name: llvm version
         run: llc --version | grep LLVM
+
       - name: run tests
         run: cargo test --locked --release
+
       - name: write version to file
         run: ./ci/write_version.sh
+
       - name: build nightly release
         run: cargo build --locked --release
+
       - name: package release
         run: ./ci/package_release.sh roc_darwin_apple_silicon.tar.gz
-      - name: Create pre-release with test_archive.tar.gz
-        uses: Anton-4/deploy-nightly@1609d8dfe211b078674801113ab7a2ec2938b2a9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
-        with:
-          upload_url: https://uploads.github.com/repos/roc-lang/roc/releases/51880579/assets{?name,label}
-          release_id: 51880579
-          asset_path: ./roc_darwin_apple_silicon.tar.gz
-          asset_name: roc_nightly-macos_apple_silicon-$$.tar.gz # $$ inserts 6 char commit hash and date (YYYY-MM-DD)
-          asset_content_type: application/gzip
-          max_releases: 3
 
+      - name: print short commit SHA
+        run: git rev-parse --short "$GITHUB_SHA"
+      - name: print date
+        run: date
+
+       - name: 'Upload artifact. Actually uploading to github releases has to be done manually.'
+         uses: actions/upload-artifact@v3
+         with:
+           name: nightly_roc_darwin_apple_silicon
+           path: roc_darwin_apple_silicon.tar.gz
+           retention-days: 4
