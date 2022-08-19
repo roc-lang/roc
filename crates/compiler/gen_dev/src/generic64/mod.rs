@@ -228,12 +228,15 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src1: GeneralReg,
         src2: GeneralReg,
     );
-    fn umul_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
-    );
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -773,24 +776,21 @@ impl<
             Layout::Builtin(Builtin::Int(
                 IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
             )) => {
-                // TODO find a general way to do this
-                let rax = CC::GENERAL_RETURN_REGS[0];
-                let rdx = CC::GENERAL_RETURN_REGS[1];
-
-                self.storage_manager
-                    .ensure_reg_free(&mut self.buf, RegStorage::General(rax));
-
-                self.storage_manager
-                    .ensure_reg_free(&mut self.buf, RegStorage::General(rdx));
-
-                self.storage_manager
-                    .load_to_specified_general_reg(&mut self.buf, src1, rax);
-
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::umul_reg64_reg64_reg64(&mut self.buf, dst_reg, rax, src2_reg);
+
+                ASM::umul_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
             Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);

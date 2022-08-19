@@ -443,12 +443,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("register signed multiplication for AArch64");
     }
 
-    fn umul_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         _dst: AArch64GeneralReg,
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
-    ) {
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
         todo!("register unsigned multiplication for AArch64");
     }
 

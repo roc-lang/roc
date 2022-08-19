@@ -1009,15 +1009,24 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         imul_reg64_reg64(buf, dst, src2);
     }
 
-    #[inline(always)]
-    fn umul_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
-    ) {
-        mov_reg64_reg64(buf, dst, src1);
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
         mul_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
     fn mul_freg32_freg32_freg32(
