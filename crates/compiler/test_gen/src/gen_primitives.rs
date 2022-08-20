@@ -1234,8 +1234,8 @@ fn return_wrapped_closure() {
             main = foo
             "#
         ),
-        [5],
-        [i64; 1]
+        5,
+        i64
     );
 }
 
