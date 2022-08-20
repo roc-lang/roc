@@ -85,15 +85,7 @@ impl Sections {
     }
 }
 
-enum Origin {
-    Real,
-    Fake,
-}
-
 fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
-    //    use object::read::Object;
-    //    let in_elf = ElfFile64::parse(in_data)?;
-
     let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
     let is_mips64el = in_elf.is_mips64el(endian);
@@ -260,32 +252,32 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     // We must sort for GNU hash before allocating symbol indices.
     if let Some(in_gnu_hash) = in_gnu_hash.as_ref() {
         //        // TODO: recalculate bucket_count
-        out_dynsyms.sort_by_key(|(_, sym)| match sym.gnu_hash {
+        out_dynsyms.sort_by_key(|sym| match sym.gnu_hash {
             None => (0, 0),
             Some(hash) => (1, hash % in_gnu_hash.bucket_count.get(endian)),
         });
     }
     let mut out_dynsyms_index = vec![Default::default(); in_dynsyms.len() + custom_names.len()];
-    for (_, out_dynsym) in out_dynsyms.iter_mut() {
+    for out_dynsym in out_dynsyms.iter_mut() {
         out_dynsyms_index[out_dynsym.in_sym] = writer.reserve_dynamic_symbol_index();
     }
 
     // Hash parameters.
     let hash_index_base = out_dynsyms
         .first()
-        .map(|(_, sym)| out_dynsyms_index[sym.in_sym].0)
+        .map(|sym| out_dynsyms_index[sym.in_sym].0)
         .unwrap_or(0);
     let hash_chain_count = writer.dynamic_symbol_count();
 
     // GNU hash parameters.
     let gnu_hash_index_base = out_dynsyms
         .iter()
-        .position(|(_, sym)| sym.gnu_hash.is_some())
+        .position(|sym| sym.gnu_hash.is_some())
         .unwrap_or(0);
     let gnu_hash_symbol_base = out_dynsyms
         .iter()
-        .find(|(_, sym)| sym.gnu_hash.is_some())
-        .map(|(_, sym)| out_dynsyms_index[sym.in_sym].0)
+        .find(|sym| sym.gnu_hash.is_some())
+        .map(|sym| out_dynsyms_index[sym.in_sym].0)
         .unwrap_or_else(|| writer.dynamic_symbol_count());
     let gnu_hash_symbol_count = writer.dynamic_symbol_count() - gnu_hash_symbol_base;
 
