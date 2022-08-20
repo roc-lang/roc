@@ -1837,13 +1837,13 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/brian-carroll/inkwell?branch=llvm-14)",
+ "inkwell 0.1.0 (git+https://github.com/brian-carroll/inkwell?branch=master)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/brian-carroll/inkwell?branch=llvm-14#c45baaae70b4ae4f40295d4c08d88394db761157"
+source = "git+https://github.com/brian-carroll/inkwell?branch=master#689b469139d8e18f3063f18e192fd3402142c93b"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1856,7 +1856,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.5.0"
-source = "git+https://github.com/brian-carroll/inkwell?branch=llvm-14#c45baaae70b4ae4f40295d4c08d88394db761157"
+source = "git+https://github.com/brian-carroll/inkwell?branch=master#689b469139d8e18f3063f18e192fd3402142c93b"
 dependencies = [
  "proc-macro2",
  "quote",
