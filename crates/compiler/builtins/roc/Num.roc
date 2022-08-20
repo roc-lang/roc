@@ -860,7 +860,7 @@ bitwiseOr : Int a, Int a -> Int a
 
 ## Bitwise left shift of a number by another
 ##
-## The least significand bits always become 0. This means that shifting left is
+## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
 ##
 ## >>> shiftLeftBy 0b0000_0011 2 == 0b0000_1100
@@ -872,7 +872,7 @@ shiftLeftBy : Int a, Int a -> Int a
 
 ## Bitwise arithmetic shift of a number by another
 ##
-## The most significand bits are copied from the current.
+## The most significant bits are copied from the current.
 ##
 ## >>> shiftRightBy 0b0000_0011 2 == 0b0000_1100
 ##
@@ -885,7 +885,7 @@ shiftRightBy : Int a, Int a -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
-## The most significand bits always become 0. This means that shifting left is
+## The most significant bits always become 0. This means that shifting left is
 ## like dividing by factors of two for unsigned integers.
 ##
 ## >>> shiftRightBy 0b0010_1000 2 == 0b0000_1010
