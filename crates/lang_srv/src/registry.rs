@@ -4,9 +4,12 @@ use bumpalo::Bump;
 use roc_load::{LoadedModule, LoadingProblem};
 use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
-use tower_lsp::lsp_types::{Diagnostic, Url};
+use tower_lsp::lsp_types::{Diagnostic, Hover, HoverContents, MarkedString, Position, Url};
 
-use crate::convert::diag::{IntoLspDiagnostic, ProblemFmt};
+use crate::convert::{
+    diag::{IntoLspDiagnostic, ProblemFmt},
+    ToRange, ToRocPosition,
+};
 
 pub(crate) enum DocumentChange {
     Modified(Url, String),
@@ -21,6 +24,7 @@ struct Document {
     arena: Bump,
 
     // Incrementally updated module, diagnostis, etc.
+    line_info: Option<LineInfo>,
     module: Option<Result<LoadedModule, ()>>,
     diagnostics: Option<Vec<Diagnostic>>,
 }
@@ -32,6 +36,7 @@ impl Document {
             source,
             arena: Bump::new(),
 
+            line_info: None,
             module: None,
             diagnostics: None,
         }
@@ -41,6 +46,16 @@ impl Document {
         self.source = source;
         self.module = None;
         self.diagnostics = None;
+    }
+
+    fn prime_line_info(&mut self) {
+        if self.line_info.is_none() {
+            self.line_info = Some(LineInfo::new(&self.source));
+        }
+    }
+
+    fn line_info(&self) -> &LineInfo {
+        &self.line_info.as_ref().unwrap()
     }
 
     fn module(&mut self) -> Result<&mut LoadedModule, LoadingProblem<'_>> {
@@ -84,8 +99,11 @@ impl Document {
 
         let diagnostics = match loaded {
             Ok(module) => {
+                let line_info = {
+                    self.prime_line_info();
+                    self.line_info()
+                };
                 let lines: Vec<_> = self.source.lines().collect();
-                let line_info = LineInfo::new(&self.source);
 
                 let alloc = RocDocAllocator::new(&lines, module.module_id, &module.interns);
 
@@ -129,6 +147,41 @@ impl Document {
         self.diagnostics = Some(diagnostics);
         self.diagnostics.as_ref().unwrap().clone()
     }
+
+    fn hover(&mut self, position: Position) -> Option<Hover> {
+        let line_info = {
+            self.prime_line_info();
+            self.line_info()
+        };
+
+        let position = position.to_roc_position(line_info);
+
+        let module = match self.module() {
+            Ok(module) => module,
+            Err(_) => return None,
+        };
+
+        let decls = module.declarations_by_id.get(&module.module_id).unwrap();
+        let (region, var) = roc_can::traverse::find_closest_type_at(position, decls)?;
+
+        let subs = module.solved.inner_mut();
+        let snapshot = subs.snapshot();
+        let type_str = roc_types::pretty_print::name_and_print_var(
+            var,
+            subs,
+            module.module_id,
+            &module.interns,
+            roc_types::pretty_print::DebugPrint::NOTHING,
+        );
+        subs.rollback_to(snapshot);
+
+        let range = region.to_range(self.line_info());
+
+        Some(Hover {
+            contents: HoverContents::Scalar(MarkedString::String(type_str)),
+            range: Some(range),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -154,5 +207,9 @@ impl Registry {
 
     pub fn diagnostics(&mut self, document: &Url) -> Vec<Diagnostic> {
         self.documents.get_mut(document).unwrap().diagnostics()
+    }
+
+    pub fn hover(&mut self, document: &Url, position: Position) -> Option<Hover> {
+        self.documents.get_mut(document).unwrap().hover(position)
     }
 }

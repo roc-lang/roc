@@ -3828,12 +3828,14 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "parking_lot 0.12.1",
+ "roc_can",
  "roc_load",
  "roc_problem",
  "roc_region",
  "roc_reporting",
  "roc_solve_problem",
  "roc_target",
+ "roc_types",
  "tokio",
  "tower-lsp",
 >>>>>>> 599eb655a (Support basic diagnostic reporting)

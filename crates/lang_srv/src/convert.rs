@@ -1,17 +1,70 @@
-use roc_region::all::{LineColumnRegion, LineInfo, Region};
+use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
 use tower_lsp::lsp_types::{Position, Range};
 
-fn range_of_region(line_info: &LineInfo, region: Region) -> Range {
-    let LineColumnRegion { start, end } = line_info.convert_region(region);
-    Range {
-        start: Position {
-            line: start.line,
-            character: start.column,
-        },
-        end: Position {
-            line: end.line,
-            character: end.column,
-        },
+pub(crate) trait ToRange {
+    type Feed;
+
+    fn to_range(&self, feed: &Self::Feed) -> Range;
+}
+
+impl ToRange for Region {
+    type Feed = LineInfo;
+
+    fn to_range(&self, line_info: &LineInfo) -> Range {
+        let LineColumnRegion { start, end } = line_info.convert_region(*self);
+        Range {
+            start: Position {
+                line: start.line,
+                character: start.column,
+            },
+            end: Position {
+                line: end.line,
+                character: end.column,
+            },
+        }
+    }
+}
+
+pub(crate) trait ToRegion {
+    type Feed;
+
+    fn to_region(&self, feed: &Self::Feed) -> Region;
+}
+
+impl ToRegion for Range {
+    type Feed = LineInfo;
+
+    fn to_region(&self, line_info: &LineInfo) -> Region {
+        let lc_region = LineColumnRegion {
+            start: LineColumn {
+                line: self.start.line,
+                column: self.start.character,
+            },
+            end: LineColumn {
+                line: self.end.line,
+                column: self.end.line,
+            },
+        };
+
+        line_info.convert_line_column_region(lc_region)
+    }
+}
+
+pub(crate) trait ToRocPosition {
+    type Feed;
+
+    fn to_roc_position(&self, feed: &Self::Feed) -> roc_region::all::Position;
+}
+
+impl ToRocPosition for tower_lsp::lsp_types::Position {
+    type Feed = LineInfo;
+
+    fn to_roc_position(&self, line_info: &LineInfo) -> roc_region::all::Position {
+        let lc = LineColumn {
+            line: self.line,
+            column: self.character,
+        };
+        line_info.convert_line_column(lc)
     }
 }
 
@@ -25,7 +78,7 @@ pub(crate) mod diag {
     use roc_reporting::report::{RocDocAllocator, Severity};
     use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
-    use super::range_of_region;
+    use super::ToRange;
 
     pub trait IntoLspSeverity {
         fn into_lsp_severity(self) -> DiagnosticSeverity;
@@ -114,7 +167,7 @@ pub(crate) mod diag {
         type Feed = ProblemFmt<'a>;
 
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
-            let range = range_of_region(fmt.line_info, self.region());
+            let range = self.region().to_range(fmt.line_info);
 
             let report = roc_reporting::report::can_problem(
                 &fmt.alloc,
@@ -146,7 +199,7 @@ pub(crate) mod diag {
         type Feed = ProblemFmt<'a>;
 
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
-            let range = range_of_region(fmt.line_info, self.region());
+            let range = self.region().to_range(fmt.line_info);
 
             let report = roc_reporting::report::type_problem(
                 &fmt.alloc,

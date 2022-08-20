@@ -8,12 +8,14 @@ name = "roc_ls"
 path = "src/server.rs"
 
 [dependencies]
+roc_can = { path = "../compiler/can" }
 roc_load = { path = "../compiler/load" }
 roc_problem = { path = "../compiler/problem" }
 roc_region = { path = "../compiler/region" }
 roc_reporting = { path = "../reporting" }
 roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_target = { path = "../compiler/roc_target" }
+roc_types = { path = "../compiler/types" }
 
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
