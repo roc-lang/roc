@@ -11,7 +11,7 @@ use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
 };
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, RecordField};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -840,7 +840,7 @@ impl DerivableVisitor for DeriveDecoding {
         fields: RecordFields,
     ) -> Result<Descend, NotDerivable> {
         for (field_name, _, field) in fields.iter_all() {
-            if matches!(subs[field], RecordField::Optional(..)) {
+            if subs[field].is_optional() {
                 return Err(NotDerivable {
                     var,
                     context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
