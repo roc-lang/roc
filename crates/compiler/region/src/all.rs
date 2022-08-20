@@ -22,6 +22,10 @@ impl Region {
         self.start <= other.start && self.end >= other.end
     }
 
+    pub fn contains_pos(&self, pos: Position) -> bool {
+        self.start <= pos && self.end >= pos
+    }
+
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
@@ -356,6 +360,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct LineInfo {
     line_offsets: Vec<u32>,
 }

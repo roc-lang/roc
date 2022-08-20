@@ -100,6 +100,20 @@ impl LanguageServer for RocLs {
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let HoverParams {
+            text_document_position_params:
+                TextDocumentPositionParams {
+                    text_document,
+                    position,
+                },
+            work_done_progress_params: _,
+        } = params;
+
+        let hover = self.registry().hover(&text_document.uri, position);
+        Ok(hover)
+    }
 }
 
 #[tokio::main]
