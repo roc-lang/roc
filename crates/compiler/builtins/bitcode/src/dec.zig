@@ -887,7 +887,7 @@ test "toStr: -0.45" {
 }
 
 test "toStr: 0.00045" {
-    var dec: RocDec = .{ .num = 000450000000000000 };
+    var dec: RocDec = .{ .num = 450000000000000 };
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.00045"[0..];
@@ -895,7 +895,7 @@ test "toStr: 0.00045" {
 }
 
 test "toStr: -0.00045" {
-    var dec: RocDec = .{ .num = -000450000000000000 };
+    var dec: RocDec = .{ .num = -450000000000000 };
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-0.00045"[0..];

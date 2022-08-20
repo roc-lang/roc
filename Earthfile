@@ -17,9 +17,9 @@ install-zig-llvm-valgrind:
     # editor
     RUN apt -y install libxkbcommon-dev
     # zig
-    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-x86_64-0.9.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /bin/zig
+    RUN wget -c https://ziglang.org/builds/zig-linux-x86_64-0.10.0-dev.3659+e5e6eb983.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-x86_64-0.10.0-dev.3659+e5e6eb983.tar.xz
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.10.0-dev.3659+e5e6eb983/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"

@@ -67,20 +67,20 @@ fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(
 }
 
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
-    return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+    return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
-    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
+    return @ptrCast([*]u8, roc_realloc(c_ptr, new_size, old_size, alignment));
 }
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+    return roc_dealloc(c_ptr, alignment);
 }
 
 // must export this explicitly because right now it is not used from zig code
 pub fn panic(c_ptr: *const anyopaque, alignment: u32) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+    return roc_panic(c_ptr, alignment);
 }
 
 pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {

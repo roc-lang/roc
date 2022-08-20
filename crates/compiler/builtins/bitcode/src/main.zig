@@ -164,7 +164,7 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
-    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak }); // zig 0.10 error: TODO: implement exporting with field access
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
@@ -237,7 +237,7 @@ pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
-test "" {
+test "imported tests" {
     const testing = std.testing;
 
     testing.refAllDecls(@This());

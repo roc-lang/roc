@@ -202,7 +202,7 @@ const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C)
 
 pub fn listMap(
     list: RocList,
-    caller: Caller1,
+    caller: Caller1, // zig 0.10 error: generic parameters not allowed in function with calling convention 'C'
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
