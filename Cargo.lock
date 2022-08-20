@@ -1837,13 +1837,13 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/roc-lang/inkwell?branch=master)",
+ "inkwell 0.1.0 (git+https://github.com/brian-carroll/inkwell?branch=llvm-14)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
+source = "git+https://github.com/brian-carroll/inkwell?branch=llvm-14#c45baaae70b4ae4f40295d4c08d88394db761157"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1856,7 +1856,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.5.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
+source = "git+https://github.com/brian-carroll/inkwell?branch=llvm-14#c45baaae70b4ae4f40295d4c08d88394db761157"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2062,15 +2062,15 @@ checksum = "d4d2456c373231a208ad294c33dc5bff30051eafd954cd4caae83a712b12854d"
 
 [[package]]
 name = "llvm-sys"
-version = "130.0.4"
+version = "140.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb6ea20e8a348f6db0b43a7f009fa7d981d22edf4cbe2e0c7b2247dbb25be61"
+checksum = "5a4ad24a72823cb06764e04a008d4aedc1be56d2be87aa4212b12a3e9f77bb10"
 dependencies = [
  "cc",
  "lazy_static",
  "libc",
  "regex",
- "semver 0.11.0",
+ "semver 1.0.12",
 ]
 
 [[package]]
@@ -4330,16 +4330,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 dependencies = [
- "semver-parser 0.7.0",
-]
-
-[[package]]
-name = "semver"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f301af10236f6df4160f7c3f04eec6dbc70ace82d23326abad5edee88801c6b6"
-dependencies = [
- "semver-parser 0.10.2",
+ "semver-parser",
 ]
 
 [[package]]
@@ -4353,15 +4344,6 @@ name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
-
-[[package]]
-name = "semver-parser"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00b0bef5b7f9e0df16536d3961cfb6e84331c065b4066afb39768d0e319411f7"
-dependencies = [
- "pest",
-]
 
 [[package]]
 name = "serde"
