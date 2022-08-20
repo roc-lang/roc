@@ -55,9 +55,9 @@ struct DynamicSymbol {
     gnu_hash: Option<u32>,
 }
 
+#[derive(Debug)]
 struct MySection {
     in_index: usize,
-    out_offset: usize,
     section: SectionHeader64<object::Endianness>,
 }
 
@@ -68,6 +68,9 @@ struct Sections {
     dynstr: MySection,
     eh_frame: MySection,
     dynamic: MySection,
+    symtab: MySection,
+    strtab: MySection,
+    shstrtab: MySection,
 }
 
 impl Sections {
@@ -79,6 +82,9 @@ impl Sections {
             &self.dynstr,
             &self.eh_frame,
             &self.dynamic,
+            &self.symtab,
+            &self.strtab,
+            &self.shstrtab,
         ]
         .into_iter()
         .enumerate()
@@ -88,7 +94,6 @@ impl Sections {
 fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
     let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
-    let is_mips64el = in_elf.is_mips64el(endian);
     let in_segments = in_elf.program_headers(endian, in_data)?;
     let in_sections = in_elf.sections(endian, in_data)?;
     let in_syms = in_sections.symbols(endian, in_data, elf::SHT_SYMTAB)?;
@@ -102,17 +107,19 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         MySection {
             in_index,
             section: *section,
-            out_offset: 0, // we'll fill this in later
         }
     };
 
-    let mut sections = Sections {
+    let sections = Sections {
         hash: help(b".hash" as &[_]),
         gnu_hash: help(b".gnu.hash" as &[_]),
         dynsym: help(b".dynsym" as &[_]),
         dynstr: help(b".dynstr" as &[_]),
         eh_frame: help(b".eh_frame" as &[_]),
         dynamic: help(b".dynamic" as &[_]),
+        symtab: help(b".symtab" as &[_]),
+        strtab: help(b".strtab" as &[_]),
+        shstrtab: help(b".shstrtab" as &[_]),
     };
 
     let mut out_data = Vec::new();
@@ -124,7 +131,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let mut in_gnu_hash = None;
     let mut out_sections = Vec::with_capacity(in_sections.len());
     let mut out_sections_index = Vec::with_capacity(in_sections.len());
-    for (_, my_section) in sections.iter() {
+    for (enum_index, my_section) in sections.iter() {
         let i = my_section.in_index;
         let in_section = &my_section.section;
 
@@ -306,7 +313,8 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         };
         out_syms_index.push(writer.reserve_symbol_index(section));
         let name = if in_sym.st_name(endian) != 0 {
-            Some(writer.add_string(in_syms.symbol_name(endian, in_sym)?))
+            let s = in_syms.symbol_name(endian, in_sym)?;
+            Some(writer.add_string(s))
         } else {
             None
         };
@@ -337,12 +345,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     // Start reserving file ranges.
     writer.reserve_file_header();
 
-    let mut hash_addr = 0;
-    let mut gnu_hash_addr = 0;
-    let mut dynamic_addr = 0;
-    let mut dynsym_addr = 0;
-    let mut dynstr_addr = 0;
-
     // We don't support moving program headers.
     assert_eq!(in_elf.e_phoff(endian), writer.reserved_len() as u64);
     writer.reserve_program_headers(in_segments.len() as u32);
@@ -356,149 +358,110 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     let mut offsets = [0; 6];
 
-    if true {
-        let mut extra_offset: usize = 0;
+    let mut extra_offset: usize = 0;
 
-        // elf::SHT_HASH
-        let in_section = sections.hash.section;
-        let offset = in_section.sh_offset(endian) as usize;
-        offsets[0] = offset;
-        writer.reserve_until(offset);
+    // elf::SHT_HASH
+    let in_section = sections.hash.section;
+    let offset = in_section.sh_offset(endian) as usize;
+    offsets[0] = offset;
+    writer.reserve_until(offset);
 
-        hash_addr = in_section.sh_addr(endian);
-        let hash = in_hash.as_ref().unwrap();
-        // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_hash(3, 13);
-        let reserved_after = writer.reserved_len();
+    let hash_addr = in_section.sh_addr(endian);
+    // here we fake a bigger hash table than the input file has
+    // let hash = in_hash.as_ref().unwrap();
+    // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
+    let reserved_before = writer.reserved_len();
+    writer.reserve_hash(3, 13);
+    let reserved_after = writer.reserved_len();
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+    extra_offset += {
+        let actual_size = reserved_after - reserved_before;
 
-            actual_size - sections.hash.section.sh_size(endian) as usize
-        };
+        actual_size - sections.hash.section.sh_size(endian) as usize
+    };
 
-        // elf::SHT_GNU_HASH
-        let in_section = &sections.gnu_hash.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[1] = offset;
-        writer.reserve_until(offset);
+    // elf::SHT_GNU_HASH
+    let in_section = &sections.gnu_hash.section;
+    let offset = in_section.sh_offset(endian) as usize + extra_offset;
+    offsets[1] = offset;
+    writer.reserve_until(offset);
 
-        gnu_hash_addr = in_section.sh_addr(endian);
-        let hash = in_gnu_hash.as_ref().unwrap();
-        let reserved_before = writer.reserved_len();
-        writer.reserve_gnu_hash(
-            hash.bloom_count.get(endian),
-            hash.bucket_count.get(endian),
-            gnu_hash_symbol_count,
-        );
-        let reserved_after = writer.reserved_len();
+    let gnu_hash_addr = in_section.sh_addr(endian);
+    let hash = in_gnu_hash.as_ref().unwrap();
+    let reserved_before = writer.reserved_len();
+    writer.reserve_gnu_hash(
+        hash.bloom_count.get(endian),
+        hash.bucket_count.get(endian),
+        gnu_hash_symbol_count,
+    );
+    let reserved_after = writer.reserved_len();
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+    extra_offset += {
+        let actual_size = reserved_after - reserved_before;
 
-            actual_size - sections.gnu_hash.section.sh_size(endian) as usize
-        };
+        actual_size - sections.gnu_hash.section.sh_size(endian) as usize
+    };
 
-        // elf::SHT_DYNSYM
-        let in_section = &sections.dynsym.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[2] = offset;
-        writer.reserve_until(offset);
+    // elf::SHT_DYNSYM
+    let in_section = &sections.dynsym.section;
+    let offset = in_section.sh_offset(endian) as usize + extra_offset;
+    offsets[2] = offset;
+    writer.reserve_until(offset);
 
-        dynsym_addr = in_section.sh_addr(endian);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_dynsym();
-        let reserved_after = writer.reserved_len();
+    let dynsym_addr = in_section.sh_addr(endian);
+    let reserved_before = writer.reserved_len();
+    writer.reserve_dynsym();
+    let reserved_after = writer.reserved_len();
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+    extra_offset += {
+        let actual_size = reserved_after - reserved_before;
 
-            actual_size - sections.dynsym.section.sh_size(endian) as usize
-        };
+        actual_size - sections.dynsym.section.sh_size(endian) as usize
+    };
 
-        // elf::SHT_STRTAB
-        let in_section = &sections.dynstr.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[3] = offset;
-        writer.reserve_until(offset);
+    // elf::SHT_STRTAB
+    let in_section = &sections.dynstr.section;
+    let offset = in_section.sh_offset(endian) as usize + extra_offset;
+    offsets[3] = offset;
+    writer.reserve_until(offset);
 
-        dynstr_addr = in_section.sh_addr(endian);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_dynstr();
-        let reserved_after = writer.reserved_len();
+    let dynstr_addr = in_section.sh_addr(endian);
+    let reserved_before = writer.reserved_len();
+    writer.reserve_dynstr();
+    let reserved_after = writer.reserved_len();
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+    extra_offset += {
+        let actual_size = reserved_after - reserved_before;
 
-            actual_size - sections.dynstr.section.sh_size(endian) as usize
-        };
+        actual_size - sections.dynstr.section.sh_size(endian) as usize
+    };
 
-        // elf::SHT_PROGBITS
-        let in_section = &sections.eh_frame.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[4] = offset;
-        writer.reserve_until(offset);
-        // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
-        let reserved_before = writer.reserved_len();
-        let todo_unused = writer.reserve(in_section.sh_size(endian) as usize, 1);
-        let reserved_after = writer.reserved_len();
+    // elf::SHT_PROGBITS
+    let in_section = &sections.eh_frame.section;
+    let offset = in_section.sh_offset(endian) as usize + extra_offset;
+    offsets[4] = offset;
+    writer.reserve_until(offset);
+    // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
+    let reserved_before = writer.reserved_len();
+    let todo_unused = writer.reserve(in_section.sh_size(endian) as usize, 1);
+    let reserved_after = writer.reserved_len();
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+    extra_offset += {
+        let actual_size = reserved_after - reserved_before;
 
-            actual_size - sections.eh_frame.section.sh_size(endian) as usize
-        };
+        actual_size - sections.eh_frame.section.sh_size(endian) as usize
+    };
 
-        // elf::SHT_DYNAMIC
-        let in_section = &sections.dynamic.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[5] = offset + 6; // seems like this needs to be aligned?!
-        writer.reserve_until(offset);
+    // elf::SHT_DYNAMIC
+    let in_section = &sections.dynamic.section;
+    let offset = in_section.sh_offset(endian) as usize + extra_offset;
+    offsets[5] = offset + 6; // seems like this needs to be aligned?!
+    writer.reserve_until(offset);
 
-        dynamic_addr = in_section.sh_addr(endian);
-        writer.reserve_dynamic(out_dynamic.len());
-    } else {
-        for (i, in_section) in alloc_sections.iter() {
-            writer.reserve_until(in_section.sh_offset(endian) as usize);
-            match in_section.sh_type(endian) {
-                elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
-                    out_sections[*i].offset =
-                        writer.reserve(in_section.sh_size(endian) as usize, 1);
-                }
-                elf::SHT_DYNAMIC => {
-                    dynamic_addr = in_section.sh_addr(endian);
-                    writer.reserve_dynamic(out_dynamic.len());
-                }
-                elf::SHT_DYNSYM if *i == in_dynsyms.section().0 => {
-                    dynsym_addr = in_section.sh_addr(endian);
-                    writer.reserve_dynsym();
-                }
-                elf::SHT_STRTAB if *i == in_dynsyms.string_section().0 => {
-                    dynstr_addr = in_section.sh_addr(endian);
-                    writer.reserve_dynstr();
-                }
-                elf::SHT_HASH => {
-                    hash_addr = in_section.sh_addr(endian);
-                    let hash = in_hash.as_ref().unwrap();
-                    // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
-                    writer.reserve_hash(3, 13);
-                }
-                elf::SHT_GNU_HASH => {
-                    gnu_hash_addr = in_section.sh_addr(endian);
-                    let hash = in_gnu_hash.as_ref().unwrap();
-                    writer.reserve_gnu_hash(
-                        hash.bloom_count.get(endian),
-                        hash.bucket_count.get(endian),
-                        gnu_hash_symbol_count,
-                    );
-                }
-                other => {
-                    panic!("Unsupported alloc section index {}, type {}", *i, other);
-                }
-            }
-        }
-    }
+    let dynamic_addr = in_section.sh_addr(endian);
+    writer.reserve_dynamic(out_dynamic.len());
+
+    // strtab and shstrtab is ignored
 
     // Reserve non-alloc sections at any offset.
     for (i, in_section) in in_sections.iter().enumerate() {
@@ -556,7 +519,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
             }
             elf::SHT_DYNAMIC => {
                 for d in &out_dynamic {
-                    dbg!(&d);
                     if let Some(string) = d.string {
                         writer.write_dynamic_string(d.tag, string);
                     } else {
@@ -574,8 +536,8 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                         section: sym.section,
                         st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
                         st_other: 0,
-                        st_shndx: 0, // relative to which section index is this defined (seems to be filled in)
-                        st_value: 1000,
+                        st_shndx: 0,
+                        st_value: 0x1000,
                         st_size: 0,
                     });
                 }
@@ -627,11 +589,12 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     writer.write_null_symbol();
-    for sym in &out_syms {
+    let section_indices = [0, 1, 2, 3, 4, 5, 5];
+    for (sym, sindex) in out_syms.iter().zip(section_indices) {
         let in_sym = in_syms.symbol(sym.in_sym)?;
         writer.write_symbol(&object::write::elf::Sym {
             name: sym.name,
-            section: sym.section,
+            section: Some(object::write::elf::SectionIndex(sindex)),
             st_info: in_sym.st_info(),
             st_other: in_sym.st_other(),
             st_shndx: in_sym.st_shndx(endian),
@@ -645,9 +608,9 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         writer.write_symbol(&object::write::elf::Sym {
             name: Some(name),
             section: Some(section),
-            st_info: (1 << 4) /* weak */ | 2, /* function */
+            st_info: (elf::STB_WEAK << 4) | elf::STT_FUNC,
             st_other: 0,
-            st_shndx: 0,
+            st_shndx: 3,
             st_value: 0x1000,
             st_size: 0,
         });
@@ -659,82 +622,43 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     writer.write_shstrtab();
 
     writer.write_null_section_header();
-    for (i, in_section) in in_sections.iter().enumerate() {
-        match in_section.sh_type(endian) {
-            elf::SHT_NULL => {}
-            elf::SHT_PROGBITS
-            | elf::SHT_NOBITS
-            | elf::SHT_NOTE
-            | elf::SHT_REL
-            | elf::SHT_RELA
-            | elf::SHT_INIT_ARRAY
-            | elf::SHT_FINI_ARRAY => {
-                let out_section = &out_sections[i];
-                let sh_link = out_sections_index[in_section.sh_link(endian) as usize].0 as u32;
-                let mut sh_info = in_section.sh_info(endian);
-                if in_section.sh_flags(endian) as u32 & elf::SHF_INFO_LINK != 0 {
-                    sh_info = out_sections_index[sh_info as usize].0 as u32;
-                }
 
-                writer.write_section_header(&object::write::elf::SectionHeader {
-                    name: out_section.name,
-                    sh_type: in_section.sh_type(endian),
-                    sh_flags: in_section.sh_flags(endian),
-                    sh_addr: in_section.sh_addr(endian),
-                    sh_offset: out_section.offset as u64,
-                    sh_size: in_section.sh_size(endian),
-                    sh_link,
-                    sh_info,
-                    sh_addralign: in_section.sh_addralign(endian),
-                    sh_entsize: in_section.sh_entsize(endian),
-                });
-            }
-            elf::SHT_STRTAB => {
-                if i == in_syms.string_section().0 {
-                    writer.write_strtab_section_header();
-                } else if i == in_dynsyms.string_section().0 {
-                    writer.write_dynstr_section_header(dynstr_addr);
-                } else if i == in_elf.shstrndx(endian, in_data)? as usize {
-                    writer.write_shstrtab_section_header();
-                } else {
-                    panic!("Unsupported string section {}", i);
-                }
-            }
-            elf::SHT_SYMTAB => {
-                if i == in_syms.section().0 {
-                    writer.write_symtab_section_header(num_local);
-                } else {
-                    panic!("Unsupported symtab section {}", i);
-                }
-            }
-            elf::SHT_SYMTAB_SHNDX => {
-                if i == in_syms.shndx_section().0 {
-                    writer.write_symtab_shndx_section_header();
-                } else {
-                    panic!("Unsupported symtab shndx section {}", i);
-                }
-            }
-            elf::SHT_DYNSYM => {
-                if i == in_dynsyms.section().0 {
-                    writer.write_dynsym_section_header(dynsym_addr, 1);
-                } else {
-                    panic!("Unsupported dynsym section {}", i);
-                }
-            }
-            elf::SHT_DYNAMIC => {
-                writer.write_dynamic_section_header(dynamic_addr);
-            }
-            elf::SHT_HASH => {
-                writer.write_hash_section_header(hash_addr);
-            }
-            elf::SHT_GNU_HASH => {
-                writer.write_gnu_hash_section_header(gnu_hash_addr);
-            }
-            other => {
-                panic!("Unsupported section type {:x}", other);
-            }
+    writer.write_hash_section_header(hash_addr);
+    writer.write_gnu_hash_section_header(gnu_hash_addr);
+    writer.write_dynsym_section_header(dynsym_addr, 1);
+
+    writer.write_dynstr_section_header(dynstr_addr);
+
+    writer.write_symtab_section_header(num_local);
+
+    writer.write_strtab_section_header();
+    writer.write_shstrtab_section_header();
+
+    {
+        let in_section = &sections.eh_frame.section;
+        let out_section = &out_sections[5]; // 5 is a random choice
+        let sh_link = out_sections_index[in_section.sh_link(endian) as usize].0 as u32;
+        let mut sh_info = in_section.sh_info(endian);
+        if in_section.sh_flags(endian) as u32 & elf::SHF_INFO_LINK != 0 {
+            sh_info = out_sections_index[sh_info as usize].0 as u32;
         }
+
+        writer.write_section_header(&object::write::elf::SectionHeader {
+            name: out_section.name,
+            sh_type: in_section.sh_type(endian),
+            sh_flags: in_section.sh_flags(endian),
+            sh_addr: in_section.sh_addr(endian),
+            sh_offset: offsets[4] as u64,
+            sh_size: in_section.sh_size(endian),
+            sh_link,
+            sh_info,
+            sh_addralign: in_section.sh_addralign(endian),
+            sh_entsize: in_section.sh_entsize(endian),
+        });
     }
+
+    writer.write_dynamic_section_header(dynamic_addr);
+
     debug_assert_eq!(writer.reserved_len(), writer.len());
 
     Ok(out_data)
