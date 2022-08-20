@@ -1012,7 +1012,10 @@ fn decode_empty_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm") // hits a wasm3 stack overflow
+))]
 fn decode_record_of_record() {
     assert_evals_to!(
         indoc!(
