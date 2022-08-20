@@ -46,6 +46,7 @@ pub enum BuildOrdering {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum BuildFileError<'a> {
     LoadingProblem(LoadingProblem<'a>),
     ErrorModule {

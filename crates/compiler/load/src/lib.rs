@@ -55,6 +55,7 @@ pub fn load_single_threaded<'a>(
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum LoadMonomorphizedError<'a> {
     LoadingProblem(LoadingProblem<'a>),
     /// Errors in the module that should be reported, without compiling the executable.
