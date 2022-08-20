@@ -164,13 +164,15 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
-    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak }); // zig 0.10 error: TODO: implement exporting with field access
+    const utils_panic = utils.panic; // Workaround https://github.com/ziglang/zig/issues/12532
+    @export(utils_panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak }); // zig 0.10 error: TODO: implement exporting with field access
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
 
         // sets the buffer used for expect failures
-        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
+        const setSharedBuffer = expect.setSharedBuffer; // Workaround https://github.com/ziglang/zig/issues/12532
+        @export(setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
@@ -236,11 +238,8 @@ pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn
 }
 
 // Run all tests in imported modules
-// https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
-test "imported tests" {
-    const testing = std.testing;
-
-    testing.refAllDecls(@This());
+test {
+    std.testing.refAllDecls(@This());
 }
 
 // For unclear reasons, sometimes this function is not linked in on some machines.
