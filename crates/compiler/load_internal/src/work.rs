@@ -166,7 +166,7 @@ impl<'a> Dependencies<'a> {
             }
         }
 
-        // Add "make specialization" dependents. Even if we're not targetting making
+        // Add "make specialization" dependents. Even if we're not targeting making
         // specializations right now, we may re-enter to do so later.
         self.make_specializations_dependents
             .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
@@ -389,8 +389,8 @@ impl<'a> Dependencies<'a> {
         );
 
         for (&module, info) in make_specializations_dependents.0.iter_mut() {
-            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::FindSpecializations)).is_none(), "should only have targetted solving types, but there is already a goal to find specializations");
-            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::MakeSpecializations)).is_none(), "should only have targetted solving types, but there is already a goal to make specializations");
+            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::FindSpecializations)).is_none(), "should only have targeted solving types, but there is already a goal to find specializations");
+            debug_assert!(self.status.get_mut(&Job::Step(module, Phase::MakeSpecializations)).is_none(), "should only have targeted solving types, but there is already a goal to make specializations");
             debug_assert!(
                 module == ModuleId::DERIVED_GEN || info.succ.contains(&ModuleId::DERIVED_GEN),
                 "derived module not accounted for in {:?}",
