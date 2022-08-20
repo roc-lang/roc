@@ -857,8 +857,44 @@ isMultipleOf : Int a, Int a -> Bool
 bitwiseAnd : Int a, Int a -> Int a
 bitwiseXor : Int a, Int a -> Int a
 bitwiseOr : Int a, Int a -> Int a
+
+## Bitwise left shift of a number by another
+##
+## The least significand bits always become 0. This means that shifting left is
+## like multiplying by factors of two for unsigned integers.
+##
+## >>> shiftLeftBy 0b0000_0011 2 == 0b0000_1100
+##
+## >>> 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
+##
+## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
 shiftLeftBy : Int a, Int a -> Int a
+
+## Bitwise arithmetic shift of a number by another
+##
+## The most significand bits are copied from the current.
+##
+## >>> shiftRightBy 0b0000_0011 2 == 0b0000_1100
+##
+## >>> 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
+##
+## >>> 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
+##
+## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
 shiftRightBy : Int a, Int a -> Int a
+
+## Bitwise logical right shift of a number by another
+##
+## The most significand bits always become 0. This means that shifting left is
+## like dividing by factors of two for unsigned integers.
+##
+## >>> shiftRightBy 0b0010_1000 2 == 0b0000_1010
+##
+## >>> 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
+##
+## >>> 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
+##
+## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, Int a -> Int a
 
 ## Round off the given fraction to the nearest integer.
