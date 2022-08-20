@@ -1,0 +1,22 @@
+[package]
+name = "roc_lang_srv"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "roc_ls"
+path = "src/server.rs"
+
+[dependencies]
+roc_load = { path = "../compiler/load" }
+roc_problem = { path = "../compiler/problem" }
+roc_region = { path = "../compiler/region" }
+roc_reporting = { path = "../reporting" }
+roc_solve_problem = { path = "../compiler/solve_problem" }
+roc_target = { path = "../compiler/roc_target" }
+
+bumpalo = { version = "3.8.0", features = ["collections"] }
+
+tower-lsp = "0.17.0"
+tokio = { version = "1.20.1", features = [ "rt", "rt-multi-thread", "macros", "io-std", ] }
+parking_lot = "0.12.1"

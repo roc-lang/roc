@@ -149,6 +149,15 @@ pub enum Error {
     },
 }
 
+impl Error {
+    pub fn region(&self) -> Region {
+        match self {
+            Error::Incomplete(region, _, _) => *region,
+            Error::Redundant { branch_region, .. } => *branch_region,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
     BadArg,
