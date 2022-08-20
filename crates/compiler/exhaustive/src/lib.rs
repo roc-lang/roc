@@ -160,6 +160,13 @@ impl Error {
             Error::Unmatchable { .. } => Warning,
         }
     }
+
+    pub fn region(&self) -> Region {
+        match self {
+            Error::Incomplete(region, _, _) => *region,
+            Error::Redundant { branch_region, .. } => *branch_region,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

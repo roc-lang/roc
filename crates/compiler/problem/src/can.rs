@@ -445,6 +445,14 @@ pub enum PrecedenceProblem {
     BothNonAssociative(Region, Loc<BinOp>, Loc<BinOp>),
 }
 
+impl PrecedenceProblem {
+    pub fn region(&self) -> Region {
+        match self {
+            PrecedenceProblem::BothNonAssociative(region, _, _) => *region,
+        }
+    }
+}
+
 /// Enum to store the various types of errors that can cause parsing an integer to fail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntErrorKind {
@@ -617,6 +625,45 @@ impl RuntimeError {
                 )
             }
             err => format!("{err:?}"),
+        }
+    }
+
+    pub fn region(&self) -> Region {
+        match self {
+            RuntimeError::Shadowing { shadow, .. } => shadow.region,
+            RuntimeError::InvalidOptionalValue { field_region, .. } => *field_region,
+            RuntimeError::UnsupportedPattern(region)
+            | RuntimeError::MalformedPattern(_, region)
+            | RuntimeError::OpaqueOutsideScope {
+                referenced_region: region,
+                ..
+            }
+            | RuntimeError::OpaqueAppliedToMultipleArgs(region)
+            | RuntimeError::ValueNotExposed { region, .. }
+            | RuntimeError::ModuleNotImported { region, .. }
+            | RuntimeError::InvalidPrecedence(_, region)
+            | RuntimeError::MalformedIdentifier(_, _, region)
+            | RuntimeError::MalformedTypeName(_, region)
+            | RuntimeError::MalformedClosure(region)
+            | RuntimeError::InvalidRecordUpdate { region }
+            | RuntimeError::InvalidFloat(_, region, _)
+            | RuntimeError::InvalidInt(_, _, region, _)
+            | RuntimeError::EmptySingleQuote(region)
+            | RuntimeError::MultipleCharsInSingleQuote(region)
+            | RuntimeError::DegenerateBranch(region)
+            | RuntimeError::InvalidInterpolation(region)
+            | RuntimeError::InvalidHexadecimal(region)
+            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
+            RuntimeError::LookupNotInScope(ident, _) => ident.region,
+            RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,
+            RuntimeError::OpaqueNotApplied(ident) => ident.region,
+            RuntimeError::CircularDef(cycle) => cycle[0].symbol_region,
+            RuntimeError::NonExhaustivePattern => Region::zero(),
+            RuntimeError::NoImplementationNamed { .. }
+            | RuntimeError::NoImplementation
+            | RuntimeError::VoidValue
+            | RuntimeError::ExposedButNotDefined(_) => Region::zero(),
         }
     }
 }
