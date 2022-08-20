@@ -15,7 +15,6 @@ jobs:
     runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 90
     env:
-      RUST_BACKTRACE: 1
       RUSTC_WRAPPER: /usr/local/cargo/bin/sccache
     steps:
       - uses: actions/checkout@v2
@@ -39,7 +38,7 @@ jobs:
 
       - name: run `roc test` on Str builtins
         run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
-      
+
       #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats
