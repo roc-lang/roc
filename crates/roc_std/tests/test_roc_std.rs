@@ -222,6 +222,24 @@ mod test_roc_std {
     }
 
     #[test]
+    fn list_from_array() {
+        let elems: [i64; 5] = [1, 2, 3, 4, 5];
+        let from_slice = RocList::from_slice(&elems);
+        let from_array = RocList::from(elems);
+        assert_eq!(from_array, from_slice);
+        assert_eq!(from_array.capacity(), from_slice.capacity());
+    }
+
+    #[test]
+    fn list_from_array_zero_size() {
+        let elems: [(); 5] = [(), (), (), (), ()];
+        let from_slice = RocList::from_slice(&elems);
+        let from_array = RocList::from(elems);
+        assert_eq!(from_array, from_slice);
+        assert_eq!(from_array.capacity(), from_slice.capacity());
+    }
+
+    #[test]
     fn roc_result_to_rust_result() {
         let greeting = "Hello, World!";
         let roc_result: RocResult<String, ()> = RocResult::ok(greeting.into());

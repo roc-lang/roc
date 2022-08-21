@@ -2485,6 +2485,26 @@ pub trait Label: Sized + Clone {
 pub type UnionTags = UnionLabels<TagName>;
 pub type UnionLambdas = UnionLabels<Symbol>;
 
+impl UnionTags {
+    pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
+        let ok_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
+
+            ("Ok".into(), variables_slice)
+        };
+
+        let err_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
+
+            ("Err".into(), variables_slice)
+        };
+
+        UnionTags::insert_slices_into_subs(subs, [err_tuple, ok_tuple])
+    }
+}
+
 impl Label for TagName {
     fn index_subs(subs: &Subs, idx: SubsIndex<Self>) -> &Self {
         &subs[idx]

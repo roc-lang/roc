@@ -16,6 +16,7 @@ interface Json
         Decode,
         Decode.{
             DecoderFormatting,
+            DecodeResult,
         },
     ]
 
@@ -57,6 +58,7 @@ Json := {} has [
              bool: decodeBool,
              string: decodeString,
              list: decodeList,
+             record: decodeRecord,
          },
      ]
 
@@ -316,7 +318,8 @@ decodeBool = Decode.custom \bytes, @Json {} ->
         else
             { result: Err TooShort, rest: bytes }
 
-decodeString = Decode.custom \bytes, @Json {} ->
+jsonString : List U8 -> DecodeResult Str
+jsonString = \bytes ->
     { before, others: afterStartingQuote } = List.split bytes 1
 
     if
@@ -334,6 +337,9 @@ decodeString = Decode.custom \bytes, @Json {} ->
             Err _ -> { result: Err TooShort, rest }
     else
         { result: Err TooShort, rest: bytes }
+
+decodeString = Decode.custom \bytes, @Json {} ->
+    jsonString bytes
 
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
         decodeElems = \chunk, accum ->
@@ -372,3 +378,72 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
                         { result: Err TooShort, rest }
         else
             { result: Err TooShort, rest: bytes }
+
+parseExactChar : List U8, U8 -> DecodeResult {}
+parseExactChar = \bytes, char ->
+    when List.get bytes 0 is
+        Ok c ->
+            if
+                c == char
+            then
+                { result: Ok {}, rest: (List.split bytes 1).others }
+            else
+                { result: Err TooShort, rest: bytes }
+
+        Err _ -> { result: Err TooShort, rest: bytes }
+
+openBrace : List U8 -> DecodeResult {}
+openBrace = \bytes -> parseExactChar bytes (asciiByte '{')
+
+closingBrace : List U8 -> DecodeResult {}
+closingBrace = \bytes -> parseExactChar bytes (asciiByte '}')
+
+recordKey : List U8 -> DecodeResult Str
+recordKey = \bytes -> jsonString bytes
+
+anything : List U8 -> DecodeResult {}
+anything = \bytes -> { result: Err TooShort, rest: bytes }
+
+colon : List U8 -> DecodeResult {}
+colon = \bytes -> parseExactChar bytes (asciiByte ':')
+
+comma : List U8 -> DecodeResult {}
+comma = \bytes -> parseExactChar bytes (asciiByte ',')
+
+tryDecode : DecodeResult a, ({ val : a, rest : List U8 } -> DecodeResult b) -> DecodeResult b
+tryDecode = \{ result, rest }, mapper ->
+    when result is
+        Ok val -> mapper { val, rest }
+        Err e -> { result: Err e, rest }
+
+decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeFields = \stepper, state, kvBytes ->
+            { val: key, rest } <- recordKey kvBytes |> tryDecode
+            { rest: afterColonBytes } <- colon rest |> tryDecode
+            { val: newState, rest: beforeCommaOrBreak } <- tryDecode
+                    (
+                        when stepper state key is
+                            Skip ->
+                                { rest: beforeCommaOrBreak } <- afterColonBytes |> anything |> tryDecode
+                                { result: Ok state, rest: beforeCommaOrBreak }
+
+                            Keep decoder ->
+                                Decode.decodeWith afterColonBytes decoder (@Json {})
+                    )
+
+            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
+
+            when commaResult is
+                Ok {} -> decodeFields stepField newState nextBytes
+                Err _ -> { result: Ok newState, rest: nextBytes }
+
+        { rest: afterBraceBytes } <- bytes |> openBrace |> tryDecode
+
+        { val: endStateResult, rest: beforeClosingBraceBytes } <- decodeFields stepField initialState afterBraceBytes |> tryDecode
+
+        { rest: afterRecordBytes } <- beforeClosingBraceBytes |> closingBrace |> tryDecode
+
+        when finalizer endStateResult is
+            Ok val -> { result: Ok val, rest: afterRecordBytes }
+            Err e -> { result: Err e, rest: afterRecordBytes }

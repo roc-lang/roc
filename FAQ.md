@@ -472,3 +472,7 @@ There were a few reasons for this rewrite.
 4. Zig has more tools for working in a memory-unsafe environment, such as reporting memory leaks in tests. These have been helpful in finding bugs that are out of scope for safe Rust.
 
 The split of Rust for the compiler and Zig for the standard library has worked well so far, and there are no plans to change it.
+
+## Why is the website so basic?
+
+We have a very basic website on purpose, it helps set expectations that roc is a work in progress and not ready yet for a first release. 

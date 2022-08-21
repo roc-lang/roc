@@ -4,7 +4,10 @@ use roc_module::{
 };
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
-use crate::DeriveError;
+use crate::{
+    util::{check_empty_ext_var, debug_name_record},
+    DeriveError,
+};
 
 #[derive(Hash)]
 pub enum FlatEncodable {
@@ -28,17 +31,7 @@ impl FlatEncodableKey {
             FlatEncodableKey::List() => "list".to_string(),
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
-            FlatEncodableKey::Record(fields) => {
-                let mut str = String::from('{');
-                fields.iter().enumerate().for_each(|(i, f)| {
-                    if i > 0 {
-                        str.push(',');
-                    }
-                    str.push_str(f.as_str());
-                });
-                str.push('}');
-                str
-            }
+            FlatEncodableKey::Record(fields) => debug_name_record(fields),
             FlatEncodableKey::TagUnion(tags) => {
                 let mut str = String::from('[');
                 tags.iter().enumerate().for_each(|(i, (tag, arity))| {
@@ -52,22 +45,6 @@ impl FlatEncodableKey {
                 str.push(']');
                 str
             }
-        }
-    }
-}
-
-fn check_ext_var(
-    subs: &Subs,
-    ext_var: Variable,
-    is_empty_ext: impl Fn(&Content) -> bool,
-) -> Result<(), DeriveError> {
-    let ext_content = subs.get_content_without_compacting(ext_var);
-    if is_empty_ext(ext_content) {
-        Ok(())
-    } else {
-        match ext_content {
-            Content::FlexVar(_) => Err(DeriveError::UnboundVar),
-            _ => Err(DeriveError::Underivable),
         }
     }
 }
@@ -86,7 +63,7 @@ impl FlatEncodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    check_ext_var(subs, ext, |ext| {
+                    check_empty_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyRecord))
                     })?;
 
@@ -106,7 +83,7 @@ impl FlatEncodable {
                     //   [ A t1, B t1 t2 ] as R
                     // look the same on the surface, because `R` is only somewhere inside of the
                     // `t`-prefixed payload types.
-                    check_ext_var(subs, ext, |ext| {
+                    check_empty_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 

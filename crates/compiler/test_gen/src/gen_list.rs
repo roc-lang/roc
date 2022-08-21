@@ -3369,3 +3369,23 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
         |(_, _, cap)| cap
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List a
+            empty = []
+
+            xs : List Str
+            xs = List.append empty "foo"
+
+            List.len xs
+            "#
+        ),
+        1,
+        usize
+    );
+}

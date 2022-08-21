@@ -182,7 +182,13 @@ mod solve_expr {
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
-        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
+        can_problems.retain(|prob| {
+            !matches!(
+                prob,
+                roc_problem::can::Problem::UnusedDef(_, _)
+                    | roc_problem::can::Problem::UnusedBranchDef(..)
+            )
+        });
 
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);

@@ -6411,11 +6411,11 @@ fn to_cc_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout {
-        Layout::Builtin(builtin) => to_cc_type_builtin(env, builtin),
-        _ => {
+    match layout.runtime_representation() {
+        Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
+        layout => {
             // TODO this is almost certainly incorrect for bigger structs
-            basic_type_from_layout(env, layout)
+            basic_type_from_layout(env, &layout)
         }
     }
 }

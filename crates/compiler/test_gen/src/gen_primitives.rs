@@ -1234,8 +1234,8 @@ fn return_wrapped_closure() {
             main = foo
             "#
         ),
-        [5],
-        [i64; 1]
+        5,
+        i64
     );
 }
 
@@ -4016,6 +4016,27 @@ fn mutually_recursive_captures() {
             "#
         ),
         RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn int_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> I32 
+            manyAux = \_ ->
+                output = \_ -> 42
+
+                output {}
+
+            when manyAux {} is
+                _ -> "done"
+            "#
+        ),
+        RocStr::from("done"),
         RocStr
     );
 }

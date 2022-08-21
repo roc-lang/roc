@@ -32,7 +32,7 @@ test_gen = { path = "../compiler/test_gen" }
 libc = "0.2.106"
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
 tempfile = "3.2.0"
-indoc = "1.0.3"
+indoc = "1.0.7"
 pretty_assertions = "1.0.0"
 strip-ansi-escapes = "0.1.1"
 

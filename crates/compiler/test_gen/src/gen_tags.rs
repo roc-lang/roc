@@ -1933,3 +1933,25 @@ fn issue_2165_recursive_tag_destructure() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn tag_union_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> [ Loop, Done ]
+            manyAux = \_ ->
+                output = Done
+
+                output
+
+            when manyAux {} is
+                Loop -> "loop"
+                Done -> "done"
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
+}

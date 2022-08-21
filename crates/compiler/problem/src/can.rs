@@ -38,6 +38,7 @@ pub enum Problem {
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, bool, Symbol, Region),
+    UnusedBranchDef(Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),

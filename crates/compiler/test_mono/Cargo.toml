@@ -20,4 +20,4 @@ roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
 test_mono_macros = { path = "../test_mono_macros" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
-indoc = "1.0.3"
+indoc = "1.0.7"

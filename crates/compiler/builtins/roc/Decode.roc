@@ -22,6 +22,7 @@ interface Decode
         bool,
         string,
         list,
+        record,
         custom,
         decodeWith,
         fromBytesPartial,
@@ -57,6 +58,7 @@ DecoderFormatting has
     bool : Decoder Bool fmt | fmt has DecoderFormatting
     string : Decoder Str fmt | fmt has DecoderFormatting
     list : Decoder elem fmt -> Decoder (List elem) fmt | fmt has DecoderFormatting
+    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt | fmt has DecoderFormatting
 
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt | fmt has DecoderFormatting
 custom = \decode -> @Decoder decode
