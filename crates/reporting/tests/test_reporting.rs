@@ -9895,13 +9895,13 @@ All branches in an `if` must have the same type!
 
         ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        `y` is not used anywhere in your code.
+        `y` is not used in this `when` branch.
 
         5│          A x | B y -> x
                             ^
 
-        If you didn't intend on using `y` then remove it so future readers of
-        your code don't wonder why it is there.
+        If you don't need to use `y`, prefix it with an underscore, like "_y",
+        or replace it with just an "_".
         "###
     );
 
@@ -10434,6 +10434,27 @@ All branches in an `if` must have the same type!
         { a : Str, b ? Str }
 
     Tip: Looks like the b field is missing.
+    "###
+    );
+
+    test_report!(
+        unused_def_in_branch_pattern,
+        indoc!(
+            r#"
+            when A "" is
+                A foo -> ""
+            "#
+        ),
+    @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `foo` is not used in this `when` branch.
+
+    5│          A foo -> ""
+                  ^^^
+
+    If you don't need to use `foo`, prefix it with an underscore, like
+    "_foo", or replace it with just an "_".
     "###
     );
 }
