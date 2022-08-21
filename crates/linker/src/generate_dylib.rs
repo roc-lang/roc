@@ -475,20 +475,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         }
     }
 
-    let custom_symbols: Vec<_> = custom_names
-        .iter()
-        .map(|name| {
-            // .eh_frame
-            let section = out_sections_index[5];
-
-            out_syms_index.push(writer.reserve_symbol_index(Some(section)));
-
-            let name = writer.add_string(name.as_bytes());
-
-            (name, section)
-        })
-        .collect();
-
     // Start reserving file ranges.
     writer.reserve_file_header();
 
@@ -663,19 +649,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
             st_shndx: in_sym.st_shndx(endian),
             st_value: in_sym.st_value(endian),
             st_size: in_sym.st_size(endian),
-        });
-    }
-
-    // DEVIATION
-    for (name, section) in custom_symbols {
-        writer.write_symbol(&object::write::elf::Sym {
-            name: Some(name),
-            section: Some(section),
-            st_info: (elf::STB_WEAK << 4) | elf::STT_FUNC,
-            st_other: 0,
-            st_shndx: 3,
-            st_value: 0x1000,
-            st_size: 0,
         });
     }
 
