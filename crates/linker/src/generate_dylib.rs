@@ -585,7 +585,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         writer.pad_until(offsets[*i - 1]);
         match in_section.sh_type(endian) {
             elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
-                // debug_assert_eq!(out_sections[*i].offset, writer.len());
                 writer.write(in_section.data(endian, in_data)?);
             }
             elf::SHT_DYNAMIC => {
@@ -593,9 +592,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                     if let Some(string) = d.string {
                         writer.write_dynamic_string(d.tag, string);
                     } else {
-                        // TODO: fix values
-                        let val = d.val;
-                        writer.write_dynamic(d.tag, val);
+                        writer.write_dynamic(d.tag, d.val);
                     }
                 }
             }
