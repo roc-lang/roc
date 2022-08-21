@@ -5,6 +5,7 @@ use object::elf::{self, SectionHeader64};
 use object::read::elf::{Dyn, FileHeader, ProgramHeader, SectionHeader, Sym};
 use object::Endianness;
 
+use object::write::elf::Writer;
 use roc_error_macros::internal_error;
 
 // an empty shared library, that we build on top of
@@ -73,6 +74,14 @@ struct Sections {
     shstrtab: MySection,
 }
 
+struct Addresses {
+    hash: u64,
+    gnu_hash: u64,
+    dynsym: u64,
+    dynstr: u64,
+    dynamic: u64,
+}
+
 impl Sections {
     fn iter(&self) -> impl Iterator<Item = (usize, &'_ MySection)> + '_ {
         [
@@ -88,6 +97,135 @@ impl Sections {
         ]
         .into_iter()
         .enumerate()
+    }
+
+    fn reserve_alloc_sections(
+        &self,
+        writer: &mut Writer,
+        hash_chain_count: u32,
+        gnu_hash_symbol_count: u32,
+        dynamic_count: usize,
+    ) -> ([usize; 6], Addresses) {
+        let sections = self;
+        let endian = Endianness::Little;
+
+        let mut offsets = [0; 6];
+
+        let mut extra_offset: usize = 0;
+
+        // elf::SHT_HASH
+        let in_section = sections.hash.section;
+        let offset = in_section.sh_offset(endian) as usize;
+        offsets[0] = offset;
+        writer.reserve_until(offset);
+
+        let hash_addr = in_section.sh_addr(endian);
+        // here we fake a bigger hash table than the input file has
+        // let hash = in_hash.as_ref().unwrap();
+        // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
+        let reserved_before = writer.reserved_len();
+        writer.reserve_hash(3, hash_chain_count);
+        let reserved_after = writer.reserved_len();
+
+        extra_offset += {
+            let actual_size = reserved_after - reserved_before;
+
+            actual_size - sections.hash.section.sh_size(endian) as usize
+        };
+
+        // elf::SHT_GNU_HASH
+        let in_section = &sections.gnu_hash.section;
+        let offset = in_section.sh_offset(endian) as usize + extra_offset;
+        offsets[1] = offset;
+        writer.reserve_until(offset);
+
+        let gnu_hash_addr = in_section.sh_addr(endian);
+        // let hash = in_gnu_hash.as_ref().unwrap();
+        let reserved_before = writer.reserved_len();
+        writer.reserve_gnu_hash(
+            // hash.bloom_count.get(endian),
+            // hash.bucket_count.get(endian),
+            1,
+            1,
+            gnu_hash_symbol_count,
+        );
+        let reserved_after = writer.reserved_len();
+
+        extra_offset += {
+            let actual_size = reserved_after - reserved_before;
+
+            actual_size - sections.gnu_hash.section.sh_size(endian) as usize
+        };
+
+        // elf::SHT_DYNSYM
+        let in_section = &sections.dynsym.section;
+        let offset = in_section.sh_offset(endian) as usize + extra_offset;
+        offsets[2] = offset;
+        writer.reserve_until(offset);
+
+        let dynsym_addr = in_section.sh_addr(endian);
+        let reserved_before = writer.reserved_len();
+        writer.reserve_dynsym();
+        let reserved_after = writer.reserved_len();
+
+        extra_offset += {
+            let actual_size = reserved_after - reserved_before;
+
+            actual_size - sections.dynsym.section.sh_size(endian) as usize
+        };
+
+        // elf::SHT_STRTAB
+        let in_section = &sections.dynstr.section;
+        let offset = in_section.sh_offset(endian) as usize + extra_offset;
+        offsets[3] = offset;
+        writer.reserve_until(offset);
+
+        let dynstr_addr = in_section.sh_addr(endian);
+        let reserved_before = writer.reserved_len();
+        writer.reserve_dynstr();
+        let reserved_after = writer.reserved_len();
+
+        extra_offset += {
+            let actual_size = reserved_after - reserved_before;
+
+            actual_size - sections.dynstr.section.sh_size(endian) as usize
+        };
+
+        // elf::SHT_PROGBITS
+        let in_section = &sections.eh_frame.section;
+        let offset = in_section.sh_offset(endian) as usize + extra_offset;
+        offsets[4] = offset;
+        writer.reserve_until(offset);
+        // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
+        let reserved_before = writer.reserved_len();
+        let todo_unused = writer.reserve(in_section.sh_size(endian) as usize, 1);
+        let reserved_after = writer.reserved_len();
+
+        extra_offset += {
+            let actual_size = reserved_after - reserved_before;
+
+            actual_size - sections.eh_frame.section.sh_size(endian) as usize
+        };
+
+        // elf::SHT_DYNAMIC
+        let in_section = &sections.dynamic.section;
+        let offset = in_section.sh_offset(endian) as usize + extra_offset;
+        offsets[5] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
+        writer.reserve_until(offset);
+
+        let dynamic_addr = in_section.sh_addr(endian);
+        writer.reserve_dynamic(dynamic_count);
+
+        // symtab, strtab and shstrtab is ignored because they are not ALLOC
+        let addresses = Addresses {
+            hash: hash_addr,
+            gnu_hash: gnu_hash_addr,
+            dynsym: dynsym_addr,
+            dynstr: dynstr_addr,
+            dynamic: dynamic_addr,
+        };
+
+        (offsets, addresses)
     }
 }
 
@@ -370,112 +508,12 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         .filter(|(_, s)| s.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0)
         .collect();
 
-    let mut offsets = [0; 6];
-
-    let mut extra_offset: usize = 0;
-
-    // elf::SHT_HASH
-    let in_section = sections.hash.section;
-    let offset = in_section.sh_offset(endian) as usize;
-    offsets[0] = offset;
-    writer.reserve_until(offset);
-
-    let hash_addr = in_section.sh_addr(endian);
-    // here we fake a bigger hash table than the input file has
-    // let hash = in_hash.as_ref().unwrap();
-    // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
-    let reserved_before = writer.reserved_len();
-    writer.reserve_hash(3, hash_chain_count);
-    let reserved_after = writer.reserved_len();
-
-    extra_offset += {
-        let actual_size = reserved_after - reserved_before;
-
-        actual_size - sections.hash.section.sh_size(endian) as usize
-    };
-
-    // elf::SHT_GNU_HASH
-    let in_section = &sections.gnu_hash.section;
-    let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[1] = offset;
-    writer.reserve_until(offset);
-
-    let gnu_hash_addr = in_section.sh_addr(endian);
-    let hash = in_gnu_hash.as_ref().unwrap();
-    let reserved_before = writer.reserved_len();
-    writer.reserve_gnu_hash(
-        hash.bloom_count.get(endian),
-        hash.bucket_count.get(endian),
+    let (offsets, addresses) = sections.reserve_alloc_sections(
+        &mut writer,
+        hash_chain_count,
         gnu_hash_symbol_count,
+        out_dynamic.len(),
     );
-    let reserved_after = writer.reserved_len();
-
-    extra_offset += {
-        let actual_size = reserved_after - reserved_before;
-
-        actual_size - sections.gnu_hash.section.sh_size(endian) as usize
-    };
-
-    // elf::SHT_DYNSYM
-    let in_section = &sections.dynsym.section;
-    let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[2] = offset;
-    writer.reserve_until(offset);
-
-    let dynsym_addr = in_section.sh_addr(endian);
-    let reserved_before = writer.reserved_len();
-    writer.reserve_dynsym();
-    let reserved_after = writer.reserved_len();
-
-    extra_offset += {
-        let actual_size = reserved_after - reserved_before;
-
-        actual_size - sections.dynsym.section.sh_size(endian) as usize
-    };
-
-    // elf::SHT_STRTAB
-    let in_section = &sections.dynstr.section;
-    let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[3] = offset;
-    writer.reserve_until(offset);
-
-    let dynstr_addr = in_section.sh_addr(endian);
-    let reserved_before = writer.reserved_len();
-    writer.reserve_dynstr();
-    let reserved_after = writer.reserved_len();
-
-    extra_offset += {
-        let actual_size = reserved_after - reserved_before;
-
-        actual_size - sections.dynstr.section.sh_size(endian) as usize
-    };
-
-    // elf::SHT_PROGBITS
-    let in_section = &sections.eh_frame.section;
-    let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[4] = offset;
-    writer.reserve_until(offset);
-    // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
-    let reserved_before = writer.reserved_len();
-    let todo_unused = writer.reserve(in_section.sh_size(endian) as usize, 1);
-    let reserved_after = writer.reserved_len();
-
-    extra_offset += {
-        let actual_size = reserved_after - reserved_before;
-
-        actual_size - sections.eh_frame.section.sh_size(endian) as usize
-    };
-
-    // elf::SHT_DYNAMIC
-    let in_section = &sections.dynamic.section;
-    let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[5] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
-    writer.reserve_until(offset);
-
-    let dynamic_addr = in_section.sh_addr(endian);
-    writer.reserve_dynamic(out_dynamic.len());
-
-    // symtab, strtab and shstrtab is ignored because they are not ALLOC
 
     // Reserve non-alloc sections at any offset.
     for (i, in_section) in in_sections.iter().enumerate() {
@@ -656,11 +694,11 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     writer.write_null_section_header();
 
-    writer.write_hash_section_header(hash_addr);
-    writer.write_gnu_hash_section_header(gnu_hash_addr);
-    writer.write_dynsym_section_header(dynsym_addr, 1);
+    writer.write_hash_section_header(addresses.hash);
+    writer.write_gnu_hash_section_header(addresses.gnu_hash);
+    writer.write_dynsym_section_header(addresses.dynsym, 1);
 
-    writer.write_dynstr_section_header(dynstr_addr);
+    writer.write_dynstr_section_header(addresses.dynstr);
 
     {
         let in_section = &sections.eh_frame.section;
@@ -685,7 +723,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         });
     }
 
-    writer.write_dynamic_section_header(dynamic_addr);
+    writer.write_dynamic_section_header(addresses.dynamic);
 
     writer.write_symtab_section_header(num_local);
 
