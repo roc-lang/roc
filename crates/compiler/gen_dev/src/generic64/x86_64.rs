@@ -1332,12 +1332,25 @@ impl X86_64Assembler {
     }
 }
 const REX: u8 = 0x40;
-const REX_W: u8 = REX | 0x8;
+
+// see https://wiki.osdev.org/X86-64_Instruction_Encoding#Encoding
+/// If set, 64-bit operand size is used
+const REX_PREFIX_W: u8 = 0b1000;
+/// Extension to the MODRM.reg
+const REX_PREFIX_R: u8 = 0b0100;
+#[allow(unused)]
+/// Extension to the SIB.index field
+const REX_PREFIX_X: u8 = 0b0010;
+/// Extension to the MODRM.rm
+const REX_PREFIX_B: u8 = 0b0001;
+
+/// Wide REX
+const REX_W: u8 = REX | REX_PREFIX_W;
 
 #[inline(always)]
 fn add_rm_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 1
+        byte | REX_PREFIX_B
     } else {
         byte
     }
@@ -1351,7 +1364,7 @@ fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 #[inline(always)]
 fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 4
+        byte | REX_PREFIX_R
     } else {
         byte
     }
@@ -1560,7 +1573,14 @@ fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gen
 /// `MUL r/m64` -> Unsigned Multiply r/m64 to r64.
 #[inline(always)]
 fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0xF7, buf, X86_64GeneralReg::RAX, src);
+    let mut rex = REX_W;
+    rex = add_reg_extension(src, rex);
+
+    if src.value() > 7 {
+        rex |= REX_PREFIX_B;
+    }
+
+    buf.extend(&[rex, 0xF7, 0b1110_0000 | (src as u8 % 8)]);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.

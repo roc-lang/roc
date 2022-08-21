@@ -1127,12 +1127,10 @@ fn gen_signed_mul_quadword_and_lower() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_unsigned_mul_quadword_and_lower() {
-    assert_evals_to!("1u64 * 1u64", 1, u64);
-
-    // assert_evals_to!("2u64 * 4", 48, u64);
-    // assert_evals_to!("2u32 * 4 * 6", 48, u32);
-    // assert_evals_to!("2u16 * 4 * 6", 48, u16);
-    // assert_evals_to!("2u8 * 4 * 6", 48, u8);
+    assert_evals_to!("2u64 * 4 * 6", 48, u64);
+    assert_evals_to!("2u32 * 4 * 6", 48, u32);
+    assert_evals_to!("2u16 * 4 * 6", 48, u16);
+    assert_evals_to!("2u8 * 4 * 6", 48, u8);
 }
 
 #[test]
