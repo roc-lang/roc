@@ -1599,11 +1599,11 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftLeftBy => {
-                // Swap order of arguments
-                backend.storage.load_symbols(
-                    &mut backend.code_builder,
-                    &[self.arguments[1], self.arguments[0]],
-                );
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[num, bits]);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shl(),
                     I64 => backend.code_builder.i64_shl(),
@@ -1612,8 +1612,8 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightBy => {
-                let bits = self.arguments[0];
-                let num = self.arguments[1];
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
                         // In most languages this operation is for signed numbers, but Roc defines it on all integers.
@@ -1657,41 +1657,39 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
                         // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
                         let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);
-                        if bit_width < 32 && symbol_is_signed_int(backend, self.arguments[0]) {
+                        if bit_width < 32 && symbol_is_signed_int(backend, bits) {
                             let mask = (1 << bit_width) - 1;
 
                             backend
                                 .storage
-                                .load_symbols(&mut backend.code_builder, &[self.arguments[1]]);
+                                .load_symbols(&mut backend.code_builder, &[num]);
 
                             backend.code_builder.i32_const(mask);
                             backend.code_builder.i32_and();
 
                             backend
                                 .storage
-                                .load_symbols(&mut backend.code_builder, &[self.arguments[0]]);
+                                .load_symbols(&mut backend.code_builder, &[bits]);
                         } else {
-                            // swap the arguments
-                            backend.storage.load_symbols(
-                                &mut backend.code_builder,
-                                &[self.arguments[1], self.arguments[0]],
-                            );
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[num, bits]);
                         }
 
                         backend.code_builder.i32_shr_u();
                     }
                     I64 => {
-                        // swap the arguments
-                        backend.storage.load_symbols(
-                            &mut backend.code_builder,
-                            &[self.arguments[1], self.arguments[0]],
-                        );
+                        backend
+                            .storage
+                            .load_symbols(&mut backend.code_builder, &[num, bits]);
                         backend.code_builder.i64_shr_u();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),

@@ -80,11 +80,11 @@ encodeCharacters = \a, b, c, d ->
 
         if d == equals then
             if c == equals then
-                n = Num.bitwiseOr (Num.shiftLeftBy 18 x) (Num.shiftLeftBy 12 y)
+                n = Num.bitwiseOr (Num.shiftLeftBy x 18) (Num.shiftLeftBy y 12)
 
                 # masking higher bits is not needed, Encode.unsignedInt8 ignores higher bits
                 b1 : U8
-                b1 = Num.intCast (Num.shiftRightBy 16 n)
+                b1 = Num.intCast (Num.shiftRightBy n 16)
 
                 Ok (Bytes.Encode.u8 b1)
             else if !(isValidChar c) then
@@ -95,10 +95,10 @@ encodeCharacters = \a, b, c, d ->
                 z : U32
                 z = Num.intCast n3
 
-                n = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 18 x) (Num.shiftLeftBy 12 y)) (Num.shiftLeftBy 6 z)
+                n = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy x 18) (Num.shiftLeftBy y 12)) (Num.shiftLeftBy z 6)
 
                 combined : U16
-                combined = Num.intCast (Num.shiftRightBy 8 n)
+                combined = Num.intCast (Num.shiftRightBy n 8)
 
                 Ok (Bytes.Encode.u16 BE combined)
         else if !(isValidChar d) then
@@ -115,14 +115,14 @@ encodeCharacters = \a, b, c, d ->
 
             n =
                 Num.bitwiseOr
-                    (Num.bitwiseOr (Num.shiftLeftBy 18 x) (Num.shiftLeftBy 12 y))
-                    (Num.bitwiseOr (Num.shiftLeftBy 6 z) w)
+                    (Num.bitwiseOr (Num.shiftLeftBy x 18) (Num.shiftLeftBy y 12))
+                    (Num.bitwiseOr (Num.shiftLeftBy z 6) w)
 
             b3 : U8
             b3 = Num.intCast n
 
             combined : U16
-            combined = Num.intCast (Num.shiftRightBy 8 n)
+            combined = Num.intCast (Num.shiftRightBy n 8)
 
             Ok (Bytes.Encode.sequence [Bytes.Encode.u16 BE combined, Bytes.Encode.u8 b3])
 
