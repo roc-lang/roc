@@ -497,22 +497,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         out_dynamic.len(),
     );
 
-    // Reserve non-alloc sections at any offset.
-    for (i, in_section) in in_sections.iter().enumerate() {
-        if in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
-            continue;
-        }
-        match in_section.sh_type(endian) {
-            elf::SHT_PROGBITS | elf::SHT_NOTE => {
-                out_sections[i].offset = writer.reserve(
-                    in_section.sh_size(endian) as usize,
-                    in_section.sh_addralign(endian) as usize,
-                );
-            }
-            _ => {}
-        }
-    }
-
     writer.reserve_symtab();
     writer.reserve_symtab_shndx();
     writer.reserve_strtab();
