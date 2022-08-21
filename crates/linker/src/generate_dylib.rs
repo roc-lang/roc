@@ -483,9 +483,10 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     writer.reserve_program_headers(in_segments.len() as u32);
 
     // Reserve alloc sections at original offsets.
-    let alloc_sections: Vec<_> = in_sections
+    let alloc_sections: Vec<_> = sections
         .iter()
         .enumerate()
+        .map(|(i, s)| (i + 1, s.1.section))
         .filter(|(_, s)| s.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0)
         .collect();
 
@@ -562,7 +563,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     for (i, in_section) in alloc_sections.iter() {
-        // writer.pad_until(in_section.sh_offset(endian) as usize);
         writer.pad_until(offsets[*i - 1]);
         match in_section.sh_type(endian) {
             elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
