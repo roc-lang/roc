@@ -133,6 +133,12 @@ impl DerivedModule {
         self.map.entry(key).or_insert(triple)
     }
 
+    pub fn is_derived_def(&self, def_symbol: Symbol) -> bool {
+        self.map
+            .iter()
+            .any(|(_, (symbol, _, _))| *symbol == def_symbol)
+    }
+
     pub fn iter_all(
         &self,
     ) -> impl Iterator<Item = (&DeriveKey, &(Symbol, Def, SpecializationLambdaSets))> {

@@ -1185,7 +1185,8 @@ impl<'a> Procs<'a> {
         }
 
         // If this is an imported symbol, let its home module make this specialization
-        if env.is_imported_symbol(name.name()) {
+        if env.is_imported_symbol(name.name()) || env.is_unloaded_derived_symbol(name.name(), self)
+        {
             add_needed_external(self, env, fn_var, name);
             return;
         }
@@ -1349,6 +1350,13 @@ impl<'a, 'i> Env<'a, 'i> {
         self.home == ModuleId::DERIVED_GEN
             && symbol.module_id() == ModuleId::DERIVED_SYNTH
             && !procs.partial_procs.contains_key(symbol)
+            // TODO: locking to find the answer in the `Derived_gen` module is not great, since
+            // Derived_gen also blocks other modules specializing. Improve this later.
+            && self
+                .derived_module
+                .lock()
+                .expect("derived module is poisoned")
+                .is_derived_def(symbol)
     }
 
     /// Unifies two variables and performs lambda set compaction.
@@ -7091,7 +7099,7 @@ fn can_reuse_symbol<'a>(
 
     if arguments.contains(&symbol) {
         Value(symbol)
-    } else if env.is_imported_symbol(symbol) {
+    } else if env.is_imported_symbol(symbol) || env.is_unloaded_derived_symbol(symbol, procs) {
         Imported(symbol)
     } else if procs.partial_procs.contains_key(symbol) {
         LocalFunction(symbol)
@@ -7263,7 +7271,10 @@ fn specialize_symbol<'a>(
     match procs.get_partial_proc(original) {
         None => {
             match arg_var {
-                Some(arg_var) if env.is_imported_symbol(original) => {
+                Some(arg_var)
+                    if env.is_imported_symbol(original)
+                        || env.is_unloaded_derived_symbol(original, procs) =>
+                {
                     let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
                         Ok(v) => v,
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
