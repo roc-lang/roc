@@ -200,7 +200,7 @@ pub const RocStr = extern struct {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        const result = RocStr.allocate(new_length, new_capacity);
+        var result = RocStr.allocate(new_length, new_capacity);
 
         // transfer the memory
 
@@ -1519,7 +1519,7 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        const result = arg1.reallocate(combined_length, combined_length);
+        var result = arg1.reallocate(combined_length, combined_length);
 
         @memcpy(result.asU8ptr() + arg1.len(), arg2.asU8ptr(), arg2.len());
 
