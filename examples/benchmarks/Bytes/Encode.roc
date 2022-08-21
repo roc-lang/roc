@@ -71,7 +71,7 @@ encodeHelp = \encoder, offset, output ->
 
         Unsigned16 endianness value ->
             a : U8
-            a = Num.intCast (Num.shiftRightBy 8 value)
+            a = Num.intCast (Num.shiftRightBy value 8)
 
             b : U8
             b = Num.intCast value
@@ -95,7 +95,7 @@ encodeHelp = \encoder, offset, output ->
 
         Signed16 endianness value ->
             a : U8
-            a = Num.intCast (Num.shiftRightBy 8 value)
+            a = Num.intCast (Num.shiftRightBy value 8)
 
             b : U8
             b = Num.intCast value
