@@ -44,7 +44,6 @@ struct Dynamic {
 struct Symbol {
     in_sym: usize,
     name: Option<object::write::StringId>,
-    section: Option<object::write::elf::SectionIndex>,
 }
 
 #[derive(Debug)]
@@ -198,7 +197,7 @@ impl Sections {
         writer.reserve_until(offset);
         // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
         let reserved_before = writer.reserved_len();
-        let todo_unused = writer.reserve(in_section.sh_size(endian) as usize, 1);
+        writer.reserve(in_section.sh_size(endian) as usize, 1);
         let reserved_after = writer.reserved_len();
 
         extra_offset += {
@@ -283,7 +282,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let mut in_gnu_hash = None;
     let mut out_sections = Vec::with_capacity(in_sections.len());
     let mut out_sections_index = Vec::with_capacity(in_sections.len());
-    for (enum_index, my_section) in sections.iter() {
+    for (_enum_index, my_section) in sections.iter() {
         let i = my_section.in_index;
         let in_section = &my_section.section;
 
@@ -470,11 +469,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         } else {
             None
         };
-        out_syms.push(Symbol {
-            in_sym: i,
-            name,
-            section,
-        });
+        out_syms.push(Symbol { in_sym: i, name });
         if in_sym.st_bind() == elf::STB_LOCAL {
             num_local = writer.symbol_count();
         }

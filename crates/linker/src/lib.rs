@@ -1,13 +1,11 @@
 use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
-use object::write;
 use object::{elf, endian, macho};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
-    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
-    SectionIndex, SectionKind, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope,
-    SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
+    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
+    SymbolIndex, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -21,10 +19,8 @@ use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 mod generate_dylib;
 mod metadata;
@@ -124,7 +120,7 @@ pub fn link_preprocessed_host(
 }
 
 fn generate_dynamic_lib(
-    target: &Triple,
+    _target: &Triple,
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
     dummy_lib_path: &Path,
@@ -150,9 +146,7 @@ fn generate_dynamic_lib(
     let bytes =
         crate::generate_dylib::generate(&custom_names).unwrap_or_else(|e| internal_error!("{}", e));
 
-    std::fs::write(dummy_lib_path, &bytes);
-
-    std::fs::copy(dummy_lib_path, "new_dummy.so");
+    std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
 // TODO: Most of this file is a mess of giant functions just to check if things work.
