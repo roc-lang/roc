@@ -461,7 +461,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let dynamic_addr = in_section.sh_addr(endian);
     writer.reserve_dynamic(out_dynamic.len());
 
-    // strtab and shstrtab is ignored
+    // symtab, strtab and shstrtab is ignored because they are not ALLOC
 
     // Reserve non-alloc sections at any offset.
     for (i, in_section) in in_sections.iter().enumerate() {
@@ -629,11 +629,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     writer.write_dynstr_section_header(dynstr_addr);
 
-    writer.write_symtab_section_header(num_local);
-
-    writer.write_strtab_section_header();
-    writer.write_shstrtab_section_header();
-
     {
         let in_section = &sections.eh_frame.section;
         let out_section = &out_sections[5]; // 5 is a random choice
@@ -658,6 +653,11 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     writer.write_dynamic_section_header(dynamic_addr);
+
+    writer.write_symtab_section_header(num_local);
+
+    writer.write_strtab_section_header();
+    writer.write_shstrtab_section_header();
 
     debug_assert_eq!(writer.reserved_len(), writer.len());
 
