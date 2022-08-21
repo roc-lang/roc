@@ -468,9 +468,9 @@ mod encode_immediate {
         17, u32
         17, u64
         17, u128
-        // 17.23, f32 TODO https://github.com/roc-lang/roc/issues/3522
+        17.25, f32
         17.23, f64
-        // 17.23, dec TODO https://github.com/roc-lang/roc/issues/3522
+        17.23, dec
     }
 }
 
