@@ -322,23 +322,20 @@ pub const RocStr = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn asSlice(self: RocStr) []u8 {
+    pub fn asSlice(self: *const RocStr) []u8 {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asSliceWithCapacity(self: RocStr) []u8 {
+    pub fn asSliceWithCapacity(self: *const RocStr) []u8 {
         return self.asU8ptr()[0..self.getCapacity()];
     }
 
-    pub fn asU8ptr(self: RocStr) [*]u8 {
+    pub fn asU8ptr(self: *const RocStr) [*]u8 {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        // return if (self.isSmallStr()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
         if (self.isSmallStr()) {
-            const as_int = @ptrToInt(&self);
-            const as_ptr = @intToPtr([*]u8, as_int);
-            return as_ptr;
+            return @ptrCast([*]u8, self);
         } else {
             return @ptrCast([*]u8, self.str_bytes);
         }
@@ -350,7 +347,7 @@ pub const RocStr = extern struct {
     // One use for this function is writing into an `alloca` for a C string that
     // only needs to live long enough to be passed as an argument to
     // a C function - like the file path argument to `fopen`.
-    pub fn memcpy(self: RocStr, dest: [*]u8) void {
+    pub fn memcpy(self: *const RocStr, dest: [*]u8) void {
         const src = self.asU8ptr();
         @memcpy(dest, src, self.len());
     }
