@@ -91,6 +91,20 @@ impl Sections {
     }
 }
 
+pub const fn round_up_to_alignment(width: usize, alignment: usize) -> usize {
+    match alignment {
+        0 => width,
+        1 => width,
+        _ => {
+            if width % alignment > 0 {
+                width + alignment - (width % alignment)
+            } else {
+                width
+            }
+        }
+    }
+}
+
 fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
     let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
@@ -371,7 +385,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     // let hash = in_hash.as_ref().unwrap();
     // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
     let reserved_before = writer.reserved_len();
-    writer.reserve_hash(3, 13);
+    writer.reserve_hash(3, hash_chain_count);
     let reserved_after = writer.reserved_len();
 
     extra_offset += {
@@ -455,7 +469,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     // elf::SHT_DYNAMIC
     let in_section = &sections.dynamic.section;
     let offset = in_section.sh_offset(endian) as usize + extra_offset;
-    offsets[5] = offset + 6; // seems like this needs to be aligned?!
+    offsets[5] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
     writer.reserve_until(offset);
 
     let dynamic_addr = in_section.sh_addr(endian);
@@ -497,16 +511,35 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     writer.write_align_program_headers();
     for in_segment in in_segments {
-        writer.write_program_header(&object::write::elf::ProgramHeader {
-            p_type: in_segment.p_type(endian),
-            p_flags: in_segment.p_flags(endian),
-            p_offset: in_segment.p_offset(endian),
-            p_vaddr: in_segment.p_vaddr(endian),
-            p_paddr: in_segment.p_paddr(endian),
-            p_filesz: in_segment.p_filesz(endian),
-            p_memsz: in_segment.p_memsz(endian),
-            p_align: in_segment.p_align(endian),
-        });
+        if in_segment.p_type(endian) == elf::PT_DYNAMIC {
+            writer.write_program_header(&object::write::elf::ProgramHeader {
+                p_type: in_segment.p_type(endian),
+                p_flags: in_segment.p_flags(endian),
+                // dirty hack really. Not sure if this is correct on its own
+                p_offset: offsets[5] as _,
+                p_vaddr: in_segment.p_vaddr(endian),
+                p_paddr: in_segment.p_paddr(endian),
+                p_filesz: in_segment.p_filesz(endian),
+                p_memsz: in_segment.p_memsz(endian),
+                p_align: in_segment.p_align(endian),
+            });
+        } else {
+            writer.write_program_header(&object::write::elf::ProgramHeader {
+                p_type: in_segment.p_type(endian),
+                p_flags: in_segment.p_flags(endian),
+                // dirty hack really. Not sure if this is correct on its own
+                p_offset: if in_segment.p_offset(endian) > 0 {
+                    offsets[5] as _
+                } else {
+                    0
+                },
+                p_vaddr: in_segment.p_vaddr(endian),
+                p_paddr: in_segment.p_paddr(endian),
+                p_filesz: in_segment.p_filesz(endian),
+                p_memsz: in_segment.p_memsz(endian),
+                p_align: in_segment.p_align(endian),
+            });
+        }
     }
 
     for (i, in_section) in alloc_sections.iter() {
