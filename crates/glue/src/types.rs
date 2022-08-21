@@ -18,7 +18,7 @@ use roc_mono::layout::{
 use roc_target::TargetInfo;
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Subs, UnionLabels, UnionTags, Variable},
-    types::RecordField,
+    types::{AliasKind, RecordField},
 };
 use std::fmt::Display;
 
@@ -934,7 +934,97 @@ fn add_builtin_type<'a>(
 
             list_id
         }
-        (layout, typ) => todo!("Handle builtin layout {:?} and type {:?}", layout, typ),
+        (
+            Builtin::List(elem_layout),
+            Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
+        ) => {
+            match (
+                elem_layout,
+                env.subs.get_content_without_compacting(*alias_var),
+            ) {
+                (
+                    Layout::Struct { field_layouts, .. },
+                    Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
+                ) => {
+                    let (key_var, val_var) = {
+                        let args_tuple = env.subs.get_subs_slice(*args_subs_slice);
+
+                        debug_assert_eq!(args_tuple.len(), 1);
+
+                        match env.subs.get_content_without_compacting(args_tuple[0]) {
+                            Content::Structure(FlatType::TagUnion(union_tags, ext_var)) => {
+                                let (mut iter, _) = union_tags.sorted_iterator_and_ext(env.subs, *ext_var);
+                                let payloads = iter.next().unwrap().1;
+
+                                debug_assert_eq!(iter.next(), None);
+
+                                (payloads[0], payloads[1])
+                            }
+                            _ => {
+                                unreachable!()
+                            }
+                        }
+                    };
+
+                    debug_assert_eq!(field_layouts.len(), 2);
+
+                    let key_id = add_type_help(env, field_layouts[0], key_var, opt_name, types);
+                    let val_id = add_type_help(env, field_layouts[1], val_var, opt_name, types);
+                    let dict_id = types.add_anonymous(RocType::RocDict(key_id, val_id), layout);
+
+                    types.depends(dict_id, key_id);
+                    types.depends(dict_id, val_id);
+
+                    dict_id
+                }
+                (elem_layout, alias_content) => unreachable!(
+                    "Unrecognized List element for Dict. Layout was: {:?} and alias_content was: {:?}",
+                    elem_layout,
+                    alias_content
+                ),
+            }
+        }
+        (
+            Builtin::List(elem_layout),
+            Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
+        ) => {
+            match (
+                elem_layout,
+                env.subs.get_content_without_compacting(*alias_var),
+            ) {
+                (
+                    Layout::Struct { field_layouts, .. },
+                    Alias(Symbol::DICT_DICT, alias_args, _alias_var, AliasKind::Opaque),
+                ) => {
+                    let dict_type_vars = env.subs.get_subs_slice(alias_args.type_variables());
+
+                    debug_assert_eq!(dict_type_vars.len(), 2);
+
+                    // Sets only use the key of the Dict they wrap, not the value
+                    let elem_var = dict_type_vars[0];
+
+                    debug_assert_eq!(field_layouts.len(), 2);
+
+                    let elem_id = add_type_help(env, field_layouts[0], elem_var, opt_name, types);
+                    let set_id = types.add_anonymous(RocType::RocSet(elem_id), layout);
+
+                    types.depends(set_id, elem_id);
+
+                    set_id
+                }
+                (elem_layout, alias_content) => unreachable!(
+                    "Unrecognized List element for Set. Layout was: {:?} and alias_content was: {:?}",
+                    elem_layout,
+                    alias_content
+                ),
+            }
+        }
+        (Builtin::List(elem_layout), alias) => {
+            unreachable!(
+                "The type alias {:?} was not an Apply(Symbol::LIST_LIST) as expected, given that its builtin was Builtin::List({:?})",
+                alias, elem_layout
+            );
+        }
     }
 }
 
