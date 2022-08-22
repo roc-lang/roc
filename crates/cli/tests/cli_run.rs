@@ -237,7 +237,11 @@ mod cli_run {
                 );
             }
 
-            assert!(out.status.success());
+            assert!(
+                out.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(out.stderr)
+            );
         }
     }
 
