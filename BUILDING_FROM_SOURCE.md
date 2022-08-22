@@ -6,6 +6,9 @@ Installation should be a smooth process, let us now if anything does not work pe
 
 We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
+> See issue [#3863](https://github.com/roc-lang/roc/issues/3863) if you encounter "version GLIBC_2.34 not found".
+> This error can occur if you ran `cargo build` in the same folder without nix.
+
 ### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
 
 #### Install
