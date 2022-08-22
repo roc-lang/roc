@@ -9,11 +9,6 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # using an overlay allows for quick updates after zig releases
-    zig = {
-      url = "github:roarkanize/zig-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
     # to be able to use vulkan system libs for editor graphics
@@ -23,7 +18,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, nixgl }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
     let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
@@ -64,8 +59,6 @@
             Security
           ]);
 
-        zig-toolchain = zig.packages.${system}."0.9.1";
-
         # For debugging LLVM IR
         debugir = pkgs.stdenv.mkDerivation {
           name = "debugir";
@@ -98,7 +91,7 @@
           llvmPkgs.clang
           libxkbcommon
           pkg-config
-          zig-toolchain # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi
