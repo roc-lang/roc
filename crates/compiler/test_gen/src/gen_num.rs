@@ -735,17 +735,15 @@ fn gen_wrap_add_nums() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_f64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    48 / 2
-                "#
-        ),
-        24.0,
-        f64
-    );
+    assert_evals_to!("48 / 2", 24.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_div_f32() {
+    assert_evals_to!("48f32 / 2", 24.0, f32);
 }
 
 #[test]
@@ -1146,17 +1144,15 @@ fn gen_mul_f32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_i64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    1000 // 10
-                "#
-        ),
-        100,
-        i64
-    );
+    assert_evals_to!("1000i64 // 10", 100, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_div_u64() {
+    assert_evals_to!("1000u64 // 10", 100, u64);
 }
 
 #[test]
