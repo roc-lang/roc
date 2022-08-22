@@ -1,5 +1,5 @@
-use std::fmt::Write as _;
-use std::path::PathBuf; // import without risk of name clashing
+use std::fmt::Write as _; // import without risk of name clashing
+use std::path::PathBuf;
 
 use bumpalo::Bump;
 use ven_pretty::DocAllocator;

@@ -32,7 +32,7 @@ fn expr2_to_string_helper(
 
     match expr2 {
         Expr2::SmallStr(arr_string) => {
-            let _ = write!(out_string, "SmallStr(\"{}\"", arr_string.as_str(),);
+            let _ = write!(out_string, "SmallStr(\"{}\")", arr_string.as_str());
         }
         Expr2::Str(pool_str) => {
             let _ = write!(out_string, "Str(\"{}\")", pool_str.as_str(pool));
