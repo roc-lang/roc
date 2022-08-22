@@ -19,7 +19,7 @@ macro_rules! disassembler_test {
     // TODO: Not sure if there is a better way to merge these together,
     // but I like the end use of this a lot better than the old tests.
     ($assemble_fn: expr, $format_fn: expr) => {{
-        use crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
+        use $crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
         let arena = bumpalo::Bump::new();
         let (mut buf, cs) = setup_capstone_and_arena(&arena);
         $assemble_fn(&mut buf);
@@ -30,7 +30,7 @@ macro_rules! disassembler_test {
         );
     }};
     ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
-        use crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
+        use $crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
         let arena = bumpalo::Bump::new();
         let (mut buf, cs) = setup_capstone_and_arena(&arena);
         for i in $iter.iter() {
@@ -44,7 +44,7 @@ macro_rules! disassembler_test {
         }
     }};
     ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr) => {{
-        use crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
+        use $crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
         let arena = bumpalo::Bump::new();
         let (mut buf, cs) = setup_capstone_and_arena(&arena);
         for i in $iter.iter() {
@@ -60,7 +60,7 @@ macro_rules! disassembler_test {
         }
     }};
     ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr, $iter3:expr) => {{
-        use crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
+        use $crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
         let arena = bumpalo::Bump::new();
         let (mut buf, cs) = setup_capstone_and_arena(&arena);
         for i in $iter.iter() {

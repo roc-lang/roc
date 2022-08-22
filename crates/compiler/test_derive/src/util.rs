@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fmt::Write as _;
+use std::path::PathBuf; // import without risk of name clashing
 
 use bumpalo::Bump;
 use ven_pretty::DocAllocator;
@@ -249,20 +250,21 @@ fn assemble_derived_golden(
 
     let mut pretty_buf = String::new();
 
-    pretty_buf.push_str(&format!("# derived for {}\n", print_var(source_var, false)));
+    // ignore returned result, writeln can not fail as it is used here
+    let _ = writeln!(pretty_buf, "# derived for {}", print_var(source_var, false));
 
     let pretty_type = print_var(typ, false);
-    pretty_buf.push_str(&format!("# {}\n", &pretty_type));
+    let _ = writeln!(pretty_buf, "# {}", &pretty_type);
 
     let pretty_type_under_aliases = print_var(typ, true);
-    pretty_buf.push_str(&format!("# {}\n", &pretty_type_under_aliases));
+    let _ = writeln!(pretty_buf, "# {}", &pretty_type_under_aliases);
 
     pretty_buf.push_str("# Specialization lambda sets:\n");
     let mut specialization_lsets = specialization_lsets.into_iter().collect::<Vec<_>>();
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        pretty_buf.push_str(&format!("#   @<{}>: {}\n", region, pretty_lset));
+        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
     }
 
     pretty_buf.push_str(derived_source);
