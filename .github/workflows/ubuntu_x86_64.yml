@@ -30,7 +30,7 @@ jobs:
       - name: regular rust tests
         run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
 
-      - name: test the dev and wasm backend # these tests require an explicit feature flag
+      - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 
       - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
