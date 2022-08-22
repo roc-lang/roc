@@ -468,9 +468,9 @@ mod encode_immediate {
         17, u32
         17, u64
         17, u128
-        // 17.23, f32 TODO https://github.com/roc-lang/roc/issues/3522
+        17.25, f32
         17.23, f64
-        // 17.23, dec TODO https://github.com/roc-lang/roc/issues/3522
+        17.23, dec
     }
 }
 
@@ -1006,6 +1006,28 @@ fn decode_empty_record() {
             "#
         ),
         RocStr::from("empty"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm") // hits a wasm3 stack overflow
+))]
+fn decode_record_of_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("ab10"),
         RocStr
     )
 }

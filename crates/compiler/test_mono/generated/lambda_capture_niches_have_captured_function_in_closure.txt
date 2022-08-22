@@ -2,10 +2,7 @@ procedure Test.11 (Test.37):
     let Test.38 : Str = "";
     ret Test.38;
 
-procedure Test.13 (Test.51, #Attr.12):
-    let Test.12 : Str = StructAtIndex 0 #Attr.12;
-    inc Test.12;
-    dec #Attr.12;
+procedure Test.13 (Test.51, Test.12):
     ret Test.12;
 
 procedure Test.15 (Test.39):
@@ -29,8 +26,8 @@ procedure Test.3 (Test.17):
     ret Test.36;
 
 procedure Test.4 (Test.18):
-    let Test.50 : {Str} = Struct {Test.18};
-    ret Test.50;
+    inc Test.18;
+    ret Test.18;
 
 procedure Test.9 (Test.29, #Attr.12):
     let Test.8 : {} = UnionAtIndex (Id 0) (Index 1) #Attr.12;
@@ -48,7 +45,8 @@ procedure Test.9 (Test.29, #Attr.12):
     let Test.7 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     let Test.49 : {} = Struct {};
     let Test.48 : Str = CallByName Test.16 Test.49;
-    let Test.45 : {Str} = CallByName Test.4 Test.48;
+    let Test.45 : Str = CallByName Test.4 Test.48;
+    dec Test.48;
     let Test.47 : {} = Struct {};
     let Test.46 : Str = CallByName Test.13 Test.47 Test.45;
     ret Test.46;
