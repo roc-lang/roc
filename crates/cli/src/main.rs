@@ -1,9 +1,10 @@
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
-    CMD_EDIT, CMD_FORMAT, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES,
-    FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, GLUE_FILE, ROC_FILE,
+    build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
+    CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION,
+    DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, GLUE_FILE,
+    ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -60,6 +61,20 @@ fn main() -> io::Result<()> {
                 test(matches, Triple::host())
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
+
+                Ok(1)
+            }
+        }
+        Some((CMD_DEV, matches)) => {
+            if matches.is_present(ROC_FILE) {
+                build(
+                    matches,
+                    BuildConfig::BuildAndRunIfNoErrors,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
+                eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
 
                 Ok(1)
             }

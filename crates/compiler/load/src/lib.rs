@@ -54,6 +54,29 @@ pub fn load_single_threaded<'a>(
     )
 }
 
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum LoadMonomorphizedError<'a> {
+    LoadingProblem(LoadingProblem<'a>),
+    /// Errors in the module that should be reported, without compiling the executable.
+    /// Relevant in check-and-then-build mode.
+    ErrorModule(LoadedModule),
+}
+
+impl<'a> From<LoadingProblem<'a>> for LoadMonomorphizedError<'a> {
+    fn from(problem: LoadingProblem<'a>) -> Self {
+        Self::LoadingProblem(problem)
+    }
+}
+
+// HACK only relevant because of some uses of `map_err` that decay into this error, but call `todo` -
+// rustc seems to be unhappy with that.
+impl<'a> From<()> for LoadMonomorphizedError<'a> {
+    fn from(_: ()) -> Self {
+        todo!()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
@@ -78,14 +101,14 @@ pub fn load_and_monomorphize(
     filename: PathBuf,
     exposed_types: ExposedByModule,
     load_config: LoadConfig,
-) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
+) -> Result<MonomorphizedModule<'_>, LoadMonomorphizedError<'_>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, load_config.render)?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(module) => Err(LoadMonomorphizedError::ErrorModule(module)),
     }
 }
 
