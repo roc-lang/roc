@@ -1,6 +1,6 @@
-on: [pull_request]
-#  schedule:
-#    - cron:  '0 9 * * *'
+on:
+  schedule:
+    - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
 
