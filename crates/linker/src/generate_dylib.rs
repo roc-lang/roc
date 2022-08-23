@@ -419,35 +419,21 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     writer.write_align_program_headers();
     for in_segment in in_segments {
-        if in_segment.p_type(endian) == elf::PT_DYNAMIC {
-            writer.write_program_header(&object::write::elf::ProgramHeader {
-                p_type: in_segment.p_type(endian),
-                p_flags: in_segment.p_flags(endian),
-                // dirty hack really. Not sure if this is correct on its own
-                p_offset: offsets[DYMAMIC_SECTION] as _,
-                p_vaddr: in_segment.p_vaddr(endian),
-                p_paddr: in_segment.p_paddr(endian),
-                p_filesz: in_segment.p_filesz(endian),
-                p_memsz: in_segment.p_memsz(endian),
-                p_align: in_segment.p_align(endian),
-            });
-        } else {
-            writer.write_program_header(&object::write::elf::ProgramHeader {
-                p_type: in_segment.p_type(endian),
-                p_flags: in_segment.p_flags(endian),
-                // dirty hack really. Not sure if this is correct on its own
-                p_offset: if in_segment.p_offset(endian) > 0 {
-                    offsets[DYMAMIC_SECTION] as _
-                } else {
-                    0
-                },
-                p_vaddr: in_segment.p_vaddr(endian),
-                p_paddr: in_segment.p_paddr(endian),
-                p_filesz: in_segment.p_filesz(endian),
-                p_memsz: in_segment.p_memsz(endian),
-                p_align: in_segment.p_align(endian),
-            });
-        }
+        writer.write_program_header(&object::write::elf::ProgramHeader {
+            p_type: in_segment.p_type(endian),
+            p_flags: in_segment.p_flags(endian),
+            // dirty hack really. Not sure if this is correct on its own
+            p_offset: if in_segment.p_offset(endian) > 0 {
+                offsets[DYMAMIC_SECTION] as _
+            } else {
+                0
+            },
+            p_vaddr: in_segment.p_vaddr(endian),
+            p_paddr: in_segment.p_paddr(endian),
+            p_filesz: in_segment.p_filesz(endian),
+            p_memsz: in_segment.p_memsz(endian),
+            p_align: in_segment.p_align(endian),
+        });
     }
 
     for (i, offset) in offsets.iter().enumerate() {
