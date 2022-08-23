@@ -1,8 +1,7 @@
-use std::convert::TryInto;
 use std::error::Error;
 
 use object::elf::{self, SectionHeader64};
-use object::read::elf::{Dyn, FileHeader, ProgramHeader, SectionHeader, Sym};
+use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
 use object::Endianness;
 
 use object::write::elf::Writer;
@@ -352,40 +351,40 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let gnu_hash_symbol_base = 1;
     let gnu_hash_symbol_count = writer.dynamic_symbol_count() - gnu_hash_symbol_base;
 
-    // Assign symbol indices.
-    let mut num_local = 0;
-    let mut out_syms = Vec::with_capacity(in_syms.len());
+    // content of the symbol table
+    //
+    // Symbol table '.symtab' contains 8 entries:
+    //    Num:    Value          Size Type    Bind   Vis      Ndx Name
+    //      0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+    //      1: 0000000000000120     0 SECTION LOCAL  DEFAULT  UND
+    //      2: 0000000000000130     0 SECTION LOCAL  DEFAULT    1
+    //      3: 0000000000000150     0 SECTION LOCAL  DEFAULT    2
+    //      4: 0000000000000168     0 SECTION LOCAL  DEFAULT    3
+    //      5: 0000000000001000     0 SECTION LOCAL  DEFAULT    4
+    //      6: 0000000000001f30     0 SECTION LOCAL  DEFAULT    5
+    //      7: 0000000000001f30     0 OBJECT  LOCAL  DEFAULT    5 _DYNAMIC
+    let symbol = |index, name| Symbol {
+        in_sym: index,
+        name,
+    };
+
+    let out_syms = [
+        symbol(1, None),
+        symbol(2, None),
+        symbol(3, None),
+        symbol(4, None),
+        symbol(5, None),
+        symbol(6, None),
+        symbol(7, Some(writer.add_string(b"_DYNAMIC"))),
+    ];
+
+    // include the NULL symbol
+    let num_local = 1 + out_syms.len();
+
     let mut out_syms_index = Vec::with_capacity(in_syms.len());
     out_syms_index.push(Default::default());
-    for (i, in_sym) in in_syms.iter().enumerate().skip(1) {
-        let section = match in_syms.symbol_section(endian, in_sym, i)? {
-            Some(in_section) => {
-                // Skip symbols for sections we aren't copying.
-                match out_sections_index.get(in_section.0) {
-                    None => continue,
-                    Some(index) => {
-                        if index.0 == 0 {
-                            out_syms_index.push(Default::default());
-                            continue;
-                        } else {
-                            Some(out_sections_index[in_section.0])
-                        }
-                    }
-                }
-            }
-            None => None,
-        };
-        out_syms_index.push(writer.reserve_symbol_index(section));
-        let name = if in_sym.st_name(endian) != 0 {
-            let s = in_syms.symbol_name(endian, in_sym)?;
-            Some(writer.add_string(s))
-        } else {
-            None
-        };
-        out_syms.push(Symbol { in_sym: i, name });
-        if in_sym.st_bind() == elf::STB_LOCAL {
-            num_local = writer.symbol_count();
-        }
+    for sym in out_syms.iter() {
+        out_syms_index.push(writer.reserve_symbol_index(Some(out_sections_index[sym.in_sym])));
     }
 
     // Start reserving file ranges.
@@ -534,7 +533,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
     writer.write_dynamic_section_header(addresses.dynamic);
 
-    writer.write_symtab_section_header(num_local);
+    writer.write_symtab_section_header(num_local as _);
 
     writer.write_strtab_section_header();
     writer.write_shstrtab_section_header();
