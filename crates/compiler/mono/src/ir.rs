@@ -576,7 +576,8 @@ impl<'a> ExternalSpecializations<'a> {
         env_subs: &mut Subs,
         variable: Variable,
     ) {
-        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let stored_variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        roc_tracing::debug!(original = ?variable, stored = ?stored_variable, "stored needed external");
 
         match self
             .symbol_or_lambda
@@ -585,11 +586,11 @@ impl<'a> ExternalSpecializations<'a> {
         {
             None => {
                 self.symbol_or_lambda.push(symbol_or_lambda);
-                self.types_to_specialize.push(vec![variable]);
+                self.types_to_specialize.push(vec![stored_variable]);
             }
             Some(index) => {
                 let types_to_specialize = &mut self.types_to_specialize[index];
-                types_to_specialize.push(variable);
+                types_to_specialize.push(stored_variable);
             }
         }
     }
@@ -2890,19 +2891,16 @@ fn specialize_external_specializations<'a>(
 
     for (symbol, solved_types) in it {
         for store_variable in solved_types {
+            let imported_variable = offset_variable(store_variable);
+
+            roc_tracing::debug!(proc_name = ?symbol, ?store_variable, ?imported_variable, "specializing needed external");
+
             // historical note: we used to deduplicate with a hash here,
             // but the cost of that hash is very high. So for now we make
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(
-                env,
-                procs,
-                layout_cache,
-                symbol,
-                offset_variable(store_variable),
-                &[],
-            )
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
         }
     }
 }
@@ -7631,6 +7629,8 @@ fn add_needed_external<'a>(
         Vacant(entry) => entry.insert(ExternalSpecializations::new()),
         Occupied(entry) => entry.into_mut(),
     };
+
+    roc_tracing::debug!(proc_name = ?name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "needed external");
 
     existing.insert_external(name, env.subs, fn_var);
 }
