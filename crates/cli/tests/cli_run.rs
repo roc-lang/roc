@@ -25,7 +25,6 @@ mod cli_run {
     use strum_macros::EnumIter;
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const VALGRIND_FLAG: &str = concatcp!("--", roc_cli::FLAG_VALGRIND);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
     const PRECOMPILED_HOST: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
@@ -137,13 +136,16 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
+        // valgrind does not yet support avx512 instructions, see #1963.
+        // we can't enable this only when testing with valgrind because of host re-use between tests
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if is_x86_feature_detected!("avx512f") {
+            std::env::set_var("NO_AVX512", "1");
+        }
+
         for cli_mode in CliMode::iter() {
             let flags = {
                 let mut vec = flags.to_vec();
-
-                if use_valgrind {
-                    vec.push(VALGRIND_FLAG);
-                }
 
                 vec.push("--max-threads=1");
 
@@ -295,13 +297,10 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" => {
-                            // test is skipped until we upgrate to zig 0.9 / llvm 13
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
-                            return;
-                        }
-                        "hello-gui" | "breakout" => {
-                            // Since these require opening a window, we do `roc build` on them but don't run them.
+                        "form" | "hello-gui" | "breakout" | "ruby" => {
+                            // Since these require things the build system often doesn't have
+                            // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
+                            // we do `roc build` on them but don't run them.
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
                             return;
                         }
@@ -441,6 +440,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Roc <3 Zig!\n",
+            use_valgrind: true,
+        },
+        ruby:"ruby-interop" => Example {
+            filename: "main.roc",
+            executable_filename: "libhello",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"",
             use_valgrind: true,
         },
         fib:"algorithms" => Example {

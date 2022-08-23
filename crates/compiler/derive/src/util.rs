@@ -130,7 +130,7 @@ impl Env<'_> {
                 // we only expect `bar` to polymorphic at this stage!
                 //
                 // TODO: it would be better if `unify` could prune these for us. See also
-                // https://github.com/rtfeldman/roc/issues/3207; that is a blocker for this TODO.
+                // https://github.com/roc-lang/roc/issues/3207; that is a blocker for this TODO.
                 #[cfg(debug_assertions)]
                 {
                     for (spec_var, lambda_sets) in _lambda_sets_to_specialize.drain() {
@@ -152,4 +152,27 @@ impl Env<'_> {
             }
         }
     }
+
+    /// Creates an extension variable for a tag union or record.
+    ///
+    /// Derivers should always construct tag union and record types such that they are closed.
+    /// If the `open-extension-vars` feature is turned on, flex extension vars will be
+    /// returned; otherwise, the appropriate closed extension variable for the type will be
+    /// returned.
+    #[inline(always)]
+    pub fn new_ext_var(&mut self, kind: ExtensionKind) -> Variable {
+        if cfg!(feature = "open-extension-vars") {
+            self.subs.fresh_unnamed_flex_var()
+        } else {
+            match kind {
+                ExtensionKind::Record => Variable::EMPTY_RECORD,
+                ExtensionKind::TagUnion => Variable::EMPTY_TAG_UNION,
+            }
+        }
+    }
+}
+
+pub(crate) enum ExtensionKind {
+    Record,
+    TagUnion,
 }

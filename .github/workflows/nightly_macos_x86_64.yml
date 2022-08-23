@@ -44,7 +44,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
         with:
-          upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/roc-lang/roc/releases/51880579/assets{?name,label}
           release_id: 51880579
           asset_path: ./roc_darwin_x86_64.tar.gz
           asset_name: roc_nightly-macos_x86_64-$$.tar.gz # $$ inserts 6 char commit hash and date (YYYY-MM-DD)

@@ -182,7 +182,13 @@ mod solve_expr {
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
-        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
+        can_problems.retain(|prob| {
+            !matches!(
+                prob,
+                roc_problem::can::Problem::UnusedDef(_, _)
+                    | roc_problem::can::Problem::UnusedBranchDef(..)
+            )
+        });
 
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
@@ -4916,7 +4922,7 @@ mod solve_expr {
 
     #[test]
     fn rigid_type_variable_problem() {
-        // see https://github.com/rtfeldman/roc/issues/1162
+        // see https://github.com/roc-lang/roc/issues/1162
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -5024,7 +5030,7 @@ mod solve_expr {
     #[test]
     fn inference_var_tag_union_ext() {
         // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
-        // See https://github.com/rtfeldman/roc/issues/2053
+        // See https://github.com/roc-lang/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -5491,7 +5497,7 @@ mod solve_expr {
         )
     }
 
-    // https://github.com/rtfeldman/roc/issues/2379
+    // https://github.com/roc-lang/roc/issues/2379
     #[test]
     fn copy_vars_referencing_copied_vars() {
         infer_eq_without_problem(
@@ -5866,7 +5872,7 @@ mod solve_expr {
     }
 
     #[test]
-    // https://github.com/rtfeldman/roc/issues/2702
+    // https://github.com/roc-lang/roc/issues/2702
     fn tag_inclusion_behind_opaque() {
         infer_eq_without_problem(
             indoc!(
@@ -7688,6 +7694,70 @@ mod solve_expr {
         \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
+        "###
+        );
+    }
+
+    #[test]
+    fn transient_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = "abc"
+
+                getX = \{} -> x
+
+                h = \{} -> (getX {})
+                #^{-1}
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(3) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn transient_captures_after_def_ordering() {
+        infer_queries!(
+            indoc!(
+                r#"
+                h = \{} -> (getX {})
+                #^{-1}
+
+                getX = \{} -> x
+
+                x = "abc"
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(1) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = True
+                y = False
+
+                a = "foo"
+                b = "bar"
+
+                foo = \{} -> if x then a else bar {}
+                #^^^{-1}
+                bar = \{} -> if y then b else foo {}
+                #^^^{-1}
+
+                bar {}
+                "#
+            ),
+        @r###"
+        foo : {} -[[foo(5) [True]* [False]* Str Str]]-> Str
+        bar : {} -[[bar(6) [True]* [False]* Str Str]]-> Str
         "###
         );
     }

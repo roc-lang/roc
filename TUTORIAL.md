@@ -8,7 +8,7 @@ Enjoy!
 
 ## Getting started
 
-Learn how to install roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
+Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
 ## Strings and Numbers
 
@@ -115,7 +115,7 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/interactive/cli-platform" }
+    packages { pf: "examples/interactive/cli-platform/main.roc" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -124,8 +124,8 @@ main = Stdout.line "I'm a Roc application!"
 
 > **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
 > source code. If you'd like to put it somewhere else, you'll need to replace
-> `"examples/interactive/cli-platform"` with the path to the
-> `examples/interactive/cli-platform` folder in that source code. In the future,
+> `"examples/interactive/cli-platform/main.roc"` with the path to the
+> `examples/interactive/cli-platform/main.roc` file in that source code. In the future,
 > Roc will have the tutorial built in, and this aside will no longer be
 > necessary!
 
@@ -1255,7 +1255,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/interactive/cli-platform" }
+    packages { pf: "examples/interactive/cli-platform/main.roc" }
     imports [pf.Stdout]
     provides main to pf
 ```
@@ -1273,14 +1273,14 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages { pf: "examples/interactive/cli-platform" }
+packages { pf: "examples/interactive/cli-platform/main.roc" }
 imports [pf.Stdout]
 provides main to pf
 ```
 
-The `packages { pf: "examples/interactive/cli-platform" }` part says two things:
+The `packages { pf: "examples/interactive/cli-platform/main.roc" }` part says two things:
 
-- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform"`
+- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform/main.roc"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
 The `imports [pf.Stdout]` line says that we want to import the `Stdout` module
@@ -1300,18 +1300,18 @@ calling a function named `line` which is exposed by a module named
 When we write `imports [pf.Stdout]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
-Since `pf` was the name we chose for the `examples/interactive/cli-platform`
-package (when we wrote `packages { pf: "examples/interactive/cli-platform" }`),
+Since `pf` was the name we chose for the `examples/interactive/cli-platform/main.roc`
+package (when we wrote `packages { pf: "examples/interactive/cli-platform/main.roc" }`),
 this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
-`examples/interactive/cli-platform` package.
+`examples/interactive/cli-platform/main.roc` package.
 
 # Building a Command-Line Interface (CLI)
 
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in `examples/interactive/cli-platform` as an example!
+platforms. Let's use the CLI platform in `examples/interactive/cli-platform/main.roc` as an example!
 
 In the CLI platform, we have four operations we can do:
 
@@ -1326,7 +1326,7 @@ First, let's do a basic "Hello World" using the tutorial app.
 
 ```coffee
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform" }
+    packages { pf: "examples/interactive/cli-platform/main.roc" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1363,7 +1363,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```swift
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform" }
+    packages { pf: "examples/interactive/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1413,7 +1413,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```haskell
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform" }
+    packages { pf: "examples/interactive/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 

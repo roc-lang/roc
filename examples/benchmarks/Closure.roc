@@ -3,7 +3,7 @@ app "closure"
     imports [pf.Task]
     provides [main] to pf
 
-# see https://github.com/rtfeldman/roc/issues/985
+# see https://github.com/roc-lang/roc/issues/985
 main : Task.Task {} []
 main = closure1 {}
 # |> Task.after (\_ -> closure2 {})

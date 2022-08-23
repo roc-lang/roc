@@ -244,7 +244,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             walk_record_fields(visitor, updates.iter());
         }
         Expr::Tag {
-            variant_var: _,
+            tag_union_var: _,
             ext_var: _,
             name: _,
             arguments,

@@ -552,7 +552,7 @@ mod test_reporting {
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unrecognized_name,
         indoc!(
             r#"
@@ -5245,7 +5245,7 @@ mod test_reporting {
     "###
     );
 
-    // https://github.com/rtfeldman/roc/issues/1714
+    // https://github.com/roc-lang/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,
             indoc!(
@@ -7570,7 +7570,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
@@ -8843,7 +8843,7 @@ All branches in an `if` must have the same type!
         "#
     );
 
-    // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+    // from https://github.com/roc-lang/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
     // There was a bug where this reported UnusedArgument("val")
     // since it was used only in the returned function only.
     //
@@ -9123,7 +9123,7 @@ All branches in an `if` must have the same type!
             "#
         ),
         // TODO: this error message is quite unfortunate. We should remove the duplication, and
-        // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
+        // also support regions that point to things in other modules. See also https://github.com/roc-lang/roc/issues/3056.
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -9895,13 +9895,13 @@ All branches in an `if` must have the same type!
 
         ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        `y` is not used anywhere in your code.
+        `y` is not used in this `when` branch.
 
         5│          A x | B y -> x
                             ^
 
-        If you didn't intend on using `y` then remove it so future readers of
-        your code don't wonder why it is there.
+        If you don't need to use `y`, prefix it with an underscore, like "_y",
+        or replace it with just an "_".
         "###
     );
 
@@ -10434,6 +10434,57 @@ All branches in an `if` must have the same type!
         { a : Str, b ? Str }
 
     Tip: Looks like the b field is missing.
+    "###
+    );
+
+    test_report!(
+        unused_def_in_branch_pattern,
+        indoc!(
+            r#"
+            when A "" is
+                A foo -> ""
+            "#
+        ),
+    @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `foo` is not used in this `when` branch.
+
+    5│          A foo -> ""
+                  ^^^
+
+    If you don't need to use `foo`, prefix it with an underscore, like
+    "_foo", or replace it with just an "_".
+    "###
+    );
+
+    test_report!(
+        infer_decoded_record_error_with_function_field,
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                when decoded is
+                    Ok rcd -> rcd.first rcd.second
+                    _ -> "something went wrong"
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    6│          Ok rcd -> rcd.first rcd.second
+                          ^^^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        a -> b
+
+    Note: `Decoding` cannot be generated for functions.
     "###
     );
 }

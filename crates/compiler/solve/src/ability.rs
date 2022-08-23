@@ -443,16 +443,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
-    }
-
-    #[inline(always)]
-    fn visit_rigid(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
-    }
-
-    #[inline(always)]
     fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), DerivableError> {
         if ability != Self::ABILITY {
             Err(DerivableError::NotDerivable(var))
@@ -529,7 +519,7 @@ trait DerivableVisitor {
     fn is_derivable(
         obligation_cache: &mut ObligationCache,
         abilities_store: &AbilitiesStore,
-        subs: &Subs,
+        subs: &mut Subs,
         var: Variable,
     ) -> Result<(), DerivableError> {
         let mut stack = vec![var];
@@ -552,8 +542,11 @@ trait DerivableVisitor {
             use DerivableError::*;
             use FlatType::*;
             match *content {
-                FlexVar(_) => Self::visit_flex(var)?,
-                RigidVar(_) => Self::visit_rigid(var)?,
+                FlexVar(opt_name) => {
+                    // Promote the flex var to be bound to the ability.
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
+                }
+                RigidVar(_) => return Err(NotDerivable(var)),
                 FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
                 RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
                 RecursionVar {
@@ -584,7 +577,15 @@ trait DerivableVisitor {
                         let descend = Self::visit_record(var)?;
                         if descend.0 {
                             push_var_slice!(fields.variables());
-                            stack.push(ext);
+                            if !matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::FlexVar(_) | Content::RigidVar(_)
+                            ) {
+                                // TODO: currently, just we suppose the presence of a flex var may
+                                // include more or less things which we can derive. But, we should
+                                // instead recurse here, and add a `t ~ u | u has Decode` constraint as needed.
+                                stack.push(ext);
+                            }
                         }
                     }
                     TagUnion(tags, ext) => {

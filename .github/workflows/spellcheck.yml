@@ -12,7 +12,7 @@ env:
 jobs:
   spell-check:
     name: spell check
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1

@@ -1,7 +1,7 @@
-use roc_module::symbol::Symbol;
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
-use crate::DeriveError;
+use crate::{util::debug_name_record, DeriveError};
 
 #[derive(Hash)]
 pub enum FlatDecodable {
@@ -12,12 +12,16 @@ pub enum FlatDecodable {
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub enum FlatDecodableKey {
     List(/* takes one variable */),
+
+    // Unfortunate that we must allocate here, c'est la vie
+    Record(Vec<Lowercase>),
 }
 
 impl FlatDecodableKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
             FlatDecodableKey::List() => "list".to_string(),
+            FlatDecodableKey::Record(fields) => debug_name_record(fields),
         }
     }
 }
@@ -33,8 +37,25 @@ impl FlatDecodable {
                     Symbol::STR_STR => Ok(Immediate(Symbol::DECODE_STRING)),
                     _ => Err(Underivable),
                 },
-                FlatType::Record(_fields, _ext) => {
-                    Err(Underivable) // yet
+                FlatType::Record(fields, ext) => {
+                    let fields_iter = match fields.unsorted_iterator(subs, ext) {
+                        Ok(it) => it,
+                        Err(_) => return Err(Underivable),
+                    };
+
+                    let mut field_names = Vec::with_capacity(fields.len());
+                    for (field_name, record_field) in fields_iter {
+                        if record_field.is_optional() {
+                            // Can't derive a concrete decoder for optional fields, since those are
+                            // compile-time-polymorphic
+                            return Err(Underivable);
+                        }
+                        field_names.push(field_name.clone());
+                    }
+
+                    field_names.sort();
+
+                    Ok(Key(FlatDecodableKey::Record(field_names)))
                 }
                 FlatType::TagUnion(_tags, _ext) | FlatType::RecursiveTagUnion(_, _tags, _ext) => {
                     Err(Underivable) // yet
@@ -42,9 +63,7 @@ impl FlatDecodable {
                 FlatType::FunctionOrTagUnion(_name_index, _, _) => {
                     Err(Underivable) // yet
                 }
-                FlatType::EmptyRecord => {
-                    Err(Underivable) // yet
-                }
+                FlatType::EmptyRecord => Ok(Key(FlatDecodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }

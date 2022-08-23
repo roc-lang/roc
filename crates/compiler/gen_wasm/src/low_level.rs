@@ -183,7 +183,7 @@ impl<'a> LowLevelCall<'a> {
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
     /// This may seem like deliberately introducing an error!
     /// But we want all targets to behave the same, and hash algos rely on wrapping.
-    /// Discussion: https://github.com/rtfeldman/roc/pull/2117#discussion_r760723063
+    /// Discussion: https://github.com/roc-lang/roc/pull/2117#discussion_r760723063
     fn wrap_small_int(&self, backend: &mut WasmBackend<'a>, int_width: IntWidth) {
         let bits = 8 * int_width.stack_size() as i32;
         let shift = 32 - bits;
@@ -1599,11 +1599,11 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftLeftBy => {
-                // Swap order of arguments
-                backend.storage.load_symbols(
-                    &mut backend.code_builder,
-                    &[self.arguments[1], self.arguments[0]],
-                );
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[num, bits]);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shl(),
                     I64 => backend.code_builder.i64_shl(),
@@ -1612,8 +1612,8 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightBy => {
-                let bits = self.arguments[0];
-                let num = self.arguments[1];
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
                         // In most languages this operation is for signed numbers, but Roc defines it on all integers.
@@ -1657,41 +1657,39 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
+                let num = self.arguments[0];
+                let bits = self.arguments[1];
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
                         // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
                         let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);
-                        if bit_width < 32 && symbol_is_signed_int(backend, self.arguments[0]) {
+                        if bit_width < 32 && symbol_is_signed_int(backend, bits) {
                             let mask = (1 << bit_width) - 1;
 
                             backend
                                 .storage
-                                .load_symbols(&mut backend.code_builder, &[self.arguments[1]]);
+                                .load_symbols(&mut backend.code_builder, &[num]);
 
                             backend.code_builder.i32_const(mask);
                             backend.code_builder.i32_and();
 
                             backend
                                 .storage
-                                .load_symbols(&mut backend.code_builder, &[self.arguments[0]]);
+                                .load_symbols(&mut backend.code_builder, &[bits]);
                         } else {
-                            // swap the arguments
-                            backend.storage.load_symbols(
-                                &mut backend.code_builder,
-                                &[self.arguments[1], self.arguments[0]],
-                            );
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[num, bits]);
                         }
 
                         backend.code_builder.i32_shr_u();
                     }
                     I64 => {
-                        // swap the arguments
-                        backend.storage.load_symbols(
-                            &mut backend.code_builder,
-                            &[self.arguments[1], self.arguments[0]],
-                        );
+                        backend
+                            .storage
+                            .load_symbols(&mut backend.code_builder, &[num, bits]);
                         backend.code_builder.i64_shr_u();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
@@ -1857,11 +1855,15 @@ impl<'a> LowLevelCall<'a> {
     /// Equality and inequality
     /// These can operate on any data type (except functions) so they're more complex than other operators.
     fn eq_or_neq(&self, backend: &mut WasmBackend<'a>) {
-        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-        let other_arg_layout = backend.storage.symbol_layouts[&self.arguments[1]];
+        let arg_layout =
+            backend.storage.symbol_layouts[&self.arguments[0]].runtime_representation();
+        let other_arg_layout =
+            backend.storage.symbol_layouts[&self.arguments[1]].runtime_representation();
         debug_assert!(
             arg_layout == other_arg_layout,
-            "Cannot do `==` comparison on different types"
+            "Cannot do `==` comparison on different types: {:?} vs {:?}",
+            arg_layout,
+            other_arg_layout
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
@@ -2113,6 +2115,18 @@ pub fn call_higher_order_lowlevel<'a>(
         ..
     } = passed_function;
 
+    // The zig lowlevel builtins expect the passed functions' closure data to always
+    // be sent as an opaque pointer. On the Roc side, however, we need to call the passed function
+    // with the Roc representation of the closure data. There are three possible cases for that
+    // representation:
+    //
+    // 1. The closure data is a struct
+    // 2. The closure data is an unwrapped value
+    // 3. There is no closure data
+    //
+    // To uniformly deal with the first two cases, always put the closure data, when it exists,
+    // into a one-element struct. That way, we get a pointer (i32) that can be passed to the zig lowlevels.
+    // The wrapper around the passed function will access the actual closure data in the struct.
     let (closure_data_layout, closure_data_exists) =
         match backend.storage.symbol_layouts[captured_environment] {
             Layout::LambdaSet(lambda_set) => {
@@ -2130,6 +2144,46 @@ pub fn call_higher_order_lowlevel<'a>(
             } => (Layout::UNIT, false),
             x => internal_error!("Closure data has an invalid layout\n{:?}", x),
         };
+
+    let (wrapped_captured_environment, wrapped_captures_layout) = if closure_data_exists {
+        // If there is closure data, make sure we put in a struct it before passing it to the
+        // external builtin impl. That way it's always an `i32` pointer.
+        let wrapped_closure_data_sym = backend.create_symbol("wrapped_captures");
+        let wrapped_captures_layout =
+            Layout::struct_no_name_order(backend.env.arena.alloc([closure_data_layout]));
+
+        // make sure that the wrapping struct is available in stack memory, so we can hand out a
+        // pointer to it.
+        let wrapped_storage = backend.storage.allocate_var(
+            wrapped_captures_layout,
+            wrapped_closure_data_sym,
+            crate::storage::StoredVarKind::Variable,
+        );
+
+        let (wrapped_storage_local_ptr, wrapped_storage_offset) = match wrapped_storage {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(backend.storage.stack_frame_pointer)
+            }
+            other => internal_error!(
+                "Struct should be allocated in stack memory, but it's in {:?}",
+                other
+            ),
+        };
+
+        // copy the actual closure data into the first and only element of the wrapping struct.
+        backend.storage.copy_value_to_memory(
+            &mut backend.code_builder,
+            wrapped_storage_local_ptr,
+            wrapped_storage_offset,
+            *captured_environment,
+        );
+
+        (wrapped_closure_data_sym, wrapped_captures_layout)
+    } else {
+        // If we don't capture anything, pass along the captured environment as-is - the wrapper
+        // function will take care not to unwrap this.
+        (*captured_environment, closure_data_layout)
+    };
 
     // We create a wrapper around the passed function, which just unboxes the arguments.
     // This allows Zig builtins to have a generic pointer-based interface.
@@ -2164,7 +2218,7 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.len()
         };
 
-        wrapper_arg_layouts.push(closure_data_layout);
+        wrapper_arg_layouts.push(wrapped_captures_layout);
         wrapper_arg_layouts.extend(
             argument_layouts
                 .iter()
@@ -2204,7 +2258,7 @@ pub fn call_higher_order_lowlevel<'a>(
             .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
         backend.get_fn_ptr(inc_fn)
     } else {
-        let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::Inc);
         backend.get_fn_ptr(inc_fn)
     };
 
@@ -2218,7 +2272,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2231,7 +2285,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2244,7 +2298,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2257,7 +2311,7 @@ pub fn call_higher_order_lowlevel<'a>(
             wrapper_fn_ptr,
             inc_fn_ptr,
             closure_data_exists,
-            *captured_environment,
+            wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
@@ -2280,7 +2334,9 @@ pub fn call_higher_order_lowlevel<'a>(
             backend.storage.load_symbol_zig(cb, *xs);
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
-                backend.storage.load_symbols(cb, &[*captured_environment]);
+                backend
+                    .storage
+                    .load_symbols(cb, &[wrapped_captured_environment]);
             } else {
                 // load_symbols assumes that a zero-size arg should be eliminated in code gen,
                 // but that's a specialization that our Zig code doesn't have! Pass a null pointer.

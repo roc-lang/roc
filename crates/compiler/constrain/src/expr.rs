@@ -1040,7 +1040,7 @@ pub fn constrain_expr(
             body_con
         }
         Tag {
-            variant_var,
+            tag_union_var: variant_var,
             ext_var,
             name,
             arguments,

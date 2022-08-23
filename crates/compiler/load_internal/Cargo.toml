@@ -29,10 +29,10 @@ roc_debug_flags = { path = "../debug_flags" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 parking_lot = "0.12"
-crossbeam = "0.8.1"
+crossbeam = "0.8.2"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
 maplit = "1.0.2"
-indoc = "1.0.3"
+indoc = "1.0.7"
 roc_test_utils = { path = "../../test_utils" }

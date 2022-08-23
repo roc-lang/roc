@@ -263,7 +263,7 @@ pub enum Layout<'a> {
         /// so keep a hash of the record order for disambiguation. This still of course may result
         /// in collisions, but it's unlikely.
         ///
-        /// See also https://github.com/rtfeldman/roc/issues/2535.
+        /// See also https://github.com/roc-lang/roc/issues/2535.
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
@@ -731,7 +731,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
 /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
 /// between such differences when constructing closure capture data.
 ///
-/// See also https://github.com/rtfeldman/roc/issues/3336.
+/// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
 
@@ -783,28 +783,56 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    pub set: &'a [(Symbol, &'a [Layout<'a>])],
+    set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
     representation: &'a Layout<'a>,
+}
+
+#[derive(Debug)]
+pub enum EnumDispatch {
+    Bool,
+    U8,
 }
 
 /// representation of the closure *for a particular function*
 #[derive(Debug)]
 pub enum ClosureRepresentation<'a> {
-    /// the closure is represented as a union. Includes the tag ID!
+    /// The closure is represented as a union. Includes the tag ID!
+    /// Each variant is a different function, and its payloads are the captures.
     Union {
         alphabetic_order_fields: &'a [Layout<'a>],
         closure_name: Symbol,
         tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
     },
-    /// The closure is represented as a struct. The layouts are sorted
-    /// alphabetically by the identifier that is captured.
+    /// The closure is one function, whose captures are represented as a struct.
+    /// The layouts are sorted alphabetically by the identifier that is captured.
     ///
     /// We MUST sort these according to their stack size before code gen!
     AlphabeticOrderStruct(&'a [Layout<'a>]),
-    /// the representation is anything but a union
-    Other(Layout<'a>),
+    /// The closure is one function that captures a single identifier, whose value is unwrapped.
+    UnwrappedCapture(Layout<'a>),
+    /// The closure dispatches to multiple functions, but none of them capture anything, so this is
+    /// a boolean or integer flag.
+    EnumDispatch(EnumDispatch),
+}
+
+/// How the closure should be seen when determining a call-by-name.
+#[derive(Debug)]
+pub enum ClosureCallOptions<'a> {
+    /// This is an empty lambda set, dispatching is an error
+    Void,
+    /// One of a few capturing functions can be called to
+    Union(UnionLayout<'a>),
+    /// The closure is one function, whose captures are represented as a struct.
+    Struct {
+        field_layouts: &'a [Layout<'a>],
+        field_order_hash: FieldOrderHash,
+    },
+    /// The closure is one function that captures a single identifier, whose value is unwrapped.
+    UnwrappedCapture(Layout<'a>),
+    /// The closure dispatches to multiple possible functions, none of which capture.
+    EnumDispatch(EnumDispatch),
 }
 
 impl<'a> LambdaSet<'a> {
@@ -818,13 +846,17 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
-        match self.representation {
-            Layout::Struct {
-                field_layouts: &[], ..
+        if self.has_unwrapped_capture_repr() {
+            Some(*self.representation)
+        } else if self.has_enum_dispatch_repr() {
+            None
+        } else {
+            match self.representation {
+                Layout::Struct {
+                    field_layouts: &[], ..
+                } => None,
+                repr => Some(*repr),
             }
-            | Layout::Builtin(Builtin::Bool)
-            | Layout::Builtin(Builtin::Int(..)) => None,
-            repr => Some(*repr),
         }
     }
 
@@ -833,6 +865,16 @@ impl<'a> LambdaSet<'a> {
             name: *name,
             captures_niche: CapturesNiche(captures_layouts),
         })
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
     }
 
     pub fn layout_for_member_with_lambda_name(
@@ -923,6 +965,11 @@ impl<'a> LambdaSet<'a> {
     where
         F: Fn(Symbol, &[Layout]) -> bool,
     {
+        if self.has_unwrapped_capture_repr() {
+            // Only one function, that captures one identifier.
+            return ClosureRepresentation::UnwrappedCapture(*self.representation);
+        }
+
         match self.representation {
             Layout::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
@@ -1004,7 +1051,58 @@ impl<'a> LambdaSet<'a> {
 
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
             }
-            _ => ClosureRepresentation::Other(*self.representation),
+            layout => {
+                debug_assert!(self.has_enum_dispatch_repr(),);
+                let enum_repr = match layout {
+                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
+                };
+                ClosureRepresentation::EnumDispatch(enum_repr)
+            }
+        }
+    }
+
+    fn has_unwrapped_capture_repr(&self) -> bool {
+        self.set.len() == 1 && self.set[0].1.len() == 1
+    }
+
+    fn has_enum_dispatch_repr(&self) -> bool {
+        self.set.len() > 1 && self.set.iter().all(|(_, captures)| captures.is_empty())
+    }
+
+    pub fn call_by_name_options(&self) -> ClosureCallOptions<'a> {
+        if self.has_unwrapped_capture_repr() {
+            return ClosureCallOptions::UnwrappedCapture(*self.representation);
+        }
+
+        match self.representation {
+            Layout::Union(union_layout) => {
+                if self.representation == &Layout::VOID {
+                    debug_assert!(self.set.is_empty());
+                    return ClosureCallOptions::Void;
+                }
+                ClosureCallOptions::Union(*union_layout)
+            }
+            Layout::Struct {
+                field_layouts,
+                field_order_hash,
+            } => {
+                debug_assert_eq!(self.set.len(), 1);
+                ClosureCallOptions::Struct {
+                    field_layouts,
+                    field_order_hash: *field_order_hash,
+                }
+            }
+            layout => {
+                debug_assert!(self.has_enum_dispatch_repr());
+                let enum_repr = match layout {
+                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
+                };
+                ClosureCallOptions::EnumDispatch(enum_repr)
+            }
         }
     }
 
@@ -1013,30 +1111,27 @@ impl<'a> LambdaSet<'a> {
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        if let [] = self.set {
-            // TERRIBLE HACK for builting functions
-            argument_layouts
-        } else {
-            match self.representation {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => {
-                    // this function does not have anything in its closure, and the lambda set is a
-                    // singleton, so we pass no extra argument
-                    argument_layouts
-                }
-                Layout::Builtin(Builtin::Bool)
-                | Layout::Builtin(Builtin::Int(IntWidth::I8 | IntWidth::U8)) => {
-                    // we don't pass this along either
-                    argument_layouts
-                }
-                _ => {
-                    let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
-                    arguments.extend(argument_layouts);
-                    arguments.push(Layout::LambdaSet(*self));
+        match self.call_by_name_options() {
+            ClosureCallOptions::Void => argument_layouts,
+            ClosureCallOptions::Struct {
+                field_layouts: &[], ..
+            } => {
+                // this function does not have anything in its closure, and the lambda set is a
+                // singleton, so we pass no extra argument
+                argument_layouts
+            }
+            ClosureCallOptions::Struct { .. }
+            | ClosureCallOptions::Union(_)
+            | ClosureCallOptions::UnwrappedCapture(_) => {
+                let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
+                arguments.extend(argument_layouts);
+                arguments.push(Layout::LambdaSet(*self));
 
-                    arguments.into_bump_slice()
-                }
+                arguments.into_bump_slice()
+            }
+            ClosureCallOptions::EnumDispatch(_) => {
+                // No captures, don't pass this along
+                argument_layouts
             }
         }
     }
@@ -1053,7 +1148,7 @@ impl<'a> LambdaSet<'a> {
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
                 let mut set: Vec<(Symbol, &[Layout])> = Vec::with_capacity_in(lambdas.len(), arena);
-                let mut set_with_variables: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
+                let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
 
                 let mut last_function_symbol = None;
@@ -1090,7 +1185,7 @@ impl<'a> LambdaSet<'a> {
                     has_duplicate_lambda_names = has_duplicate_lambda_names || is_multimorphic;
 
                     set.push((*function_symbol, arguments));
-                    set_with_variables.push((*function_symbol, variables.to_vec()));
+                    set_with_variables.push((function_symbol, variables.as_slice()));
 
                     last_function_symbol = Some(function_symbol);
                 }
@@ -1139,7 +1234,7 @@ impl<'a> LambdaSet<'a> {
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
-                // See also https://github.com/rtfeldman/roc/issues/3163.
+                // See also https://github.com/roc-lang/roc/issues/3163.
                 Ok(LambdaSet {
                     set: &[],
                     representation: arena.alloc(Layout::UNIT),
@@ -1151,70 +1246,23 @@ impl<'a> LambdaSet<'a> {
     fn make_representation(
         arena: &'a Bump,
         subs: &Subs,
-        tags: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
+        tags: std::vec::Vec<(&Symbol, &[Variable])>,
         opt_rec_var: Option<Variable>,
         target_info: TargetInfo,
     ) -> Layout<'a> {
-        if let Some(rec_var) = opt_rec_var {
-            let tags: std::vec::Vec<_> = tags
-                .iter()
-                .map(|(sym, vars)| (sym, vars.as_slice()))
-                .collect();
-            let tags = UnsortedUnionLabels { tags };
-            let mut env = Env {
-                seen: Vec::new_in(arena),
-                target_info,
-                arena,
-                subs,
-            };
+        let union_labels = UnsortedUnionLabels { tags };
+        let mut env = Env {
+            seen: Vec::new_in(arena),
+            target_info,
+            arena,
+            subs,
+        };
 
-            return layout_from_recursive_union(&mut env, rec_var, &tags)
-                .expect("unable to create lambda set representation");
-        }
+        match opt_rec_var {
+            Some(rec_var) => layout_from_recursive_union(&mut env, rec_var, &union_labels)
+                .expect("unable to create lambda set representation"),
 
-        // otherwise, this is a closure with a payload
-        let variant = union_sorted_tags_help(arena, tags, opt_rec_var, subs, target_info);
-
-        use UnionVariant::*;
-        match variant {
-            Never => Layout::VOID,
-            BoolUnion { .. } => Layout::bool(),
-            ByteUnion { .. } => Layout::u8(),
-            Unit | UnitWithArguments => {
-                // no useful information to store
-                Layout::UNIT
-            }
-            Newtype {
-                arguments: layouts, ..
-            } => Layout::struct_no_name_order(layouts.into_bump_slice()),
-            Wrapped(variant) => {
-                use WrappedVariant::*;
-
-                match variant {
-                    NonRecursive {
-                        sorted_tag_layouts: tags,
-                    } => {
-                        debug_assert!(tags.len() > 1);
-
-                        // if the closed-over value is actually a layout, it should be wrapped in a 1-element record
-                        debug_assert!(matches!(tags[0].0, TagOrClosure::Closure(_)));
-
-                        let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
-
-                        for (_, tag_args) in tags.iter() {
-                            tag_arguments.push(&tag_args[0..]);
-                        }
-                        Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
-                    }
-
-                    Recursive { .. }
-                    | NullableUnwrapped { .. }
-                    | NullableWrapped { .. }
-                    | NonNullableUnwrapped { .. } => {
-                        internal_error!("Recursive layouts should be produced in an earlier branch")
-                    }
-                }
-            }
+            None => layout_from_union(&mut env, &union_labels),
         }
     }
 
@@ -1239,7 +1287,7 @@ enum ResolvedLambdaSet {
         OptVariable,
     ),
     /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
-    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    /// compiler. See https://github.com/roc-lang/roc/issues/3163.
     Unbound,
 }
 
@@ -1775,6 +1823,13 @@ impl<'a> Layout<'a> {
                 field_layouts,
                 field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
             }
+        }
+    }
+
+    pub fn runtime_representation(&self) -> Self {
+        match self {
+            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+            other => *other,
         }
     }
 }

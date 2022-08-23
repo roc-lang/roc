@@ -31,10 +31,13 @@ pub mod build;
 mod format;
 pub use format::format;
 
+use crate::build::{BuildFileError, BuildOrdering};
+
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
+pub const CMD_DEV: &str = "dev";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
@@ -55,7 +58,6 @@ pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
-pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -92,11 +94,6 @@ pub fn build_app<'a>() -> Command<'a> {
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
         .help("Store LLVM debug information in the generated program.")
-        .required(false);
-
-    let flag_valgrind = Arg::new(FLAG_VALGRIND)
-        .long(FLAG_VALGRIND)
-        .help("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
@@ -150,7 +147,6 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
             .arg(flag_wasm_stack_size_kb.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
@@ -190,7 +186,6 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -213,7 +208,19 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
-            .arg(flag_valgrind.clone())
+            .arg(roc_file_to_run.clone())
+            .arg(args_for_app.clone())
+        )
+        .subcommand(Command::new(CMD_DEV)
+            .about("`check` a .roc file, and then run it if there were no errors.")
+            .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
@@ -280,7 +287,6 @@ pub fn build_app<'a>() -> Command<'a> {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_precompiled)
-        .arg(flag_valgrind)
         .arg(roc_file_to_run.required(false))
         .arg(args_for_app);
 
@@ -519,7 +525,10 @@ pub fn build(
         .and_then(|s| s.parse::<u32>().ok())
         .map(|x| x * 1024);
 
-    let target_valgrind = matches.is_present(FLAG_VALGRIND);
+    let build_ordering = match config {
+        BuildAndRunIfNoErrors => BuildOrdering::BuildIfChecks,
+        _ => BuildOrdering::AlwaysBuild,
+    };
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -530,9 +539,9 @@ pub fn build(
         link_type,
         linking_strategy,
         precompiled,
-        target_valgrind,
         threading,
         wasm_dev_stack_bytes,
+        build_ordering,
     );
 
     match res_binary_path {
@@ -633,55 +642,13 @@ pub fn build(
                     x
                 }
                 BuildAndRunIfNoErrors => {
-                    if problems.errors == 0 {
-                        if problems.warnings > 0 {
-                            println!(
-                                "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
-                                problems.warnings,
-                                if problems.warnings == 1 {
-                                    "warning"
-                                } else {
-                                    "warnings"
-                                },
-                                total_time.as_millis(),
-                                "─".repeat(80)
-                            );
-                        }
-
-                        let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
-
-                        let mut bytes = std::fs::read(&binary_path).unwrap();
-
-                        let x = roc_run(
-                            arena,
-                            opt_level,
-                            triple,
-                            args,
-                            &mut bytes,
-                            expectations,
-                            interns,
-                        );
-                        std::mem::forget(bytes);
-                        x
-                    } else {
-                        let mut output = format!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
-                            if problems.errors == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.errors,
-                            if problems.errors == 1 {
-                                "error"
-                            } else {
-                                "errors"
-                            },
-                            if problems.warnings == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
+                    debug_assert!(
+                        problems.errors == 0,
+                        "if there are errors, they should have been returned as an error variant"
+                    );
+                    if problems.warnings > 0 {
+                        println!(
+                            "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             problems.warnings,
                             if problems.warnings == 1 {
                                 "warning"
@@ -689,22 +656,74 @@ pub fn build(
                                 "warnings"
                             },
                             total_time.as_millis(),
+                            "─".repeat(80)
                         );
-                        // If you're running "main.roc" then you can just do `roc run`
-                        // to re-run the program.
-                        if filename != DEFAULT_ROC_FILENAME {
-                            output.push(' ');
-                            output.push_str(&filename.to_string_lossy());
-                        }
-
-                        println!("{}\x1B[39m", output);
-
-                        Ok(problems.exit_code())
                     }
+
+                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+
+                    let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                    let x = roc_run(
+                        arena,
+                        opt_level,
+                        triple,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
+                    std::mem::forget(bytes);
+                    x
                 }
             }
         }
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(BuildFileError::ErrorModule {
+            mut module,
+            total_time,
+        }) => {
+            debug_assert!(module.total_problems() > 0);
+
+            let problems = roc_build::program::report_problems_typechecked(&mut module);
+
+            let mut output = format!(
+                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
+                if problems.errors == 0 {
+                    32 // green
+                } else {
+                    33 // yellow
+                },
+                problems.errors,
+                if problems.errors == 1 {
+                    "error"
+                } else {
+                    "errors"
+                },
+                if problems.warnings == 0 {
+                    32 // green
+                } else {
+                    33 // yellow
+                },
+                problems.warnings,
+                if problems.warnings == 1 {
+                    "warning"
+                } else {
+                    "warnings"
+                },
+                total_time.as_millis(),
+            );
+            // If you're running "main.roc" then you can just do `roc run`
+            // to re-run the program.
+            if filename != DEFAULT_ROC_FILENAME {
+                output.push(' ');
+                output.push_str(&filename.to_string_lossy());
+            }
+
+            println!("{}\x1B[39m", output);
+
+            Ok(problems.exit_code())
+        }
+        Err(BuildFileError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
             print!("{}", report);
 
             Ok(1)

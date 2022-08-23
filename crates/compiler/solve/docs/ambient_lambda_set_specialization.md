@@ -32,7 +32,7 @@ f = if True then id1 else id2
 ^ f : a -[[id1, id2]] -> a
 ```
 
-The syntax `-[[id1]]->` can be read as “a function that dispatches to `id1`". Then the arrow `-[[id1, id2]]->` then is “a function that dispatches to `id1`, or `id2`". The tag union `[id1, id2]` can contain payloads to represent the captures of `id1` and `id2`; however, the implications of that are out of scope for this discussion, see [Folkert’s great explanation](https://github.com/rtfeldman/roc/pull/2307#discussion_r777042512) for more information. During compile-time, Roc would attach a run-time examinable tag to the value in each branch of the `f` expression body, representing whether to dispatch to `id1` or `id2`. Whenever `f` is dispatched, that tag is examined to determine exactly which function should be dispatched to. This is “**defunctionalization**”.
+The syntax `-[[id1]]->` can be read as “a function that dispatches to `id1`". Then the arrow `-[[id1, id2]]->` then is “a function that dispatches to `id1`, or `id2`". The tag union `[id1, id2]` can contain payloads to represent the captures of `id1` and `id2`; however, the implications of that are out of scope for this discussion, see [Folkert’s great explanation](https://github.com/roc-lang/roc/pull/2307#discussion_r777042512) for more information. During compile-time, Roc would attach a run-time examinable tag to the value in each branch of the `f` expression body, representing whether to dispatch to `id1` or `id2`. Whenever `f` is dispatched, that tag is examined to determine exactly which function should be dispatched to. This is “**defunctionalization**”.
 
 In the presence of [abilities](https://docs.google.com/document/d/1kUh53p1Du3fWP_jZp-sdqwb5C9DuS43YJwXHg1NzETY/edit), lambda sets get more complicated. Now, I can write something like
 
@@ -100,7 +100,7 @@ The unification trace for the call `f (@Foo {})` proceeds as follows. I use `'tN
   Foo -[[zeroHash] + Foo:hashThunk:1]-> ({} -[[lam1] + Foo:hashThunk:2]-> U64)
 ```
 
-Now that the specialization lambdas’ type variables point to concrete types, we can resolve the concrete lambdas of `Foo:hashThunk:1` and `Foo:hashThunk:2`. Cool! Let’s do that. We know that 
+Now that the specialization lambdas’ type variables point to concrete types, we can resolve the concrete lambdas of `Foo:hashThunk:1` and `Foo:hashThunk:2`. Cool! Let’s do that. We know that
 
 ```
 hashThunk = \@Foo {} -> \{} -> 1
@@ -205,46 +205,46 @@ Okay, so first we’ll enumerate some terminology, and the exact algorithm. Then
 ### Some definitions
 
 - **The region invariant.** Previously we discussed the “region” of a lambda set in a specialization function definition. The way regions are assigned in the compiler follows a very specific ordering and holds a invariant we’ll call the “region invariant”. First, let’s define a procedure for creating function types and assigning regions:
-    
+
     ```
-    Type = \region -> 
+    Type = \region ->
       (Type_atom, region)
     | Type_function region
-    
+
     Type_function = \region ->
     	let left_type, new_region = Type (region + 1)
       let right_type, new_region = Type (new_region)
       let func_type = left_type -[Lambda region]-> right_type
       (func_type, new_region)
     ```
-    
+
     This procedure would create functions that look like the trees(abbreviating `L=Lambda`, `a=atom` below)
-    
+
     ```
      -[L 1]->
     a         a
-    
+
     ===
-    
+
               -[L 1]->
      -[L 2]->          -[L 3]->
     a        a        a        a
-    
+
     ===
                                -[L 1]->
               -[L 2]->                            -[L 5]->
      -[L 3]->          -[L 4]->          -[L 6]->          -[L 7]->
     a        a        a        a        a        a        a        a
     ```
-    
+
     The invariant is this: for a region `r`, the only functions enclosing `r` have a region number that is less than `r`. Moreover, every region `r' < r`, either the function at `r'` encloses `r`, or is disjoint from `r`.
-    
+
 - **Ambient functions.** For a given lambda set at region `r`, any function that encloses `r` is called an **ambient function** of `r`. The function directly at region `r` is called the **directly ambient function**.
-    
+
     For example, the functions identified by `L 4`, `L 2`, and `L 1` in the last example tree above are all ambient functions of the function identified by `L 4`.
-    
-    The region invariant means that the only functions that are ambient of a region `r` are those identified by regions `< r`. 
-    
+
+    The region invariant means that the only functions that are ambient of a region `r` are those identified by regions `< r`.
+
 - `uls_of_var`. A look aside table of the unspecialized lambda sets (uls) depending on a variable. For example, in `a -[[] + a:f:1]-> (b -[[] + a:f:2]-> {})`, there would be a mapping of `a => { [[] + a:f:1]; [[] + a:f:2] }`. When `a` gets instantiated with a concrete type, we know that these lambda sets are ready to be resolved.
 
 ### Explicit Description
@@ -440,13 +440,13 @@ F has f : a, b -> ({} -> ({} -> {})) | a has F, b has G
 #     ^ a, b -[[] + a:f:1]-> ({} -[[] + a:f:2]-> ({} -[[] + a:f:3]-> {})) | a has F, b has G
 G has g : b -> ({} -> {}) | b has G
 #     ^ b -[[] + b:g:1]-> ({} -[[] + b:g:2]-> {}) | b has G
-                                                        
+
 Fo := {}
 f = \@Fo {}, b -> \{} -> g b
 #^  Fo, b -[[Fo#f]]-> ({} -[[lamF b]]-> ({} -[[] + b:g:2]]-> {})) | b has G
 #   instantiation with a=Fo of
 #   a, b -[[] + a:f:1]-> ({} -[[] + a:f:2]-> ({} -[[] + a:f:3]-> {})) | a has F, b has G
-                                                        
+
 Go := {}
 g = \@Go {} -> \{} -> {}
 #^  {} -[[Go#g]]-> ({} -[[lamG]]-> {})
@@ -670,7 +670,7 @@ You may have observed that step 1 and step 2 of the algorithm are somewhat overk
 This optimization is correct with a change to the region numbering scheme:
 
 ```python
-Type = \region -> 
+Type = \region ->
   (Type_atom, region)
 | Type_function region
 

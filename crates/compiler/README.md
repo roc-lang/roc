@@ -172,7 +172,7 @@ ask the compiler to emit debug information during various stages of compilation.
 
 There are some goals for more sophisticated debugging tools:
 
-- A nicer unification debugger, see https://github.com/rtfeldman/roc/issues/2486.
+- A nicer unification debugger, see https://github.com/roc-lang/roc/issues/2486.
   Any interest in helping out here is greatly appreciated.
 
 ### General Tips

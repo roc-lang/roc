@@ -719,9 +719,10 @@ impl<'a> Storage<'a> {
             ) => {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
+                // Note: load_symbols will not destroy the value, so we can use it again later.
+                // It will leave a Popped marker in the VM stack model in CodeBuilder
                 self.load_symbols(code_builder, &[from_symbol]);
                 code_builder.set_local(*to_local_id);
-                self.symbol_storage_map.insert(from_symbol, to.clone());
             }
 
             (

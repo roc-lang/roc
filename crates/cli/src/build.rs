@@ -5,7 +5,10 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
-use roc_load::{EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
+use roc_load::{
+    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
+    LoadingProblem, Threading,
+};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
@@ -35,6 +38,23 @@ pub struct BuiltFile {
     pub interns: Interns,
 }
 
+pub enum BuildOrdering {
+    /// Run up through typechecking first; continue building iff that is successful.
+    BuildIfChecks,
+    /// Always build the Roc binary, even if there are type errors.
+    AlwaysBuild,
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum BuildFileError<'a> {
+    LoadingProblem(LoadingProblem<'a>),
+    ErrorModule {
+        module: LoadedModule,
+        total_time: Duration,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
@@ -46,29 +66,46 @@ pub fn build_file<'a>(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     precompiled: bool,
-    target_valgrind: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
-) -> Result<BuiltFile, LoadingProblem<'a>> {
+    order: BuildOrdering,
+) -> Result<BuiltFile, BuildFileError<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
+    let exec_mode = match order {
+        BuildOrdering::BuildIfChecks => ExecutionMode::ExecutableIfCheck,
+        BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
+    };
+
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         threading,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode,
     };
-    let loaded = roc_load::load_and_monomorphize(
+    let load_result = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
         subs_by_module,
         load_config,
-    )?;
+    );
+    let loaded = match load_result {
+        Ok(loaded) => loaded,
+        Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
+            return Err(BuildFileError::LoadingProblem(problem))
+        }
+        Err(LoadMonomorphizedError::ErrorModule(module)) => {
+            return Err(BuildFileError::ErrorModule {
+                module,
+                total_time: compilation_start.elapsed(),
+            })
+        }
+    };
 
     use target_lexicon::Architecture;
     let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
@@ -152,7 +189,6 @@ pub fn build_file<'a>(
         target,
         exposed_values,
         exposed_closure_types,
-        target_valgrind,
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
@@ -161,9 +197,7 @@ pub fn build_file<'a>(
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
         .tempfile()
-        .map_err(|err| {
-            todo!("TODO Gracefully handle tempfile creation error {:?}", err);
-        })?;
+        .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
     let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
@@ -329,12 +363,12 @@ pub fn build_file<'a>(
                     link_type
                 )
                 .map_err(|_| {
-                    todo!("gracefully handle `ld` failing to spawn.");
+                    todo!("gracefully handle `ld` failing to spawn.")
                 })?;
 
-            let exit_status = child.wait().map_err(|_| {
-                todo!("gracefully handle error after `ld` spawned");
-            })?;
+            let exit_status = child
+                .wait()
+                .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
 
             if exit_status.success() {
                 problems
@@ -377,7 +411,6 @@ fn spawn_rebuild_thread(
     target: &Triple,
     exported_symbols: Vec<String>,
     exported_closure_types: Vec<String>,
-    target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -395,7 +428,6 @@ fn spawn_rebuild_thread(
                         &thread_local_target,
                         host_input_path.as_path(),
                         None,
-                        target_valgrind,
                     );
 
                     preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
@@ -408,7 +440,6 @@ fn spawn_rebuild_thread(
                         preprocessed_host_path.as_path(),
                         exported_symbols,
                         exported_closure_types,
-                        target_valgrind,
                     );
                 }
                 LinkingStrategy::Legacy => {
@@ -417,7 +448,6 @@ fn spawn_rebuild_thread(
                         &thread_local_target,
                         host_input_path.as_path(),
                         None,
-                        target_valgrind,
                     );
                 }
             }

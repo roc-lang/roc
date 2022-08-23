@@ -9,6 +9,8 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
+use roc_std::RocList;
+#[allow(unused_imports)]
 use roc_std::RocStr;
 
 #[test]
@@ -1232,8 +1234,8 @@ fn return_wrapped_closure() {
             main = foo
             "#
         ),
-        [5],
-        [i64; 1]
+        5,
+        i64
     );
 }
 
@@ -2643,12 +2645,12 @@ fn pattern_match_unit_tag() {
     );
 }
 
-// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+// see for why this is disabled on wasm32 https://github.com/roc-lang/roc/issues/1687
 #[cfg(not(feature = "gen-llvm-wasm"))]
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mirror_llvm_alignment_padding() {
-    // see https://github.com/rtfeldman/roc/issues/1569
+    // see https://github.com/roc-lang/roc/issues/1569
     assert_evals_to!(
         indoc!(
             r#"
@@ -2781,7 +2783,7 @@ fn lambda_set_enum_byte_byte() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_until() {
-    // see https://github.com/rtfeldman/roc/issues/1576
+    // see https://github.com/roc-lang/roc/issues/1576
     assert_evals_to!(
         indoc!(
             r#"
@@ -2807,7 +2809,7 @@ fn list_walk_until() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_with_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2835,7 +2837,7 @@ fn int_literal_not_specialized_with_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_no_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2862,7 +2864,7 @@ fn int_literal_not_specialized_no_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unresolved_tvar_when_capture_is_unused() {
-    // see https://github.com/rtfeldman/roc/issues/1585
+    // see https://github.com/roc-lang/roc/issues/1585
     assert_evals_to!(
         indoc!(
             r#"
@@ -2908,7 +2910,7 @@ fn value_not_exposed_hits_panic() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2934,7 +2936,7 @@ fn mix_function_and_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure_level_of_indirection() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2960,7 +2962,7 @@ fn mix_function_and_closure_level_of_indirection() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     // the distinction is actually important, dropping that info means some functions just get
     // skipped
     assert_evals_to!(
@@ -3422,7 +3424,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_conslist() {
-    // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
+    // this had an RC problem, https://github.com/roc-lang/roc/issues/2968
     assert_evals_to!(
         indoc!(
             r#"
@@ -3724,7 +3726,7 @@ fn recursive_lambda_set_issue_3444() {
         ),
         RocStr::from("c"),
         RocStr
-    );
+    )
 }
 
 #[test]
@@ -3835,6 +3837,225 @@ fn compose_recursive_lambda_set_productive_inferred() {
             "#
         ),
         RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f : {} -> List a
+            f = \_ -> []
+
+            main : List U8
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::<u8>::from_slice(&[]),
+        RocList<u8>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f = \_ -> []
+
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<std::convert::Infallible>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_after_def_ordering() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = \{} -> getX {}
+
+            getX = \{} -> x
+
+            x = "abc"
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            z = "abc"
+
+            getX = \{} -> getY {}
+            getY = \{} -> getZ {}
+            getZ = \{} -> z
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain_with_multiple_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = "h"
+            x = "x"
+            y = "y"
+            z = "z"
+
+            getX = \{} -> Str.concat x (getY {})
+            getY = \{} -> Str.concat y (getZ {})
+            getZ = \{} -> z
+
+            getH = \{} -> Str.concat h (getX {})
+
+            getH {}
+            "#
+        ),
+        RocStr::from("hxyz"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_from_outer_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            innerScope =
+                h = \{} -> getX {}
+                h {}
+
+            innerScope
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mutually_recursive_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Bool
+            x = True
+
+            y : Bool
+            y = False
+
+            a = "foo"
+            b = "bar"
+
+            foo = \{} -> if x then a else bar {}
+            bar = \{} -> if y then b else foo {}
+
+            bar {}
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn monomorphization_sees_polymorphic_recursion() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            foo : a, Bool -> Str
+            foo = \in, b -> if b then "done" else bar in
+
+            bar = \_ -> foo {} True
+
+            foo "" False
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn int_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> I32 
+            manyAux = \_ ->
+                output = \_ -> 42
+
+                output {}
+
+            when manyAux {} is
+                _ -> "done"
+            "#
+        ),
+        RocStr::from("done"),
         RocStr
     );
 }

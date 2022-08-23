@@ -4,20 +4,17 @@ procedure Num.19 (#Attr.2, #Attr.3):
 
 procedure Test.1 (Test.2):
     let Test.9 : U32 = 0i64;
-    let Test.16 : {U32} = Struct {Test.2};
-    let Test.8 : U32 = CallByName Test.3 Test.9 Test.16;
+    let Test.8 : U32 = CallByName Test.3 Test.9 Test.2;
     ret Test.8;
 
 procedure Test.3 (Test.18, Test.19):
-    joinpoint Test.10 Test.4 #Attr.12:
-        let Test.2 : U32 = StructAtIndex 0 #Attr.12;
+    joinpoint Test.10 Test.4 Test.2:
         let Test.14 : Int1 = true;
         if Test.14 then
             ret Test.4;
         else
             let Test.12 : U32 = CallByName Num.19 Test.4 Test.2;
-            let Test.13 : {U32} = Struct {Test.2};
-            jump Test.10 Test.12 Test.13;
+            jump Test.10 Test.12 Test.2;
     in
     jump Test.10 Test.18 Test.19;
 

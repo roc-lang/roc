@@ -1114,18 +1114,35 @@ fn gen_mul_dec() {
         i128
     );
 }
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-fn gen_mul_i64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    2 * 4 * 6
-                "#
-        ),
-        48,
-        i64
-    );
+fn gen_signed_mul_quadword_and_lower() {
+    assert_evals_to!("2i64 * 4 * 6", 48, i64);
+    assert_evals_to!("2i32 * 4 * 6", 48, i32);
+    assert_evals_to!("2i16 * 4 * 6", 48, i16);
+    assert_evals_to!("2i8 * 4 * 6", 48, i8);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_unsigned_mul_quadword_and_lower() {
+    assert_evals_to!("2u64 * 4 * 6", 48, u64);
+    assert_evals_to!("2u32 * 4 * 6", 48, u32);
+    assert_evals_to!("2u16 * 4 * 6", 48, u16);
+    assert_evals_to!("2u8 * 4 * 6", 48, u8);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_mul_f64() {
+    assert_evals_to!("2f64 * 4 * 6", 48.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_mul_f32() {
+    assert_evals_to!("2f32 * 4 * 6", 48.0, f32);
 }
 
 #[test]
@@ -2091,9 +2108,9 @@ fn float_mul_checked() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn shift_left_by() {
-    assert_evals_to!("Num.shiftLeftBy 0 0b0000_0001", 0b0000_0001, i64);
-    assert_evals_to!("Num.shiftLeftBy 1 0b0000_0001", 0b0000_0010, i64);
-    assert_evals_to!("Num.shiftLeftBy 2 0b0000_0011", 0b0000_1100, i64);
+    assert_evals_to!("Num.shiftLeftBy 0b0000_0001 0", 0b0000_0001, i64);
+    assert_evals_to!("Num.shiftLeftBy 0b0000_0001 1", 0b0000_0010, i64);
+    assert_evals_to!("Num.shiftLeftBy 0b0000_0011 2", 0b0000_1100, i64);
 }
 
 #[test]
@@ -2105,43 +2122,43 @@ fn shift_right_by() {
 
     // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
     assert_evals_to!(
-        "Num.shiftRightBy 2 (Num.toI8 0b1100_0000u8)",
+        "Num.shiftRightBy (Num.toI8 0b1100_0000u8) 2",
         0b1111_0000u8 as i8,
         i8
     );
-    assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
-    assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
-    assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
-    assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 0b0100_0000i8 2", 0b0001_0000i8, i8);
+    assert_evals_to!("Num.shiftRightBy 0b1110_0000u8 1", 0b1111_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 0b1100_0000u8 2", 0b1111_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 0b0100_0000u8 12", 0b0000_0000u8, u8);
 
     // LLVM in release mode returns 0 instead of -1 for some reason
     if !is_llvm_release_mode {
-        assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
+        assert_evals_to!("Num.shiftRightBy 0b1000_0000u8 12", 0b1111_1111u8, u8);
     }
-    assert_evals_to!("Num.shiftRightBy 0 12", 12, i64);
-    assert_evals_to!("Num.shiftRightBy 1 12", 6, i64);
-    assert_evals_to!("Num.shiftRightBy 1 -12", -6, i64);
-    assert_evals_to!("Num.shiftRightBy 8 12", 0, i64);
-    assert_evals_to!("Num.shiftRightBy 8 -12", -1, i64);
-    assert_evals_to!("Num.shiftRightBy -1 12", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 12 0", 12, i64);
+    assert_evals_to!("Num.shiftRightBy 12 1", 6, i64);
+    assert_evals_to!("Num.shiftRightBy -12 1", -6, i64);
+    assert_evals_to!("Num.shiftRightBy 12 8", 0, i64);
+    assert_evals_to!("Num.shiftRightBy -12 8", -1, i64);
+    assert_evals_to!("Num.shiftRightBy 12 -1", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
-    assert_evals_to!("Num.shiftRightBy 1 0", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 0 1", 0, i64);
 
-    assert_evals_to!("Num.shiftRightBy 0 12i32", 12, i32);
-    assert_evals_to!("Num.shiftRightBy 1 12i32", 6, i32);
-    assert_evals_to!("Num.shiftRightBy 1 -12i32", -6, i32);
-    assert_evals_to!("Num.shiftRightBy 8 12i32", 0, i32);
-    assert_evals_to!("Num.shiftRightBy 8 -12i32", -1, i32);
+    assert_evals_to!("Num.shiftRightBy 12i32 0", 12, i32);
+    assert_evals_to!("Num.shiftRightBy 12i32 1", 6, i32);
+    assert_evals_to!("Num.shiftRightBy -12i32 1", -6, i32);
+    assert_evals_to!("Num.shiftRightBy 12i32 8", 0, i32);
+    assert_evals_to!("Num.shiftRightBy -12i32 8", -1, i32);
 
-    assert_evals_to!("Num.shiftRightBy 0 12i8", 12, i8);
-    assert_evals_to!("Num.shiftRightBy 1 12i8", 6, i8);
-    assert_evals_to!("Num.shiftRightBy 1 -12i8", -6, i8);
-    assert_evals_to!("Num.shiftRightBy 8 12i8", 0, i8);
+    assert_evals_to!("Num.shiftRightBy 12i8 0", 12, i8);
+    assert_evals_to!("Num.shiftRightBy 12i8 1", 6, i8);
+    assert_evals_to!("Num.shiftRightBy -12i8 1", -6, i8);
+    assert_evals_to!("Num.shiftRightBy 12i8 8", 0, i8);
 
     if !is_llvm_release_mode {
-        assert_evals_to!("Num.shiftRightBy -1 0", 0, i64);
-        assert_evals_to!("Num.shiftRightBy -1 -12", -1, i64);
-        assert_evals_to!("Num.shiftRightBy 8 -12i8", -1, i8);
+        assert_evals_to!("Num.shiftRightBy 0 -1", 0, i64);
+        assert_evals_to!("Num.shiftRightBy -12 -1", -1, i64);
+        assert_evals_to!("Num.shiftRightBy -12i8 8", -1, i8);
     }
 }
 
@@ -2150,14 +2167,14 @@ fn shift_right_by() {
 fn shift_right_zf_by() {
     // Logical Right Shift
     assert_evals_to!(
-        "Num.shiftRightZfBy 2 (Num.toI8 0b1100_0000u8)",
+        "Num.shiftRightZfBy (Num.toI8 0b1100_0000u8) 2",
         0b0011_0000i8,
         i8
     );
-    assert_evals_to!("Num.shiftRightZfBy 2 0b1100_0000u8", 0b0011_0000u8, u8);
-    assert_evals_to!("Num.shiftRightZfBy 1 0b0000_0010u8", 0b0000_0001u8, u8);
-    assert_evals_to!("Num.shiftRightZfBy 2 0b0000_1100u8", 0b0000_0011u8, u8);
-    assert_evals_to!("Num.shiftRightZfBy 12 0b1000_0000u8", 0b0000_0000u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b1100_0000u8 2", 0b0011_0000u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b0000_0010u8 1", 0b0000_0001u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b0000_1100u8 2", 0b0000_0011u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b1000_0000u8 12", 0b0000_0000u8, u8);
 }
 
 #[test]
@@ -3567,7 +3584,7 @@ fn to_float_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2696
+// https://github.com/roc-lang/roc/issues/2696
 fn upcast_of_int_is_zext() {
     assert_evals_to!(
         indoc!(
@@ -3582,7 +3599,7 @@ fn upcast_of_int_is_zext() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2696
+// https://github.com/roc-lang/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
         indoc!(

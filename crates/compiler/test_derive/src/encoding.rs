@@ -7,7 +7,7 @@
 use insta::assert_snapshot;
 
 use crate::{
-    test_hash_eq, test_hash_neq,
+    test_key_eq, test_key_neq,
     util::{check_immediate, derive_test},
     v,
 };
@@ -17,7 +17,7 @@ use roc_types::subs::Variable;
 
 // {{{ hash tests
 
-test_hash_eq! {
+test_key_eq! {
     ToEncoder,
 
     same_record:
@@ -70,7 +70,7 @@ test_hash_eq! {
         v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 }
 
-test_hash_neq! {
+test_key_neq! {
     ToEncoder,
 
     different_record_fields:
@@ -174,10 +174,7 @@ fn one_field_record() {
               \#Derived.bytes, #Derived.fmt ->
                 Encode.appendWith
                   #Derived.bytes
-                  (Encode.record
-                    [
-                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-                    ])
+                  (Encode.record [{ value: Encode.toEncoder #Derived.rcd.a, key: "a" }])
                   #Derived.fmt
         "###
         )
@@ -202,8 +199,8 @@ fn two_field_record() {
                   #Derived.bytes
                   (Encode.record
                     [
-                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-                      { value: Encode.toEncoder #Derived.rcd.b, key: "b", },
+                      { value: Encode.toEncoder #Derived.rcd.a, key: "a" },
+                      { value: Encode.toEncoder #Derived.rcd.b, key: "b" },
                     ])
                   #Derived.fmt
         "###

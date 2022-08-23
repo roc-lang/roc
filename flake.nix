@@ -2,16 +2,11 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-22.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # using an overlay allows for quick updates after zig releases
-    zig = {
-      url = "github:roarkanize/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # to easily make configs for multiple architectures
@@ -23,21 +18,19 @@
     };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, nixgl }:
-    let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
-    in
-    flake-utils.lib.eachSystem supportedSystems (system:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
+    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
+    in flake-utils.lib.eachSystem supportedSystems (system:
       let
-        overlays = [ (import rust-overlay) ] ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else []);
-        pkgs = import nixpkgs {
-          inherit system overlays;
-        };
+        overlays = [ (import rust-overlay) ]
+          ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        pkgs = import nixpkgs { inherit system overlays; };
         llvmPkgs = pkgs.llvmPackages_13;
 
         # get current working directory
         cwd = builtins.toString ./.;
-        rust = pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
+        rust =
+          pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
 
         linuxInputs = with pkgs;
           lib.optionals stdenv.isLinux [
@@ -55,7 +48,8 @@
           ];
 
         darwinInputs = with pkgs;
-          lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+          lib.optionals stdenv.isDarwin
+          (with pkgs.darwin.apple_sdk.frameworks; [
             AppKit
             CoreFoundation
             CoreServices
@@ -64,8 +58,6 @@
             Metal
             Security
           ]);
-
-        zig-toolchain = zig.packages.${system}."0.9.1";
 
         # For debugging LLVM IR
         debugir = pkgs.stdenv.mkDerivation {
@@ -99,7 +91,7 @@
           llvmPkgs.clang
           libxkbcommon
           pkg-config
-          zig-toolchain # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi
@@ -108,28 +100,33 @@
           zlib
           libiconv
 
-          # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
+          # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
           debugir
           rust
           rust-bindgen
         ]);
-      in
-      {
+      in {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs ++  (if system == "x86_64-linux" then [ pkgs.nixgl.nixVulkanIntel ] else []);
+          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs
+            ++ (if system == "x86_64-linux" then
+              [ pkgs.nixgl.nixVulkanIntel ]
+            else
+              [ ]);
 
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           # nix does not store libs in /usr/lib or /lib
-          NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
+          NIX_GLIBC_PATH =
+            if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib] ++ linuxInputs);
-          NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
+            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
+              ++ linuxInputs);
+          NIXPKGS_ALLOW_UNFREE =
+            1; # to run the editor with NVIDIA's closed source drivers
         };
 
         formatter = pkgs.nixpkgs-fmt;
-      }
-    );
+      });
 }

@@ -3929,7 +3929,7 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
 pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let jmp_buf = get_sjlj_buffer(env);
     if cfg!(target_arch = "aarch64") {
-        // Due to https://github.com/rtfeldman/roc/issues/2965, we use a setjmp we linked in from Zig
+        // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
@@ -6459,11 +6459,11 @@ fn to_cc_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout {
-        Layout::Builtin(builtin) => to_cc_type_builtin(env, builtin),
-        _ => {
+    match layout.runtime_representation() {
+        Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
+        layout => {
             // TODO this is almost certainly incorrect for bigger structs
-            basic_type_from_layout(env, layout)
+            basic_type_from_layout(env, &layout)
         }
     }
 }
@@ -7087,22 +7087,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
-        NumShiftLeftBy => {
-            // NOTE arguments are flipped;
-            // we write `assert_eq!(0b0000_0001 << 0, 0b0000_0001);`
-            // as `Num.shiftLeftBy 0 0b0000_0001
-            bd.build_left_shift(rhs, lhs, "int_shift_left").into()
-        }
-        NumShiftRightBy => {
-            // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, true, "int_shift_right")
-                .into()
-        }
-        NumShiftRightZfBy => {
-            // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, false, "int_shift_right_zf")
-                .into()
-        }
+        NumShiftLeftBy => bd.build_left_shift(lhs, rhs, "int_shift_left").into(),
+        NumShiftRightBy => bd
+            .build_right_shift(lhs, rhs, true, "int_shift_right")
+            .into(),
+        NumShiftRightZfBy => bd
+            .build_right_shift(lhs, rhs, false, "int_shift_right_zf")
+            .into(),
 
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);

@@ -6,7 +6,7 @@ authors = ["The Roc Contributors"]
 edition = "2021"
 
 [dependencies]
-pulldown-cmark = { version = "0.9.1", default-features = false }
+pulldown-cmark = { version = "0.9.2", default-features = false }
 roc_ast = { path = "../ast" }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }

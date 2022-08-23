@@ -361,7 +361,7 @@ impl<'ctx> RocUnion<'ctx> {
         // set the tag id
         //
         // NOTE: setting the tag id initially happened before writing the data into it.
-        // That turned out to expose UB. More info at https://github.com/rtfeldman/roc/issues/3554
+        // That turned out to expose UB. More info at https://github.com/roc-lang/roc/issues/3554
         if let Some(tag_id) = tag_id {
             let tag_id_type = match self.tag_type.unwrap() {
                 TagType::I8 => env.context.i8_type(),

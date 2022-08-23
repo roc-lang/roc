@@ -126,7 +126,7 @@ build-nightly-release:
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound serde --release
+    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
     RUN ./ci/package_release.sh roc_linux_x86_64.tar.gz
     SAVE ARTIFACT ./roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 

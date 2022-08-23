@@ -20,14 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: "trunk"
+          ref: "main"
           clean: "true"
 
       - name: Earthly version
         run: earthly --version
 
-      - name: on trunk; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder
+      - name: on main; prepare a self-contained benchmark folder
+        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder
 
       - uses: actions/checkout@v2
         with:

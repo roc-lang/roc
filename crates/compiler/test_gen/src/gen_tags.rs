@@ -1154,7 +1154,7 @@ fn applied_tag_function_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "This test has incorrect refcounts: https://github.com/rtfeldman/roc/issues/2968"]
+#[ignore = "This test has incorrect refcounts: https://github.com/roc-lang/roc/issues/2968"]
 fn applied_tag_function_linked_list() {
     assert_evals_to!(
         indoc!(
@@ -1469,7 +1469,7 @@ fn issue_2458() {
 }
 
 #[test]
-#[ignore = "See https://github.com/rtfeldman/roc/issues/2466"]
+#[ignore = "See https://github.com/roc-lang/roc/issues/2466"]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2458_deep_recursion_var() {
     assert_evals_to!(
@@ -1921,10 +1921,10 @@ fn issue_2165_recursive_tag_destructure() {
         indoc!(
             r#"
             SomeTag : [ Ctor { rec : List SomeTag } ]
-            
+
             x : SomeTag
             x = Ctor { rec: [] }
-            
+
             when x is
               Ctor { rec } -> Num.toStr (List.len rec)
             "#
@@ -1932,4 +1932,26 @@ fn issue_2165_recursive_tag_destructure() {
         RocStr::from("0"),
         RocStr
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn tag_union_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> [ Loop, Done ]
+            manyAux = \_ ->
+                output = Done
+
+                output
+
+            when manyAux {} is
+                Loop -> "loop"
+                Done -> "done"
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
 }

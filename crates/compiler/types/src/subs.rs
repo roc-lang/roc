@@ -66,6 +66,7 @@ struct ErrorTypeState {
     recursive_tag_unions_seen: Vec<Variable>,
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
     utable: u64,
@@ -99,10 +100,12 @@ impl SubsHeader {
     }
 
     fn to_array(self) -> [u8; std::mem::size_of::<Self>()] {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(self) }
     }
 
     fn from_array(array: [u8; std::mem::size_of::<Self>()]) -> Self {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(array) }
     }
 }
@@ -2258,13 +2261,13 @@ pub struct LambdaSet {
     ///
     /// ```text
     /// XEffect : A -> B
-    ///                                                   
+    ///
     /// after : ({} -> XEffect) -> XEffect
     /// after =
     ///     \cont ->
     ///         f = \A -[`f (typeof cont)]-> when cont {} is A -> B
     ///         f
-    ///                                                   
+    ///
     /// nestForever : {} -> XEffect
     /// nestForever = \{} -[`nestForever]-> after nestForever
     /// ^^^^^^^^^^^ {} -[`nestForever]-> A -[`f ({} -[`nestForever]-> A -[`f ...]-> B)]-> B
@@ -2481,6 +2484,26 @@ pub trait Label: Sized + Clone {
 
 pub type UnionTags = UnionLabels<TagName>;
 pub type UnionLambdas = UnionLabels<Symbol>;
+
+impl UnionTags {
+    pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
+        let ok_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
+
+            ("Ok".into(), variables_slice)
+        };
+
+        let err_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
+
+            ("Err".into(), variables_slice)
+        };
+
+        UnionTags::insert_slices_into_subs(subs, [err_tuple, ok_tuple])
+    }
+}
 
 impl Label for TagName {
     fn index_subs(subs: &Subs, idx: SubsIndex<Self>) -> &Self {
@@ -2995,7 +3018,7 @@ impl RecordFields {
         (it, ext)
     }
 
-    /// Get a sorted iterator over the fields of this record type
+    /// get a sorted iterator over the fields of this record type
     ///
     /// Implementation: When the record has an `ext` variable that is the empty record, then
     /// we read the (assumed sorted) fields directly from Subs. Otherwise we have to chase the

@@ -1,8 +1,9 @@
 #![allow(clippy::manual_map)]
 
 use crate::layout::{
-    Builtin, CapturesNiche, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache,
-    LayoutProblem, RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
+    Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName,
+    LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, TagIdIntType, UnionLayout,
+    WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -343,10 +344,16 @@ impl<'a> Proc<'a> {
         D::Doc: Clone,
         A: Clone,
     {
-        let args_doc = self
-            .args
-            .iter()
-            .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
+        let args_doc = self.args.iter().map(|(layout, symbol)| {
+            let arg_doc = symbol_to_doc(alloc, *symbol);
+            if pretty_print_ir_symbols() {
+                arg_doc
+                    .append(alloc.reflow(": "))
+                    .append(layout.to_doc(alloc, Parens::NotNeeded))
+            } else {
+                arg_doc
+            }
+        });
 
         if pretty_print_ir_symbols() {
             alloc
@@ -621,6 +628,10 @@ impl<'a> Suspended<'a> {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.symbol_or_lambdas.is_empty()
+    }
+
     fn specialization(
         &mut self,
         subs: &mut Subs,
@@ -654,8 +665,22 @@ enum PendingSpecializations<'a> {
     /// that we can give specializations we need to modules higher up in the dependency chain, so
     /// that they can start making specializations too
     Finding(Suspended<'a>),
-    /// We are making specializations. If any new one comes up, we can just make it immediately
-    Making,
+    /// We are making specializations.
+    /// If any new one comes up while specializing a body, we can do one of two things:
+    ///   - if the new specialization is for a symbol that is not in the current stack of symbols
+    ///     being specialized, make it immediately
+    ///   - if it is, we must suspend the specialization, and we'll do it once the stack is clear
+    ///     again.
+    Making(Suspended<'a>),
+}
+
+impl<'a> PendingSpecializations<'a> {
+    fn is_empty(&self) -> bool {
+        match self {
+            PendingSpecializations::Finding(suspended)
+            | PendingSpecializations::Making(suspended) => suspended.is_empty(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -940,6 +965,8 @@ pub struct Procs<'a> {
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
+    /// The current set of functions under specialization.
+    pub specialization_stack: Vec<'a, Symbol>,
 }
 
 impl<'a> Procs<'a> {
@@ -954,7 +981,42 @@ impl<'a> Procs<'a> {
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
+            specialization_stack: Vec::with_capacity_in(16, arena),
         }
+    }
+
+    fn push_active_specialization(&mut self, specialization: Symbol) {
+        self.specialization_stack.push(specialization);
+    }
+
+    fn pop_active_specialization(&mut self, specialization: Symbol) {
+        let popped = self
+            .specialization_stack
+            .pop()
+            .expect("specialization stack is empty");
+        debug_assert_eq!(
+            popped, specialization,
+            "incorrect popped specialization: passed {:?}, but was {:?}",
+            specialization, popped
+        );
+    }
+
+    /// If we need to specialize a function that is already in the stack, we must wait to do so
+    /// until that function is popped off. That's because the type environment will be configured
+    /// for the existing specialization on the stack.
+    ///
+    /// For example, in
+    ///
+    ///   foo = \val, b -> if b then "done" else bar val
+    ///   bar = \_ -> foo {} True
+    ///   foo "" False
+    ///
+    /// During the specialization of `foo : Str False -> Str`, we specialize `bar : Str -> Str`,
+    /// which in turn needs a specialization of `foo : {} False -> Str`. However, we can't
+    /// specialize both `foo : Str False -> Str` and `foo : {} False -> Str` at the same time, so
+    /// the latter specialization must be deferred.
+    fn symbol_needs_suspended_specialization(&self, specialization: Symbol) -> bool {
+        self.specialization_stack.contains(&specialization)
     }
 }
 
@@ -1045,8 +1107,14 @@ impl<'a> Procs<'a> {
                         debug_assert!(layout.arguments.is_empty());
                     }
 
-                    match &mut self.pending_specializations {
-                        PendingSpecializations::Finding(suspended) => {
+                    let needs_suspended_specialization =
+                        self.symbol_needs_suspended_specialization(name.name());
+                    match (
+                        &mut self.pending_specializations,
+                        needs_suspended_specialization,
+                    ) {
+                        (PendingSpecializations::Finding(suspended), _)
+                        | (PendingSpecializations::Making(suspended), true) => {
                             // register the pending specialization, so this gets code genned later
                             suspended.specialization(env.subs, name, layout, annotation);
 
@@ -1080,7 +1148,7 @@ impl<'a> Procs<'a> {
                                 }
                             }
                         }
-                        PendingSpecializations::Making => {
+                        (PendingSpecializations::Making(_), false) => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
@@ -1178,7 +1246,8 @@ impl<'a> Procs<'a> {
         }
 
         // If this is an imported symbol, let its home module make this specialization
-        if env.is_imported_symbol(name.name()) {
+        if env.is_imported_symbol(name.name()) || env.is_unloaded_derived_symbol(name.name(), self)
+        {
             add_needed_external(self, env, fn_var, name);
             return;
         }
@@ -1190,11 +1259,17 @@ impl<'a> Procs<'a> {
 
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
-        match &mut self.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization =
+            self.symbol_needs_suspended_specialization(name.name());
+        match (
+            &mut self.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 suspended.specialization(env.subs, name, layout, fn_var);
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let symbol = name;
 
                 let partial_proc_id = match self.partial_procs.symbol_to_id(symbol.name()) {
@@ -1207,7 +1282,7 @@ impl<'a> Procs<'a> {
                 // (We had a bug around this before this system existed!)
                 self.specialized.mark_in_progress(symbol.name(), layout);
 
-                // See https://github.com/rtfeldman/roc/issues/1600
+                // See https://github.com/roc-lang/roc/issues/1600
                 //
                 // The annotation variable is the generic/lifted/top-level annotation.
                 // It is connected to the variables of the function's body
@@ -1342,6 +1417,13 @@ impl<'a, 'i> Env<'a, 'i> {
         self.home == ModuleId::DERIVED_GEN
             && symbol.module_id() == ModuleId::DERIVED_SYNTH
             && !procs.partial_procs.contains_key(symbol)
+            // TODO: locking to find the answer in the `Derived_gen` module is not great, since
+            // Derived_gen also blocks other modules specializing. Improve this later.
+            && self
+                .derived_module
+                .lock()
+                .expect("derived module is poisoned")
+                .is_derived_def(symbol)
     }
 
     /// Unifies two variables and performs lambda set compaction.
@@ -2501,7 +2583,7 @@ fn patterns_to_when<'a>(
     // are only stores anyway, no branches.
     //
     // NOTE this fails if the pattern contains rigid variables,
-    // see https://github.com/rtfeldman/roc/issues/786
+    // see https://github.com/roc-lang/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, annotated_mark, pattern) in patterns.into_iter() {
         if annotated_mark.exhaustive.is_non_exhaustive(env.subs) {
@@ -2739,25 +2821,50 @@ pub fn specialize_all<'a>(
     specializations_for_host: HostSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    for externals in externals_others_need {
-        specialize_external_specializations(env, &mut procs, layout_cache, externals);
-    }
-
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
     let pending_specializations = std::mem::replace(
         &mut procs.pending_specializations,
-        PendingSpecializations::Making,
+        PendingSpecializations::Making(Suspended::new_in(env.arena)),
     );
 
+    // Add all of our existing pending specializations.
     match pending_specializations {
-        PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
             specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
+        PendingSpecializations::Making(suspended) => {
+            debug_assert!(
+                suspended.is_empty(),
+                "suspended specializations cannot ever start off non-empty when making"
+            );
+        }
     }
 
+    // Specialize all the symbols everyone else needs.
+    for externals in externals_others_need {
+        specialize_external_specializations(env, &mut procs, layout_cache, externals);
+    }
+
+    // Specialize any symbols the host needs.
     specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
+
+    // Now, we must go through and continuously complete any new suspended specializations that were
+    // discovered in specializing the other demanded symbols.
+    while !procs.pending_specializations.is_empty() {
+        let pending_specializations = std::mem::replace(
+            &mut procs.pending_specializations,
+            PendingSpecializations::Making(Suspended::new_in(env.arena)),
+        );
+        match pending_specializations {
+            PendingSpecializations::Making(suspended) => {
+                specialize_suspended(env, &mut procs, layout_cache, suspended);
+            }
+            PendingSpecializations::Finding(_) => {
+                internal_error!("should not have this variant after making specializations")
+            }
+        }
+    }
 
     debug_assert!(
         procs.symbol_specializations.is_empty(),
@@ -3127,6 +3234,8 @@ fn specialize_external<'a>(
             closure: opt_closure_layout,
             ret_layout,
         } => {
+            let mut proc_args = Vec::from_iter_in(proc_args.iter().copied(), env.arena);
+
             // unpack the closure symbols, if any
             match (opt_closure_layout, captured_symbols) {
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
@@ -3196,6 +3305,9 @@ fn specialize_external<'a>(
                         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
                             // captured variables are in symbol-alphabetic order, but now we want
                             // them ordered by their alignment requirements
+                            //
+                            // TODO: sort only the fields and apply the found permutation to the symbols
+                            // TODO: can we move this ordering to `layout_for_member`?
                             let mut combined = Vec::from_iter_in(
                                 captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
                                 env.arena,
@@ -3210,19 +3322,25 @@ fn specialize_external<'a>(
                                 size2.cmp(&size1)
                             });
 
+                            let ordered_field_layouts = Vec::from_iter_in(
+                                combined.iter().map(|(_, layout)| **layout),
+                                env.arena,
+                            );
+                            let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
+
                             debug_assert_eq!(
                                 captured.len(),
-                                field_layouts.len(),
+                                ordered_field_layouts.len(),
                                 "{:?} captures {:?} but has layout {:?}",
                                 lambda_name,
                                 &captured,
-                                &field_layouts
+                                &ordered_field_layouts
                             );
 
                             for (index, (symbol, layout)) in combined.iter().enumerate() {
                                 let expr = Expr::StructAtIndex {
                                     index: index as _,
-                                    field_layouts,
+                                    field_layouts: ordered_field_layouts,
                                     structure: Symbol::ARG_CLOSURE,
                                 };
 
@@ -3235,51 +3353,37 @@ fn specialize_external<'a>(
                                     env.arena.alloc(specialized_body),
                                 );
                             }
-                            //                                    let symbol = captured[0].0;
-                            //
-                            //                                    substitute_in_exprs(
-                            //                                        env.arena,
-                            //                                        &mut specialized_body,
-                            //                                        symbol,
-                            //                                        Symbol::ARG_CLOSURE,
-                            //                                    );
                         }
 
-                        ClosureRepresentation::Other(layout) => match layout {
-                            Layout::Builtin(Builtin::Bool) => {
-                                // just ignore this value
-                                // IDEA don't pass this value in the future
-                            }
-                            Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-                                // just ignore this value
-                                // IDEA don't pass this value in the future
-                            }
-                            other => {
-                                // NOTE other values always should be wrapped in a 1-element record
-                                unreachable!(
-                                    "{:?} is not a valid closure data representation",
-                                    other
-                                )
-                            }
-                        },
+                        ClosureRepresentation::UnwrappedCapture(_layout) => {
+                            debug_assert_eq!(captured.len(), 1);
+                            let (captured_symbol, _captured_layout) = captured[0];
+
+                            // The capture set is unwrapped, so simply replace the closure argument
+                            // to the function with the unwrapped capture name.
+                            let captured_symbol = get_specialized_name(captured_symbol);
+                            let closure_arg = proc_args.last_mut().unwrap();
+                            debug_assert_eq!(closure_arg.1, Symbol::ARG_CLOSURE);
+                            closure_arg.1 = captured_symbol;
+                        }
+
+                        ClosureRepresentation::EnumDispatch(_) => {
+                            // just ignore this value, since it's not a capture
+                            // IDEA don't pass this value in the future
+                        }
                     }
                 }
                 (None, CapturedSymbols::None) | (None, CapturedSymbols::Captured([])) => {}
                 _ => unreachable!("to closure or not to closure?"),
             }
 
-            let proc_args: Vec<_> = proc_args
-                .iter()
-                .map(|&(layout, symbol)| {
-                    // Grab the specialization symbol, if it exists.
-                    let symbol = procs
-                        .symbol_specializations
-                        .remove_single(symbol)
-                        .unwrap_or(symbol);
-
-                    (layout, symbol)
-                })
-                .collect_in(env.arena);
+            proc_args.iter_mut().for_each(|(_layout, symbol)| {
+                // Grab the specialization symbol, if it exists.
+                *symbol = procs
+                    .symbol_specializations
+                    .remove_single(*symbol)
+                    .unwrap_or(*symbol);
+            });
 
             // reset subs, so we don't get type errors when specializing for a different signature
             layout_cache.rollback_to(cache_snapshot);
@@ -3566,6 +3670,8 @@ where
     let annotation_var = procs.partial_procs.get_id(partial_proc_id).annotation;
     instantiate_rigids(env.subs, annotation_var);
 
+    procs.push_active_specialization(proc_name.name());
+
     let specialized = specialize_external(
         env,
         procs,
@@ -3575,6 +3681,8 @@ where
         host_exposed_variables,
         partial_proc_id,
     );
+
+    procs.pop_active_specialization(proc_name.name());
 
     match specialized {
         Ok(proc) => {
@@ -3869,7 +3977,7 @@ pub fn with_hole<'a>(
             )
         }
         Tag {
-            variant_var,
+            tag_union_var: variant_var,
             name: tag_name,
             arguments: args,
             ..
@@ -5396,29 +5504,42 @@ where
 
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
-        ClosureRepresentation::Other(Layout::Builtin(Builtin::Bool)) => {
-            debug_assert_eq!(symbols.len(), 0);
+        ClosureRepresentation::UnwrappedCapture(_layout) => {
+            debug_assert_eq!(symbols.len(), 1);
 
-            debug_assert_eq!(lambda_set.set.len(), 2);
-            let tag_id = name.name() != lambda_set.iter_set().next().unwrap().name();
-            let expr = Expr::Literal(Literal::Bool(tag_id));
+            let mut symbols = symbols;
+            let (captured_symbol, _) = symbols.next().unwrap();
 
-            Stmt::Let(assigned, expr, lambda_set_layout, hole)
+            // The capture set is unwrapped, so just replaced the assigned capture symbol with the
+            // only capture.
+            let mut hole = hole.clone();
+            substitute_in_exprs(env.arena, &mut hole, assigned, *captured_symbol);
+            hole
         }
-        ClosureRepresentation::Other(Layout::Builtin(Builtin::Int(IntWidth::U8))) => {
-            debug_assert_eq!(symbols.len(), 0);
+        ClosureRepresentation::EnumDispatch(repr) => match repr {
+            EnumDispatch::Bool => {
+                debug_assert_eq!(symbols.len(), 0);
 
-            debug_assert!(lambda_set.set.len() > 2);
-            let tag_id = lambda_set
-                .iter_set()
-                .position(|s| s.name() == name.name())
-                .unwrap() as u8;
+                debug_assert_eq!(lambda_set.len(), 2);
+                let tag_id = name.name() != lambda_set.iter_set().next().unwrap().name();
+                let expr = Expr::Literal(Literal::Bool(tag_id));
 
-            let expr = Expr::Literal(Literal::Byte(tag_id));
+                Stmt::Let(assigned, expr, lambda_set_layout, hole)
+            }
+            EnumDispatch::U8 => {
+                debug_assert_eq!(symbols.len(), 0);
 
-            Stmt::Let(assigned, expr, lambda_set_layout, hole)
-        }
-        _ => unreachable!(),
+                debug_assert!(lambda_set.len() > 2);
+                let tag_id = lambda_set
+                    .iter_set()
+                    .position(|s| s.name() == name.name())
+                    .unwrap() as u8;
+
+                let expr = Expr::Literal(Literal::Byte(tag_id));
+
+                Stmt::Let(assigned, expr, lambda_set_layout, hole)
+            }
+        },
     };
 
     result
@@ -5692,7 +5813,7 @@ fn tag_union_to_function<'a>(
     }
 
     let loc_body = Loc::at_zero(roc_can::expr::Expr::Tag {
-        variant_var: return_variable,
+        tag_union_var: return_variable,
         name: tag_name,
         arguments: loc_expr_args,
         ext_var,
@@ -5857,10 +5978,7 @@ fn register_capturing_closure<'a>(
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
                 match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
-                        if let Layout::Struct {
-                            field_layouts: &[], ..
-                        } = lambda_set.runtime_representation()
-                        {
+                        if lambda_set.is_represented().is_none() {
                             CapturedSymbols::None
                         } else {
                             let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
@@ -5869,7 +5987,7 @@ fn register_capturing_closure<'a>(
                         }
                     }
                     Err(_) => {
-                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                        // just allow this. see https://github.com/roc-lang/roc/issues/1585
                         if captured_symbols.is_empty() {
                             CapturedSymbols::None
                         } else {
@@ -7162,7 +7280,7 @@ fn can_reuse_symbol<'a>(
 
     if arguments.contains(&symbol) {
         Value(symbol)
-    } else if env.is_imported_symbol(symbol) {
+    } else if env.is_imported_symbol(symbol) || env.is_unloaded_derived_symbol(symbol, procs) {
         Imported(symbol)
     } else if procs.partial_procs.contains_key(symbol) {
         LocalFunction(symbol)
@@ -7334,7 +7452,10 @@ fn specialize_symbol<'a>(
     match procs.get_partial_proc(original) {
         None => {
             match arg_var {
-                Some(arg_var) if env.is_imported_symbol(original) => {
+                Some(arg_var)
+                    if env.is_imported_symbol(original)
+                        || env.is_unloaded_derived_symbol(original, procs) =>
+                {
                     let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
                         Ok(v) => v,
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
@@ -7603,7 +7724,7 @@ fn build_call<'a>(
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
 }
 
-/// See https://github.com/rtfeldman/roc/issues/1549
+/// See https://github.com/roc-lang/roc/issues/1549
 ///
 /// What happened is that a function has a type error, but the arguments are not processed.
 /// That means specializations were missing. Normally that is not a problem, but because
@@ -7936,8 +8057,14 @@ fn call_by_name_help<'a>(
             debug_assert!(top_level_layout.arguments.is_empty());
         }
 
-        match &mut procs.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization =
+            procs.symbol_needs_suspended_specialization(proc_name.name());
+        match (
+            &mut procs.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 debug_assert!(!env.is_imported_symbol(proc_name.name()));
 
                 // register the pending specialization, so this gets code genned later
@@ -7966,7 +8093,7 @@ fn call_by_name_help<'a>(
                     hole,
                 )
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name.name());
 
                 let field_symbols = field_symbols.into_bump_slice();
@@ -8100,8 +8227,13 @@ fn call_by_name_module_thunk<'a>(
             debug_assert!(top_level_layout.arguments.is_empty());
         }
 
-        match &mut procs.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization = procs.symbol_needs_suspended_specialization(proc_name);
+        match (
+            &mut procs.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
@@ -8114,7 +8246,7 @@ fn call_by_name_module_thunk<'a>(
 
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 match opt_partial_proc {
@@ -9166,9 +9298,9 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
 where
     ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
-    match lambda_set.runtime_representation() {
-        Layout::VOID => empty_lambda_set_error(),
-        Layout::Union(union_layout) => {
+    match lambda_set.call_by_name_options() {
+        ClosureCallOptions::Void => empty_lambda_set_error(),
+        ClosureCallOptions::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = lowlevel_union_lambda_set_to_switch(
@@ -9197,7 +9329,7 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct { .. } => match lambda_set.iter_set().next() {
+        ClosureCallOptions::Struct { .. } => match lambda_set.iter_set().next() {
             Some(lambda_name) => {
                 let call_spec_id = env.next_call_specialization_id();
                 let update_mode = env.next_update_mode_id();
@@ -9222,39 +9354,58 @@ where
                 hole.clone()
             }
         },
-        Layout::Builtin(Builtin::Bool) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+        ClosureCallOptions::UnwrappedCapture(_) => {
+            let lambda_name = lambda_set
+                .iter_set()
+                .next()
+                .expect("no function in lambda set");
 
-            lowlevel_enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Bool),
+            let call_spec_id = env.next_call_specialization_id();
+            let update_mode = env.next_update_mode_id();
+            let call = to_lowlevel_call((
+                lambda_name,
                 closure_data_symbol,
                 lambda_set.is_represented(),
-                to_lowlevel_call,
-                return_layout,
-                assigned,
-                hole,
-            )
-        }
-        Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+                call_spec_id,
+                update_mode,
+            ));
 
-            lowlevel_enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int(IntWidth::U8)),
-                closure_data_symbol,
-                lambda_set.is_represented(),
-                to_lowlevel_call,
-                return_layout,
-                assigned,
-                hole,
-            )
+            build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
         }
-        other => todo!("{:?}", other),
+        ClosureCallOptions::EnumDispatch(repr) => match repr {
+            EnumDispatch::Bool => {
+                let closure_tag_id_symbol = closure_data_symbol;
+
+                lowlevel_enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Bool),
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    to_lowlevel_call,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+            EnumDispatch::U8 => {
+                let closure_tag_id_symbol = closure_data_symbol;
+
+                lowlevel_enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)),
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    to_lowlevel_call,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+        },
     }
 }
 
@@ -9345,15 +9496,14 @@ fn match_on_lambda_set<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    match lambda_set.runtime_representation() {
-        Layout::VOID => empty_lambda_set_error(),
-        Layout::Union(union_layout) => {
+    match lambda_set.call_by_name_options() {
+        ClosureCallOptions::Void => empty_lambda_set_error(),
+        ClosureCallOptions::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = union_lambda_set_to_switch(
                 env,
                 lambda_set,
-                Layout::Union(union_layout),
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -9377,9 +9527,9 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct {
+        ClosureCallOptions::Struct {
             field_layouts,
-            field_order_hash,
+            field_order_hash: _,
         } => {
             let function_symbol = match lambda_set.iter_set().next() {
                 Some(function_symbol) => function_symbol,
@@ -9403,10 +9553,6 @@ fn match_on_lambda_set<'a>(
                 _ => ClosureInfo::Captures {
                     lambda_set,
                     closure_data_symbol,
-                    closure_data_layout: Layout::Struct {
-                        field_layouts,
-                        field_order_hash,
-                    },
                 },
             };
 
@@ -9421,15 +9567,21 @@ fn match_on_lambda_set<'a>(
                 hole,
             )
         }
-        Layout::Builtin(Builtin::Bool) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+        ClosureCallOptions::UnwrappedCapture(_) => {
+            let function_symbol = lambda_set
+                .iter_set()
+                .next()
+                .expect("no function in lambda set");
 
-            enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Bool),
+            let closure_info = ClosureInfo::Captures {
+                lambda_set,
                 closure_data_symbol,
+            };
+
+            union_lambda_set_branch_help(
+                env,
+                function_symbol,
+                closure_info,
                 argument_symbols,
                 argument_layouts,
                 return_layout,
@@ -9437,23 +9589,38 @@ fn match_on_lambda_set<'a>(
                 hole,
             )
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            let closure_tag_id_symbol = closure_data_symbol;
+        ClosureCallOptions::EnumDispatch(repr) => match repr {
+            EnumDispatch::Bool => {
+                let closure_tag_id_symbol = closure_data_symbol;
 
-            enum_lambda_set_to_switch(
-                env,
-                lambda_set.iter_set(),
-                closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int(IntWidth::U8)),
-                closure_data_symbol,
-                argument_symbols,
-                argument_layouts,
-                return_layout,
-                assigned,
-                hole,
-            )
-        }
-        other => todo!("{:?}", other),
+                enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Bool),
+                    argument_symbols,
+                    argument_layouts,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+            EnumDispatch::U8 => {
+                let closure_tag_id_symbol = closure_data_symbol;
+
+                enum_lambda_set_to_switch(
+                    env,
+                    lambda_set.iter_set(),
+                    closure_tag_id_symbol,
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)),
+                    argument_symbols,
+                    argument_layouts,
+                    return_layout,
+                    assigned,
+                    hole,
+                )
+            }
+        },
     }
 }
 
@@ -9461,7 +9628,6 @@ fn match_on_lambda_set<'a>(
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
-    closure_layout: Layout<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
@@ -9471,7 +9637,7 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    if lambda_set.set.is_empty() {
+    if lambda_set.is_empty() {
         // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
@@ -9481,7 +9647,7 @@ fn union_lambda_set_to_switch<'a>(
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
-    let mut branches = Vec::with_capacity_in(lambda_set.set.len(), env.arena);
+    let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
     for (i, lambda_name) in lambda_set.iter_set().enumerate() {
         let closure_info = if lambda_name.no_captures() {
@@ -9490,7 +9656,6 @@ fn union_lambda_set_to_switch<'a>(
             ClosureInfo::Captures {
                 lambda_set,
                 closure_data_symbol,
-                closure_data_layout: closure_layout,
             }
         };
 
@@ -9560,11 +9725,10 @@ fn union_lambda_set_branch<'a>(
     )
 }
 
+#[derive(Clone, Copy)]
 enum ClosureInfo<'a> {
     Captures {
         closure_data_symbol: Symbol,
-        /// The layout of this closure variant
-        closure_data_layout: Layout<'a>,
         /// The whole lambda set representation this closure is a variant of
         lambda_set: LambdaSet<'a>,
     },
@@ -9586,34 +9750,21 @@ fn union_lambda_set_branch_help<'a>(
         ClosureInfo::Captures {
             lambda_set,
             closure_data_symbol,
-            closure_data_layout,
-        } => match closure_data_layout {
-            Layout::Struct {
-                field_layouts: &[], ..
-            }
-            | Layout::Builtin(Builtin::Bool)
-            | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-                (argument_layouts_slice, argument_symbols_slice)
-            }
-            _ => {
-                // extend layouts with the layout of the closure environment
-                let mut argument_layouts =
-                    Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-                argument_layouts.extend(argument_layouts_slice);
-                argument_layouts.push(Layout::LambdaSet(lambda_set));
-
+        } => {
+            let argument_layouts =
+                lambda_set.extend_argument_list(env.arena, argument_layouts_slice);
+            let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
                 // extend symbols with the symbol of the closure environment
                 let mut argument_symbols =
                     Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
                 argument_symbols.extend(argument_symbols_slice);
                 argument_symbols.push(closure_data_symbol);
-
-                (
-                    argument_layouts.into_bump_slice(),
-                    argument_symbols.into_bump_slice(),
-                )
-            }
-        },
+                argument_symbols.into_bump_slice()
+            } else {
+                argument_symbols_slice
+            };
+            (argument_layouts, argument_symbols)
+        }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything
             // to still get a lambda set that does store information. We must not pass a closure
@@ -9637,13 +9788,14 @@ fn union_lambda_set_branch_help<'a>(
     build_call(env, call, assigned, *return_layout, hole)
 }
 
+/// Switches over a enum lambda set, which may dispatch to different functions, none of which
+/// capture.
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
     lambda_set: impl ExactSizeIterator<Item = LambdaName<'a>>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
-    closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
@@ -9656,15 +9808,11 @@ fn enum_lambda_set_to_switch<'a>(
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
-    let closure_layout = closure_tag_id_layout;
-
     for (i, lambda_name) in lambda_set.into_iter().enumerate() {
         let stmt = enum_lambda_set_branch(
             env,
             join_point_id,
             lambda_name,
-            closure_data_symbol,
-            closure_layout,
             argument_symbols,
             argument_layouts,
             return_layout,
@@ -9700,15 +9848,14 @@ fn enum_lambda_set_to_switch<'a>(
     }
 }
 
+/// A branch for an enum lambda set branch dispatch, which never capture!
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
-    closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
-    argument_symbols_slice: &'a [Symbol],
-    argument_layouts_slice: &'a [Layout<'a>],
+    argument_symbols: &'a [Symbol],
+    argument_layouts: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
@@ -9716,34 +9863,6 @@ fn enum_lambda_set_branch<'a>(
     let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
     let assigned = result_symbol;
-
-    let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct {
-            field_layouts: &[], ..
-        }
-        | Layout::Builtin(Builtin::Bool)
-        | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            (argument_layouts_slice, argument_symbols_slice)
-        }
-        _ => {
-            // extend layouts with the layout of the closure environment
-            let mut argument_layouts =
-                Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-            argument_layouts.extend(argument_layouts_slice);
-            argument_layouts.push(closure_data_layout);
-
-            // extend symbols with the symbol of the closure environment
-            let mut argument_symbols =
-                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-            argument_symbols.extend(argument_symbols_slice);
-            argument_symbols.push(closure_data_symbol);
-
-            (
-                argument_layouts.into_bump_slice(),
-                argument_symbols.into_bump_slice(),
-            )
-        }
-    };
 
     let call = self::Call {
         call_type: CallType::ByName {

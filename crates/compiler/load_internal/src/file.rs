@@ -130,13 +130,15 @@ pub enum ExecutionMode {
     Test,
     Check,
     Executable,
+    /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
+    ExecutableIfCheck,
 }
 
 impl ExecutionMode {
     fn goal_phase(&self) -> Phase {
         match self {
             ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
-            ExecutionMode::Check => Phase::SolveTypes,
+            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck => Phase::SolveTypes,
         }
     }
 }
@@ -166,6 +168,22 @@ struct ModuleCache<'a> {
     type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+}
+
+impl<'a> ModuleCache<'a> {
+    pub fn total_problems(&self) -> usize {
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        total
+    }
 }
 
 impl Default for ModuleCache<'_> {
@@ -2385,11 +2403,34 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            if is_host_exposed && state.goal_phase() == Phase::SolveTypes {
+            let finish_type_checking = is_host_exposed &&
+                (state.goal_phase() == Phase::SolveTypes)
+                // If we're running in check-and-then-build mode, only exit now there are errors.
+                && (!matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) || state.module_cache.total_problems() > 0);
+
+            if finish_type_checking {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 
                 state.timings.insert(module_id, module_timing);
+
+                if matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) {
+                    // We there may outstanding modules in the typecheked cache whose ident IDs
+                    // aren't registered; transfer all of their idents over to the state, since
+                    // we're now done and ready to report errors.
+                    for (
+                        module_id,
+                        TypeCheckedModule {
+                            ident_ids,
+                            module_timing,
+                            ..
+                        },
+                    ) in state.module_cache.typechecked.drain()
+                    {
+                        state.constrained_ident_ids.insert(module_id, ident_ids);
+                        state.timings.insert(module_id, module_timing);
+                    }
+                }
 
                 let documentation = {
                     let mut empty = MutMap::default();
@@ -2427,7 +2468,9 @@ fn update<'a>(
                     },
                 );
 
-                if state.goal_phase() > Phase::SolveTypes {
+                if state.goal_phase() > Phase::SolveTypes
+                    || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
+                {
                     let layout_cache = state
                         .layout_caches
                         .pop()
@@ -2451,6 +2494,25 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                     state.timings.insert(module_id, module_timing);
                 }
+
+                let work = if is_host_exposed
+                    && matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
+                {
+                    debug_assert!(
+                        work.is_empty(),
+                        "work left over after host exposed is checked"
+                    );
+
+                    // Update the goal phase to target full codegen.
+                    state.exec_mode = ExecutionMode::Executable;
+
+                    // Load the find + make specializations portion of the dependency graph.
+                    state
+                        .dependencies
+                        .load_find_and_make_specializations_after_check()
+                } else {
+                    work
+                };
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
@@ -2810,7 +2872,7 @@ fn finish_specialization(
     let entry_point = {
         match exec_mode {
             ExecutionMode::Test => EntryPoint::Test,
-            ExecutionMode::Executable => {
+            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 let path_to_platform = {
                     use PlatformPath::*;
                     let package_name = match platform_path {
@@ -5007,7 +5069,9 @@ fn build_pending_specializations<'a>(
                 // skip expectations if we're not going to run them
                 match execution_mode {
                     ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check | ExecutionMode::Executable => continue,
+                    ExecutionMode::Check
+                    | ExecutionMode::Executable
+                    | ExecutionMode::ExecutableIfCheck => continue,
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5081,7 +5145,9 @@ fn build_pending_specializations<'a>(
                 // skip expectations if we're not going to run them
                 match execution_mode {
                     ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check | ExecutionMode::Executable => continue,
+                    ExecutionMode::Check
+                    | ExecutionMode::Executable
+                    | ExecutionMode::ExecutableIfCheck => continue,
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs

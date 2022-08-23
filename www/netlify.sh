@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Runs on every Netlify build, to set up the Netlify server.
 

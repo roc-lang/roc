@@ -234,7 +234,7 @@ Culturally, to support HKP is to take a side, and to decline to support it is al
 Given this, language designers have three options:
 
 - Have HKP and have Monad in the standard library. Embrace them and build a culture and ecosystem around them.
-- Have HKP and don't have Monad in the standard library. An alternate standard lbirary built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
+- Have HKP and don't have Monad in the standard library. An alternate standard library built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
 - Don't have HKP; build a culture and ecosystem around other things.
 
 Considering that these are the only three options, I think the best choice for Roc—not only on a technical
@@ -458,7 +458,7 @@ The short explanation for why Roc is released under the [Universal Permissive Li
 - It's one license, unlike "MIT or Apache2, at your choice" (which is how [Rust addressed the problem](https://internals.rust-lang.org/t/rationale-of-apache-dual-licensing/8952/4) of MIT not having patent protections but Apache2 not being GPLv2 compatible)
 - It's been approved by OSI, FSF, and Oracle's lawyers, so it has been not only vetted by three giants in the world of software licensing, but also three giants with competing interests - and they all approved it.
 
-There's also [a longer explanation](https://github.com/rtfeldman/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
+There's also [a longer explanation](https://github.com/roc-lang/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
 
 ## Why does Roc use both Rust and Zig?
 
@@ -472,3 +472,7 @@ There were a few reasons for this rewrite.
 4. Zig has more tools for working in a memory-unsafe environment, such as reporting memory leaks in tests. These have been helpful in finding bugs that are out of scope for safe Rust.
 
 The split of Rust for the compiler and Zig for the standard library has worked well so far, and there are no plans to change it.
+
+## Why is the website so basic?
+
+We have a very basic website on purpose, it helps set expectations that roc is a work in progress and not ready yet for a first release. 

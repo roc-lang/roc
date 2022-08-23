@@ -184,7 +184,7 @@ pub enum Expr {
 
     // Sum Types
     Tag {
-        variant_var: Variable,
+        tag_union_var: Variable,
         ext_var: Variable,
         name: TagName,
         arguments: Vec<(Variable, Loc<Expr>)>,
@@ -780,12 +780,12 @@ pub fn canonicalize_expr<'a>(
                         return (fn_expr, output);
                     }
                     Tag {
-                        variant_var,
+                        tag_union_var: variant_var,
                         ext_var,
                         name,
                         ..
                     } => Tag {
-                        variant_var,
+                        tag_union_var: variant_var,
                         ext_var,
                         name,
                         arguments: args,
@@ -796,7 +796,7 @@ pub fn canonicalize_expr<'a>(
                         name,
                         ..
                     } => Tag {
-                        variant_var,
+                        tag_union_var: variant_var,
                         ext_var,
                         name,
                         arguments: args,
@@ -1422,7 +1422,7 @@ fn canonicalize_when_branch<'a>(
         if output.references.has_value_lookup(symbol) {
             pattern_bound_symbols_body_needs.insert(symbol);
         } else {
-            env.problem(Problem::UnusedDef(symbol, region));
+            env.problem(Problem::UnusedBranchDef(symbol, region));
         }
     }
 
@@ -1893,7 +1893,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         }
 
         Tag {
-            variant_var,
+            tag_union_var: variant_var,
             ext_var,
             name,
             arguments,

@@ -113,7 +113,6 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-    _target_valgrind: bool,
 ) -> Output {
     let mut command = Command::new(&zig_executable());
     command
@@ -149,13 +148,10 @@ pub fn build_zig_host_native(
         target,
     ]);
 
-    // use single threaded testing for cli_run and enable this code if valgrind fails with unhandled instruction bytes, see #1963.
-    /*if target_valgrind {
-        command.args(&[
-        "-mcpu",
-        "x86_64"
-        ]);
-    }*/
+    // valgrind does not yet support avx512 instructions, see #1963.
+    if env::var("NO_AVX512").is_ok() {
+        command.args(&["-mcpu", "x86_64"]);
+    }
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
@@ -177,7 +173,6 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-    _target_valgrind: bool,
 ) -> Output {
     let mut command = Command::new(&zig_executable());
     command
@@ -234,7 +229,6 @@ pub fn build_zig_host_native(
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
     // For compatibility with the non-macOS def above. Keep these in sync.
-    _target_valgrind: bool,
 ) -> Output {
     use serde_json::Value;
 
@@ -463,7 +457,6 @@ pub fn rebuild_host(
     target: &Triple,
     host_input_path: &Path,
     shared_lib_path: Option<&Path>,
-    target_valgrind: bool,
 ) -> PathBuf {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
@@ -535,7 +528,6 @@ pub fn rebuild_host(
                     "native",
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
             Architecture::X86_32(_) => {
@@ -549,7 +541,6 @@ pub fn rebuild_host(
                     "i386-linux-musl",
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
 
@@ -564,7 +555,6 @@ pub fn rebuild_host(
                     target_zig_str(target),
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
@@ -971,7 +961,7 @@ fn link_linux(
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args(&[
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
             "-lm",
@@ -1054,7 +1044,7 @@ fn link_macos(
     }
 
     ld_command.args(&[
-        // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+        // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
         "-lresolv",
@@ -1079,7 +1069,7 @@ fn link_macos(
         "QuartzCore",
         // "-lrt", // TODO shouldn't we need this?
         // "-lc_nonshared", // TODO shouldn't we need this?
-        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/roc-lang/roc/pull/554#discussion_r496370840
         "-framework",
         "Security",
         // Output
