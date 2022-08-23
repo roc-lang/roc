@@ -278,25 +278,16 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 }
             }
             elf::SHT_SYMTAB => {
-                if i == in_syms.section().0 {
-                    index = writer.reserve_symtab_section_index();
-                } else {
-                    panic!("Unsupported symtab section {}", i);
-                }
+                debug_assert!(i == in_syms.section().0);
+                index = writer.reserve_symtab_section_index();
             }
             elf::SHT_SYMTAB_SHNDX => {
-                if i == in_syms.shndx_section().0 {
-                    index = writer.reserve_symtab_shndx_section_index();
-                } else {
-                    panic!("Unsupported symtab shndx section {}", i);
-                }
+                debug_assert!(i == in_syms.shndx_section().0);
+                index = writer.reserve_symtab_shndx_section_index();
             }
             elf::SHT_DYNSYM => {
-                if i == in_dynsyms.section().0 {
-                    index = writer.reserve_dynsym_section_index();
-                } else {
-                    panic!("Unsupported dynsym section {}", i);
-                }
+                debug_assert!(i == in_dynsyms.section().0);
+                index = writer.reserve_dynsym_section_index();
             }
             elf::SHT_DYNAMIC => {
                 assert!(in_dynamic.is_none());
