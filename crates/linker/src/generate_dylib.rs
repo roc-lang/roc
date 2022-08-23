@@ -421,14 +421,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     assert_eq!(in_elf.e_phoff(endian), writer.reserved_len() as u64);
     writer.reserve_program_headers(in_segments.len() as u32);
 
-    // Reserve alloc sections at original offsets.
-    let alloc_sections: Vec<_> = sections
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (i + 1, s.1.section))
-        .filter(|(_, s)| s.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0)
-        .collect();
-
     let (offsets, addresses) = sections.reserve_alloc_sections(
         &mut writer,
         hash_chain_count,
@@ -485,63 +477,68 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         }
     }
 
-    for (i, in_section) in alloc_sections.iter() {
-        writer.pad_until(offsets[*i - 1]);
-        match in_section.sh_type(endian) {
-            elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
-                // writer.write(in_section.data(endian, in_data)?);
-            }
-            elf::SHT_DYNAMIC => {
-                for d in &out_dynamic {
-                    if let Some(string) = d.string {
-                        writer.write_dynamic_string(d.tag, string);
-                    } else {
-                        writer.write_dynamic(d.tag, d.val);
-                    }
-                }
-            }
-            elf::SHT_DYNSYM if *i == in_dynsyms.section().0 => {
-                writer.write_null_dynamic_symbol();
-                for sym in &out_dynsyms {
-                    writer.write_dynamic_symbol(&object::write::elf::Sym {
-                        name: sym.name,
-                        section: sym.section,
-                        st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
-                        st_other: 0,
-                        st_shndx: 0,
-                        st_value: 0x1000,
-                        st_size: 0,
-                    });
-                }
-            }
-            elf::SHT_STRTAB if *i == in_dynsyms.string_section().0 => {
-                writer.write_dynstr();
-            }
-            elf::SHT_HASH => {
-                let hash = in_hash.as_ref().unwrap();
-                writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |index| {
-                    out_dynsyms
-                        .get(index.checked_sub(hash_index_base)? as usize)?
-                        .hash
+    {
+        {
+            writer.pad_until(offsets[0]);
+
+            let hash = in_hash.as_ref().unwrap();
+            writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |index| {
+                out_dynsyms
+                    .get(index.checked_sub(hash_index_base)? as usize)?
+                    .hash
+            });
+        }
+
+        {
+            writer.pad_until(offsets[1]);
+
+            let gnu_hash = in_gnu_hash.as_ref().unwrap();
+            writer.write_gnu_hash(
+                gnu_hash_symbol_base,
+                gnu_hash.bloom_shift.get(endian),
+                gnu_hash.bloom_count.get(endian),
+                gnu_hash.bucket_count.get(endian),
+                gnu_hash_symbol_count,
+                |index| {
+                    out_dynsyms[gnu_hash_index_base + index as usize]
+                        .gnu_hash
+                        .unwrap()
+                },
+            );
+        }
+
+        {
+            writer.pad_until(offsets[2]);
+
+            writer.write_null_dynamic_symbol();
+            for sym in &out_dynsyms {
+                writer.write_dynamic_symbol(&object::write::elf::Sym {
+                    name: sym.name,
+                    section: sym.section,
+                    st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
+                    st_other: 0,
+                    st_shndx: 0,
+                    st_value: 0x1000,
+                    st_size: 0,
                 });
             }
-            elf::SHT_GNU_HASH => {
-                let gnu_hash = in_gnu_hash.as_ref().unwrap();
-                writer.write_gnu_hash(
-                    gnu_hash_symbol_base,
-                    gnu_hash.bloom_shift.get(endian),
-                    gnu_hash.bloom_count.get(endian),
-                    gnu_hash.bucket_count.get(endian),
-                    gnu_hash_symbol_count,
-                    |index| {
-                        out_dynsyms[gnu_hash_index_base + index as usize]
-                            .gnu_hash
-                            .unwrap()
-                    },
-                );
-            }
-            other => {
-                panic!("Unsupported alloc section type {:x}", other);
+        }
+
+        {
+            writer.pad_until(offsets[3]);
+
+            writer.write_dynstr();
+        }
+
+        {
+            writer.pad_until(offsets[4]);
+
+            for d in &out_dynamic {
+                if let Some(string) = d.string {
+                    writer.write_dynamic_string(d.tag, string);
+                } else {
+                    writer.write_dynamic(d.tag, d.val);
+                }
             }
         }
     }
