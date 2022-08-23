@@ -25,7 +25,7 @@ use std::ffi::{OsStr, OsString};
 use roc_cli::build;
 
 fn main() -> io::Result<()> {
-    roc_tracing::setup_tracing!();
+    let _tracing_guards = roc_tracing::setup_tracing!();
 
     let matches = build_app().get_matches();
 
