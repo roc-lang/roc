@@ -162,7 +162,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let in_syms = in_sections.symbols(endian, in_data, elf::SHT_SYMTAB)?;
     let in_dynsyms = in_sections.symbols(endian, in_data, elf::SHT_DYNSYM)?;
 
-    let help = |name: &[u8]| {
+    let get_section = |name: &[u8]| {
         *in_sections
             .section_by_name(Endianness::Little, name)
             .unwrap()
@@ -170,11 +170,11 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     };
 
     let sections = Sections {
-        hash: help(b".hash" as &[_]),
-        gnu_hash: help(b".gnu.hash" as &[_]),
-        dynsym: help(b".dynsym" as &[_]),
-        dynstr: help(b".dynstr" as &[_]),
-        dynamic: help(b".dynamic" as &[_]),
+        hash: get_section(b".hash" as &[_]),
+        gnu_hash: get_section(b".gnu.hash" as &[_]),
+        dynsym: get_section(b".dynsym" as &[_]),
+        dynstr: get_section(b".dynstr" as &[_]),
+        dynamic: get_section(b".dynamic" as &[_]),
     };
 
     let mut out_data = Vec::new();
