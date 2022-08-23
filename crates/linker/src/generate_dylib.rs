@@ -68,6 +68,7 @@ struct Sections {
     shstrtab: Section,
 }
 
+#[derive(Default)]
 struct Addresses {
     hash: u64,
     gnu_hash: u64,
@@ -105,93 +106,57 @@ impl Sections {
         let mut offsets = [0; 5];
 
         let mut extra_offset: usize = 0;
+        let mut addresses = Addresses::default();
 
-        // elf::SHT_HASH
-        let in_section = sections.hash.section;
-        let offset = in_section.sh_offset(endian) as usize;
-        offsets[0] = offset;
-        writer.reserve_until(offset);
+        for (i, out_offset) in offsets.iter_mut().enumerate().take(5) {
+            // symtab, strtab and shstrtab is ignored because they are not ALLOC
+            let in_section = match i {
+                0 => sections.hash.section,
+                1 => sections.gnu_hash.section,
+                2 => sections.dynsym.section,
+                3 => sections.dynstr.section,
+                4 => sections.dynamic.section,
+                _ => unreachable!(),
+            };
 
-        let hash_addr = in_section.sh_addr(endian);
-        // here we fake a bigger hash table than the input file has
-        let reserved_before = writer.reserved_len();
-        writer.reserve_hash(3, hash_chain_count);
-        let reserved_after = writer.reserved_len();
+            let offset = in_section.sh_offset(endian) as usize + extra_offset;
+            let offset = round_up_to_alignment(offset, 8);
+            *out_offset = offset;
+            writer.reserve_until(offset);
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
+            let reserved_before = writer.reserved_len();
 
-            actual_size - sections.hash.section.sh_size(endian) as usize
-        };
+            match i {
+                0 => {
+                    writer.reserve_hash(3, hash_chain_count);
+                }
+                1 => {
+                    addresses.gnu_hash = in_section.sh_addr(endian);
+                    writer.reserve_gnu_hash(1, 1, gnu_hash_symbol_count);
+                }
+                2 => {
+                    addresses.dynsym = in_section.sh_addr(endian);
+                    writer.reserve_dynsym();
+                }
+                3 => {
+                    addresses.dynstr = in_section.sh_addr(endian);
+                    writer.reserve_dynstr();
+                }
+                4 => {
+                    addresses.dynamic = in_section.sh_addr(endian);
+                    writer.reserve_dynamic(dynamic_count);
+                }
+                _ => unreachable!(),
+            }
 
-        // elf::SHT_GNU_HASH
-        let in_section = &sections.gnu_hash.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[1] = offset;
-        writer.reserve_until(offset);
+            let reserved_after = writer.reserved_len();
 
-        let gnu_hash_addr = in_section.sh_addr(endian);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_gnu_hash(1, 1, gnu_hash_symbol_count);
-        let reserved_after = writer.reserved_len();
+            extra_offset += {
+                let actual_size = reserved_after - reserved_before;
 
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
-
-            actual_size - sections.gnu_hash.section.sh_size(endian) as usize
-        };
-
-        // elf::SHT_DYNSYM
-        let in_section = &sections.dynsym.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[2] = offset;
-        writer.reserve_until(offset);
-
-        let dynsym_addr = in_section.sh_addr(endian);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_dynsym();
-        let reserved_after = writer.reserved_len();
-
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
-
-            actual_size - sections.dynsym.section.sh_size(endian) as usize
-        };
-
-        // elf::SHT_STRTAB
-        let in_section = &sections.dynstr.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[3] = offset;
-        writer.reserve_until(offset);
-
-        let dynstr_addr = in_section.sh_addr(endian);
-        let reserved_before = writer.reserved_len();
-        writer.reserve_dynstr();
-        let reserved_after = writer.reserved_len();
-
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
-
-            actual_size - sections.dynstr.section.sh_size(endian) as usize
-        };
-
-        // elf::SHT_DYNAMIC
-        let in_section = &sections.dynamic.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[DYMAMIC_SECTION] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
-        writer.reserve_until(offset);
-
-        let dynamic_addr = in_section.sh_addr(endian);
-        writer.reserve_dynamic(dynamic_count);
-
-        // symtab, strtab and shstrtab is ignored because they are not ALLOC
-        let addresses = Addresses {
-            hash: hash_addr,
-            gnu_hash: gnu_hash_addr,
-            dynsym: dynsym_addr,
-            dynstr: dynstr_addr,
-            dynamic: dynamic_addr,
-        };
+                actual_size.saturating_sub(in_section.sh_size(endian) as usize)
+            };
+        }
 
         (offsets, addresses)
     }
