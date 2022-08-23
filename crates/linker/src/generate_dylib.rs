@@ -51,11 +51,7 @@ struct DynamicSymbol {
     gnu_hash: Option<u32>,
 }
 
-#[derive(Debug)]
-struct Section {
-    in_index: usize,
-    section: SectionHeader64<object::Endianness>,
-}
+type Section = SectionHeader64<object::Endianness>;
 
 struct Sections {
     hash: Section,
@@ -93,11 +89,11 @@ impl Sections {
         for (i, out_offset) in offsets.iter_mut().enumerate().take(5) {
             // symtab, strtab and shstrtab is ignored because they are not ALLOC
             let in_section = match i {
-                0 => sections.hash.section,
-                1 => sections.gnu_hash.section,
-                2 => sections.dynsym.section,
-                3 => sections.dynstr.section,
-                4 => sections.dynamic.section,
+                0 => sections.hash,
+                1 => sections.gnu_hash,
+                2 => sections.dynsym,
+                3 => sections.dynstr,
+                4 => sections.dynamic,
                 _ => unreachable!(),
             };
 
@@ -167,14 +163,10 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let in_dynsyms = in_sections.symbols(endian, in_data, elf::SHT_DYNSYM)?;
 
     let help = |name: &[u8]| {
-        let (in_index, section) = in_sections
+        *in_sections
             .section_by_name(Endianness::Little, name)
-            .unwrap();
-
-        Section {
-            in_index,
-            section: *section,
-        }
+            .unwrap()
+            .1
     };
 
     let sections = Sections {
