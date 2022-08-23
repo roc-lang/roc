@@ -1814,11 +1814,7 @@ fn int_add_checked_err() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_add_wrap() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                Num.addWrap 9_223_372_036_854_775_807 1
-                "#
-        ),
+        "Num.addWrap 9_223_372_036_854_775_807 1",
         std::i64::MIN,
         i64
     );
@@ -1828,15 +1824,9 @@ fn int_add_wrap() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_pass() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1.0 0.0 is
-                    Ok v -> v
-                    Err Overflow -> -1.0
-                "#
-        ),
-        1.0,
-        f64
+        "Num.addChecked 1.0 0.0",
+        RocResult::ok(1.0),
+        RocResult<f64, ()>
     );
 }
 
@@ -1844,27 +1834,17 @@ fn float_add_checked_pass() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_fail() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1.7976931348623157e308 1.7976931348623157e308 is
-                    Err Overflow -> -1
-                    Ok v -> v
-                "#
-        ),
-        -1.0,
-        f64
+        "Num.addChecked 1.7976931348623157e308 1.7976931348623157e308",
+        RocResult::err(()),
+        RocResult<f64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen_dev"))]
 fn float_add_overflow() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    1.7976931348623157e308 + 1.7976931348623157e308
-                    "#
-        ),
+        "1.7976931348623157e308 + 1.7976931348623157e308",
         f64::INFINITY,
         f64
     );
@@ -1903,11 +1883,7 @@ fn int_sub_wrap() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_overflow() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    -1.7976931348623157e308 - 1.7976931348623157e308
-                "#
-        ),
+        "-1.7976931348623157e308 - 1.7976931348623157e308",
         -f64::INFINITY,
         f64
     );
