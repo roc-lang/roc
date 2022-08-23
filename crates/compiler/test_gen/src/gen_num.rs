@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocDec, RocOrder};
+use roc_std::{RocDec, RocOrder, RocResult};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -1791,30 +1791,22 @@ fn int_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn int_add_checked() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_add_checked_ok() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1 2 is
-                    Ok v -> v
-                    _ -> -1
-                "#
-        ),
-        3,
-        i64
+        "Num.addChecked 1 2",
+        RocResult::ok(3),
+        RocResult<i64, ()>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_add_checked_err() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 9_223_372_036_854_775_807 1 is
-                    Err Overflow -> -1
-                    Ok v -> v
-                "#
-        ),
-        -1,
-        i64
+        "Num.addChecked 9_223_372_036_854_775_807 1",
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
