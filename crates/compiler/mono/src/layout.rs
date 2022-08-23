@@ -1142,7 +1142,7 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        roc_tracing::debug!(size = ?lambda_set_size(subs, closure_var), "building lambda set layout");
+        roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(subs, closure_var), "building lambda set layout");
 
         match resolve_lambda_set(subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
