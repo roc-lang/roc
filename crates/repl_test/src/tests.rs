@@ -542,7 +542,18 @@ fn four_element_record() {
 #[test]
 fn multiline_string() {
     // If a string contains newlines, format it as a multiline string in the output
-    expect_success(r#""\n\nhi!\n\n""#, "\"\n\nhi!\n\n\" : Str");
+    expect_success(
+        r#""\n\nhi!\n\n""#,
+        indoc!(
+            r#""""
+
+            
+                hi!
+            
+
+                """ : Str"#
+        ),
+    );
 }
 
 #[test]
