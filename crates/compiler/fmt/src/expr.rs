@@ -419,7 +419,15 @@ fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, inden
 
     match seg {
         Plaintext(string) => {
-            buf.push_str_allow_spaces(string);
+            // Lines in block strings will end with Plaintext ending in "\n" to indicate
+            // a line break in the input string
+            match string.strip_suffix('\n') {
+                Some(string_without_newline) => {
+                    buf.push_str_allow_spaces(string_without_newline);
+                    buf.newline();
+                }
+                None => buf.push_str_allow_spaces(string),
+            }
         }
         Unicode(loc_str) => {
             buf.push_str("\\u(");
@@ -501,36 +509,19 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             }
         }
         Block(lines) => {
+            // Block strings will always be formatted with """ on new lines
             buf.push_str("\"\"");
+            buf.newline();
 
-            if lines.len() > 1 {
-                // Since we have multiple lines, format this with
-                // the `"""` symbols on their own lines, and the
+            for segments in lines.iter() {
+                for seg in segments.iter() {
+                    buf.indent(indent);
+                    format_str_segment(seg, buf, indent);
+                }
+
                 buf.newline();
-
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    buf.newline();
-                }
-            } else {
-                // This is a single-line block string, for example:
-                //
-                //     """Whee, "quotes" inside quotes!"""
-
-                // This loop will run either 0 or 1 times.
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    // Don't print a newline here, because we either
-                    // just printed 1 or 0 lines.
-                }
             }
-
+            buf.indent(indent);
             buf.push_str("\"\"");
         }
     }
