@@ -1009,6 +1009,58 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         imul_reg64_reg64(buf, dst, src2);
     }
 
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        mul_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
+    }
+
+    fn mul_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            mulss_freg32_freg32(buf, dst, src2);
+        } else if dst == src2 {
+            mulss_freg32_freg32(buf, dst, src1);
+        } else {
+            movss_freg32_freg32(buf, dst, src1);
+            mulss_freg32_freg32(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
+    fn mul_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            mulsd_freg64_freg64(buf, dst, src2);
+        } else if dst == src2 {
+            mulsd_freg64_freg64(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            mulsd_freg64_freg64(buf, dst, src2);
+        }
+    }
+
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
         jmp_imm32(buf, offset);
@@ -1280,12 +1332,25 @@ impl X86_64Assembler {
     }
 }
 const REX: u8 = 0x40;
-const REX_W: u8 = REX | 0x8;
+
+// see https://wiki.osdev.org/X86-64_Instruction_Encoding#Encoding
+/// If set, 64-bit operand size is used
+const REX_PREFIX_W: u8 = 0b1000;
+/// Extension to the MODRM.reg
+const REX_PREFIX_R: u8 = 0b0100;
+#[allow(unused)]
+/// Extension to the SIB.index field
+const REX_PREFIX_X: u8 = 0b0010;
+/// Extension to the MODRM.rm
+const REX_PREFIX_B: u8 = 0b0001;
+
+/// Wide REX
+const REX_W: u8 = REX | REX_PREFIX_W;
 
 #[inline(always)]
 fn add_rm_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 1
+        byte | REX_PREFIX_B
     } else {
         byte
     }
@@ -1299,7 +1364,7 @@ fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 #[inline(always)]
 fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 4
+        byte | REX_PREFIX_R
     } else {
         byte
     }
@@ -1396,6 +1461,46 @@ fn addss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     }
 }
 
+/// `MULSD xmm1,xmm2/m64` -> Multiply the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn mulsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF2,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x59,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF2, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `ADDSS xmm1,xmm2/m64` -> Add the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn mulss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x59,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF3, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
 #[inline(always)]
 fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
     let dst_high = dst as u8 > 7;
@@ -1463,6 +1568,19 @@ fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gen
     // IMUL is strange, the parameters are reversed from must other binary ops.
     // The final encoding is (src, dst) instead of (dst, src).
     extended_binop_reg64_reg64(0x0F, 0xAF, buf, src, dst);
+}
+
+/// `MUL r/m64` -> Unsigned Multiply r/m64 to r64.
+#[inline(always)]
+fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
+    let mut rex = REX_W;
+    rex = add_reg_extension(src, rex);
+
+    if src.value() > 7 {
+        rex |= REX_PREFIX_B;
+    }
+
+    buf.extend(&[rex, 0xF7, 0b1110_0000 | (src as u8 % 8)]);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
@@ -2083,6 +2201,35 @@ mod tests {
             |reg1, reg2| format!("imul {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mul_reg64_reg64() {
+        disassembler_test!(
+            mul_reg64_reg64,
+            |reg| format!("mul {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mulsd_freg64_freg64() {
+        disassembler_test!(
+            mulsd_freg64_freg64,
+            |reg1, reg2| format!("mulsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_mulss_freg32_freg32() {
+        disassembler_test!(
+            mulss_freg32_freg32,
+            |reg1, reg2| format!("mulss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
         );
     }
 

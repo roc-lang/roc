@@ -21,7 +21,7 @@ mod disassembler_test_macro;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 
-use storage::StorageManager;
+use storage::{RegStorage, StorageManager};
 
 const REFCOUNT_ONE: u64 = i64::MIN as u64;
 // TODO: on all number functions double check and deal with over/underflow.
@@ -210,12 +210,33 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn mul_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn mul_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -337,6 +358,19 @@ pub fn new_backend_64bit<
         join_map: MutMap::default(),
         storage_manager: storage::new_storage_manager(env, target_info),
     }
+}
+
+macro_rules! quadword_and_smaller {
+    () => {
+        IntWidth::I64
+            | IntWidth::U64
+            | IntWidth::I32
+            | IntWidth::U32
+            | IntWidth::I16
+            | IntWidth::U16
+            | IntWidth::I8
+            | IntWidth::U8
+    };
 }
 
 impl<
@@ -699,16 +733,7 @@ impl<
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
         match layout {
-            Layout::Builtin(Builtin::Int(
-                IntWidth::I64
-                | IntWidth::U64
-                | IntWidth::I32
-                | IntWidth::U32
-                | IntWidth::I16
-                | IntWidth::U16
-                | IntWidth::I8
-                | IntWidth::U8,
-            )) => {
+            Layout::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -736,7 +761,9 @@ impl<
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
         match layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(
+                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
+            )) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -745,6 +772,37 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Int(
+                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
+            )) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+
+                ASM::umul_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumMul: layout, {:?}", x),
         }
