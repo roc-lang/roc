@@ -1068,12 +1068,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src2: X86_64FloatReg,
     ) {
         if dst == src1 {
-            divss_freg64_freg64(buf, dst, src2);
+            divss_freg32_freg32(buf, dst, src2);
         } else if dst == src2 {
-            divss_freg64_freg64(buf, dst, src1);
+            divss_freg32_freg32(buf, dst, src1);
         } else {
             movsd_freg64_freg64(buf, dst, src1);
-            divss_freg64_freg64(buf, dst, src2);
+            divss_freg32_freg32(buf, dst, src2);
         }
     }
 
@@ -1555,7 +1555,7 @@ fn mulsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
 
 /// `DIVSS xmm1,xmm2/m64` -> Divide the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
 #[inline(always)]
-fn divss_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+fn divss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
@@ -1725,8 +1725,12 @@ fn udiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
         rex |= REX_PREFIX_B;
     }
 
-    // `xor edx, edx`, clears the edx register
-    buf.extend(&[0x31, 0b1101_0010]);
+    // The CQO instruction can be used to produce a double quadword dividend
+    // from a quadword before a quadword division.
+    //
+    // The CQO instruction (available in 64-bit mode only) copies the sign (bit 63)
+    // of the value in the RAX register into every bit position in the RDX register
+    buf.extend(&[0x48, 0x99]);
 
     // adds a cqo (convert doubleword to quadword)
     buf.extend(&[rex, 0xF7, 0b1111_0000 | (src as u8 % 8)]);
@@ -2377,6 +2381,44 @@ mod tests {
         disassembler_test!(
             mulss_freg32_freg32,
             |reg1, reg2| format!("mulss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_idiv_reg64_reg64() {
+        disassembler_test!(
+            idiv_reg64_reg64,
+            |reg| format!("cqo\nidiv {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_div_reg64_reg64() {
+        disassembler_test!(
+            udiv_reg64_reg64,
+            |reg| format!("cqo\ndiv {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_divsd_freg64_freg64() {
+        disassembler_test!(
+            divsd_freg64_freg64,
+            |reg1, reg2| format!("divsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_divss_freg32_freg32() {
+        disassembler_test!(
+            divss_freg32_freg32,
+            |reg1, reg2| format!("divss {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
         );
