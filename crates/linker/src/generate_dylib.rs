@@ -364,14 +364,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         })
     }
 
-    // We must sort for GNU hash before allocating symbol indices.
-    if let Some(in_gnu_hash) = in_gnu_hash.as_ref() {
-        //        // TODO: recalculate bucket_count
-        out_dynsyms.sort_by_key(|sym| match sym.gnu_hash {
-            None => (0, 0),
-            Some(hash) => (1, hash % in_gnu_hash.bucket_count.get(endian)),
-        });
-    }
     let mut out_dynsyms_index = vec![Default::default(); in_dynsyms.len() + custom_names.len()];
     for out_dynsym in out_dynsyms.iter_mut() {
         out_dynsyms_index[out_dynsym.in_sym] = writer.reserve_dynamic_symbol_index();
