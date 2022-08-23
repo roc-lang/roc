@@ -10,7 +10,7 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, Label, OptVariable, RecordFields, Subs, UnionTags,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, UnionTags,
     UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
@@ -1142,6 +1142,8 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
+        roc_tracing::debug!(size = ?lambda_set_size(subs, closure_var), "building lambda set layout");
+
         match resolve_lambda_set(subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
                 // sort the tags; make sure ordering stays intact!
@@ -1318,6 +1320,122 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
             c => internal_error!("called with a non-lambda set {:?}", c),
         }
     }
+}
+
+/// Determines the "size" of a lambda set. Size roughly calculates how many nested lambda sets are
+/// captured in a lambda set.
+/// Size is calculated in three dimensions:
+///   - the depth of the longest chain of nested lambda sets, including type constructors besides
+///     lambda sets.
+///   - the depth of the longest chain of nested lambda sets, excluding type constructors besides
+///     lambda sets.
+///   - the total number of lambda sets
+/// The returned tuple consists of these statistics in order. A lambda set with no nested lambda
+/// set captures, but perhaps with other captures, would have a size of (1, 1, 1).
+///
+/// Follows recursion variables until they are seen twice.
+/// Returns (0, 0, 0) if the provided variable is not a lambda set.
+fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
+    // NOTE: we must be very careful not to recurse on the stack.
+    let mut max_depth_any_ctor = 0;
+    let mut max_depth_only_lset = 0;
+    let mut total = 0;
+
+    let mut seen_rec_vars = roc_collections::VecSet::default();
+
+    // Run a DFS. I think in general deeply nested lambda sets wind up looking like multi-leaf
+    // trees, so I think running the depth first saves space.
+    let mut stack = std::vec::Vec::with_capacity(4);
+    stack.push((var, 0, 0));
+    while let Some((var, depth_any, depth_lset)) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            // The interesting case
+            Content::LambdaSet(roc_types::subs::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized: _,
+                ambient_function: _,
+            }) => {
+                total += 1;
+
+                let new_depth_any = depth_any + 1;
+                let new_depth_lset = depth_lset + 1;
+                max_depth_any_ctor = std::cmp::max(max_depth_any_ctor, new_depth_any);
+                max_depth_only_lset = std::cmp::max(max_depth_only_lset, new_depth_lset);
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    seen_rec_vars.insert(rec_var);
+                }
+                for (_, captures) in solved.iter_from_subs(subs) {
+                    for capture in captures {
+                        stack.push((*capture, new_depth_any, new_depth_lset));
+                    }
+                }
+            }
+            // The boring ones
+            Content::RecursionVar {
+                structure,
+                opt_name: _,
+            } => {
+                if !seen_rec_vars.contains(&var) {
+                    stack.push((*structure, depth_any + 1, depth_lset))
+                }
+            }
+            Content::Alias(_, _, real_var, _) => {
+                // For layout purposes, only the real_var matters.
+                stack.push((*real_var, depth_any + 1, depth_lset));
+            }
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, args) => {
+                    for var in subs.get_subs_slice(*args) {
+                        stack.push((*var, depth_any + 1, depth_lset));
+                    }
+                }
+                FlatType::Func(args, lset, ret) => {
+                    for var in subs.get_subs_slice(*args) {
+                        stack.push((*var, depth_any + 1, depth_lset));
+                    }
+                    stack.push((*lset, depth_any + 1, depth_lset));
+                    stack.push((*ret, depth_any + 1, depth_lset));
+                }
+                FlatType::Record(fields, ext) => {
+                    for var_index in fields.iter_variables() {
+                        let var = subs[var_index];
+                        stack.push((var, depth_any + 1, depth_lset));
+                    }
+                    stack.push((*ext, depth_any + 1, depth_lset));
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    stack.push((*ext, depth_any + 1, depth_lset));
+                }
+                FlatType::TagUnion(tags, ext) => {
+                    for (_, payloads) in tags.iter_from_subs(subs) {
+                        for payload in payloads {
+                            stack.push((*payload, depth_any + 1, depth_lset));
+                        }
+                    }
+                    stack.push((*ext, depth_any + 1, depth_lset));
+                }
+                FlatType::RecursiveTagUnion(rec_var, tags, ext) => {
+                    seen_rec_vars.insert(*rec_var);
+                    for (_, payloads) in tags.iter_from_subs(subs) {
+                        for payload in payloads {
+                            stack.push((*payload, depth_any + 1, depth_lset));
+                        }
+                    }
+                    stack.push((*ext, depth_any + 1, depth_lset));
+                }
+                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+            },
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RangedNumber(_)
+            | Content::Error => {}
+        }
+    }
+    (max_depth_any_ctor, max_depth_only_lset, total)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
