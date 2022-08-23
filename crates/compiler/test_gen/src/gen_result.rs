@@ -1,10 +1,8 @@
-#![cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -228,7 +226,7 @@ fn is_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_ok() {
     assert_evals_to!(
         indoc!(
@@ -245,7 +243,7 @@ fn roc_result_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_err() {
     assert_evals_to!(
         indoc!(
@@ -258,6 +256,32 @@ fn roc_result_err() {
         ),
         RocResult::err(RocStr::from("foo")),
         RocResult<i64, RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn function_returns_roc_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            addChecked : Num a, Num a -> Result (Num a) [Overflow]*
+            addChecked = \a, b ->
+                result = addCheckedLowlevel a b
+
+                if result.b then
+                    Err Overflow
+                else
+                    Ok result.a
+
+            addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
+            addCheckedLowlevel = \a, b -> { b: True, a: a + b }
+
+            addChecked 1 2
+            "#
+        ),
+        RocResult::ok(42),
+        RocResult<i64, ()>
     );
 }
 
