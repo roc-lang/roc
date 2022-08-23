@@ -27,11 +27,6 @@ pub fn generate(custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
     }
 }
 
-struct Section {
-    name: Option<object::write::StringId>,
-    offset: usize,
-}
-
 #[derive(Debug)]
 struct Dynamic {
     tag: u32,
@@ -66,7 +61,6 @@ struct Sections {
     gnu_hash: MySection,
     dynsym: MySection,
     dynstr: MySection,
-    eh_frame: MySection,
     dynamic: MySection,
     symtab: MySection,
     strtab: MySection,
@@ -88,7 +82,6 @@ impl Sections {
             &self.gnu_hash,
             &self.dynsym,
             &self.dynstr,
-            &self.eh_frame,
             &self.dynamic,
             &self.symtab,
             &self.strtab,
@@ -104,11 +97,11 @@ impl Sections {
         hash_chain_count: u32,
         gnu_hash_symbol_count: u32,
         dynamic_count: usize,
-    ) -> ([usize; 6], Addresses) {
+    ) -> ([usize; 5], Addresses) {
         let sections = self;
         let endian = Endianness::Little;
 
-        let mut offsets = [0; 6];
+        let mut offsets = [0; 5];
 
         let mut extra_offset: usize = 0;
 
@@ -190,26 +183,10 @@ impl Sections {
             actual_size - sections.dynstr.section.sh_size(endian) as usize
         };
 
-        // elf::SHT_PROGBITS
-        let in_section = &sections.eh_frame.section;
-        let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[4] = offset;
-        writer.reserve_until(offset);
-        // out_sections[*i].offset = writer.reserve(in_section.sh_size(endian) as usize, 1);
-        let reserved_before = writer.reserved_len();
-        writer.reserve(in_section.sh_size(endian) as usize, 1);
-        let reserved_after = writer.reserved_len();
-
-        extra_offset += {
-            let actual_size = reserved_after - reserved_before;
-
-            actual_size - sections.eh_frame.section.sh_size(endian) as usize
-        };
-
         // elf::SHT_DYNAMIC
         let in_section = &sections.dynamic.section;
         let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[5] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
+        offsets[4] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
         writer.reserve_until(offset);
 
         let dynamic_addr = in_section.sh_addr(endian);
@@ -266,7 +243,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         gnu_hash: help(b".gnu.hash" as &[_]),
         dynsym: help(b".dynsym" as &[_]),
         dynstr: help(b".dynstr" as &[_]),
-        eh_frame: help(b".eh_frame" as &[_]),
         dynamic: help(b".dynamic" as &[_]),
         symtab: help(b".symtab" as &[_]),
         strtab: help(b".strtab" as &[_]),
@@ -280,27 +256,15 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let mut in_dynamic = None;
     let mut in_hash = None;
     let mut in_gnu_hash = None;
-    let mut out_sections = Vec::with_capacity(in_sections.len());
     let mut out_sections_index = Vec::with_capacity(in_sections.len());
     for (_enum_index, my_section) in sections.iter() {
         let i = my_section.in_index;
         let in_section = &my_section.section;
 
-        let mut name = None;
         let index;
         match in_section.sh_type(endian) {
             elf::SHT_NULL => {
                 index = writer.reserve_null_section_index();
-            }
-            elf::SHT_PROGBITS
-            | elf::SHT_NOBITS
-            | elf::SHT_NOTE
-            | elf::SHT_REL
-            | elf::SHT_RELA
-            | elf::SHT_INIT_ARRAY
-            | elf::SHT_FINI_ARRAY => {
-                name = Some(writer.add_section_name(in_sections.section_name(endian, in_section)?));
-                index = writer.reserve_section_index();
             }
             elf::SHT_STRTAB => {
                 if i == in_syms.string_section().0 {
@@ -356,7 +320,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 panic!("Unsupported section type {:x}", other);
             }
         }
-        out_sections.push(Section { name, offset: 0 });
         out_sections_index.push(index);
     }
 
@@ -395,8 +358,8 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         let hash = Some(elf::hash(in_name));
         let gnu_hash = Some(elf::gnu_hash(in_name));
 
-        // .eh_frame
-        let section = Some(out_sections_index[5]);
+        // .dynamic
+        let section = Some(out_sections_index[4]);
 
         out_dynsyms.push(DynamicSymbol {
             in_sym: i,
@@ -520,7 +483,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 p_type: in_segment.p_type(endian),
                 p_flags: in_segment.p_flags(endian),
                 // dirty hack really. Not sure if this is correct on its own
-                p_offset: offsets[5] as _,
+                p_offset: offsets[4] as _,
                 p_vaddr: in_segment.p_vaddr(endian),
                 p_paddr: in_segment.p_paddr(endian),
                 p_filesz: in_segment.p_filesz(endian),
@@ -533,7 +496,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 p_flags: in_segment.p_flags(endian),
                 // dirty hack really. Not sure if this is correct on its own
                 p_offset: if in_segment.p_offset(endian) > 0 {
-                    offsets[5] as _
+                    offsets[4] as _
                 } else {
                     0
                 },
@@ -550,7 +513,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         writer.pad_until(offsets[*i - 1]);
         match in_section.sh_type(endian) {
             elf::SHT_PROGBITS | elf::SHT_NOTE | elf::SHT_INIT_ARRAY | elf::SHT_FINI_ARRAY => {
-                writer.write(in_section.data(endian, in_data)?);
+                // writer.write(in_section.data(endian, in_data)?);
             }
             elf::SHT_DYNAMIC => {
                 for d in &out_dynamic {
@@ -607,20 +570,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         }
     }
 
-    for (i, in_section) in in_sections.iter().enumerate() {
-        if in_section.sh_flags(endian) & u64::from(elf::SHF_ALLOC) != 0 {
-            continue;
-        }
-        match in_section.sh_type(endian) {
-            elf::SHT_PROGBITS | elf::SHT_NOTE => {
-                writer.write_align(in_section.sh_addralign(endian) as usize);
-                debug_assert_eq!(out_sections[i].offset, writer.len());
-                writer.write(in_section.data(endian, in_data)?);
-            }
-            _ => {}
-        }
-    }
-
     writer.write_null_symbol();
     let section_indices = [0, 1, 2, 3, 4, 5, 5];
     for (sym, sindex) in out_syms.iter().zip(section_indices) {
@@ -648,29 +597,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     writer.write_dynsym_section_header(addresses.dynsym, 1);
 
     writer.write_dynstr_section_header(addresses.dynstr);
-
-    {
-        let in_section = &sections.eh_frame.section;
-        let out_section = &out_sections[5]; // 5 is a random choice
-        let sh_link = out_sections_index[in_section.sh_link(endian) as usize].0 as u32;
-        let mut sh_info = in_section.sh_info(endian);
-        if in_section.sh_flags(endian) as u32 & elf::SHF_INFO_LINK != 0 {
-            sh_info = out_sections_index[sh_info as usize].0 as u32;
-        }
-
-        writer.write_section_header(&object::write::elf::SectionHeader {
-            name: out_section.name,
-            sh_type: in_section.sh_type(endian),
-            sh_flags: in_section.sh_flags(endian),
-            sh_addr: in_section.sh_addr(endian),
-            sh_offset: offsets[4] as u64,
-            sh_size: in_section.sh_size(endian),
-            sh_link,
-            sh_info,
-            sh_addralign: in_section.sh_addralign(endian),
-            sh_entsize: in_section.sh_entsize(endian),
-        });
-    }
 
     writer.write_dynamic_section_header(addresses.dynamic);
 
