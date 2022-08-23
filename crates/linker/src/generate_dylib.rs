@@ -63,9 +63,6 @@ struct Sections {
     dynsym: Section,
     dynstr: Section,
     dynamic: Section,
-    symtab: Section,
-    strtab: Section,
-    shstrtab: Section,
 }
 
 #[derive(Default)]
@@ -78,21 +75,6 @@ struct Addresses {
 }
 
 impl Sections {
-    fn iter(&self) -> impl Iterator<Item = (usize, &'_ Section)> + '_ {
-        [
-            &self.hash,
-            &self.gnu_hash,
-            &self.dynsym,
-            &self.dynstr,
-            &self.dynamic,
-            &self.symtab,
-            &self.strtab,
-            &self.shstrtab,
-        ]
-        .into_iter()
-        .enumerate()
-    }
-
     fn reserve_alloc_sections(
         &self,
         writer: &mut Writer,
@@ -201,60 +183,21 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         dynsym: help(b".dynsym" as &[_]),
         dynstr: help(b".dynstr" as &[_]),
         dynamic: help(b".dynamic" as &[_]),
-        symtab: help(b".symtab" as &[_]),
-        strtab: help(b".strtab" as &[_]),
-        shstrtab: help(b".shstrtab" as &[_]),
     };
 
     let mut out_data = Vec::new();
     let mut writer = object::write::elf::Writer::new(endian, in_elf.is_class_64(), &mut out_data);
 
-    // Find metadata sections, and assign section indices.
-    let mut out_sections_index = Vec::with_capacity(in_sections.len());
-    for (_enum_index, section) in sections.iter() {
-        let i = section.in_index;
-        let in_section = &section.section;
-
-        let index;
-        match in_section.sh_type(endian) {
-            elf::SHT_STRTAB => {
-                if i == in_syms.string_section().0 {
-                    index = writer.reserve_strtab_section_index();
-                } else if i == in_dynsyms.string_section().0 {
-                    index = writer.reserve_dynstr_section_index();
-                } else if i == in_elf.shstrndx(endian, in_data)? as usize {
-                    index = writer.reserve_shstrtab_section_index();
-                } else {
-                    panic!("Unsupported string section {}", i);
-                }
-            }
-            elf::SHT_SYMTAB => {
-                debug_assert!(i == in_syms.section().0);
-                index = writer.reserve_symtab_section_index();
-            }
-            elf::SHT_SYMTAB_SHNDX => {
-                debug_assert!(i == in_syms.shndx_section().0);
-                index = writer.reserve_symtab_shndx_section_index();
-            }
-            elf::SHT_DYNSYM => {
-                debug_assert!(i == in_dynsyms.section().0);
-                index = writer.reserve_dynsym_section_index();
-            }
-            elf::SHT_DYNAMIC => {
-                index = writer.reserve_dynamic_section_index();
-            }
-            elf::SHT_HASH => {
-                index = writer.reserve_hash_section_index();
-            }
-            elf::SHT_GNU_HASH => {
-                index = writer.reserve_gnu_hash_section_index();
-            }
-            other => {
-                panic!("Unsupported section type {:x}", other);
-            }
-        }
-        out_sections_index.push(index);
-    }
+    let out_sections_index = [
+        writer.reserve_hash_section_index(),
+        writer.reserve_gnu_hash_section_index(),
+        writer.reserve_dynsym_section_index(),
+        writer.reserve_dynstr_section_index(),
+        writer.reserve_dynamic_section_index(),
+        writer.reserve_symtab_section_index(),
+        writer.reserve_strtab_section_index(),
+        writer.reserve_shstrtab_section_index(),
+    ];
 
     // Assign dynamic strings.
     //
