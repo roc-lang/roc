@@ -443,16 +443,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
-    }
-
-    #[inline(always)]
-    fn visit_rigid(var: Variable) -> Result<(), DerivableError> {
-        Err(DerivableError::NotDerivable(var))
-    }
-
-    #[inline(always)]
     fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), DerivableError> {
         if ability != Self::ABILITY {
             Err(DerivableError::NotDerivable(var))
@@ -529,7 +519,7 @@ trait DerivableVisitor {
     fn is_derivable(
         obligation_cache: &mut ObligationCache,
         abilities_store: &AbilitiesStore,
-        subs: &Subs,
+        subs: &mut Subs,
         var: Variable,
     ) -> Result<(), DerivableError> {
         let mut stack = vec![var];
@@ -552,8 +542,11 @@ trait DerivableVisitor {
             use DerivableError::*;
             use FlatType::*;
             match *content {
-                FlexVar(_) => Self::visit_flex(var)?,
-                RigidVar(_) => Self::visit_rigid(var)?,
+                FlexVar(opt_name) => {
+                    // Promote the flex var to be bound to the ability.
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
+                }
+                RigidVar(_) => return Err(NotDerivable(var)),
                 FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
                 RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
                 RecursionVar {
