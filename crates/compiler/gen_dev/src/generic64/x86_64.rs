@@ -1695,7 +1695,7 @@ fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
     buf.extend(&[rex, 0xF7, 0b1110_0000 | (src as u8 % 8)]);
 }
 
-/// `IDIV r/m64` -> Signed Divide r/m64 to r64.
+/// `IDIV r/m64` -> Signed divide RDX:RAX by r/m64, with result stored in RAX ← Quotient, RDX ← Remainder.
 #[inline(always)]
 fn idiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
     let mut rex = REX_W;
@@ -1705,11 +1705,17 @@ fn idiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
         rex |= REX_PREFIX_B;
     }
 
-    // adds a cqo (convert doubleword to quadword)
-    buf.extend(&[0x48, 0x99, rex, 0xF7, 0b1111_1000 | (src as u8 % 8)]);
+    // The CQO instruction can be used to produce a double quadword dividend
+    // from a quadword before a quadword division.
+    //
+    // The CQO instruction (available in 64-bit mode only) copies the sign (bit 63)
+    // of the value in the RAX register into every bit position in the RDX register
+    buf.extend(&[0x48, 0x99]);
+
+    buf.extend(&[rex, 0xF7, 0b1111_1000 | (src as u8 % 8)]);
 }
 
-/// `DIV r/m64` -> Unsigned Divide r/m64 to r64.
+/// `DIV r/m64` -> Unsigned divide RDX:RAX by r/m64, with result stored in RAX ← Quotient, RDX ← Remainder.
 #[inline(always)]
 fn udiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
     let mut rex = REX_W;
@@ -1719,8 +1725,11 @@ fn udiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
         rex |= REX_PREFIX_B;
     }
 
+    // `xor edx, edx`, clears the edx register
+    buf.extend(&[0x31, 0b1101_0010]);
+
     // adds a cqo (convert doubleword to quadword)
-    buf.extend(&[0x48, 0x99, rex, 0xF7, 0b1111_0000 | (src as u8 % 8)]);
+    buf.extend(&[rex, 0xF7, 0b1111_0000 | (src as u8 % 8)]);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
