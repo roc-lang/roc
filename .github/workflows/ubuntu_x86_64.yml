@@ -21,27 +21,26 @@ jobs:
         with:
           clean: "true"
           
-      - run: which rustup
-      
-      - run: rustup target list
+      - run: which cargo
+      - run: rustup target list --installed
 
-      - name: zig fmt check, zig tests
-        run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+      #- name: zig fmt check, zig tests
+      #  run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
 
-      - name: zig wasm tests
-        run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+      #- name: zig wasm tests
+      #  run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
-      - name: regular rust tests
-        run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
+      #- name: regular rust tests
+      #  run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
 
-      - name: test the dev backend # these tests require an explicit feature flag
-        run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+      #- name: test the dev backend # these tests require an explicit feature flag
+      #  run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 
-      - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
-        run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+      #- name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
+      #  run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
 
-      - name: run `roc test` on Str builtins
-        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
+      #- name: run `roc test` on Str builtins
+      #  run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
 
       #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test
