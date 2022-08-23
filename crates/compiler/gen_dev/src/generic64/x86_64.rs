@@ -1318,6 +1318,10 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
+
+    fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+        seto_reg64(buf, dst);
+    }
 }
 
 impl X86_64Assembler {
@@ -1963,6 +1967,12 @@ fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 #[inline(always)]
 fn setge_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9d, buf, reg);
+}
+
+/// `SETO r/m64` -> Set byte if oveflow flag is set.
+#[inline(always)]
+fn seto_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x90, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.
