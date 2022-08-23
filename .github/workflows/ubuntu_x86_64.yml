@@ -20,8 +20,7 @@ jobs:
       - uses: actions/checkout@v2
         with:
           clean: "true"
-          
-      - run: rustup target add wasm32-wasi
+      
       - run: rustup target list --installed
 
       #- name: zig fmt check, zig tests
