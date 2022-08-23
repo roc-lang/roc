@@ -54,6 +54,7 @@ impl TracingGuards {
 #[must_use]
 pub fn setup_tracing() -> TracingGuards {
     if let Ok(file) = std::env::var(LOGTO_VAR) {
+        let _ = std::fs::remove_file(&file);
         let file_appender = tracing_appender::rolling::never(".", file);
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         let file_layer = fmt::Layer::default()
