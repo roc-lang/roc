@@ -370,22 +370,12 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     // Hash parameters.
-    let hash_index_base = out_dynsyms
-        .first()
-        .map(|sym| out_dynsyms_index[sym.in_sym].0)
-        .unwrap_or(0);
+    let hash_index_base = 1;
     let hash_chain_count = writer.dynamic_symbol_count();
 
     // GNU hash parameters.
-    let gnu_hash_index_base = out_dynsyms
-        .iter()
-        .position(|sym| sym.gnu_hash.is_some())
-        .unwrap_or(0);
-    let gnu_hash_symbol_base = out_dynsyms
-        .iter()
-        .find(|sym| sym.gnu_hash.is_some())
-        .map(|sym| out_dynsyms_index[sym.in_sym].0)
-        .unwrap_or_else(|| writer.dynamic_symbol_count());
+    let gnu_hash_index_base = 0;
+    let gnu_hash_symbol_base = 1;
     let gnu_hash_symbol_count = writer.dynamic_symbol_count() - gnu_hash_symbol_base;
 
     // Assign symbol indices.
