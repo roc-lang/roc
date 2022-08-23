@@ -115,8 +115,6 @@ impl Sections {
 
         let hash_addr = in_section.sh_addr(endian);
         // here we fake a bigger hash table than the input file has
-        // let hash = in_hash.as_ref().unwrap();
-        // writer.reserve_hash(hash.bucket_count.get(endian), hash_chain_count);
         let reserved_before = writer.reserved_len();
         writer.reserve_hash(3, hash_chain_count);
         let reserved_after = writer.reserved_len();
@@ -134,15 +132,8 @@ impl Sections {
         writer.reserve_until(offset);
 
         let gnu_hash_addr = in_section.sh_addr(endian);
-        // let hash = in_gnu_hash.as_ref().unwrap();
         let reserved_before = writer.reserved_len();
-        writer.reserve_gnu_hash(
-            // hash.bloom_count.get(endian),
-            // hash.bucket_count.get(endian),
-            1,
-            1,
-            gnu_hash_symbol_count,
-        );
+        writer.reserve_gnu_hash(1, 1, gnu_hash_symbol_count);
         let reserved_after = writer.reserved_len();
 
         extra_offset += {
@@ -255,9 +246,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let mut writer = object::write::elf::Writer::new(endian, in_elf.is_class_64(), &mut out_data);
 
     // Find metadata sections, and assign section indices.
-    let mut in_dynamic = None;
-    let mut in_hash = None;
-    let mut in_gnu_hash = None;
     let mut out_sections_index = Vec::with_capacity(in_sections.len());
     for (_enum_index, section) in sections.iter() {
         let i = section.in_index;
@@ -265,9 +253,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
 
         let index;
         match in_section.sh_type(endian) {
-            elf::SHT_NULL => {
-                index = writer.reserve_null_section_index();
-            }
             elf::SHT_STRTAB => {
                 if i == in_syms.string_section().0 {
                     index = writer.reserve_strtab_section_index();
@@ -292,21 +277,12 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 index = writer.reserve_dynsym_section_index();
             }
             elf::SHT_DYNAMIC => {
-                assert!(in_dynamic.is_none());
-                in_dynamic = in_section.dynamic(endian, in_data)?;
-                debug_assert!(in_dynamic.is_some());
                 index = writer.reserve_dynamic_section_index();
             }
             elf::SHT_HASH => {
-                assert!(in_hash.is_none());
-                in_hash = in_section.hash_header(endian, in_data)?;
-                debug_assert!(in_hash.is_some());
                 index = writer.reserve_hash_section_index();
             }
             elf::SHT_GNU_HASH => {
-                assert!(in_gnu_hash.is_none());
-                in_gnu_hash = in_section.gnu_hash_header(endian, in_data)?;
-                debug_assert!(in_gnu_hash.is_some());
                 index = writer.reserve_gnu_hash_section_index();
             }
             other => {
@@ -317,27 +293,29 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     // Assign dynamic strings.
-    let mut out_dynamic = Vec::new();
-    if let Some((in_dynamic, link)) = in_dynamic {
-        out_dynamic.reserve(in_dynamic.len());
-        let in_dynamic_strings = in_sections.strings(endian, in_data, link)?;
-        for d in in_dynamic {
-            let tag: u32 = d.d_tag(endian) as u32;
-            let val: u64 = d.d_val(endian);
-            let string = if d.is_string(endian) {
-                let s = in_dynamic_strings
-                    .get(val.try_into()?)
-                    .map_err(|_| "Invalid dynamic string")?;
-                Some(writer.add_dynamic_string(s))
-            } else {
-                None
-            };
-            out_dynamic.push(Dynamic { tag, val, string });
-            if tag == elf::DT_NULL {
-                break;
-            }
-        }
-    }
+    //
+    // Dynamic section at offset 0x2268 contains 8 entries:
+    //   Tag        Type                         Name/Value
+    //  0x000000000000000e (SONAME)             Library soname: [libapp.so]
+    //  0x0000000000000004 (HASH)               0x120
+    //  0x000000006ffffef5 (GNU_HASH)           0x130
+    //  0x0000000000000005 (STRTAB)             0x168
+    //  0x0000000000000006 (SYMTAB)             0x150
+    //  0x000000000000000a (STRSZ)              11 (bytes)
+    //  0x000000000000000b (SYMENT)             24 (bytes)
+    //  0x0000000000000000 (NULL)               0x0
+    let dynamic = |tag, val, string| Dynamic { tag, val, string };
+    let soname = writer.add_dynamic_string(b"libapp.so");
+    let out_dynamic = [
+        dynamic(elf::DT_SONAME, 1, Some(soname)),
+        dynamic(elf::DT_HASH, 288, None),
+        dynamic(elf::DT_GNU_HASH, 304, None),
+        dynamic(elf::DT_STRTAB, 360, None),
+        dynamic(elf::DT_SYMTAB, 336, None),
+        dynamic(elf::DT_STRSZ, 11, None),
+        dynamic(elf::DT_SYMENT, 24, None),
+        dynamic(elf::DT_NULL, 0, None),
+    ];
 
     // Assign dynamic symbol indices.
     let mut out_dynsyms = Vec::with_capacity(in_dynsyms.len());
@@ -477,8 +455,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         {
             writer.pad_until(offsets[0]);
 
-            let hash = in_hash.as_ref().unwrap();
-            writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |_| None);
+            writer.write_hash(1, hash_chain_count, |_| None);
         }
 
         {
