@@ -450,56 +450,47 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         }
     }
 
-    {
-        {
-            writer.pad_until(offsets[0]);
+    for (i, offset) in offsets.iter().enumerate() {
+        writer.pad_until(*offset);
 
-            writer.write_hash(1, hash_chain_count, |_| None);
-        }
-
-        {
-            writer.pad_until(offsets[1]);
-
-            writer.write_gnu_hash(1, 0, 1, 1, gnu_hash_symbol_count, |index| {
-                out_dynsyms[gnu_hash_index_base + index as usize]
-                    .gnu_hash
-                    .unwrap()
-            });
-        }
-
-        {
-            writer.pad_until(offsets[2]);
-
-            writer.write_null_dynamic_symbol();
-            for sym in &out_dynsyms {
-                writer.write_dynamic_symbol(&object::write::elf::Sym {
-                    name: sym.name,
-                    section: sym.section,
-                    st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
-                    st_other: 0,
-                    st_shndx: 0,
-                    st_value: 0x1000,
-                    st_size: 0,
+        match i {
+            0 => {
+                writer.write_hash(1, hash_chain_count, |_| None);
+            }
+            1 => {
+                writer.write_gnu_hash(1, 0, 1, 1, gnu_hash_symbol_count, |index| {
+                    out_dynsyms[gnu_hash_index_base + index as usize]
+                        .gnu_hash
+                        .unwrap()
                 });
             }
-        }
-
-        {
-            writer.pad_until(offsets[3]);
-
-            writer.write_dynstr();
-        }
-
-        {
-            writer.pad_until(offsets[4]);
-
-            for d in &out_dynamic {
-                if let Some(string) = d.string {
-                    writer.write_dynamic_string(d.tag, string);
-                } else {
-                    writer.write_dynamic(d.tag, d.val);
+            2 => {
+                writer.write_null_dynamic_symbol();
+                for sym in &out_dynsyms {
+                    writer.write_dynamic_symbol(&object::write::elf::Sym {
+                        name: sym.name,
+                        section: sym.section,
+                        st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
+                        st_other: 0,
+                        st_shndx: 0,
+                        st_value: 0x1000,
+                        st_size: 0,
+                    });
                 }
             }
+            3 => {
+                writer.write_dynstr();
+            }
+            4 => {
+                for d in &out_dynamic {
+                    if let Some(string) = d.string {
+                        writer.write_dynamic_string(d.tag, string);
+                    } else {
+                        writer.write_dynamic(d.tag, d.val);
+                    }
+                }
+            }
+            _ => unreachable!(),
         }
     }
 
