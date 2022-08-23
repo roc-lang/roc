@@ -49,7 +49,6 @@ struct DynamicSymbol {
     in_sym: usize,
     name: Option<object::write::StringId>,
     section: Option<object::write::elf::SectionIndex>,
-    hash: Option<u32>,
     gnu_hash: Option<u32>,
 }
 
@@ -349,7 +348,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         let in_name = name.as_bytes();
         let name = Some(writer.add_dynamic_string(in_name));
 
-        let hash = Some(elf::hash(in_name));
         let gnu_hash = Some(elf::gnu_hash(in_name));
 
         // .dynamic
@@ -359,7 +357,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
             in_sym: i,
             name,
             section,
-            hash,
             gnu_hash,
         })
     }
@@ -370,7 +367,6 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     }
 
     // Hash parameters.
-    let hash_index_base = 1;
     let hash_chain_count = writer.dynamic_symbol_count();
 
     // GNU hash parameters.
@@ -482,29 +478,17 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
             writer.pad_until(offsets[0]);
 
             let hash = in_hash.as_ref().unwrap();
-            writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |index| {
-                out_dynsyms
-                    .get(index.checked_sub(hash_index_base)? as usize)?
-                    .hash
-            });
+            writer.write_hash(hash.bucket_count.get(endian), hash_chain_count, |_| None);
         }
 
         {
             writer.pad_until(offsets[1]);
 
-            let gnu_hash = in_gnu_hash.as_ref().unwrap();
-            writer.write_gnu_hash(
-                gnu_hash_symbol_base,
-                gnu_hash.bloom_shift.get(endian),
-                gnu_hash.bloom_count.get(endian),
-                gnu_hash.bucket_count.get(endian),
-                gnu_hash_symbol_count,
-                |index| {
-                    out_dynsyms[gnu_hash_index_base + index as usize]
-                        .gnu_hash
-                        .unwrap()
-                },
-            );
+            writer.write_gnu_hash(1, 0, 1, 1, gnu_hash_symbol_count, |index| {
+                out_dynsyms[gnu_hash_index_base + index as usize]
+                    .gnu_hash
+                    .unwrap()
+            });
         }
 
         {
