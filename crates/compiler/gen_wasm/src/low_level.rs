@@ -1191,7 +1191,16 @@ impl<'a> LowLevelCall<'a> {
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumDivUnchecked => {
+            NumDivFrac => {
+                self.load_args(backend);
+                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
+                    F32 => backend.code_builder.f32_div(),
+                    F64 => backend.code_builder.f64_div(),
+                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_DIV),
+                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                }
+            }
+            NumDivTruncUnchecked => {
                 self.load_args(backend);
                 let is_signed = symbol_is_signed_int(backend, self.arguments[0]);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
@@ -1209,9 +1218,6 @@ impl<'a> LowLevelCall<'a> {
                             backend.code_builder.i64_div_u()
                         }
                     }
-                    F32 => backend.code_builder.f32_div(),
-                    F64 => backend.code_builder.f64_div(),
-                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_DIV),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
