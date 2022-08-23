@@ -1,0 +1,11 @@
+[package]
+name = "roc_tracing"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+description = "Utilities for setting up tracing at various executable entry points."
+
+[dependencies]
+tracing = { version = "0.1.36", features = ["release_max_level_off"] }
+tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }

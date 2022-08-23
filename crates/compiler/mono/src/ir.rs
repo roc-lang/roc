@@ -3652,6 +3652,7 @@ where
     instantiate_rigids(env.subs, annotation_var);
 
     procs.push_active_specialization(proc_name.name());
+    roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
     let specialized = specialize_external(
         env,
@@ -3663,6 +3664,11 @@ where
         partial_proc_id,
     );
 
+    roc_tracing::debug!(
+        ?proc_name,
+        succeeded = specialized.is_ok(),
+        "specialization end"
+    );
     procs.pop_active_specialization(proc_name.name());
 
     match specialized {
