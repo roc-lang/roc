@@ -691,7 +691,6 @@ fn encode_derived_list_of_records() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_derived_list_of_lists_of_strings() {
     assert_evals_to!(
         indoc!(

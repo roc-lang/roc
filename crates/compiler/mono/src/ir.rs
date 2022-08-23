@@ -628,6 +628,10 @@ impl<'a> Suspended<'a> {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.symbol_or_lambdas.is_empty()
+    }
+
     fn specialization(
         &mut self,
         subs: &mut Subs,
@@ -661,8 +665,22 @@ enum PendingSpecializations<'a> {
     /// that we can give specializations we need to modules higher up in the dependency chain, so
     /// that they can start making specializations too
     Finding(Suspended<'a>),
-    /// We are making specializations. If any new one comes up, we can just make it immediately
-    Making,
+    /// We are making specializations.
+    /// If any new one comes up while specializing a body, we can do one of two things:
+    ///   - if the new specialization is for a symbol that is not in the current stack of symbols
+    ///     being specialized, make it immediately
+    ///   - if it is, we must suspend the specialization, and we'll do it once the stack is clear
+    ///     again.
+    Making(Suspended<'a>),
+}
+
+impl<'a> PendingSpecializations<'a> {
+    fn is_empty(&self) -> bool {
+        match self {
+            PendingSpecializations::Finding(suspended)
+            | PendingSpecializations::Making(suspended) => suspended.is_empty(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -947,6 +965,8 @@ pub struct Procs<'a> {
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
+    /// The current set of functions under specialization.
+    pub specialization_stack: Vec<'a, Symbol>,
 }
 
 impl<'a> Procs<'a> {
@@ -961,7 +981,42 @@ impl<'a> Procs<'a> {
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
+            specialization_stack: Vec::with_capacity_in(16, arena),
         }
+    }
+
+    fn push_active_specialization(&mut self, specialization: Symbol) {
+        self.specialization_stack.push(specialization);
+    }
+
+    fn pop_active_specialization(&mut self, specialization: Symbol) {
+        let popped = self
+            .specialization_stack
+            .pop()
+            .expect("specialization stack is empty");
+        debug_assert_eq!(
+            popped, specialization,
+            "incorrect popped specialization: passed {:?}, but was {:?}",
+            specialization, popped
+        );
+    }
+
+    /// If we need to specialize a function that is already in the stack, we must wait to do so
+    /// until that function is popped off. That's because the type environment will be configured
+    /// for the existing specialization on the stack.
+    ///
+    /// For example, in
+    ///
+    ///   foo = \val, b -> if b then "done" else bar val
+    ///   bar = \_ -> foo {} True
+    ///   foo "" False
+    ///
+    /// During the specialization of `foo : Str False -> Str`, we specialize `bar : Str -> Str`,
+    /// which in turn needs a specialization of `foo : {} False -> Str`. However, we can't
+    /// specialize both `foo : Str False -> Str` and `foo : {} False -> Str` at the same time, so
+    /// the latter specialization must be deferred.
+    fn symbol_needs_suspended_specialization(&self, specialization: Symbol) -> bool {
+        self.specialization_stack.contains(&specialization)
     }
 }
 
@@ -1052,8 +1107,14 @@ impl<'a> Procs<'a> {
                         debug_assert!(layout.arguments.is_empty());
                     }
 
-                    match &mut self.pending_specializations {
-                        PendingSpecializations::Finding(suspended) => {
+                    let needs_suspended_specialization =
+                        self.symbol_needs_suspended_specialization(name.name());
+                    match (
+                        &mut self.pending_specializations,
+                        needs_suspended_specialization,
+                    ) {
+                        (PendingSpecializations::Finding(suspended), _)
+                        | (PendingSpecializations::Making(suspended), true) => {
                             // register the pending specialization, so this gets code genned later
                             suspended.specialization(env.subs, name, layout, annotation);
 
@@ -1087,7 +1148,7 @@ impl<'a> Procs<'a> {
                                 }
                             }
                         }
-                        PendingSpecializations::Making => {
+                        (PendingSpecializations::Making(_), false) => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
@@ -1198,11 +1259,17 @@ impl<'a> Procs<'a> {
 
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
-        match &mut self.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization =
+            self.symbol_needs_suspended_specialization(name.name());
+        match (
+            &mut self.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 suspended.specialization(env.subs, name, layout, fn_var);
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let symbol = name;
 
                 let partial_proc_id = match self.partial_procs.symbol_to_id(symbol.name()) {
@@ -2735,25 +2802,50 @@ pub fn specialize_all<'a>(
     specializations_for_host: HostSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    for externals in externals_others_need {
-        specialize_external_specializations(env, &mut procs, layout_cache, externals);
-    }
-
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
     let pending_specializations = std::mem::replace(
         &mut procs.pending_specializations,
-        PendingSpecializations::Making,
+        PendingSpecializations::Making(Suspended::new_in(env.arena)),
     );
 
+    // Add all of our existing pending specializations.
     match pending_specializations {
-        PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
             specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
+        PendingSpecializations::Making(suspended) => {
+            debug_assert!(
+                suspended.is_empty(),
+                "suspended specializations cannot ever start off non-empty when making"
+            );
+        }
     }
 
+    // Specialize all the symbols everyone else needs.
+    for externals in externals_others_need {
+        specialize_external_specializations(env, &mut procs, layout_cache, externals);
+    }
+
+    // Specialize any symbols the host needs.
     specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
+
+    // Now, we must go through and continuously complete any new suspended specializations that were
+    // discovered in specializing the other demanded symbols.
+    while !procs.pending_specializations.is_empty() {
+        let pending_specializations = std::mem::replace(
+            &mut procs.pending_specializations,
+            PendingSpecializations::Making(Suspended::new_in(env.arena)),
+        );
+        match pending_specializations {
+            PendingSpecializations::Making(suspended) => {
+                specialize_suspended(env, &mut procs, layout_cache, suspended);
+            }
+            PendingSpecializations::Finding(_) => {
+                internal_error!("should not have this variant after making specializations")
+            }
+        }
+    }
 
     debug_assert!(
         procs.symbol_specializations.is_empty(),
@@ -3559,6 +3651,8 @@ where
     let annotation_var = procs.partial_procs.get_id(partial_proc_id).annotation;
     instantiate_rigids(env.subs, annotation_var);
 
+    procs.push_active_specialization(proc_name.name());
+
     let specialized = specialize_external(
         env,
         procs,
@@ -3568,6 +3662,8 @@ where
         host_exposed_variables,
         partial_proc_id,
     );
+
+    procs.pop_active_specialization(proc_name.name());
 
     match specialized {
         Ok(proc) => {
@@ -7876,8 +7972,14 @@ fn call_by_name_help<'a>(
             debug_assert!(top_level_layout.arguments.is_empty());
         }
 
-        match &mut procs.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization =
+            procs.symbol_needs_suspended_specialization(proc_name.name());
+        match (
+            &mut procs.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 debug_assert!(!env.is_imported_symbol(proc_name.name()));
 
                 // register the pending specialization, so this gets code genned later
@@ -7906,7 +8008,7 @@ fn call_by_name_help<'a>(
                     hole,
                 )
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name.name());
 
                 let field_symbols = field_symbols.into_bump_slice();
@@ -8040,8 +8142,13 @@ fn call_by_name_module_thunk<'a>(
             debug_assert!(top_level_layout.arguments.is_empty());
         }
 
-        match &mut procs.pending_specializations {
-            PendingSpecializations::Finding(suspended) => {
+        let needs_suspended_specialization = procs.symbol_needs_suspended_specialization(proc_name);
+        match (
+            &mut procs.pending_specializations,
+            needs_suspended_specialization,
+        ) {
+            (PendingSpecializations::Finding(suspended), _)
+            | (PendingSpecializations::Making(suspended), true) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
@@ -8054,7 +8161,7 @@ fn call_by_name_module_thunk<'a>(
 
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
-            PendingSpecializations::Making => {
+            (PendingSpecializations::Making(_), false) => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 match opt_partial_proc {
