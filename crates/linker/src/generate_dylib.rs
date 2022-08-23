@@ -11,6 +11,9 @@ use roc_error_macros::internal_error;
 // an empty shared library, that we build on top of
 const DUMMY: &[u8] = include_bytes!("../dummy-elf64-x86-64.so");
 
+// index of the dynamic section
+const DYMAMIC_SECTION: usize = 4;
+
 pub fn generate(custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
     let kind = match object::FileKind::parse(DUMMY) {
         Ok(file) => file,
@@ -51,20 +54,20 @@ struct DynamicSymbol {
 }
 
 #[derive(Debug)]
-struct MySection {
+struct Section {
     in_index: usize,
     section: SectionHeader64<object::Endianness>,
 }
 
 struct Sections {
-    hash: MySection,
-    gnu_hash: MySection,
-    dynsym: MySection,
-    dynstr: MySection,
-    dynamic: MySection,
-    symtab: MySection,
-    strtab: MySection,
-    shstrtab: MySection,
+    hash: Section,
+    gnu_hash: Section,
+    dynsym: Section,
+    dynstr: Section,
+    dynamic: Section,
+    symtab: Section,
+    strtab: Section,
+    shstrtab: Section,
 }
 
 struct Addresses {
@@ -76,7 +79,7 @@ struct Addresses {
 }
 
 impl Sections {
-    fn iter(&self) -> impl Iterator<Item = (usize, &'_ MySection)> + '_ {
+    fn iter(&self) -> impl Iterator<Item = (usize, &'_ Section)> + '_ {
         [
             &self.hash,
             &self.gnu_hash,
@@ -186,7 +189,7 @@ impl Sections {
         // elf::SHT_DYNAMIC
         let in_section = &sections.dynamic.section;
         let offset = in_section.sh_offset(endian) as usize + extra_offset;
-        offsets[4] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
+        offsets[DYMAMIC_SECTION] = round_up_to_alignment(offset, 8); // seems like this needs to be aligned?!
         writer.reserve_until(offset);
 
         let dynamic_addr = in_section.sh_addr(endian);
@@ -232,7 +235,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
             .section_by_name(Endianness::Little, name)
             .unwrap();
 
-        MySection {
+        Section {
             in_index,
             section: *section,
         }
@@ -257,9 +260,9 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     let mut in_hash = None;
     let mut in_gnu_hash = None;
     let mut out_sections_index = Vec::with_capacity(in_sections.len());
-    for (_enum_index, my_section) in sections.iter() {
-        let i = my_section.in_index;
-        let in_section = &my_section.section;
+    for (_enum_index, section) in sections.iter() {
+        let i = section.in_index;
+        let in_section = &section.section;
 
         let index;
         match in_section.sh_type(endian) {
@@ -350,7 +353,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
         let gnu_hash = Some(elf::gnu_hash(in_name));
 
         // .dynamic
-        let section = Some(out_sections_index[4]);
+        let section = Some(out_sections_index[DYMAMIC_SECTION]);
 
         out_dynsyms.push(DynamicSymbol {
             in_sym: i,
@@ -474,7 +477,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 p_type: in_segment.p_type(endian),
                 p_flags: in_segment.p_flags(endian),
                 // dirty hack really. Not sure if this is correct on its own
-                p_offset: offsets[4] as _,
+                p_offset: offsets[DYMAMIC_SECTION] as _,
                 p_vaddr: in_segment.p_vaddr(endian),
                 p_paddr: in_segment.p_paddr(endian),
                 p_filesz: in_segment.p_filesz(endian),
@@ -487,7 +490,7 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
                 p_flags: in_segment.p_flags(endian),
                 // dirty hack really. Not sure if this is correct on its own
                 p_offset: if in_segment.p_offset(endian) > 0 {
-                    offsets[4] as _
+                    offsets[DYMAMIC_SECTION] as _
                 } else {
                     0
                 },
