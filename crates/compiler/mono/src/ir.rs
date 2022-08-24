@@ -3041,7 +3041,11 @@ fn rollback_typestate(
     layout_cache.rollback_to(layout_snapshot);
 }
 
-fn specialize_external<'a>(
+/// Specialize a single proc.
+///
+/// The caller should snapshot and rollback the type state before and after calling this function,
+/// respectively. This function will not take snapshots itself, but will modify the type state.
+fn specialize_proc_help<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     lambda_name: LambdaName<'a>,
@@ -3052,9 +3056,6 @@ fn specialize_external<'a>(
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
-
-    // unify the called function with the specialized signature, then specialize the function body
-    let snapshot = snapshot_typestate(env.subs, layout_cache);
 
     let _unified = env.unify(partial_proc.annotation, fn_var);
 
@@ -3409,8 +3410,6 @@ fn specialize_external<'a>(
         }
     };
 
-    rollback_typestate(env.subs, layout_cache, snapshot);
-
     Ok(specialized_proc)
 }
 
@@ -3620,39 +3619,10 @@ fn specialize_variable<'a>(
     proc_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: &[(Symbol, Variable)],
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    specialize_variable_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        |_| fn_var,
-        host_exposed_aliases,
-        partial_proc_id,
-    )
-}
-
-fn specialize_variable_help<'a, F>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    proc_name: LambdaName<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    fn_var_thunk: F,
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
-where
-    F: FnOnce(&mut Env<'a, '_>) -> Variable,
-{
-    // add the specializations that other modules require of us
-
-    let snapshot = env.subs.snapshot();
-    let cache_snapshot = layout_cache.snapshot();
-
-    // important: evaluate after the snapshot has been created!
-    let fn_var = fn_var_thunk(env);
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    let snapshot = snapshot_typestate(env.subs, layout_cache);
 
     // for debugging only
     let raw = layout_cache
@@ -3677,7 +3647,7 @@ where
     procs.push_active_specialization(proc_name.name());
     roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
-    let specialized = specialize_external(
+    let specialized = specialize_proc_help(
         env,
         procs,
         proc_name,
@@ -3694,7 +3664,7 @@ where
     );
     procs.pop_active_specialization(proc_name.name());
 
-    match specialized {
+    let result = match specialized {
         Ok(proc) => {
             // when successful, the layout after unification should be the layout before unification
             //            debug_assert_eq!(
@@ -3704,15 +3674,9 @@ where
             //                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
             //            );
 
-            env.subs.rollback_to(snapshot);
-            layout_cache.rollback_to(cache_snapshot);
-
             Ok((proc, raw))
         }
         Err(error) => {
-            env.subs.rollback_to(snapshot);
-            layout_cache.rollback_to(cache_snapshot);
-
             // earlier we made this information available where we handle the failure
             // but we didn't do anything useful with it. So it's here if we ever need it again
             let _ = error;
@@ -3721,7 +3685,11 @@ where
                 attempted_layout: raw,
             })
         }
-    }
+    };
+
+    rollback_typestate(env.subs, layout_cache, snapshot);
+
+    result
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
