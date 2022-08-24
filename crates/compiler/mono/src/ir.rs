@@ -1,9 +1,9 @@
 #![allow(clippy::manual_map)]
 
 use crate::layout::{
-    Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName,
-    LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, TagIdIntType, UnionLayout,
-    WrappedVariant,
+    self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
+    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, TagIdIntType,
+    UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -4073,12 +4073,16 @@ pub fn with_hole<'a>(
             mut fields,
             ..
         } => {
-            let sorted_fields = match crate::layout::sort_record_fields(
-                env.arena,
-                record_var,
-                env.subs,
-                env.target_info,
-            ) {
+            let sorted_fields_result = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                layout::sort_record_fields(&mut layout_env, record_var)
+            };
+            let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
             };
@@ -4466,12 +4470,16 @@ pub fn with_hole<'a>(
             loc_expr,
             ..
         } => {
-            let sorted_fields = match crate::layout::sort_record_fields(
-                env.arena,
-                record_var,
-                env.subs,
-                env.target_info,
-            ) {
+            let sorted_fields_result = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                layout::sort_record_fields(&mut layout_env, record_var)
+            };
+            let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
             };
@@ -4666,12 +4674,17 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
 
-            let sorted_fields = match crate::layout::sort_record_fields(
-                env.arena,
-                record_var,
-                env.subs,
-                env.target_info,
-            ) {
+            let sorted_fields_result = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                layout::sort_record_fields(&mut layout_env, record_var)
+            };
+
+            let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
             };
@@ -5555,8 +5568,11 @@ fn convert_tag_union<'a>(
     arena: &'a Bump,
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
-    let res_variant =
-        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.target_info);
+    let res_variant = {
+        let mut layout_env =
+            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        crate::layout::union_sorted_tags(&mut layout_env, variant_var)
+    };
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -5973,7 +5989,17 @@ fn register_capturing_closure<'a>(
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
-                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
+                let lambda_set_layout = {
+                    LambdaSet::from_var(
+                        layout_cache,
+                        env.arena,
+                        env.subs,
+                        closure_var,
+                        env.target_info,
+                    )
+                };
+
+                match lambda_set_layout {
                     Ok(lambda_set) => {
                         if lambda_set.is_represented().is_none() {
                             CapturedSymbols::None
@@ -8579,9 +8605,15 @@ fn from_can_pattern_help<'a>(
             use crate::layout::UnionVariant::*;
             use roc_exhaustive::Union;
 
-            let res_variant =
-                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
-                    .map_err(Into::into);
+            let res_variant = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                crate::layout::union_sorted_tags(&mut layout_env, *whole_var).map_err(Into::into)
+            };
 
             let variant = match res_variant {
                 Ok(cached) => cached,
@@ -9034,9 +9066,16 @@ fn from_can_pattern_help<'a>(
             ..
         } => {
             // sorted fields based on the type
-            let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.target_info)
-                    .map_err(RuntimeError::from)?;
+            let sorted_fields = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                crate::layout::sort_record_fields(&mut layout_env, *whole_var)
+                    .map_err(RuntimeError::from)?
+            };
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);

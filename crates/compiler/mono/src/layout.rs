@@ -187,8 +187,13 @@ impl<'a> RawFunctionLayout<'a> {
                 let fn_args = fn_args.into_bump_slice();
                 let ret = arena.alloc(ret);
 
-                let lambda_set =
-                    LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info)?;
+                let lambda_set = LambdaSet::from_var(
+                    env.cache,
+                    env.arena,
+                    env.subs,
+                    closure_var,
+                    env.target_info,
+                )?;
 
                 Ok(Self::Function(fn_args, lambda_set, ret))
             }
@@ -1137,19 +1142,29 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn from_var(
+        cache: &LayoutCache<'a>,
         arena: &'a Bump,
         subs: &Subs,
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(subs, closure_var), "building lambda set layout");
+        // Ideally we would pass `env` in directly, but that currently casues problems later on
+        // (in alias analysis) with recursive pointers not appearing under recursive layouts. So,
+        // we have to clear the `seen` cache before building a lambda set layout.
+        //
+        // I think more generally, we need to address https://github.com/roc-lang/roc/issues/2466,
+        // which should also resolve the issue here.
+        let mut env = Env::from_components(cache, subs, arena, target_info);
 
-        match resolve_lambda_set(subs, closure_var) {
+        roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(env.subs, closure_var), "building lambda set layout");
+
+        match resolve_lambda_set(env.subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
-                let mut set: Vec<(Symbol, &[Layout])> = Vec::with_capacity_in(lambdas.len(), arena);
+                let mut set: Vec<(Symbol, &[Layout])> =
+                    Vec::with_capacity_in(lambdas.len(), env.arena);
                 let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
 
@@ -1158,14 +1173,8 @@ impl<'a> LambdaSet<'a> {
 
                 let mut has_duplicate_lambda_names = false;
                 while let Some((function_symbol, variables)) = lambdas_it.next() {
-                    let mut arguments = Vec::with_capacity_in(variables.len(), arena);
+                    let mut arguments = Vec::with_capacity_in(variables.len(), env.arena);
 
-                    let mut env = Env {
-                        arena,
-                        subs,
-                        seen: Vec::new_in(arena),
-                        target_info,
-                    };
                     if let Some(rec_var) = opt_recursion_var.into_variable() {
                         env.insert_seen(rec_var);
                     }
@@ -1214,19 +1223,17 @@ impl<'a> LambdaSet<'a> {
                     let (set, set_with_variables): (std::vec::Vec<_>, std::vec::Vec<_>) =
                         joined.into_iter().unzip();
 
-                    let set = Vec::from_iter_in(set, arena);
+                    let set = Vec::from_iter_in(set, env.arena);
 
                     (set, set_with_variables)
                 } else {
                     (set, set_with_variables)
                 };
 
-                let representation = arena.alloc(Self::make_representation(
-                    arena,
-                    subs,
+                let representation = env.arena.alloc(Self::make_representation(
+                    &mut env,
                     set_with_variables,
                     opt_recursion_var.into_variable(),
-                    target_info,
                 ));
 
                 Ok(LambdaSet {
@@ -1239,32 +1246,24 @@ impl<'a> LambdaSet<'a> {
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::UNIT),
+                    representation: env.arena.alloc(Layout::UNIT),
                 })
             }
         }
     }
 
     fn make_representation(
-        arena: &'a Bump,
-        subs: &Subs,
-        tags: std::vec::Vec<(&Symbol, &[Variable])>,
+        env: &mut Env<'a, '_>,
+        set: std::vec::Vec<(&Symbol, &[Variable])>,
         opt_rec_var: Option<Variable>,
-        target_info: TargetInfo,
     ) -> Layout<'a> {
-        let union_labels = UnsortedUnionLabels { tags };
-        let mut env = Env {
-            seen: Vec::new_in(arena),
-            target_info,
-            arena,
-            subs,
-        };
+        let union_labels = UnsortedUnionLabels { tags: set };
 
         match opt_rec_var {
-            Some(rec_var) => layout_from_recursive_union(&mut env, rec_var, &union_labels)
+            Some(rec_var) => layout_from_recursive_union(env, rec_var, &union_labels)
                 .expect("unable to create lambda set representation"),
 
-            None => layout_from_union(&mut env, &union_labels),
+            None => layout_from_union(env, &union_labels),
         }
     }
 
@@ -1453,9 +1452,26 @@ pub struct Env<'a, 'b> {
     arena: &'a Bump,
     seen: Vec<'a, Variable>,
     subs: &'b Subs,
+    #[allow(unused)]
+    cache: &'b LayoutCache<'a>,
 }
 
 impl<'a, 'b> Env<'a, 'b> {
+    pub fn from_components(
+        cache: &'b LayoutCache<'a>,
+        subs: &'b Subs,
+        arena: &'a Bump,
+        target_info: TargetInfo,
+    ) -> Self {
+        Self {
+            cache,
+            subs,
+            seen: Vec::new_in(arena),
+            arena,
+            target_info,
+        }
+    }
+
     fn is_seen(&self, var: Variable) -> bool {
         let var = self.subs.get_root_key_without_compacting(var);
 
@@ -1993,6 +2009,7 @@ impl<'a> LayoutCache<'a> {
             subs,
             seen: Vec::new_in(arena),
             target_info: self.target_info,
+            cache: self,
         };
 
         Layout::from_var(&mut env, var)
@@ -2012,6 +2029,7 @@ impl<'a> LayoutCache<'a> {
             subs,
             seen: Vec::new_in(arena),
             target_info: self.target_info,
+            cache: self,
         };
         RawFunctionLayout::from_var(&mut env, var)
     }
@@ -2413,8 +2431,13 @@ fn layout_from_flat_type<'a>(
             if env.is_seen(closure_var) {
                 Ok(Layout::RecursivePointer)
             } else {
-                let lambda_set =
-                    LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info)?;
+                let lambda_set = LambdaSet::from_var(
+                    env.cache,
+                    env.arena,
+                    env.subs,
+                    closure_var,
+                    env.target_info,
+                )?;
 
                 Ok(Layout::LambdaSet(lambda_set))
             }
@@ -2495,19 +2518,10 @@ fn layout_from_flat_type<'a>(
 pub type SortedField<'a> = (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>);
 
 pub fn sort_record_fields<'a>(
-    arena: &'a Bump,
+    env: &mut Env<'a, '_>,
     var: Variable,
-    subs: &Subs,
-    target_info: TargetInfo,
 ) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
-    let mut env = Env {
-        arena,
-        subs,
-        seen: Vec::new_in(arena),
-        target_info,
-    };
-
-    let (it, _) = match gather_fields_unsorted_iter(subs, RecordFields::empty(), var) {
+    let (it, _) = match gather_fields_unsorted_iter(env.subs, RecordFields::empty(), var) {
         Ok(it) => it,
         Err(_) => return Err(LayoutProblem::Erroneous),
     };
@@ -2516,7 +2530,7 @@ pub fn sort_record_fields<'a>(
         .into_iter()
         .map(|(field, field_type)| (field.clone(), field_type));
 
-    sort_record_fields_help(&mut env, it)
+    sort_record_fields_help(env, it)
 }
 
 fn sort_record_fields_help<'a>(
@@ -2707,26 +2721,25 @@ impl<'a> WrappedVariant<'a> {
 }
 
 pub fn union_sorted_tags<'a>(
-    arena: &'a Bump,
+    env: &mut Env<'a, '_>,
     var: Variable,
-    subs: &Subs,
-    target_info: TargetInfo,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
     use roc_types::pretty_print::ChasedExt;
     use Content::*;
 
-    let var =
-        if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
-            *structure
-        } else {
-            var
-        };
+    let var = if let Content::RecursionVar { structure, .. } =
+        env.subs.get_content_without_compacting(var)
+    {
+        *structure
+    } else {
+        var
+    };
 
     let mut tags_vec = std::vec::Vec::new();
-    let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
+    let result = match roc_types::pretty_print::chase_ext_tag_union(env.subs, var, &mut tags_vec) {
         ChasedExt::Empty => {
-            let opt_rec_var = get_recursion_var(subs, var);
-            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
+            let opt_rec_var = get_recursion_var(env.subs, var);
+            union_sorted_tags_help(env, tags_vec, opt_rec_var)
         }
         ChasedExt::NonEmpty { content, .. } => {
             match content {
@@ -2737,12 +2750,12 @@ pub fn union_sorted_tags<'a>(
                     //   x = A
                     //   x
                     // In such cases it's fine to drop the variable. We may be proven wrong in the future...
-                    let opt_rec_var = get_recursion_var(subs, var);
-                    union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
+                    let opt_rec_var = get_recursion_var(env.subs, var);
+                    union_sorted_tags_help(env, tags_vec, opt_rec_var)
                 }
                 RecursionVar { .. } => {
-                    let opt_rec_var = get_recursion_var(subs, var);
-                    union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
+                    let opt_rec_var = get_recursion_var(env.subs, var);
+                    union_sorted_tags_help(env, tags_vec, opt_rec_var)
                 }
 
                 Error => return Err(LayoutProblem::Erroneous),
@@ -2967,24 +2980,15 @@ where
 }
 
 pub fn union_sorted_tags_help<'a, L>(
-    arena: &'a Bump,
+    env: &mut Env<'a, '_>,
     mut tags_vec: std::vec::Vec<(L, std::vec::Vec<Variable>)>,
     opt_rec_var: Option<Variable>,
-    subs: &Subs,
-    target_info: TargetInfo,
 ) -> UnionVariant<'a>
 where
     L: Into<TagOrClosure> + Ord + Clone,
 {
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut env = Env {
-        arena,
-        subs,
-        seen: Vec::new_in(arena),
-        target_info,
-    };
 
     match tags_vec.len() {
         0 => {
@@ -2995,11 +2999,11 @@ where
             let (tag_name, arguments) = tags_vec.remove(0);
 
             // just one tag in the union (but with arguments) can be a struct
-            let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut layouts = Vec::with_capacity_in(tags_vec.len(), env.arena);
             let mut contains_zero_sized = false;
 
             for var in arguments {
-                match Layout::from_var(&mut env, var) {
+                match Layout::from_var(env, var) {
                     Ok(layout) => {
                         // Drop any zero-sized arguments like {}
                         if !layout.is_dropped_because_empty() {
@@ -3022,8 +3026,8 @@ where
             }
 
             layouts.sort_by(|layout1, layout2| {
-                let size1 = layout1.alignment_bytes(target_info);
-                let size2 = layout2.alignment_bytes(target_info);
+                let size1 = layout1.alignment_bytes(env.target_info);
+                let size2 = layout2.alignment_bytes(env.target_info);
 
                 size2.cmp(&size1)
             });
@@ -3048,7 +3052,7 @@ where
         }
         num_tags => {
             // default path
-            let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_vec.len(), env.arena);
             let mut has_any_arguments = false;
 
             let mut nullable = None;
@@ -3071,17 +3075,19 @@ where
                     continue;
                 }
 
-                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
+                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
                 for var in arguments {
-                    match Layout::from_var(&mut env, var) {
+                    match Layout::from_var(env, var) {
                         Ok(layout) => {
                             has_any_arguments = true;
 
                             // make sure to not unroll recursive types!
                             let self_recursion = opt_rec_var.is_some()
-                                && subs.get_root_key_without_compacting(var)
-                                    == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
+                                && env.subs.get_root_key_without_compacting(var)
+                                    == env
+                                        .subs
+                                        .get_root_key_without_compacting(opt_rec_var.unwrap())
                                 && is_recursive_tag_union(&layout);
 
                             if self_recursion {
@@ -3105,8 +3111,8 @@ where
                 }
 
                 arg_layouts.sort_by(|layout1, layout2| {
-                    let size1 = layout1.alignment_bytes(target_info);
-                    let size2 = layout2.alignment_bytes(target_info);
+                    let size1 = layout1.alignment_bytes(env.target_info);
+                    let size2 = layout2.alignment_bytes(env.target_info);
 
                     size2.cmp(&size1)
                 });
@@ -3127,7 +3133,7 @@ where
                 3..=MAX_ENUM_SIZE if !has_any_arguments => {
                     // type can be stored in a byte
                     // needs the sorted tag names to determine the tag_id
-                    let mut tag_names = Vec::with_capacity_in(answer.len(), arena);
+                    let mut tag_names = Vec::with_capacity_in(answer.len(), env.arena);
 
                     for (tag_name, _) in answer {
                         tag_names.push(tag_name);
