@@ -16,9 +16,11 @@ roc_collections = { path = "../collections" }
 roc_reporting = { path = "../../reporting" }
 
 [build-dependencies]
-roc_load_internal = { path = "../load_internal" }
 roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
+
+[target.'cfg(not(windows))'.build-dependencies]
+roc_load_internal = { path = "../load_internal" }
