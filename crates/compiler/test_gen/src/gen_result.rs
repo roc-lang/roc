@@ -260,32 +260,6 @@ fn roc_result_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn function_returns_roc_result() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            addChecked : Num a, Num a -> Result (Num a) [Overflow]*
-            addChecked = \a, b ->
-                result = addCheckedLowlevel a b
-
-                if result.b then
-                    Err Overflow
-                else
-                    Ok result.a
-
-            addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
-            addCheckedLowlevel = \a, b -> { b: True, a: a + b }
-
-            addChecked 1 2
-            "#
-        ),
-        RocResult::ok(42),
-        RocResult<i64, ()>
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
