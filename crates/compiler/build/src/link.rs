@@ -519,13 +519,19 @@ pub fn rebuild_host(
             }
             Architecture::X86_64 => {
                 let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+
+                let target = match target.operating_system {
+                    OperatingSystem::Windows => "x86_64-windows-gnu",
+                    _ => "native",
+                };
+
                 build_zig_host_native(
                     &env_path,
                     &env_home,
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    "native",
+                    target,
                     opt_level,
                     shared_lib_path,
                 )
@@ -1185,11 +1191,7 @@ fn link_windows(
                     "-lc",
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
-                    "native",
-                    "--pkg-begin",
-                    "str",
-                    zig_str_path.to_str().unwrap(),
-                    "--pkg-end",
+                    "x86_64-windows-gnu",
                     "--strip",
                     "-O",
                     "Debug",
