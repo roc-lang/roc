@@ -56,8 +56,8 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
-    TagIdIntType, UnionLayout,
+    Builtin, BuiltinInner, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds,
+    RawFunctionLayout, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -1346,7 +1346,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
                 (
                     PointerValue(argument),
-                    Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
+                    Layout::Union(UnionLayout::NonNullableUnwrapped(_, fields)),
                 ) => {
                     let struct_layout = Layout::struct_no_name_order(fields);
                     let struct_type = basic_type_from_layout(env, &struct_layout);
@@ -1430,7 +1430,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         "load_element",
                     )
                 }
-                UnionLayout::Recursive(tag_layouts) => {
+                UnionLayout::Recursive(_, tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
 
                     let field_layouts = tag_layouts[*tag_id as usize];
@@ -1439,7 +1439,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
-                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                UnionLayout::NonNullableUnwrapped(_, field_layouts) => {
                     let struct_layout = Layout::struct_no_name_order(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
@@ -1454,6 +1454,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     )
                 }
                 UnionLayout::NullableWrapped {
+                    rec: _,
                     nullable_id,
                     other_tags,
                 } => {
@@ -1472,6 +1473,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
                 UnionLayout::NullableUnwrapped {
+                    rec: _,
                     nullable_id,
                     other_fields,
                 } => {
@@ -1584,7 +1586,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     tag_field_layout: Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    if let Layout::RecursivePointer = tag_field_layout {
+    if let Layout::RecursivePointer(_) = tag_field_layout {
         debug_assert!(value.is_pointer_value());
 
         // we store recursive pointers as `i64*`
@@ -1704,7 +1706,7 @@ fn build_tag<'a, 'ctx, 'env>(
 
             alloca.into()
         }
-        UnionLayout::Recursive(tags) => {
+        UnionLayout::Recursive(_, tags) => {
             debug_assert!(union_size > 1);
 
             let tag_field_layouts = &tags[tag_id as usize];
@@ -1722,6 +1724,7 @@ fn build_tag<'a, 'ctx, 'env>(
             )
         }
         UnionLayout::NullableWrapped {
+            rec: _,
             nullable_id,
             other_tags: tags,
         } => {
@@ -1753,7 +1756,7 @@ fn build_tag<'a, 'ctx, 'env>(
                 parent,
             )
         }
-        UnionLayout::NonNullableUnwrapped(fields) => {
+        UnionLayout::NonNullableUnwrapped(_, fields) => {
             debug_assert_eq!(union_size, 1);
             debug_assert_eq!(tag_id, 0);
             debug_assert_eq!(arguments.len(), fields.len());
@@ -1778,6 +1781,7 @@ fn build_tag<'a, 'ctx, 'env>(
             data_ptr.into()
         }
         UnionLayout::NullableUnwrapped {
+            rec: _,
             nullable_id,
             other_fields,
         } => {
@@ -1943,7 +1947,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             let argument_ptr = argument.into_pointer_value();
             get_tag_id_wrapped(env, argument_ptr)
         }
-        UnionLayout::Recursive(_) => {
+        UnionLayout::Recursive(_, _) => {
             let argument_ptr = argument.into_pointer_value();
 
             if union_layout.stores_tag_id_as_data(env.target_info) {
@@ -1952,7 +1956,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
                 tag_pointer_read_tag_id(env, argument_ptr)
             }
         }
-        UnionLayout::NonNullableUnwrapped(_) => tag_id_int_type.const_zero(),
+        UnionLayout::NonNullableUnwrapped(_, _) => tag_id_int_type.const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
             let is_null = env.builder.build_is_null(argument_ptr, "is_null");
@@ -2032,7 +2036,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     let field_layout = field_layouts[index];
     let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr_old");
 
-    if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
+    if let Some(Layout::RecursivePointer(_)) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
         let actual_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
@@ -2076,7 +2080,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let field_layout = field_layouts[index];
     let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr");
 
-    if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
+    if let Some(Layout::RecursivePointer(_)) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
 
@@ -2442,7 +2446,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
 
             for (symbol, expr, layout) in queue {
-                debug_assert!(layout != &Layout::RecursivePointer);
+                debug_assert!(layout != &Layout::RecursivePointer(()));
 
                 let val = build_exp_expr(
                     env,
@@ -6118,7 +6122,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match arg_layout {
                 Layout::Builtin(arg_builtin) => {
-                    use roc_mono::layout::Builtin::*;
+                    use roc_mono::layout::BuiltinInner::*;
 
                     match arg_builtin {
                         Int(int_width) => {
@@ -6189,7 +6193,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
                     if lhs_builtin == rhs_builtin =>
                 {
-                    use roc_mono::layout::Builtin::*;
+                    use roc_mono::layout::BuiltinInner::*;
 
                     let tag_eq = env.context.i8_type().const_int(0_u64, false);
                     let tag_gt = env.context.i8_type().const_int(1_u64, false);
@@ -6504,7 +6508,7 @@ impl RocReturn {
     fn roc_return_by_pointer(target_info: TargetInfo, layout: Layout) -> bool {
         match layout {
             Layout::Builtin(builtin) => {
-                use Builtin::*;
+                use BuiltinInner::*;
 
                 match target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes4 => false,
@@ -7114,7 +7118,7 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
         (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
             if lhs_builtin == rhs_builtin =>
         {
-            use roc_mono::layout::Builtin::*;
+            use roc_mono::layout::BuiltinInner::*;
 
             match lhs_builtin {
                 Int(int_width) => build_int_binop(

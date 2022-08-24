@@ -16,7 +16,9 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{
+    Builtin, BuiltinInner, Layout, LayoutIds, LayoutInner, UnionLayout, UnionLayoutInner,
+};
 
 use super::build::{load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
@@ -408,7 +410,7 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     builtin: &Builtin<'a>,
 ) -> Option<FunctionValue<'ctx>> {
-    use Builtin::*;
+    use BuiltinInner::*;
 
     match builtin {
         List(element_layout) => {
@@ -485,7 +487,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
     };
 
     match layout {
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be hashed directly")
             }
@@ -538,7 +540,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
     when_recursive: &WhenRecursive<'a>,
     layout: &Layout<'a>,
 ) -> Option<FunctionValue<'ctx>> {
-    use Layout::*;
+    use LayoutInner::*;
 
     match layout {
         Builtin(builtin) => {
@@ -552,7 +554,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         }
 
         Union(variant) => {
-            use UnionLayout::*;
+            use UnionLayoutInner::*;
 
             match variant {
                 NonRecursive(&[]) => {
@@ -588,7 +590,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             Some(function)
         }
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers cannot be in/decremented directly")
             }
@@ -1238,7 +1240,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         let mut deferred_nonrec = Vec::new_in(env.arena);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = field_layout {
+            if let Layout::RecursivePointer(_) = field_layout {
                 // this field has type `*i64`, but is really a pointer to the data we want
                 let elem_pointer = env
                     .builder
@@ -1345,15 +1347,15 @@ fn union_layout_tags<'a>(
     arena: &'a bumpalo::Bump,
     union_layout: &UnionLayout<'a>,
 ) -> &'a [&'a [Layout<'a>]] {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     match union_layout {
         NullableWrapped {
             other_tags: tags, ..
         } => *tags,
         NullableUnwrapped { other_fields, .. } => arena.alloc([*other_fields]),
-        NonNullableUnwrapped(fields) => arena.alloc([*fields]),
-        Recursive(tags) => tags,
+        NonNullableUnwrapped(_, fields) => arena.alloc([*fields]),
+        Recursive(_, tags) => tags,
         NonRecursive(tags) => tags,
     }
 }
@@ -1644,7 +1646,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         );
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = field_layout {
+            if let Layout::RecursivePointer(_) = field_layout {
                 let recursive_union_layout = match when_recursive {
                     WhenRecursive::Unreachable => {
                         panic!("non-recursive tag unions cannot contain naked recursion pointers!");
@@ -1676,7 +1678,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     mode.to_call_mode(fn_val),
                     when_recursive,
                     recursive_ptr_field_value,
-                    &Layout::RecursivePointer,
+                    &Layout::RecursivePointer(()),
                 )
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env

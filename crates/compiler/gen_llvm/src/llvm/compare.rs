@@ -11,7 +11,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout, UnionLayoutInner};
 
 use super::build::{dec_binop_with_unchecked, load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
@@ -189,7 +189,7 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
             }
@@ -383,7 +383,7 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!("recursion pointers should never be compared directly")
         }
         Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
@@ -713,7 +713,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             .build_extract_value(struct2, index as u32, "eq_field")
             .unwrap();
 
-        let are_equal = if let Layout::RecursivePointer = field_layout {
+        let are_equal = if let Layout::RecursivePointer(_) = field_layout {
             match &when_recursive {
                 WhenRecursive::Unreachable => {
                     unreachable!("The current layout should not be recursive, but is")
@@ -892,7 +892,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     env.builder.position_at_end(entry);
 
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     match union_layout {
         NonRecursive(&[]) => {
@@ -969,7 +969,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        Recursive(tags) => {
+        Recursive(_, tags) => {
             let ptr_equal = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 env.builder
@@ -1190,7 +1190,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.build_switch(id1, default, &cases);
         }
-        NonNullableUnwrapped(field_layouts) => {
+        NonNullableUnwrapped(_, field_layouts) => {
             let ptr_equal = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 env.builder

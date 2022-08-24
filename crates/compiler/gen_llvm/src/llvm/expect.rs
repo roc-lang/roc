@@ -10,7 +10,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, BuiltinInner, Layout, LayoutIds, UnionLayout, UnionLayoutInner};
 use roc_region::all::Region;
 
 use super::build::{
@@ -279,7 +279,7 @@ fn build_clone<'a, 'ctx, 'env>(
             )
         }
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
             }
@@ -474,7 +474,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
     debug_assert!(tag_value.is_pointer_value());
 
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     match union_layout {
         NonRecursive(&[]) => {
@@ -536,7 +536,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        Recursive(tags) => {
+        Recursive(_, tags) => {
             let id = get_tag_id(env, parent, &union_layout, tag_value);
 
             let switch_block = env.context.append_basic_block(parent, "switch_block");
@@ -608,7 +608,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        NonNullableUnwrapped(fields) => {
+        NonNullableUnwrapped(_, fields) => {
             //
 
             let tag_value = tag_value.into_pointer_value();
@@ -648,6 +648,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
             env.builder.build_return(Some(&answer));
         }
         NullableWrapped {
+            rec: _,
             nullable_id,
             other_tags,
         } => {
@@ -869,7 +870,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
     builtin: Builtin<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    use Builtin::*;
+    use BuiltinInner::*;
 
     match builtin {
         Int(_) | Float(_) | Bool | Decimal => {

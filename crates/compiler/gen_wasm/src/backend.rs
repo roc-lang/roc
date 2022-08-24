@@ -12,7 +12,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
     ProcLayout, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout, UnionLayoutInner};
 use roc_std::RocDec;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
@@ -1675,12 +1675,12 @@ impl<'a> WasmBackend<'a> {
         tag_id_symbol: Symbol,
         stored_value: &StoredValue,
     ) {
-        use UnionLayout::*;
+        use UnionLayoutInner::*;
 
         let block_result_id = match union_layout {
             NonRecursive(_) => None,
-            Recursive(_) => None,
-            NonNullableUnwrapped(_) => {
+            Recursive(_, _) => None,
+            NonNullableUnwrapped(_, _) => {
                 self.code_builder.i32_const(0);
                 return;
             }
@@ -1752,16 +1752,17 @@ impl<'a> WasmBackend<'a> {
         index: u64,
         symbol: Symbol,
     ) {
-        use UnionLayout::*;
+        use UnionLayoutInner::*;
 
         debug_assert!(!union_layout.tag_is_null(tag_id));
 
         let tag_index = tag_id as usize;
         let field_layouts = match union_layout {
             NonRecursive(tags) => tags[tag_index],
-            Recursive(tags) => tags[tag_index],
-            NonNullableUnwrapped(layouts) => *layouts,
+            Recursive(_, tags) => tags[tag_index],
+            NonNullableUnwrapped(_, layouts) => *layouts,
             NullableWrapped {
+                rec: _,
                 other_tags,
                 nullable_id,
             } => {

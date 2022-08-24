@@ -5,7 +5,7 @@ use roc_module::symbol::{IdentIds, Symbol};
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
+use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout, UnionLayoutInner};
 
 use super::{let_lowlevel, CodeGenHelp, Context, LAYOUT_BOOL};
 
@@ -33,7 +33,7 @@ pub fn eq_generic<'a>(
         Layout::Union(union_layout) => eq_tag_union(root, ident_ids, ctx, union_layout),
         Layout::Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, inner_layout),
         Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
             )
@@ -183,7 +183,7 @@ fn eq_tag_union<'a>(
     ctx: &mut Context<'a>,
     union_layout: UnionLayout<'a>,
 ) -> Stmt<'a> {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     let parent_rec_ptr_layout = ctx.recursive_union;
     if !matches!(union_layout, NonRecursive(_)) {
@@ -193,14 +193,15 @@ fn eq_tag_union<'a>(
     let body = match union_layout {
         NonRecursive(tags) => eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None),
 
-        Recursive(tags) => eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None),
+        Recursive(_, tags) => eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None),
 
-        NonNullableUnwrapped(field_layouts) => {
+        NonNullableUnwrapped(_, field_layouts) => {
             let tags = root.arena.alloc([field_layouts]);
             eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None)
         }
 
         NullableWrapped {
+            rec: _,
             other_tags,
             nullable_id,
         } => eq_tag_union_help(
@@ -213,6 +214,7 @@ fn eq_tag_union<'a>(
         ),
 
         NullableUnwrapped {
+            rec: _,
             other_fields,
             nullable_id,
         } => eq_tag_union_help(
@@ -405,7 +407,7 @@ fn eq_tag_fields<'a>(
     // (If there are more than one, the others will use non-tail recursion)
     let rec_ptr_index = field_layouts
         .iter()
-        .position(|field| matches!(field, Layout::RecursivePointer));
+        .position(|field| matches!(field, Layout::RecursivePointer(_)));
 
     let (tailrec_index, innermost_stmt) = match rec_ptr_index {
         None => {
@@ -583,7 +585,7 @@ fn eq_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([*elem_layout]));
+    let box_union_layout = UnionLayout::NonNullableUnwrapped((), root.arena.alloc([*elem_layout]));
     let box_layout = Layout::Union(box_union_layout);
 
     // Compare lengths

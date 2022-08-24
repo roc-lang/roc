@@ -5,7 +5,10 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, UnionLayout};
+use roc_mono::layout::{
+    round_up_to_alignment, Builtin, BuiltinInner, Layout, LayoutInner, UnionLayout,
+    UnionLayoutInner,
+};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -27,7 +30,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use Layout::*;
+    use LayoutInner::*;
 
     match layout {
         Struct {
@@ -41,7 +44,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             inner_type.ptr_type(AddressSpace::Generic).into()
         }
         Union(union_layout) => basic_type_from_union_layout(env, union_layout),
-        RecursivePointer => env
+        RecursivePointer(_) => env
             .context
             .i64_type()
             .ptr_type(AddressSpace::Generic)
@@ -55,7 +58,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     union_layout: &UnionLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     match union_layout {
         NonRecursive(tags) => {
@@ -64,7 +67,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
                 .struct_type()
                 .into()
         }
-        Recursive(tags)
+        Recursive(_, tags)
         | NullableWrapped {
             other_tags: tags, ..
         } => {
@@ -86,7 +89,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
                 .ptr_type(AddressSpace::Generic)
                 .into()
         }
-        NonNullableUnwrapped(fields) => {
+        NonNullableUnwrapped(_, fields) => {
             RocUnion::untagged_from_slices(env.context, &[fields], env.target_info)
                 .struct_type()
                 .ptr_type(AddressSpace::Generic)
@@ -99,7 +102,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     builtin: &Builtin<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use Builtin::*;
+    use BuiltinInner::*;
 
     let context = env.context;
 
@@ -128,7 +131,7 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use Layout::*;
+    use LayoutInner::*;
 
     match layout {
         LambdaSet(lambda_set) => {

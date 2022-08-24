@@ -8,7 +8,7 @@ use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
+use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout, UnionLayoutInner};
 
 use super::{CodeGenHelp, Context, HelperOp};
 
@@ -17,7 +17,7 @@ const LAYOUT_UNIT: Layout = Layout::UNIT;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
 // TODO: Replace usages with root.union_refcount
-const LAYOUT_PTR: Layout = Layout::RecursivePointer;
+const LAYOUT_PTR: Layout = Layout::RecursivePointer(());
 
 pub fn refcount_stmt<'a>(
     root: &mut CodeGenHelp<'a>,
@@ -124,7 +124,7 @@ pub fn refcount_generic<'a>(
             let runtime_layout = lambda_set.runtime_representation();
             refcount_generic(root, ident_ids, ctx, runtime_layout, structure)
         }
-        Layout::RecursivePointer => unreachable!(
+        Layout::RecursivePointer(()) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
         Layout::Boxed(inner_layout) => {
@@ -157,7 +157,7 @@ pub fn refcount_reset_proc_body<'a>(
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
-        use UnionLayout::*;
+        use UnionLayoutInner::*;
 
         let tag_layouts;
         let mut null_id = None;
@@ -165,13 +165,14 @@ pub fn refcount_reset_proc_body<'a>(
             NonRecursive(tags) => {
                 tag_layouts = tags;
             }
-            Recursive(tags) => {
+            Recursive(_, tags) => {
                 tag_layouts = tags;
             }
-            NonNullableUnwrapped(field_layouts) => {
+            NonNullableUnwrapped(_, field_layouts) => {
                 tag_layouts = root.arena.alloc([field_layouts]);
             }
             NullableWrapped {
+                rec: _,
                 other_tags: tags,
                 nullable_id,
             } => {
@@ -179,6 +180,7 @@ pub fn refcount_reset_proc_body<'a>(
                 tag_layouts = tags;
             }
             NullableUnwrapped {
+                rec: _,
                 other_fields,
                 nullable_id,
             } => {
@@ -352,7 +354,7 @@ pub fn refcount_reset_proc_body<'a>(
 // In the short term, it helps us to skip refcounting and let it leak, so we can make
 // progress incrementally. Kept in sync with generate_procs using assertions.
 pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     match layout {
         Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(elem_layout),
@@ -362,10 +364,10 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
             NonRecursive(tags) => tags
                 .iter()
                 .all(|fields| fields.iter().all(is_rc_implemented_yet)),
-            Recursive(tags) => tags
+            Recursive(_, tags) => tags
                 .iter()
                 .all(|fields| fields.iter().all(is_rc_implemented_yet)),
-            NonNullableUnwrapped(fields) => fields.iter().all(is_rc_implemented_yet),
+            NonNullableUnwrapped(_, fields) => fields.iter().all(is_rc_implemented_yet),
             NullableWrapped { other_tags, .. } => other_tags
                 .iter()
                 .all(|fields| fields.iter().all(is_rc_implemented_yet)),
@@ -376,7 +378,7 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
         Layout::LambdaSet(lambda_set) => {
             is_rc_implemented_yet(&lambda_set.runtime_representation())
         }
-        Layout::RecursivePointer => true,
+        Layout::RecursivePointer(()) => true,
         Layout::Boxed(_) => true,
     }
 }
@@ -693,7 +695,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([*elem_layout]));
+    let box_union_layout = UnionLayout::NonNullableUnwrapped((), arena.alloc([*elem_layout]));
     let box_layout = Layout::Union(box_union_layout);
 
     //
@@ -1017,7 +1019,7 @@ fn refcount_union<'a>(
     union: UnionLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     let parent_rec_ptr_layout = ctx.recursive_union;
     if !matches!(union, NonRecursive(_)) {
@@ -1027,7 +1029,7 @@ fn refcount_union<'a>(
     let body = match union {
         NonRecursive(tags) => refcount_union_nonrec(root, ident_ids, ctx, union, tags, structure),
 
-        Recursive(tags) => {
+        Recursive(_, tags) => {
             let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
             if is_tailrec && !ctx.op.is_decref() {
                 refcount_union_tailrec(root, ident_ids, ctx, union, tags, None, tail_idx, structure)
@@ -1036,7 +1038,7 @@ fn refcount_union<'a>(
             }
         }
 
-        NonNullableUnwrapped(field_layouts) => {
+        NonNullableUnwrapped(_, field_layouts) => {
             // We don't do tail recursion on NonNullableUnwrapped.
             // Its RecursionPointer is always nested inside a List, Option, or other sub-layout, since
             // a direct RecursionPointer is only possible if there's at least one non-recursive variant.
@@ -1046,6 +1048,7 @@ fn refcount_union<'a>(
         }
 
         NullableWrapped {
+            rec: _,
             other_tags: tags,
             nullable_id,
         } => {
@@ -1061,6 +1064,7 @@ fn refcount_union<'a>(
         }
 
         NullableUnwrapped {
+            rec: _,
             other_fields,
             nullable_id,
         } => {

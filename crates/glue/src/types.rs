@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, UnionLayout,
+    LayoutCache, UnionLayout, UnionLayoutInner,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -848,8 +848,8 @@ fn add_type_help<'a>(
 
                                 type_id
                             }
-                            UnionLayout::Recursive(_)
-                            | UnionLayout::NonNullableUnwrapped(_)
+                            UnionLayout::Recursive(_, _)
+                            | UnionLayout::NonNullableUnwrapped(_, _)
                             | UnionLayout::NullableWrapped { .. }
                             | UnionLayout::NullableUnwrapped { .. } => {
                                 unreachable!();
@@ -1095,7 +1095,7 @@ fn add_tag_union<'a>(
 
     let tag_union_type = match layout {
         Layout::Union(union_layout) => {
-            use UnionLayout::*;
+            use UnionLayoutInner::*;
 
             match union_layout {
                 // A non-recursive tag union
@@ -1118,7 +1118,7 @@ fn add_tag_union<'a>(
                 }
                 // A recursive tag union (general case)
                 // e.g. `Expr : [Sym Str, Add Expr Expr]`
-                Recursive(_) => {
+                Recursive(_, _) => {
                     let tags =
                         union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     let discriminant_size =
@@ -1132,7 +1132,7 @@ fn add_tag_union<'a>(
                         discriminant_offset,
                     }
                 }
-                NonNullableUnwrapped(_) => {
+                NonNullableUnwrapped(_, _) => {
                     let mut tags =
                         union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
 
@@ -1155,6 +1155,7 @@ fn add_tag_union<'a>(
                 // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
                 // see also: https://youtu.be/ip92VMpf_-A?t=164
                 NullableWrapped {
+                    rec: _,
                     nullable_id,
                     other_tags,
                 } => {
@@ -1181,6 +1182,7 @@ fn add_tag_union<'a>(
                 // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
                 // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
                 NullableUnwrapped {
+                    rec: _,
                     nullable_id: null_represents_first_tag,
                     other_fields: _, // TODO use this!
                 } => {
@@ -1260,7 +1262,7 @@ fn add_tag_union<'a>(
         Layout::LambdaSet(_) => {
             todo!();
         }
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();

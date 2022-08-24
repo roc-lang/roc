@@ -431,8 +431,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 },
             ))
         }
-        Layout::Union(UnionLayout::Recursive(_))
-        | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
+        Layout::Union(UnionLayout::Recursive(_, _))
+        | Layout::Union(UnionLayout::NonNullableUnwrapped(_, _))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(env.target_info);
@@ -451,7 +451,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 },
             ))
         }
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
@@ -579,7 +579,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 );
             }
         },
-        (_, Layout::RecursivePointer) => match (raw_content, when_recursive) {
+        (_, Layout::RecursivePointer(_)) => match (raw_content, when_recursive) {
             (
                 Content::RecursionVar {
                     structure,
@@ -645,7 +645,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 WhenRecursive::Unreachable,
             )
         }
-        (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
+        (_, Layout::Union(union_layout @ UnionLayout::Recursive(_,union_layouts))) => {
             let (rec_var, tags) = match raw_content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
@@ -676,7 +676,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 when_recursive,
             )
         }
-        (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
+        (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_, _))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)

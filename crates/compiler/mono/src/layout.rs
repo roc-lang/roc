@@ -255,9 +255,11 @@ impl FieldOrderHash {
     }
 }
 
+pub type Layout<'a> = LayoutInner<'a, ()>;
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Layout<'a> {
+pub enum LayoutInner<'a, RecursiveRepr> {
     Builtin(Builtin<'a>),
     Struct {
         /// Two different struct types can have the same layout, for example
@@ -270,30 +272,33 @@ pub enum Layout<'a> {
         ///
         /// See also https://github.com/roc-lang/roc/issues/2535.
         field_order_hash: FieldOrderHash,
-        field_layouts: &'a [Layout<'a>],
+        field_layouts: &'a [LayoutInner<'a, ()>],
     },
-    Boxed(&'a Layout<'a>),
-    Union(UnionLayout<'a>),
-    LambdaSet(LambdaSet<'a>),
+    Boxed(&'a LayoutInner<'a, ()>),
+    Union(UnionLayoutInner<'a, ()>),
+    LambdaSet(LambdaSetInner<'a, ()>),
     /// A recursive pointer in a recursive layout
-    RecursivePointer,
+    RecursivePointer(
+        /// The recursive layout
+        RecursiveRepr,
+    ),
 }
 
+pub type UnionLayout<'a> = UnionLayoutInner<'a, ()>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum UnionLayout<'a> {
+pub enum UnionLayoutInner<'a, RecursiveRepr> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
-    NonRecursive(&'a [&'a [Layout<'a>]]),
+    NonRecursive(&'a [&'a [LayoutInner<'a, RecursiveRepr>]]),
     /// A recursive tag union (general case)
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
-    Recursive(&'a [&'a [Layout<'a>]]),
+    Recursive(RecursiveRepr, &'a [&'a [LayoutInner<'a, RecursiveRepr>]]),
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-    NonNullableUnwrapped(&'a [Layout<'a>]),
+    NonNullableUnwrapped(RecursiveRepr, &'a [LayoutInner<'a, RecursiveRepr>]),
     /// A recursive tag union that has an empty variant
-    /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
-    /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
     /// e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     ///
@@ -303,8 +308,9 @@ pub enum UnionLayout<'a> {
     /// ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
     /// and since Empty's tag id is 0, here nullable_id would be 0.
     NullableWrapped {
+        rec: RecursiveRepr,
         nullable_id: u16,
-        other_tags: &'a [&'a [Layout<'a>]],
+        other_tags: &'a [&'a [LayoutInner<'a, RecursiveRepr>]],
     },
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
@@ -318,6 +324,7 @@ pub enum UnionLayout<'a> {
     /// represented as NULL at runtime, so nullable_id is 1 - which is to say, `true`, because
     /// `(1 as bool)` is `true`.
     NullableUnwrapped {
+        rec: RecursiveRepr,
         nullable_id: bool,
         other_fields: &'a [Layout<'a>],
     },
@@ -330,7 +337,7 @@ impl<'a> UnionLayout<'a> {
         D::Doc: Clone,
         A: Clone,
     {
-        use UnionLayout::*;
+        use UnionLayoutInner::*;
 
         match self {
             NonRecursive(tags) => {
@@ -346,7 +353,7 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.intersperse(tags_doc, ", "))
                     .append(alloc.text("]"))
             }
-            Recursive(tags) => {
+            Recursive(_, tags) => {
                 let tags_doc = tags.iter().map(|fields| {
                     alloc.text("C ").append(alloc.intersperse(
                         fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
@@ -358,7 +365,7 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.intersperse(tags_doc, ", "))
                     .append(alloc.text("]"))
             }
-            NonNullableUnwrapped(fields) => {
+            NonNullableUnwrapped(_, fields) => {
                 let fields_doc = alloc.text("C ").append(alloc.intersperse(
                     fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
                     " ",
@@ -369,6 +376,7 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.text("]"))
             }
             NullableUnwrapped {
+                rec: _,
                 nullable_id,
                 other_fields,
             } => {
@@ -402,13 +410,14 @@ impl<'a> UnionLayout<'a> {
                 // this cannot be recursive; return immediately
                 return field_layouts[index];
             }
-            UnionLayout::Recursive(tag_layouts) => {
+            UnionLayout::Recursive(_, tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
 
                 field_layouts[index]
             }
-            UnionLayout::NonNullableUnwrapped(field_layouts) => field_layouts[index],
+            UnionLayout::NonNullableUnwrapped(_, field_layouts) => field_layouts[index],
             UnionLayout::NullableWrapped {
+                rec: _,
                 nullable_id,
                 other_tags,
             } => {
@@ -425,6 +434,7 @@ impl<'a> UnionLayout<'a> {
             }
 
             UnionLayout::NullableUnwrapped {
+                rec: _,
                 nullable_id,
                 other_fields,
             } => {
@@ -434,7 +444,7 @@ impl<'a> UnionLayout<'a> {
             }
         };
 
-        if let Layout::RecursivePointer = result {
+        if let Layout::RecursivePointer(()) = result {
             Layout::Union(self)
         } else {
             result
@@ -443,10 +453,10 @@ impl<'a> UnionLayout<'a> {
 
     pub fn number_of_tags(&'a self) -> usize {
         match self {
-            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => tags.len(),
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(_, tags) => tags.len(),
 
             UnionLayout::NullableWrapped { other_tags, .. } => other_tags.len() + 1,
-            UnionLayout::NonNullableUnwrapped(_) => 1,
+            UnionLayout::NonNullableUnwrapped(_, _) => 1,
             UnionLayout::NullableUnwrapped { .. } => 2,
         }
     }
@@ -454,12 +464,12 @@ impl<'a> UnionLayout<'a> {
     pub fn discriminant(&self) -> Discriminant {
         match self {
             UnionLayout::NonRecursive(tags) => Discriminant::from_number_of_tags(tags.len()),
-            UnionLayout::Recursive(tags) => Discriminant::from_number_of_tags(tags.len()),
+            UnionLayout::Recursive(_, tags) => Discriminant::from_number_of_tags(tags.len()),
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
                 Discriminant::from_number_of_tags(other_tags.len() + 1)
             }
-            UnionLayout::NonNullableUnwrapped(_) => Discriminant::from_number_of_tags(2),
+            UnionLayout::NonNullableUnwrapped(_, _) => Discriminant::from_number_of_tags(2),
             UnionLayout::NullableUnwrapped { .. } => Discriminant::from_number_of_tags(1),
         }
     }
@@ -493,30 +503,34 @@ impl<'a> UnionLayout<'a> {
     pub fn stores_tag_id_as_data(&self, target_info: TargetInfo) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => true,
-            UnionLayout::Recursive(tags)
+            UnionLayout::Recursive(_, tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
             } => !Self::stores_tag_id_in_pointer_bits(tags, target_info),
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+            UnionLayout::NonNullableUnwrapped(_, _) | UnionLayout::NullableUnwrapped { .. } => {
+                false
+            }
         }
     }
 
     pub fn stores_tag_id_in_pointer(&self, target_info: TargetInfo) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => false,
-            UnionLayout::Recursive(tags)
+            UnionLayout::Recursive(_, tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
             } => Self::stores_tag_id_in_pointer_bits(tags, target_info),
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+            UnionLayout::NonNullableUnwrapped(_, _) | UnionLayout::NullableUnwrapped { .. } => {
+                false
+            }
         }
     }
 
     pub fn tag_is_null(&self, tag_id: TagIdIntType) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
-            | UnionLayout::Recursive(_) => false,
+            | UnionLayout::NonNullableUnwrapped(_, _)
+            | UnionLayout::Recursive(_, _) => false,
             UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id,
             UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
@@ -525,7 +539,7 @@ impl<'a> UnionLayout<'a> {
     pub fn is_nullable(&self) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
-            | UnionLayout::Recursive(_)
+            | UnionLayout::Recursive(_, _)
             | UnionLayout::NonNullableUnwrapped { .. } => false,
             UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
         }
@@ -543,8 +557,8 @@ impl<'a> UnionLayout<'a> {
     pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         let allocation = match self {
             UnionLayout::NonRecursive(tags) => Self::tags_alignment_bytes(tags, target_info),
-            UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(tags, target_info),
-            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+            UnionLayout::Recursive(_, tags) => Self::tags_alignment_bytes(tags, target_info),
+            UnionLayout::NonNullableUnwrapped(_, field_layouts) => {
                 Layout::struct_no_name_order(field_layouts).alignment_bytes(target_info)
             }
             UnionLayout::NullableWrapped { other_tags, .. } => {
@@ -600,8 +614,8 @@ impl<'a> UnionLayout<'a> {
     fn data_size_and_alignment_help_match(&self, target_info: TargetInfo) -> (u32, u32) {
         match self {
             Self::NonRecursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
-            Self::Recursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
-            Self::NonNullableUnwrapped(fields) => {
+            Self::Recursive(_, tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
+            Self::NonNullableUnwrapped(_, fields) => {
                 Layout::stack_size_and_alignment_slices(&[fields], target_info)
             }
             Self::NullableWrapped { other_tags, .. } => {
@@ -616,11 +630,11 @@ impl<'a> UnionLayout<'a> {
     pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
         match self {
             UnionLayout::NonRecursive(tags)
-            | UnionLayout::Recursive(tags)
+            | UnionLayout::Recursive(_, tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
             } => Some(Self::tag_id_offset_help(tags, target_info)),
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
+            UnionLayout::NonNullableUnwrapped(_, _) | UnionLayout::NullableUnwrapped { .. } => None,
         }
     }
 
@@ -638,8 +652,8 @@ impl<'a> UnionLayout<'a> {
                 let (width, align) = self.data_size_and_alignment(target_info);
                 round_up_to_alignment(width, align)
             }
-            UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
+            UnionLayout::Recursive(_, _)
+            | UnionLayout::NonNullableUnwrapped(_, _)
             | UnionLayout::NullableWrapped { .. }
             | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
         }
@@ -786,12 +800,14 @@ impl<'a> LambdaName<'a> {
     }
 }
 
+pub type LambdaSet<'a> = LambdaSetInner<'a, ()>;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet<'a> {
+pub struct LambdaSetInner<'a, RecursiveRepr> {
     /// collection of function names and their closure arguments
-    set: &'a [(Symbol, &'a [Layout<'a>])],
+    set: &'a [(Symbol, &'a [LayoutInner<'a, RecursiveRepr>])],
     /// how the closure will be represented at runtime
-    representation: &'a Layout<'a>,
+    representation: &'a LayoutInner<'a, RecursiveRepr>,
 }
 
 #[derive(Debug)]
@@ -942,22 +958,22 @@ impl<'a> LambdaSet<'a> {
             return true;
         }
 
-        let left = if left == &Layout::RecursivePointer {
+        let left = if left == &Layout::RecursivePointer(()) {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 runtime_repr,
-                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
+                Layout::Union(UnionLayout::Recursive(_, _) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
         } else {
             *left
         };
 
-        let right = if right == &Layout::RecursivePointer {
+        let right = if right == &Layout::RecursivePointer(()) {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 runtime_repr,
-                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
+                Layout::Union(UnionLayout::Recursive(_, _) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
         } else {
@@ -1000,7 +1016,7 @@ impl<'a> LambdaSet<'a> {
                             union_layout: *union,
                         }
                     }
-                    UnionLayout::Recursive(_) => {
+                    UnionLayout::Recursive(_, _) => {
                         let (index, (name, fields)) = self
                             .set
                             .iter()
@@ -1018,6 +1034,7 @@ impl<'a> LambdaSet<'a> {
                         }
                     }
                     UnionLayout::NullableUnwrapped {
+                        rec: _,
                         nullable_id: _,
                         other_fields: _,
                     } => {
@@ -1037,8 +1054,9 @@ impl<'a> LambdaSet<'a> {
                             union_layout: *union,
                         }
                     }
-                    UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
+                    UnionLayout::NonNullableUnwrapped(_, _) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
+                        rec: _,
                         nullable_id: _,
                         other_tags: _,
                     } => todo!("recursive closures"),
@@ -1438,14 +1456,16 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
     (max_depth_any_ctor, max_depth_only_lset, total)
 }
 
+pub type Builtin<'a> = BuiltinInner<'a, ()>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Builtin<'a> {
+pub enum BuiltinInner<'a, RecursiveRepr> {
     Int(IntWidth),
     Float(FloatWidth),
     Bool,
     Decimal,
     Str,
-    List(&'a Layout<'a>),
+    List(&'a LayoutInner<'a, RecursiveRepr>),
 }
 
 pub struct Env<'a, 'b> {
@@ -1644,7 +1664,7 @@ impl<'a> Layout<'a> {
     /// monomorphized away already!
     fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
         if env.is_seen(var) {
-            Ok(Layout::RecursivePointer)
+            Ok(Layout::RecursivePointer(()))
         } else {
             let content = env.subs.get_content_without_compacting(var);
             Self::new_help(env, var, *content)
@@ -1652,7 +1672,7 @@ impl<'a> Layout<'a> {
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
-        use Layout::*;
+        use LayoutInner::*;
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
@@ -1660,23 +1680,23 @@ impl<'a> Layout<'a> {
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
             Union(variant) => {
-                use UnionLayout::*;
+                use UnionLayoutInner::*;
 
                 match variant {
                     NonRecursive(tags) => tags
                         .iter()
                         .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
-                    Recursive(_)
+                    Recursive(_, _)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => {
+                    | NonNullableUnwrapped(_, _) => {
                         // a recursive union will always contain a pointer, and is thus not safe to memcpy
                         false
                     }
                 }
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().safe_to_memcpy(),
-            Boxed(_) | RecursivePointer => {
+            Boxed(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -1705,13 +1725,13 @@ impl<'a> Layout<'a> {
             Layout::Boxed(content) => content.is_zero_sized(),
             Layout::Union(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(tags)
-                | UnionLayout::Recursive(tags)
+                | UnionLayout::Recursive(_, tags)
                 | UnionLayout::NullableWrapped {
                     other_tags: tags, ..
                 } => tags
                     .iter()
                     .all(|payloads| payloads.iter().all(Self::is_zero_sized)),
-                UnionLayout::NonNullableUnwrapped(tags)
+                UnionLayout::NonNullableUnwrapped(_, tags)
                 | UnionLayout::NullableUnwrapped {
                     other_fields: tags, ..
                 } => tags.iter().all(Self::is_zero_sized),
@@ -1721,14 +1741,14 @@ impl<'a> Layout<'a> {
             // else but the recutsive pointer is zero-sized, then
             // the whole thing is unnecessary at runtime and should
             // be zero-sized.
-            Layout::RecursivePointer => true,
+            Layout::RecursivePointer(_) => true,
         }
     }
 
     pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {
         match self {
             Layout::Builtin(builtin) => {
-                use Builtin::*;
+                use BuiltinInner::*;
 
                 match target_info.ptr_width() {
                     PtrWidth::Bytes4 => {
@@ -1766,7 +1786,7 @@ impl<'a> Layout<'a> {
 
     /// Very important to use this when doing a memcpy!
     pub fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
-        use Layout::*;
+        use LayoutInner::*;
 
         match self {
             Builtin(builtin) => builtin.stack_size(target_info),
@@ -1783,7 +1803,7 @@ impl<'a> Layout<'a> {
             LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
-            RecursivePointer => target_info.ptr_width() as u32,
+            RecursivePointer(_) => target_info.ptr_width() as u32,
             Boxed(_) => target_info.ptr_width() as u32,
         }
     }
@@ -1797,7 +1817,7 @@ impl<'a> Layout<'a> {
                 .unwrap_or(0),
 
             Layout::Union(variant) => {
-                use UnionLayout::*;
+                use UnionLayoutInner::*;
 
                 match variant {
                     NonRecursive(tags) => {
@@ -1822,17 +1842,17 @@ impl<'a> Layout<'a> {
                             }
                         }
                     }
-                    Recursive(_)
+                    Recursive(_, _)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
+                    | NonNullableUnwrapped(_, _) => target_info.ptr_width() as u32,
                 }
             }
             Layout::LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .alignment_bytes(target_info),
             Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
-            Layout::RecursivePointer => target_info.ptr_width() as u32,
+            Layout::RecursivePointer(_) => target_info.ptr_width() as u32,
             Layout::Boxed(_) => target_info.ptr_width() as u32,
         }
     }
@@ -1847,7 +1867,9 @@ impl<'a> Layout<'a> {
             Layout::LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .allocation_alignment_bytes(target_info),
-            Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
+            Layout::RecursivePointer(_) => {
+                unreachable!("should be looked up to get an actual layout")
+            }
             Layout::Boxed(inner) => inner.allocation_alignment_bytes(target_info),
         }
     }
@@ -1876,15 +1898,15 @@ impl<'a> Layout<'a> {
     }
 
     pub fn is_refcounted(&self) -> bool {
-        use self::Builtin::*;
-        use Layout::*;
+        use self::BuiltinInner::*;
+        use LayoutInner::*;
 
         match self {
             Union(UnionLayout::NonRecursive(_)) => false,
 
             Union(_) => true,
 
-            RecursivePointer => true,
+            RecursivePointer(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
 
@@ -1896,27 +1918,27 @@ impl<'a> Layout<'a> {
     /// it may contains values/fields that are. Therefore when this record
     /// goes out of scope, the refcount on those values/fields must  be decremented.
     pub fn contains_refcounted(&self) -> bool {
-        use Layout::*;
+        use LayoutInner::*;
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
             Struct { field_layouts, .. } => field_layouts.iter().any(|f| f.contains_refcounted()),
             Union(variant) => {
-                use UnionLayout::*;
+                use UnionLayoutInner::*;
 
                 match variant {
                     NonRecursive(fields) => fields
                         .iter()
                         .flat_map(|ls| ls.iter())
                         .any(|f| f.contains_refcounted()),
-                    Recursive(_)
+                    Recursive(_, _)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => true,
+                    | NonNullableUnwrapped(_, _) => true,
                 }
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().contains_refcounted(),
-            RecursivePointer => true,
+            RecursivePointer(_) => true,
             Boxed(_) => true,
         }
     }
@@ -1927,7 +1949,7 @@ impl<'a> Layout<'a> {
         D::Doc: Clone,
         A: Clone,
     {
-        use Layout::*;
+        use LayoutInner::*;
 
         match self {
             Builtin(builtin) => builtin.to_doc(alloc, parens),
@@ -1941,7 +1963,7 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             LambdaSet(lambda_set) => lambda_set.runtime_representation().to_doc(alloc, parens),
-            RecursivePointer => alloc.text("*self"),
+            RecursivePointer(_) => alloc.text("*self"),
             Boxed(inner) => alloc
                 .text("Boxed(")
                 .append(inner.to_doc(alloc, parens))
@@ -2103,7 +2125,7 @@ impl<'a> LayoutCache<'a> {
             module: self.recursive_layouts.0,
             index: self.recursive_layouts.1.len(),
         };
-        self.recursive_layouts.1.push(Layout::RecursivePointer);
+        self.recursive_layouts.1.push(Layout::RecursivePointer(()));
 
         let root = subs.get_root_key_without_compacting(var);
         let opt_old_index = self
@@ -2125,7 +2147,7 @@ impl<'a> LayoutCache<'a> {
 
     fn set_recursion(&mut self, index: Pending<LayoutIndex>, layout: Layout<'a>) {
         let index = index.0;
-        debug_assert_eq!(self.recursive_layouts[index], Layout::RecursivePointer);
+        debug_assert_eq!(self.recursive_layouts[index], Layout::RecursivePointer(()));
         self.recursive_layouts[index] = layout;
     }
 }
@@ -2258,7 +2280,7 @@ impl<'a> Builtin<'a> {
     pub const WRAPPER_CAPACITY: u32 = 2;
 
     pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
-        use Builtin::*;
+        use BuiltinInner::*;
 
         let ptr_width = target_info.ptr_width() as u32;
 
@@ -2274,7 +2296,7 @@ impl<'a> Builtin<'a> {
 
     pub fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use std::mem::align_of;
-        use Builtin::*;
+        use BuiltinInner::*;
 
         let ptr_width = target_info.ptr_width() as u32;
 
@@ -2297,7 +2319,7 @@ impl<'a> Builtin<'a> {
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
-        use Builtin::*;
+        use BuiltinInner::*;
 
         match self {
             Int(_) | Float(_) | Bool | Decimal => true,
@@ -2308,7 +2330,7 @@ impl<'a> Builtin<'a> {
 
     // Question: does is_refcounted exactly correspond with the "safe to memcpy" property?
     pub fn is_refcounted(&self) -> bool {
-        use Builtin::*;
+        use BuiltinInner::*;
 
         match self {
             Int(_) | Float(_) | Bool | Decimal => false,
@@ -2323,7 +2345,7 @@ impl<'a> Builtin<'a> {
         D::Doc: Clone,
         A: Clone,
     {
-        use Builtin::*;
+        use BuiltinInner::*;
 
         match self {
             Int(int_width) => {
@@ -2519,7 +2541,7 @@ fn layout_from_flat_type<'a>(
         }
         Func(_, closure_var, _) => {
             if env.is_seen(closure_var) {
-                Ok(Layout::RecursivePointer)
+                Ok(Layout::RecursivePointer(()))
             } else {
                 let lambda_set = LambdaSet::from_var(
                     env.cache,
@@ -2856,7 +2878,7 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
         layout,
         Layout::Union(
             UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::Recursive(_)
+                | UnionLayout::Recursive(_, _)
                 | UnionLayout::NullableWrapped { .. }
                 | UnionLayout::NonNullableUnwrapped { .. },
         )
@@ -2968,7 +2990,7 @@ where
                                 && is_recursive_tag_union(&layout);
 
                             if self_recursion {
-                                arg_layouts.push(Layout::RecursivePointer);
+                                arg_layouts.push(Layout::RecursivePointer(()));
                             } else {
                                 arg_layouts.push(layout);
                             }
@@ -3166,7 +3188,7 @@ where
                                 && is_recursive_tag_union(&layout);
 
                             if self_recursion {
-                                arg_layouts.push(Layout::RecursivePointer);
+                                arg_layouts.push(Layout::RecursivePointer(()));
                             } else {
                                 arg_layouts.push(layout);
                             }
@@ -3329,7 +3351,7 @@ where
                     tag_layouts.extend(tags.iter().map(|r| r.1));
 
                     debug_assert!(tag_layouts.len() > 1);
-                    Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
+                    Layout::Union(UnionLayout::Recursive((), tag_layouts.into_bump_slice()))
                 }
 
                 NullableWrapped {
@@ -3341,6 +3363,7 @@ where
                     tag_layouts.extend(tags.iter().map(|r| r.1));
 
                     Layout::Union(UnionLayout::NullableWrapped {
+                        rec: (),
                         nullable_id,
                         other_tags: tag_layouts.into_bump_slice(),
                     })
@@ -3400,7 +3423,7 @@ where
         for &var in variables {
             // TODO does this cause problems with mutually recursive unions?
             if rec_var == subs.get_root_key_without_compacting(var) {
-                tag_layout.push(Layout::RecursivePointer);
+                tag_layout.push(Layout::RecursivePointer(()));
                 continue;
             }
 
@@ -3424,20 +3447,22 @@ where
                 let nullable_id = tag_id != 0;
 
                 UnionLayout::NullableUnwrapped {
+                    rec: (),
                     nullable_id,
                     other_fields: one,
                 }
             }
             many => UnionLayout::NullableWrapped {
+                rec: (),
                 nullable_id: tag_id,
                 other_tags: many,
             },
         }
     } else if tag_layouts.len() == 1 {
         // drop the tag id
-        UnionLayout::NonNullableUnwrapped(tag_layouts.pop().unwrap())
+        UnionLayout::NonNullableUnwrapped((), tag_layouts.pop().unwrap())
     } else {
-        UnionLayout::Recursive(tag_layouts.into_bump_slice())
+        UnionLayout::Recursive((), tag_layouts.into_bump_slice())
     };
 
     Ok(Layout::Union(union_layout))

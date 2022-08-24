@@ -1309,7 +1309,7 @@ impl<
         union_layout: &UnionLayout<'a>,
     ) {
         match union_layout {
-            UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(tag_layouts) => {
+            UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(_, tag_layouts) => {
                 self.storage_manager.load_field_at_index(
                     sym,
                     structure,
@@ -1503,7 +1503,8 @@ macro_rules! single_register_int_builtins {
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::Builtin(Builtin::Bool | single_register_int_builtins!()) | Layout::RecursivePointer
+        Layout::Builtin(Builtin::Bool | single_register_int_builtins!())
+            | Layout::RecursivePointer(_)
     };
 }
 

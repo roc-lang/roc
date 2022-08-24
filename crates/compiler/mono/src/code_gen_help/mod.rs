@@ -8,7 +8,7 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, CapturesNiche, LambdaName, Layout, UnionLayout};
+use crate::layout::{Builtin, CapturesNiche, LambdaName, Layout, UnionLayout, UnionLayoutInner};
 
 mod equality;
 mod refcount;
@@ -86,7 +86,7 @@ impl<'a> CodeGenHelp<'a> {
         let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
-        let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
+        let union_refcount = UnionLayout::NonNullableUnwrapped((), arena.alloc([layout_isize]));
 
         CodeGenHelp {
             arena,
@@ -240,7 +240,7 @@ impl<'a> CodeGenHelp<'a> {
         // debug_assert!(self.debug_recursion_depth < 100);
         self.debug_recursion_depth += 1;
 
-        let layout = if matches!(called_layout, Layout::RecursivePointer) {
+        let layout = if matches!(called_layout, Layout::RecursivePointer(_)) {
             let union_layout = ctx.recursive_union.unwrap();
             Layout::Union(union_layout)
         } else {
@@ -454,7 +454,7 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             // This line is the whole point of the function
-            Layout::RecursivePointer => Layout::Union(ctx.recursive_union.unwrap()),
+            Layout::RecursivePointer(_) => Layout::Union(ctx.recursive_union.unwrap()),
         }
     }
 
@@ -462,13 +462,13 @@ impl<'a> CodeGenHelp<'a> {
         &self,
         union: UnionLayout<'a>,
     ) -> (bool, Vec<'a, Option<usize>>) {
-        use UnionLayout::*;
+        use UnionLayoutInner::*;
         match union {
             NonRecursive(_) => return (false, bumpalo::vec![in self.arena]),
 
-            Recursive(tags) => self.union_tail_recursion_fields_help(tags),
+            Recursive(_, tags) => self.union_tail_recursion_fields_help(tags),
 
-            NonNullableUnwrapped(field_layouts) => {
+            NonNullableUnwrapped(_, field_layouts) => {
                 self.union_tail_recursion_fields_help(&[field_layouts])
             }
 
@@ -492,7 +492,7 @@ impl<'a> CodeGenHelp<'a> {
         for fields in tags.iter() {
             let found_index = fields
                 .iter()
-                .position(|f| matches!(f, Layout::RecursivePointer));
+                .position(|f| matches!(f, Layout::RecursivePointer(_)));
             tailrec_indices.push(found_index);
             can_use_tailrec |= found_index.is_some();
         }
@@ -539,7 +539,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
         Layout::Union(_) => true,
         Layout::LambdaSet(_) => true,
-        Layout::RecursivePointer => false,
+        Layout::RecursivePointer(_) => false,
         Layout::Boxed(_) => true,
     }
 }

@@ -1914,7 +1914,7 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
 
-            Layout::RecursivePointer => {
+            Layout::RecursivePointer(_) => {
                 internal_error!(
                     "Tried to apply `==` to RecursivePointer values {:?}",
                     self.arguments,

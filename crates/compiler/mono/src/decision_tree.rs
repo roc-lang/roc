@@ -829,7 +829,8 @@ fn to_relevant_branch_help<'a>(
                                 start.extend(end);
                             }
                         }
-                        UnionLayout::NonRecursive([_]) | UnionLayout::NonNullableUnwrapped(_) => {
+                        UnionLayout::NonRecursive([_])
+                        | UnionLayout::NonNullableUnwrapped(_, _) => {
                             let sub_positions =
                                 arguments
                                     .into_iter()
@@ -846,7 +847,7 @@ fn to_relevant_branch_help<'a>(
                             start.extend(end);
                         }
                         UnionLayout::NonRecursive(_)
-                        | UnionLayout::Recursive(_)
+                        | UnionLayout::Recursive(_, _)
                         | UnionLayout::NullableWrapped { .. }
                         | UnionLayout::NullableUnwrapped { .. } => {
                             let sub_positions =

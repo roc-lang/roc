@@ -3287,7 +3287,7 @@ fn specialize_proc_help<'a>(
                             debug_assert!(matches!(
                                 union_layout,
                                 UnionLayout::NonRecursive(_)
-                                    | UnionLayout::Recursive(_)
+                                    | UnionLayout::Recursive(_, _)
                                     | UnionLayout::NullableUnwrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
@@ -7019,7 +7019,7 @@ fn store_tag_pattern<'a>(
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
         let mut arg_layout = *arg_layout;
 
-        if let Layout::RecursivePointer = arg_layout {
+        if let Layout::RecursivePointer(_) = arg_layout {
             arg_layout = Layout::Union(union_layout);
         }
 
@@ -7102,7 +7102,7 @@ fn store_newtype_pattern<'a>(
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
         let mut arg_layout = *arg_layout;
 
-        if let Layout::RecursivePointer = arg_layout {
+        if let Layout::RecursivePointer(()) = arg_layout {
             arg_layout = *layout;
         }
 

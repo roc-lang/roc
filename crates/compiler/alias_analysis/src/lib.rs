@@ -12,7 +12,10 @@ use roc_mono::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
     ModifyRc, OptLevel, Proc, Stmt,
 };
-use roc_mono::layout::{Builtin, CapturesNiche, Layout, RawFunctionLayout, UnionLayout};
+use roc_mono::layout::{
+    Builtin, BuiltinInner, CapturesNiche, Layout, LayoutInner, RawFunctionLayout, UnionLayout,
+    UnionLayoutInner,
+};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -244,7 +247,7 @@ where
             let mut builder = TypeDefBuilder::new();
 
             let variant_types = recursive_variant_types(&mut builder, &union_layout)?;
-            let root_type = if let UnionLayout::NonNullableUnwrapped(_) = union_layout {
+            let root_type = if let UnionLayout::NonNullableUnwrapped(_, _) = union_layout {
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
             } else {
@@ -1113,7 +1116,7 @@ fn recursive_variant_types(
     builder: &mut impl TypeContext,
     union_layout: &UnionLayout,
 ) -> Result<Vec<TypeId>> {
-    use UnionLayout::*;
+    use UnionLayoutInner::*;
 
     let mut result;
 
@@ -1121,17 +1124,18 @@ fn recursive_variant_types(
         NonRecursive(_) => {
             unreachable!()
         }
-        Recursive(tags) => {
+        Recursive(_, tags) => {
             result = Vec::with_capacity(tags.len());
 
             for tag in tags.iter() {
                 result.push(recursive_tag_variant(builder, union_layout, tag)?);
             }
         }
-        NonNullableUnwrapped(fields) => {
+        NonNullableUnwrapped(_, fields) => {
             result = vec![recursive_tag_variant(builder, union_layout, fields)?];
         }
         NullableWrapped {
+            rec: _,
             nullable_id,
             other_tags: tags,
         } => {
@@ -1150,6 +1154,7 @@ fn recursive_variant_types(
             }
         }
         NullableUnwrapped {
+            rec: _,
             nullable_id,
             other_fields: fields,
         } => {
@@ -1206,7 +1211,7 @@ fn expr_spec<'a>(
                     let value_id = build_tuple_value(builder, env, block, arguments)?;
                     return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
-                UnionLayout::NonNullableUnwrapped(_) => {
+                UnionLayout::NonNullableUnwrapped(_, _) => {
                     let value_id = data_id;
 
                     let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
@@ -1216,7 +1221,7 @@ fn expr_spec<'a>(
 
                     return builder.add_make_named(block, MOD_APP, type_name, value_id);
                 }
-                UnionLayout::Recursive(_) => data_id,
+                UnionLayout::Recursive(_, _) => data_id,
                 UnionLayout::NullableWrapped { .. } => data_id,
                 UnionLayout::NullableUnwrapped { .. } => data_id,
             };
@@ -1260,7 +1265,7 @@ fn expr_spec<'a>(
 
                 builder.add_get_tuple_field(block, tuple_value_id, index)
             }
-            UnionLayout::Recursive(_)
+            UnionLayout::Recursive(_, _)
             | UnionLayout::NullableUnwrapped { .. }
             | UnionLayout::NullableWrapped { .. } => {
                 let index = (*index) as u32;
@@ -1401,7 +1406,7 @@ fn layout_spec_help(
     layout: &Layout,
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
-    use Layout::*;
+    use LayoutInner::*;
 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
@@ -1425,10 +1430,10 @@ fn layout_spec_help(
                     let variant_types = non_recursive_variant_types(builder, tags, when_recursive)?;
                     builder.add_union_type(&variant_types)
                 }
-                UnionLayout::Recursive(_)
+                UnionLayout::Recursive(_, _)
                 | UnionLayout::NullableUnwrapped { .. }
                 | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped(_) => {
+                | UnionLayout::NonNullableUnwrapped(_, _) => {
                     let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
@@ -1443,16 +1448,16 @@ fn layout_spec_help(
 
             builder.add_tuple_type(&[cell_type, inner_type])
         }
-        RecursivePointer => match when_recursive {
+        RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!()
             }
             WhenRecursive::Loop(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(_) => unreachable!(),
-                UnionLayout::Recursive(_)
+                UnionLayout::Recursive(_, _)
                 | UnionLayout::NullableUnwrapped { .. }
                 | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped(_) => {
+                | UnionLayout::NonNullableUnwrapped(_, _) => {
                     let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
@@ -1468,7 +1473,7 @@ fn builtin_spec(
     builtin: &Builtin,
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
-    use Builtin::*;
+    use BuiltinInner::*;
 
     match builtin {
         Int(_) | Bool => builder.add_tuple_type(&[]),

@@ -1,5 +1,5 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Layout, UnionLayout};
+use roc_mono::layout::{Layout, UnionLayoutInner};
 
 use crate::wasm_module::ValueType;
 use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
@@ -42,8 +42,8 @@ pub enum WasmLayout {
 
 impl WasmLayout {
     pub fn new(layout: &Layout) -> Self {
-        use roc_mono::layout::Builtin::*;
-        use UnionLayout::*;
+        use roc_mono::layout::BuiltinInner::*;
+        use UnionLayoutInner::*;
         use ValueType::*;
 
         let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
@@ -96,13 +96,13 @@ impl WasmLayout {
             },
 
             Layout::Union(
-                Recursive(_)
-                | NonNullableUnwrapped(_)
+                Recursive(_, _)
+                | NonNullableUnwrapped(_, _)
                 | NullableWrapped { .. }
                 | NullableUnwrapped { .. },
             )
             | Layout::Boxed(_)
-            | Layout::RecursivePointer => Self::Primitive(PTR_TYPE, PTR_SIZE),
+            | Layout::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
         }
     }
 
