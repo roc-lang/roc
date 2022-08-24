@@ -935,13 +935,6 @@ struct State<'a> {
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
 
-    // Each thread gets its own layout cache. When one "pending specializations"
-    // pass completes, it returns its layout cache so another thread can use it.
-    // We don't bother trying to union them all together to maximize cache hits,
-    // since the unioning process could potentially take longer than the savings.
-    // (Granted, this has not been attempted or measured!)
-    pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
-
     pub render: RenderTarget,
     pub exec_mode: ExecutionMode,
 
@@ -970,7 +963,6 @@ impl<'a> State<'a> {
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
-        number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
@@ -998,7 +990,6 @@ impl<'a> State<'a> {
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
-            layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
             exec_mode,
@@ -1501,7 +1492,6 @@ pub fn load_single_threaded<'a>(
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
-    let number_of_workers = 1;
     let mut state = State::new(
         root_id,
         target_info,
@@ -1510,7 +1500,6 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         cached_subs,
         render,
-        number_of_workers,
         exec_mode,
     );
 
@@ -1727,7 +1716,6 @@ fn load_multi_threaded<'a>(
         ident_ids_by_module,
         cached_subs,
         render,
-        num_workers,
         exec_mode,
     );
 
@@ -2471,10 +2459,7 @@ fn update<'a>(
                 if state.goal_phase() > Phase::SolveTypes
                     || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
                 {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                    let layout_cache = LayoutCache::new(state.target_info);
 
                     let typechecked = TypeCheckedModule {
                         module_id,
