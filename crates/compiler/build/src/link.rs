@@ -138,15 +138,23 @@ pub fn build_zig_host_native(
         "str",
         zig_str_path,
         "--pkg-end",
-        // include the zig runtime
-        "-fcompiler-rt",
         // include libc
-        "--library",
-        "c",
+        "-lc",
         // cross-compile?
         "-target",
         target,
     ]);
+
+    // some examples need the compiler-rt in the app object file.
+    // but including it on windows causes weird crashes, at least
+    // when we use zig 0.9. It looks like zig 0.10 is going to fix
+    // this problem for us, so this is a temporary workaround
+    if !target.contains("windows") {
+        command.args(&[
+            // include the zig runtime
+            "-fcompiler-rt",
+        ]);
+    }
 
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
@@ -1188,13 +1196,12 @@ fn link_windows(
                 .args(&["build-exe"])
                 .args(input_paths)
                 .args([
-                    "-lc",
-                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
                     "x86_64-windows-gnu",
-                    "--strip",
-                    "-O",
-                    "Debug",
+                    "--subsystem",
+                    "console",
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
                 ])
                 .spawn()?;
 
