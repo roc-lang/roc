@@ -3,7 +3,7 @@ use roc_target::TargetInfo;
 use roc_utils::get_lib_path;
 use std::ops::Index;
 
-const LIB_DIR_ERROR: &'static str = "Failed to find the lib directory. Did you copy the roc binary without also copying the lib directory?\nIf you built roc from source, the lib dir should be in target/release.\nIf not, the lib dir should be included in the release tar.gz file.";
+const LIB_DIR_ERROR: &str = "Failed to find the lib directory. Did you copy the roc binary without also copying the lib directory?\nIf you built roc from source, the lib dir should be in target/release.\nIf not, the lib dir should be included in the release tar.gz file.";
 
 pub fn get_builtins_host_obj_path() -> String {
     let builtins_host_path = get_lib_path().expect(LIB_DIR_ERROR).join("builtins-host.o");
