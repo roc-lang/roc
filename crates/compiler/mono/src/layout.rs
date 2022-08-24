@@ -42,7 +42,7 @@ pub type TagIdIntType = u16;
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
     Erroneous,
@@ -225,12 +225,14 @@ impl<'a> RawFunctionLayout<'a> {
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
     fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
-        if env.is_seen(var) {
-            unreachable!("The initial variable of a signature cannot be seen already")
-        } else {
-            let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, *content)
-        }
+        env.cached_raw_function_or(var, |env| {
+            if env.is_seen(var) {
+                unreachable!("The initial variable of a signature cannot be seen already")
+            } else {
+                let content = env.subs.get_content_without_compacting(var);
+                Self::new_help(env, var, *content)
+            }
+        })
     }
 }
 
@@ -1142,7 +1144,7 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn from_var(
-        cache: &LayoutCache<'a>,
+        cache: &mut LayoutCache<'a>,
         arena: &'a Bump,
         subs: &Subs,
         closure_var: Variable,
@@ -1156,6 +1158,18 @@ impl<'a> LambdaSet<'a> {
         // which should also resolve the issue here.
         let mut env = Env::from_components(cache, subs, arena, target_info);
 
+        let result = env.cached_or(closure_var, |env| {
+            Self::from_var_help(env, closure_var).map(|layout| Layout::LambdaSet(layout))
+        });
+
+        match result {
+            Ok(Layout::LambdaSet(lambda_set)) => Ok(lambda_set),
+            Err(err) => Err(err),
+            Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
+        }
+    }
+
+    fn from_var_help(env: &mut Env<'a, '_>, closure_var: Variable) -> Result<Self, LayoutProblem> {
         roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(env.subs, closure_var), "building lambda set layout");
 
         match resolve_lambda_set(env.subs, closure_var) {
@@ -1180,7 +1194,7 @@ impl<'a> LambdaSet<'a> {
                     }
 
                     for var in variables {
-                        arguments.push(Layout::from_var(&mut env, *var)?);
+                        arguments.push(Layout::from_var(env, *var)?);
                     }
 
                     let arguments = arguments.into_bump_slice();
@@ -1231,7 +1245,7 @@ impl<'a> LambdaSet<'a> {
                 };
 
                 let representation = env.arena.alloc(Self::make_representation(
-                    &mut env,
+                    env,
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 ));
@@ -1452,13 +1466,12 @@ pub struct Env<'a, 'b> {
     arena: &'a Bump,
     seen: Vec<'a, Variable>,
     subs: &'b Subs,
-    #[allow(unused)]
-    cache: &'b LayoutCache<'a>,
+    cache: &'b mut LayoutCache<'a>,
 }
 
 impl<'a, 'b> Env<'a, 'b> {
     pub fn from_components(
-        cache: &'b LayoutCache<'a>,
+        cache: &'b mut LayoutCache<'a>,
         subs: &'b Subs,
         arena: &'a Bump,
         target_info: TargetInfo,
@@ -1493,6 +1506,30 @@ impl<'a, 'b> Env<'a, 'b> {
         } else {
             false
         }
+    }
+
+    fn cached_or(
+        &mut self,
+        var: Variable,
+        compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> LayoutResult<'a>,
+    ) -> LayoutResult<'a> {
+        if let Some(result) = self.cache.get(self.subs, var) {
+            return result;
+        }
+        let result = compute_layout(self);
+        self.cache.insert(self.subs, var, result)
+    }
+
+    fn cached_raw_function_or(
+        &mut self,
+        var: Variable,
+        compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> RawFunctionLayoutResult<'a>,
+    ) -> RawFunctionLayoutResult<'a> {
+        if let Some(result) = self.cache.get_raw_function(self.subs, var) {
+            return result;
+        }
+        let result = compute_layout(self);
+        self.cache.insert_raw_function(self.subs, var, result)
     }
 }
 
@@ -1642,12 +1679,14 @@ impl<'a> Layout<'a> {
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
     fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
-        if env.is_seen(var) {
-            Ok(Layout::RecursivePointer)
-        } else {
-            let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, *content)
-        }
+        env.cached_or(var, |env| {
+            if env.is_seen(var) {
+                Ok(Layout::RecursivePointer)
+            } else {
+                let content = env.subs.get_content_without_compacting(var);
+                Self::new_help(env, var, *content)
+            }
+        })
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
@@ -1968,29 +2007,40 @@ impl<'a> Layout<'a> {
     }
 }
 
-/// Avoid recomputing Layout from Variable multiple times.
-/// We use `ena` for easy snapshots and rollbacks of the cache.
-/// During specialization, a type variable `a` can be specialized to different layouts,
-/// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
-/// Therefore in general it's invalid to store a map from variables to layouts
-/// But if we're careful when to invalidate certain keys, we still get some benefit
+type LayoutResult<'a> = Result<Layout<'a>, LayoutProblem>;
+type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
+
+/// A single layer of the layout cache.
+/// Snapshots are implemented by operating on new layers, and rollbacks by dropping the latest
+/// layer.
+#[derive(Debug)]
+struct CacheLayer<Result>(MutMap<Variable, Result>);
+
+impl<Result> Default for CacheLayer<Result> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+/// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
     pub target_info: TargetInfo,
+    cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
+    raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
     _marker: std::marker::PhantomData<&'a u8>,
-}
-
-#[derive(Debug, Clone)]
-pub enum CachedLayout<'a> {
-    Cached(Layout<'a>),
-    NotCached,
-    Problem(LayoutProblem),
 }
 
 impl<'a> LayoutCache<'a> {
     pub fn new(target_info: TargetInfo) -> Self {
+        let mut cache = std::vec::Vec::with_capacity(4);
+        cache.push(CacheLayer::default());
+        let mut raw_cache = std::vec::Vec::with_capacity(4);
+        raw_cache.push(CacheLayer::default());
         Self {
             target_info,
+            cache,
+            raw_function_cache: raw_cache,
             _marker: Default::default(),
         }
     }
@@ -2012,6 +2062,7 @@ impl<'a> LayoutCache<'a> {
             cache: self,
         };
 
+        // [Layout::from_var] should query the cache!
         Layout::from_var(&mut env, var)
     }
 
@@ -2031,18 +2082,88 @@ impl<'a> LayoutCache<'a> {
             target_info: self.target_info,
             cache: self,
         };
+
+        // [Layout::from_var] should query the cache!
         RawFunctionLayout::from_var(&mut env, var)
     }
 
-    pub fn snapshot(&mut self) -> SnapshotKeyPlaceholder {
-        SnapshotKeyPlaceholder
+    fn get_help<Result: Copy>(
+        cache: &std::vec::Vec<CacheLayer<Result>>,
+        subs: &Subs,
+        var: Variable,
+    ) -> Option<Result> {
+        let root = subs.get_root_key_without_compacting(var);
+
+        for layer in cache.iter().rev() {
+            // TODO: it's possible that after unification, roots in earlier cache layers changed...
+            // how often does that happen?
+            if let Some(result) = layer.0.get(&root) {
+                return Some(*result);
+            }
+        }
+        None
     }
 
-    pub fn rollback_to(&mut self, _snapshot: SnapshotKeyPlaceholder) {}
+    fn insert_help<Result: Copy>(
+        cache: &mut std::vec::Vec<CacheLayer<Result>>,
+        subs: &Subs,
+        var: Variable,
+        result: Result,
+    ) -> Result {
+        let root = subs.get_root_key_without_compacting(var);
+        let layer = cache
+            .last_mut()
+            .expect("cache must have at least one layer");
+        let opt_old_result = layer.0.insert(root, result);
+        debug_assert!(opt_old_result.is_none(), "overwritting cache result");
+        result
+    }
+
+    fn get(&self, subs: &Subs, var: Variable) -> Option<LayoutResult<'a>> {
+        Self::get_help(&self.cache, subs, var)
+    }
+
+    fn get_raw_function(&self, subs: &Subs, var: Variable) -> Option<RawFunctionLayoutResult<'a>> {
+        Self::get_help(&self.raw_function_cache, subs, var)
+    }
+
+    fn insert(&mut self, subs: &Subs, var: Variable, result: LayoutResult<'a>) -> LayoutResult<'a> {
+        Self::insert_help(&mut self.cache, subs, var, result)
+    }
+
+    fn insert_raw_function(
+        &mut self,
+        subs: &Subs,
+        var: Variable,
+        result: RawFunctionLayoutResult<'a>,
+    ) -> RawFunctionLayoutResult<'a> {
+        Self::insert_help(&mut self.raw_function_cache, subs, var, result)
+    }
+
+    pub fn snapshot(&mut self) -> CacheSnapshot {
+        debug_assert_eq!(self.raw_function_cache.len(), self.cache.len());
+        self.cache.push(Default::default());
+        self.raw_function_cache.push(Default::default());
+        CacheSnapshot {
+            layer: self.cache.len(),
+        }
+    }
+
+    pub fn rollback_to(&mut self, snapshot: CacheSnapshot) {
+        let CacheSnapshot { layer } = snapshot;
+
+        debug_assert_eq!(self.cache.len(), layer);
+        debug_assert_eq!(self.raw_function_cache.len(), layer);
+
+        self.cache.pop();
+        self.raw_function_cache.pop();
+    }
 }
 
-// placeholder for the type ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
-pub struct SnapshotKeyPlaceholder;
+pub struct CacheSnapshot {
+    /// Index of the pushed layer
+    layer: usize,
+}
 
 impl<'a> Layout<'a> {
     pub fn int_width(width: IntWidth) -> Layout<'a> {
