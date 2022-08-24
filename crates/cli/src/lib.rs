@@ -1203,6 +1203,7 @@ pub enum Target {
     System,
     Linux32,
     Linux64,
+    Windows64,
     Wasm32,
 }
 
@@ -1220,6 +1221,7 @@ impl Target {
             System => "system",
             Linux32 => "linux32",
             Linux64 => "linux64",
+            Windows64 => "windows64",
             Wasm32 => "wasm32",
         }
     }
@@ -1229,6 +1231,7 @@ impl Target {
         Target::System.as_str(),
         Target::Linux32.as_str(),
         Target::Linux64.as_str(),
+        Target::Windows64.as_str(),
         Target::Wasm32.as_str(),
     ];
 
@@ -1250,6 +1253,13 @@ impl Target {
                 operating_system: OperatingSystem::Linux,
                 environment: Environment::Musl,
                 binary_format: BinaryFormat::Elf,
+            },
+            Windows64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Windows,
+                environment: Environment::Gnu,
+                binary_format: BinaryFormat::Coff,
             },
             Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
@@ -1282,6 +1292,7 @@ impl std::str::FromStr for Target {
             "system" => Ok(Target::System),
             "linux32" => Ok(Target::Linux32),
             "linux64" => Ok(Target::Linux64),
+            "windows64" => Ok(Target::Windows64),
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
