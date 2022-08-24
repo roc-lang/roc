@@ -198,7 +198,7 @@ fn get_tags_vars_and_variant<'a>(
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
     let union_variant = {
-        let cache = LayoutCache::new(env.target_info);
+        let cache = LayoutCache::new(env.target_info, ModuleId::ATTR);
         let mut layout_env =
             layout::Env::from_components(&cache, env.subs, env.arena, env.target_info);
         union_sorted_tags_help(&mut layout_env, tags_vec, opt_rec_var)
@@ -601,7 +601,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 // It's possible to hit a recursive pointer before the full type layout; just
                 // figure out the actual recursive structure layout at this point.
                 let content = env.subs.get_content_without_compacting(*structure);
-                let union_layout = LayoutCache::new(env.target_info)
+                let union_layout = LayoutCache::new(env.target_info, ModuleId::ATTR)
                     .from_var(env.arena, *structure, env.subs)
                     .expect("no layout for structure");
                 debug_assert!(matches!(union_layout, Layout::Union(..)));
@@ -956,7 +956,7 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(record_fields.len(), arena);
-    let mut layout_cache = LayoutCache::new(env.target_info);
+    let mut layout_cache = LayoutCache::new(env.target_info, ModuleId::ATTR);
 
     if record_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
@@ -1201,7 +1201,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         .collect();
 
                     let union_variant = {
-                        let cache = LayoutCache::new(env.target_info);
+                        let cache = LayoutCache::new(env.target_info, ModuleId::ATTR);
                         let mut layout_env = layout::Env::from_components(
                             &cache,
                             env.subs,

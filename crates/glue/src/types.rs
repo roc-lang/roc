@@ -9,7 +9,7 @@ use roc_builtins::bitcode::{
 use roc_collections::VecMap;
 use roc_module::{
     ident::TagName,
-    symbol::{Interns, Symbol},
+    symbol::{Interns, ModuleId, Symbol},
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
@@ -619,7 +619,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
-            layout_cache: LayoutCache::new(target),
+            layout_cache: LayoutCache::new(target, ModuleId::ATTR),
             target,
         }
     }

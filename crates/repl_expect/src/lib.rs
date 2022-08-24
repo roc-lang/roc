@@ -1,4 +1,4 @@
-use roc_module::symbol::Interns;
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::{
     ir::ProcLayout,
     layout::{CapturesNiche, LayoutCache},
@@ -46,7 +46,7 @@ pub fn get_values<'a>(
 
             let content = subs.get_content_without_compacting(variable);
 
-            let mut layout_cache = LayoutCache::new(target_info);
+            let mut layout_cache = LayoutCache::new(target_info, ModuleId::ATTR);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
             let proc_layout = ProcLayout {

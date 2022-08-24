@@ -5,7 +5,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
@@ -275,6 +275,7 @@ pub enum Layout<'a> {
     Boxed(&'a Layout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
+    /// A recursive pointer in a recursive layout
     RecursivePointer,
 }
 
@@ -1968,29 +1969,57 @@ impl<'a> Layout<'a> {
     }
 }
 
-/// Avoid recomputing Layout from Variable multiple times.
-/// We use `ena` for easy snapshots and rollbacks of the cache.
-/// During specialization, a type variable `a` can be specialized to different layouts,
-/// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
-/// Therefore in general it's invalid to store a map from variables to layouts
-/// But if we're careful when to invalidate certain keys, we still get some benefit
+/// An index into a layout. Used for linking recursion pointers back to their wrapping structures.
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutIndex {
+    module: ModuleId,
+    index: usize,
+}
+
+/// A buffer of recursive layouts indexed by [LayoutIndex].
+#[derive(Debug)]
+struct RecursiveLayouts<'a>(ModuleId, std::vec::Vec<Layout<'a>>);
+
+impl<'a> std::ops::Index<LayoutIndex> for RecursiveLayouts<'a> {
+    type Output = Layout<'a>;
+
+    fn index(&self, index: LayoutIndex) -> &Self::Output {
+        debug_assert_eq!(self.0, index.module);
+        &self.1[index.index]
+    }
+}
+
+impl<'a> std::ops::IndexMut<LayoutIndex> for RecursiveLayouts<'a> {
+    fn index_mut(&mut self, index: LayoutIndex) -> &mut Self::Output {
+        debug_assert_eq!(self.0, index.module);
+        &mut self.1[index.index]
+    }
+}
+
+struct Pending<T>(T);
+
+/// A cache to avoid recomputing Layout from Variable multiple times.
+/// Owned by one module.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
     pub target_info: TargetInfo,
+    recursive_layouts: RecursiveLayouts<'a>,
+    /// A cache of root recursion variable -> layout index.
+    /// The cache is represented as a series of layers. A layer is pushed when we take a snapshot,
+    /// and popped when we roll back to a previous snapshot.
+    recursive_layouts_cache: std::vec::Vec<MutMap<Variable, LayoutIndex>>,
     _marker: std::marker::PhantomData<&'a u8>,
 }
 
-#[derive(Debug, Clone)]
-pub enum CachedLayout<'a> {
-    Cached(Layout<'a>),
-    NotCached,
-    Problem(LayoutProblem),
-}
-
 impl<'a> LayoutCache<'a> {
-    pub fn new(target_info: TargetInfo) -> Self {
+    pub fn new(target_info: TargetInfo, module: ModuleId) -> Self {
+        let mut layout_index_cache = std::vec::Vec::with_capacity(4);
+        layout_index_cache.push(Default::default());
+
         Self {
             target_info,
+            recursive_layouts: RecursiveLayouts(module, std::vec::Vec::with_capacity(32)),
+            recursive_layouts_cache: layout_index_cache,
             _marker: Default::default(),
         }
     }
@@ -2034,15 +2063,76 @@ impl<'a> LayoutCache<'a> {
         RawFunctionLayout::from_var(&mut env, var)
     }
 
-    pub fn snapshot(&mut self) -> SnapshotKeyPlaceholder {
-        SnapshotKeyPlaceholder
+    pub fn snapshot(&mut self) -> CacheSnapshot {
+        self.recursive_layouts_cache.push(Default::default());
+
+        CacheSnapshot {
+            layer: self.recursive_layouts_cache.len(),
+        }
     }
 
-    pub fn rollback_to(&mut self, _snapshot: SnapshotKeyPlaceholder) {}
+    pub fn rollback_to(&mut self, snapshot: CacheSnapshot) {
+        let CacheSnapshot { layer } = snapshot;
+
+        debug_assert_eq!(self.recursive_layouts_cache.len(), layer);
+        self.recursive_layouts_cache.pop();
+    }
+
+    /// Finds a [LayoutIndex] for a recursion var.
+    fn index_for_recursion_var(&self, subs: &Subs, var: Variable) -> Option<LayoutIndex> {
+        let root = subs.get_root_key_without_compacting(var);
+        debug_assert!(matches!(
+            subs.get_content_without_compacting(root),
+            Content::RecursionVar { .. }
+        ));
+        for layer in self.recursive_layouts_cache.iter().rev() {
+            if let Some(index) = layer.get(&root) {
+                return Some(*index);
+            }
+        }
+        None
+    }
+
+    /// Pushes a fresh layout index for a recursion variable.
+    ///
+    /// Note that the returned [LayoutIndex] has a faux layout initially. It must be explicitly
+    /// be updated with [Self::set_recursion].
+    #[must_use]
+    fn push_recursion_index(&mut self, subs: &Subs, var: Variable) -> Pending<LayoutIndex> {
+        let index = LayoutIndex {
+            module: self.recursive_layouts.0,
+            index: self.recursive_layouts.1.len(),
+        };
+        self.recursive_layouts.1.push(Layout::RecursivePointer);
+
+        let root = subs.get_root_key_without_compacting(var);
+        let opt_old_index = self
+            .recursive_layouts_cache
+            .last_mut()
+            .unwrap()
+            .insert(root, index);
+
+        debug_assert!(
+            opt_old_index.is_none(),
+            "overwriting old layout index: {:?} -> {:?} at {:?}",
+            opt_old_index,
+            index,
+            root
+        );
+
+        Pending(index)
+    }
+
+    fn set_recursion(&mut self, index: Pending<LayoutIndex>, layout: Layout<'a>) {
+        let index = index.0;
+        debug_assert_eq!(self.recursive_layouts[index], Layout::RecursivePointer);
+        self.recursive_layouts[index] = layout;
+    }
 }
 
-// placeholder for the type ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
-pub struct SnapshotKeyPlaceholder;
+pub struct CacheSnapshot {
+    layer: usize,
+}
 
 impl<'a> Layout<'a> {
     pub fn int_width(width: IntWidth) -> Layout<'a> {
