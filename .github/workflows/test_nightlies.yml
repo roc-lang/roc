@@ -16,7 +16,7 @@ jobs:
         run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
 
       - name: get the url of today`s release for macos apple silicon
-        run: echo "RELEASE_URL=$(./ci/get_latest_release.sh)" >> $GITHUB_ENV
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh)" >> $GITHUB_ENV
 
       - name: get the archive from the url
         run: curl -OL ${{ env.RELEASE_URL }}
