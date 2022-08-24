@@ -2170,6 +2170,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
+name = "memexec"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc62ccb14881da5d1862cda3a9648fb4a4897b2aff0b2557b89da44a5e550b7c"
+
+[[package]]
 name = "memmap2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3462,6 +3468,7 @@ dependencies = [
  "inkwell 0.1.0",
  "libc",
  "libloading",
+ "memexec",
  "mimalloc",
  "pretty_assertions",
  "roc_build",

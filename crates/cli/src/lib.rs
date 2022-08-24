@@ -919,20 +919,12 @@ impl ExecutableFile {
                 libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
 
-            #[cfg(all(target_family = "windows"))]
+            #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
-                use std::process::Command;
-
-                let _ = argv;
-                let _ = envp;
-
-                let mut command = Command::new(path);
-
-                let output = command.output().unwrap();
-
-                println!("{}", String::from_utf8_lossy(&output.stdout));
-
-                std::process::exit(0)
+                use memexec::memexec_exe;
+                let bytes = std::fs::read(path).unwrap();
+                memexec_exe(&bytes).unwrap();
+                std::process::exit(0);
             }
         }
     }
