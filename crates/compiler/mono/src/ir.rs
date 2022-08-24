@@ -3007,6 +3007,40 @@ fn generate_runtime_error_function<'a>(
     }
 }
 
+/// A snapshot of the state of types at a moment in time.
+/// Includes the exact types, but also auxiliary information like layouts.
+struct TypeStateSnapshot {
+    subs_snapshot: roc_types::subs::SubsSnapshot,
+    layout_snapshot: crate::layout::SnapshotKeyPlaceholder,
+}
+
+/// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and
+/// accordingly [rolled back][rollback_typestate] a specialization is complete, so as to not
+/// interfere with other specializations.
+fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> TypeStateSnapshot {
+    TypeStateSnapshot {
+        subs_snapshot: subs.snapshot(),
+        layout_snapshot: layout_cache.snapshot(),
+    }
+}
+
+/// Rolls back the type state to the given [snapshot].
+/// Should be called after a specialization is complete to avoid interfering with other
+/// specializations.
+fn rollback_typestate(
+    subs: &mut Subs,
+    layout_cache: &mut LayoutCache<'_>,
+    snapshot: TypeStateSnapshot,
+) {
+    let TypeStateSnapshot {
+        subs_snapshot,
+        layout_snapshot,
+    } = snapshot;
+
+    subs.rollback_to(subs_snapshot);
+    layout_cache.rollback_to(layout_snapshot);
+}
+
 fn specialize_external<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -3020,8 +3054,7 @@ fn specialize_external<'a>(
     let captured_symbols = partial_proc.captured_symbols;
 
     // unify the called function with the specialized signature, then specialize the function body
-    let snapshot = env.subs.snapshot();
-    let cache_snapshot = layout_cache.snapshot();
+    let snapshot = snapshot_typestate(env.subs, layout_cache);
 
     let _unified = env.unify(partial_proc.annotation, fn_var);
 
@@ -3170,7 +3203,7 @@ fn specialize_external<'a>(
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
-    match specialized {
+    let specialized_proc = match specialized {
         SpecializedLayout::FunctionPointerBody {
             ret_layout,
             closure: opt_closure_layout,
@@ -3183,10 +3216,6 @@ fn specialize_external<'a>(
             //
             //      foo = \x,y -> Num.add x y
 
-            // reset subs, so we don't get type errors when specializing for a different signature
-            layout_cache.rollback_to(cache_snapshot);
-            env.subs.rollback_to(snapshot);
-
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Layout::LambdaSet(lambda_set),
                 None => Layout::UNIT,
@@ -3195,7 +3224,7 @@ fn specialize_external<'a>(
             // I'm not sure how to handle the closure case, does it ever occur?
             debug_assert!(matches!(captured_symbols, CapturedSymbols::None));
 
-            let proc = Proc {
+            Proc {
                 name: lambda_name,
                 args: &[],
                 body: specialized_body,
@@ -3204,9 +3233,7 @@ fn specialize_external<'a>(
                 is_self_recursive: recursivity,
                 must_own_arguments: false,
                 host_exposed_layouts,
-            };
-
-            Ok(proc)
+            }
         }
         SpecializedLayout::FunctionBody {
             arguments: proc_args,
@@ -3364,16 +3391,12 @@ fn specialize_external<'a>(
                     .unwrap_or(*symbol);
             });
 
-            // reset subs, so we don't get type errors when specializing for a different signature
-            layout_cache.rollback_to(cache_snapshot);
-            env.subs.rollback_to(snapshot);
-
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Some(Layout::LambdaSet(lambda_set)),
                 None => None,
             };
 
-            let proc = Proc {
+            Proc {
                 name: lambda_name,
                 args: proc_args.into_bump_slice(),
                 body: specialized_body,
@@ -3382,11 +3405,13 @@ fn specialize_external<'a>(
                 is_self_recursive: recursivity,
                 must_own_arguments: false,
                 host_exposed_layouts,
-            };
-
-            Ok(proc)
+            }
         }
-    }
+    };
+
+    rollback_typestate(env.subs, layout_cache, snapshot);
+
+    Ok(specialized_proc)
 }
 
 #[derive(Debug)]
