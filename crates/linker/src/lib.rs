@@ -120,7 +120,7 @@ pub fn link_preprocessed_host(
 }
 
 fn generate_dynamic_lib(
-    _target: &Triple,
+    target: &Triple,
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
     dummy_lib_path: &Path,
@@ -143,8 +143,8 @@ fn generate_dynamic_lib(
         }
     }
 
-    let bytes =
-        crate::generate_dylib::generate(&custom_names).unwrap_or_else(|e| internal_error!("{}", e));
+    let bytes = crate::generate_dylib::generate(target, &custom_names)
+        .unwrap_or_else(|e| internal_error!("{}", e));
 
     std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }

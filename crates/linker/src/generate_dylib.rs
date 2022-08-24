@@ -1,31 +1,22 @@
-use std::error::Error;
-
 use object::elf::{self, SectionHeader64};
 use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
 use object::Endianness;
 
 use object::write::elf::Writer;
-use roc_error_macros::internal_error;
+use target_lexicon::Triple;
 
 // an empty shared library, that we build on top of
-const DUMMY: &[u8] = include_bytes!("../dummy-elf64-x86-64.so");
+const DUMMY_ELF64: &[u8] = include_bytes!("../dummy-elf64-x86-64.so");
 
 // index of the dynamic section
 const DYMAMIC_SECTION: usize = 4;
 
-pub fn generate(custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let kind = match object::FileKind::parse(DUMMY) {
-        Ok(file) => file,
-        Err(err) => {
-            internal_error!("Failed to parse file: {}", err);
-        }
-    };
-
-    match kind {
-        object::FileKind::Elf64 => copy_file(DUMMY, custom_names),
-        _ => {
-            internal_error!("Not an ELF file");
-        }
+pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => create_dylib_elf64(DUMMY_ELF64, custom_names),
+        target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
+        target_lexicon::BinaryFormat::Coff => todo!("coff dylib creation"),
+        other => unimplemented!("dylib creation for {:?}", other),
     }
 }
 
@@ -86,7 +77,7 @@ impl Sections {
         let mut extra_offset: usize = 0;
         let mut addresses = Addresses::default();
 
-        for (i, out_offset) in offsets.iter_mut().enumerate().take(5) {
+        for (i, out_offset) in offsets.iter_mut().enumerate() {
             // symtab, strtab and shstrtab is ignored because they are not ALLOC
             let in_section = match i {
                 0 => sections.hash,
@@ -154,7 +145,7 @@ pub const fn round_up_to_alignment(width: usize, alignment: usize) -> usize {
     }
 }
 
-fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn Error>> {
+fn create_dylib_elf64(in_data: &[u8], custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
     let in_segments = in_elf.program_headers(endian, in_data)?;
@@ -308,14 +299,16 @@ fn copy_file(in_data: &[u8], custom_names: &[String]) -> Result<Vec<u8>, Box<dyn
     writer.reserve_shstrtab();
     writer.reserve_section_headers();
 
-    writer.write_file_header(&object::write::elf::FileHeader {
-        os_abi: in_elf.e_ident().os_abi,
-        abi_version: in_elf.e_ident().abi_version,
-        e_type: in_elf.e_type(endian),
-        e_machine: in_elf.e_machine(endian),
-        e_entry: in_elf.e_entry(endian),
-        e_flags: in_elf.e_flags(endian),
-    })?;
+    writer
+        .write_file_header(&object::write::elf::FileHeader {
+            os_abi: in_elf.e_ident().os_abi,
+            abi_version: in_elf.e_ident().abi_version,
+            e_type: in_elf.e_type(endian),
+            e_machine: in_elf.e_machine(endian),
+            e_entry: in_elf.e_entry(endian),
+            e_flags: in_elf.e_flags(endian),
+        })
+        .unwrap();
 
     writer.write_align_program_headers();
     for in_segment in in_segments {
