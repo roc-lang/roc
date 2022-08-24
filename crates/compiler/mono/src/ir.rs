@@ -3030,7 +3030,7 @@ fn generate_runtime_error_function<'a>(
 /// Includes the exact types, but also auxiliary information like layouts.
 struct TypeStateSnapshot {
     subs_snapshot: roc_types::subs::SubsSnapshot,
-    layout_snapshot: crate::layout::SnapshotKeyPlaceholder,
+    layout_snapshot: crate::layout::CacheSnapshot,
 }
 
 /// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and

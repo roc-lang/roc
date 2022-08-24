@@ -198,9 +198,9 @@ fn get_tags_vars_and_variant<'a>(
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
     let union_variant = {
-        let cache = LayoutCache::new(env.target_info);
+        let mut cache = LayoutCache::new(env.target_info);
         let mut layout_env =
-            layout::Env::from_components(&cache, env.subs, env.arena, env.target_info);
+            layout::Env::from_components(&mut cache, env.subs, env.arena, env.target_info);
         union_sorted_tags_help(&mut layout_env, tags_vec, opt_rec_var)
     };
 
@@ -1201,9 +1201,9 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         .collect();
 
                     let union_variant = {
-                        let cache = LayoutCache::new(env.target_info);
+                        let mut cache = LayoutCache::new(env.target_info);
                         let mut layout_env = layout::Env::from_components(
-                            &cache,
+                            &mut cache,
                             env.subs,
                             env.arena,
                             env.target_info,
