@@ -476,7 +476,24 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
     match literal {
         PlainLine(string) => {
-            buf.push_str_allow_spaces(string);
+            // When a PlainLine contains "\n" it is formatted as a block string using """
+            let mut lines = string.split('\n');
+            match (lines.next(), lines.next()) {
+                (Some(first), Some(second)) => {
+                    buf.push_str("\"\"");
+                    buf.newline();
+
+                    for line in [first, second].into_iter().chain(lines) {
+                        buf.indent(indent);
+                        buf.push_str_allow_spaces(line);
+                        buf.newline();
+                    }
+
+                    buf.indent(indent);
+                    buf.push_str("\"\"");
+                }
+                _ => buf.push_str_allow_spaces(string),
+            }
         }
         Line(segments) => {
             for seg in segments.iter() {
