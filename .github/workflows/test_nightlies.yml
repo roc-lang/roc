@@ -1,6 +1,6 @@
-on: [pull_request]
-#  schedule:
-#    - cron:  '0 15 * * *'
+on:
+  schedule:
+    - cron:  '0 13 * * *'
 
 name: Test latest nightly release for macOS Apple Silicon
 
