@@ -119,6 +119,17 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(remainder);
             }
 
+            ExpectFx {
+                condition,
+                remainder,
+                lookups,
+                ..
+            } => {
+                result.insert(*condition);
+                result.extend(lookups.iter().copied());
+                stack.push(remainder);
+            }
+
             Jump(_, arguments) => {
                 result.extend(arguments.iter().copied());
             }
@@ -671,8 +682,8 @@ impl<'a> Context<'a> {
 
                     match ownership {
                         DataBorrowedFunctionOwns => {
-                            // the data is borrowed;
-                            // increment it to own the values so the function can use them
+                            // the data is borrowed; increment it to own the values so the function
+                            // can use them
                             let rc = Stmt::Refcounting(ModifyRc::Inc(argument, 1), stmt);
 
                             stmt = self.arena.alloc(rc);
@@ -690,8 +701,8 @@ impl<'a> Context<'a> {
             }};
         }
 
-        // incrementing/consuming the closure (if needed) is done by the zig implementation.
-        // We don't want to touch the RC on the roc side, so treat these as borrowed.
+        // incrementing/consuming the closure (if needed) is done by the zig implementation. We
+        // don't want to touch the RC on the roc side, so treat these as borrowed.
         const FUNCTION: bool = BORROWED;
         const CLOSURE_DATA: bool = BORROWED;
 
@@ -753,9 +764,9 @@ impl<'a> Context<'a> {
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListSortWith { xs } => {
-                // NOTE: we may apply the function to the same argument multiple times.
-                // for that to be valid, the function must borrow its argument. This is not
-                // enforced at the moment
+                // NOTE: we may apply the function to the same argument multiple times. for that to
+                // be valid, the function must borrow its argument. This is not enforced at the
+                // moment
                 //
                 // we also don't check that both arguments have the same ownership characteristics
                 let ownerships = [(xs, function_ps[0])];
@@ -768,7 +779,8 @@ impl<'a> Context<'a> {
 
                     match ownership {
                         DataOwnedFunctionOwns => {
-                            // if non-unique, elements have been consumed, must still consume the list itself
+                            // if non-unique, elements have been consumed, must still consume the
+                            // list itself
                             let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), b);
 
                             let condition_stmt = branch_on_list_uniqueness(
@@ -914,8 +926,7 @@ impl<'a> Context<'a> {
             }
 
             EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated
-                // function pointers are persistent
+                // EmptyArray is always stack-allocated function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
         };
@@ -924,8 +935,7 @@ impl<'a> Context<'a> {
     }
 
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
-        // is this value a constant?
-        // TODO do function pointers also fall into this category?
+        // is this value a constant? TODO do function pointers also fall into this category?
         let persistent = false;
 
         // must this value be consumed?
@@ -979,9 +989,7 @@ impl<'a> Context<'a> {
 
     // Add `dec` instructions for parameters that are
     //
-    //  - references
-    //  - not alive in `b`
-    //  - not borrow.
+    //  - references - not alive in `b` - not borrow.
     //
     // That is, we must make sure these parameters are consumed.
     fn add_dec_for_dead_params(
@@ -1021,9 +1029,9 @@ impl<'a> Context<'a> {
     ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
-        // let-chains can be very long, especially for large (list) literals
-        // in (rust) debug mode, this function can overflow the stack for such values
-        // so we have to write an explicit loop.
+        // let-chains can be very long, especially for large (list) literals in (rust) debug mode,
+        // this function can overflow the stack for such values so we have to write an explicit
+        // loop.
         {
             let mut cont = stmt;
             let mut triples = Vec::new_in(self.arena);
@@ -1199,6 +1207,30 @@ impl<'a> Context<'a> {
                 (expect, b_live_vars)
             }
 
+            ExpectFx {
+                remainder,
+                condition,
+                region,
+                lookups,
+                layouts,
+            } => {
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::ExpectFx {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                });
+
+                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
+
+                b_live_vars.extend(lookups.iter().copied());
+
+                (expect, b_live_vars)
+            }
+
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
@@ -1303,6 +1335,17 @@ pub fn collect_stmt(
         }
 
         Expect {
+            condition,
+            remainder,
+            lookups,
+            ..
+        } => {
+            vars.insert(*condition);
+            vars.extend(lookups.iter().copied());
+            collect_stmt(remainder, jp_live_vars, vars)
+        }
+
+        ExpectFx {
             condition,
             remainder,
             lookups,

@@ -257,6 +257,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ZeroArgumentTag { .. } => todo!(),
         OpaqueRef { .. } => todo!(),
         Expect { .. } => todo!(),
+        ExpectFx { .. } => todo!(),
         TypedHole(_) => todo!(),
         RuntimeError(_) => todo!(),
     }

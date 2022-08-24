@@ -309,6 +309,7 @@ impl<'a> ParamMap<'a> {
                 }
 
                 Expect { remainder, .. } => stack.push(remainder),
+                ExpectFx { remainder, .. } => stack.push(remainder),
 
                 Switch {
                     branches,
@@ -820,6 +821,10 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(param_map, remainder);
             }
 
+            ExpectFx { remainder, .. } => {
+                self.collect_stmt(param_map, remainder);
+            }
+
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
             Ret(_) | RuntimeError(_) => {
@@ -988,6 +993,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
             }
 
             Expect { remainder, .. } => stack.push(remainder),
+            ExpectFx { remainder, .. } => stack.push(remainder),
 
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
