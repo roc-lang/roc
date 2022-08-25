@@ -10,7 +10,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant,
+    self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant,
     WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
@@ -201,7 +201,7 @@ fn get_tags_vars_and_variant<'a>(
         let mut cache = LayoutCache::new(env.target_info);
         let mut layout_env =
             layout::Env::from_components(&mut cache, env.subs, env.arena, env.target_info);
-        union_sorted_tags_help(&mut layout_env, tags_vec, opt_rec_var)
+        union_sorted_tags_pub(&mut layout_env, tags_vec, opt_rec_var)
     };
 
     (vars_of_tag, union_variant)
@@ -1208,7 +1208,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                             env.arena,
                             env.target_info,
                         );
-                        union_sorted_tags_help(&mut layout_env, tags_vec, None)
+                        union_sorted_tags_pub(&mut layout_env, tags_vec, None)
                     };
 
                     match union_variant {
