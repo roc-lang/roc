@@ -1277,7 +1277,7 @@ impl<'a> LambdaSet<'a> {
             Some(rec_var) => layout_from_recursive_union(env, rec_var, &union_labels)
                 .expect("unable to create lambda set representation"),
 
-            None => layout_from_union(env, &union_labels),
+            None => layout_from_non_recursive_union(env, &union_labels),
         }
     }
 
@@ -2433,7 +2433,7 @@ fn layout_from_lambda_set<'a>(
     match recursion_var.into_variable() {
         None => {
             let labels = solved.unsorted_lambdas(env.subs);
-            Ok(layout_from_union(env, &labels))
+            Ok(layout_from_non_recursive_union(env, &labels))
         }
         Some(rec_var) => {
             let labels = solved.unsorted_lambdas(env.subs);
@@ -2610,7 +2610,7 @@ fn layout_from_flat_type<'a>(
 
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_union(env, &tags))
+            Ok(layout_from_non_recursive_union(env, &tags))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(
@@ -2621,7 +2621,7 @@ fn layout_from_flat_type<'a>(
             let union_tags = UnionTags::from_tag_name_index(tag_name);
             let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
 
-            Ok(layout_from_union(env, &tags))
+            Ok(layout_from_non_recursive_union(env, &tags))
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -2909,10 +2909,9 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
     )
 }
 
-fn union_sorted_tags_help_new<'a, L>(
+fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     tags_list: &[(&'_ L, &[Variable])],
-    opt_rec_var: Option<Variable>,
 ) -> UnionVariant<'a>
 where
     L: Label + Ord + Clone + Into<TagOrClosure>,
@@ -2960,11 +2959,6 @@ where
 
             if layouts.is_empty() {
                 UnionVariant::Unit
-            } else if opt_rec_var.is_some() {
-                UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
-                    tag_name,
-                    fields: layouts.into_bump_slice(),
-                })
             } else {
                 UnionVariant::Newtype {
                     tag_name,
@@ -2978,26 +2972,7 @@ where
                 Vec::with_capacity_in(tags_list.len(), env.arena);
             let mut has_any_arguments = false;
 
-            let mut nullable: Option<(TagIdIntType, TagOrClosure)> = None;
-
-            // only recursive tag unions can be nullable
-            let is_recursive = opt_rec_var.is_some();
-            if is_recursive && GENERATE_NULLABLE {
-                for (index, (name, variables)) in tags_list.iter().enumerate() {
-                    if variables.is_empty() {
-                        nullable = Some((index as TagIdIntType, (*name).clone().into()));
-                        break;
-                    }
-                }
-            }
-
-            for (index, &(tag_name, arguments)) in tags_list.into_iter().enumerate() {
-                // reserve space for the tag discriminant
-                if matches!(nullable, Some((i, _)) if i as usize == index) {
-                    debug_assert!(arguments.is_empty());
-                    continue;
-                }
-
+            for &(tag_name, arguments) in tags_list.into_iter() {
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
                 for &var in arguments {
@@ -3005,19 +2980,7 @@ where
                         Ok(layout) => {
                             has_any_arguments = true;
 
-                            // make sure to not unroll recursive types!
-                            let self_recursion = opt_rec_var.is_some()
-                                && env.subs.get_root_key_without_compacting(var)
-                                    == env
-                                        .subs
-                                        .get_root_key_without_compacting(opt_rec_var.unwrap())
-                                && is_recursive_tag_union(&layout);
-
-                            if self_recursion {
-                                arg_layouts.push(Layout::RecursivePointer);
-                            } else {
-                                arg_layouts.push(layout);
-                            }
+                            arg_layouts.push(layout);
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3064,33 +3027,8 @@ where
                     UnionVariant::ByteUnion(tag_names)
                 }
                 _ => {
-                    let variant = if let Some((nullable_id, nullable_name)) = nullable {
-                        if answer.len() == 1 {
-                            let (other_name, other_arguments) = answer.drain(..).next().unwrap();
-                            let nullable_id = nullable_id != 0;
-
-                            WrappedVariant::NullableUnwrapped {
-                                nullable_id,
-                                nullable_name,
-                                other_name,
-                                other_fields: other_arguments,
-                            }
-                        } else {
-                            WrappedVariant::NullableWrapped {
-                                nullable_id,
-                                nullable_name,
-                                sorted_tag_layouts: answer,
-                            }
-                        }
-                    } else if is_recursive {
-                        debug_assert!(answer.len() > 1);
-                        WrappedVariant::Recursive {
-                            sorted_tag_layouts: answer,
-                        }
-                    } else {
-                        WrappedVariant::NonRecursive {
-                            sorted_tag_layouts: answer,
-                        }
+                    let variant = WrappedVariant::NonRecursive {
+                        sorted_tag_layouts: answer,
                     };
 
                     UnionVariant::Wrapped(variant)
@@ -3323,7 +3261,10 @@ fn layout_from_newtype<'a, L: Label>(
     }
 }
 
-fn layout_from_union<'a, L>(env: &mut Env<'a, '_>, tags: &UnsortedUnionLabels<L>) -> Layout<'a>
+fn layout_from_non_recursive_union<'a, L>(
+    env: &mut Env<'a, '_>,
+    tags: &UnsortedUnionLabels<L>,
+) -> Layout<'a>
 where
     L: Label + Ord + Into<TagOrClosure>,
 {
@@ -3335,8 +3276,7 @@ where
 
     let tags_vec = &tags.tags;
 
-    let opt_rec_var = None;
-    let variant = union_sorted_tags_help_new(env, tags_vec, opt_rec_var);
+    let variant = union_sorted_non_recursive_tags_help(env, tags_vec);
 
     match variant {
         Never => Layout::VOID,
@@ -3368,32 +3308,12 @@ where
                     Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
                 }
 
-                Recursive {
-                    sorted_tag_layouts: tags,
-                } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                    tag_layouts.extend(tags.iter().map(|r| r.1));
-
-                    debug_assert!(tag_layouts.len() > 1);
-                    Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
+                Recursive { .. }
+                | NullableWrapped { .. }
+                | NullableUnwrapped { .. }
+                | NonNullableUnwrapped { .. } => {
+                    internal_error!("non-recursive tag union has recursive layout")
                 }
-
-                NullableWrapped {
-                    nullable_id,
-                    nullable_name: _,
-                    sorted_tag_layouts: tags,
-                } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                    tag_layouts.extend(tags.iter().map(|r| r.1));
-
-                    Layout::Union(UnionLayout::NullableWrapped {
-                        nullable_id,
-                        other_tags: tag_layouts.into_bump_slice(),
-                    })
-                }
-
-                NullableUnwrapped { .. } => todo!(),
-                NonNullableUnwrapped { .. } => todo!(),
             }
         }
     }
