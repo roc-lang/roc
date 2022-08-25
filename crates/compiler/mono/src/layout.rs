@@ -123,7 +123,7 @@ impl<'a> LayoutCache<'a> {
     }
 
     fn get_help<Result: Copy>(
-        cache: &std::vec::Vec<CacheLayer<Result>>,
+        cache: &[CacheLayer<Result>],
         subs: &Subs,
         var: Variable,
     ) -> Option<Result> {
@@ -140,7 +140,7 @@ impl<'a> LayoutCache<'a> {
     }
 
     fn insert_help<Result>(
-        cache: &mut std::vec::Vec<CacheLayer<Result>>,
+        cache: &mut [CacheLayer<Result>],
         subs: &Subs,
         var: Variable,
         result: Result,
@@ -1416,7 +1416,7 @@ impl<'a> LambdaSet<'a> {
 
         let Cacheable(result, criteria) = env.cached_or(closure_var, |env| {
             let Cacheable(result, criteria) = Self::from_var_help(env, closure_var);
-            let result = result.map(|layout| Layout::LambdaSet(layout));
+            let result = result.map(Layout::LambdaSet);
             Cacheable(result, criteria)
         });
 
