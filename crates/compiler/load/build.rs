@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(not(windows))]
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 
@@ -50,7 +51,11 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     }
 
     #[cfg(windows)]
-    write_subs_for_module_dummy(&output_path)
+    {
+        let _ = SKIP_SUBS_CACHE;
+        let _ = module_id;
+        write_subs_for_module_dummy(&output_path)
+    }
 }
 
 fn write_subs_for_module_dummy(output_path: &Path) {
