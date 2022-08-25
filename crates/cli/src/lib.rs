@@ -11,7 +11,6 @@ use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_repl_expect::run::expect_mono_module_to_dylib;
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -318,6 +317,12 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+#[cfg(windows)]
+pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
+    todo!("running tests does not work on windows right now")
+}
+
+#[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let start_time = Instant::now();
     let arena = Bump::new();
@@ -389,7 +394,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = expect_mono_module_to_dylib(
+    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
