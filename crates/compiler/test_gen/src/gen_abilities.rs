@@ -955,7 +955,7 @@ fn encode_then_decode_list_of_lists_of_strings() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_two_fields() {
     assert_evals_to!(
@@ -977,7 +977,7 @@ fn decode_record_two_fields() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
@@ -999,7 +999,7 @@ fn decode_record_two_fields_string_and_int() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
@@ -1021,7 +1021,7 @@ fn decode_record_two_fields_string_and_string_infer() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
@@ -1044,7 +1044,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
@@ -1088,7 +1088,7 @@ fn decode_empty_record() {
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
     not(feature = "gen-llvm-wasm"), // hits a wasm3 stack overflow
-    not(debug_assertions) // hits a stack overflow in debug builds
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_of_record() {
     assert_evals_to!(
