@@ -5990,7 +5990,7 @@ fn register_capturing_closure<'a>(
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
                 let lambda_set_layout = {
-                    LambdaSet::from_var(
+                    LambdaSet::from_var_pub(
                         layout_cache,
                         env.arena,
                         env.subs,
