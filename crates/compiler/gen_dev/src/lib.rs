@@ -406,7 +406,7 @@ trait Backend<'a> {
                 self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
             LowLevel::NumAddChecked => {
-                self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0])
+                self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
@@ -715,7 +715,8 @@ trait Backend<'a> {
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        layout: &Layout<'a>,
+        num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
     );
 
     /// build_num_mul stores `src1 * src2` into dst.

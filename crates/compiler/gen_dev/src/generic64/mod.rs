@@ -769,13 +769,12 @@ impl<
         src1: &Symbol,
         src2: &Symbol,
         num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
     ) {
         use Builtin::Int;
 
         let buf = &mut self.buf;
 
-        let fields = [*num_layout, Layout::bool()];
-        let return_layout = Layout::struct_no_name_order(&fields);
         let struct_size = return_layout.stack_size(self.target_info);
 
         let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
