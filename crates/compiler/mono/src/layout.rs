@@ -1406,7 +1406,7 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
-        // Ideally we would pass `env` in directly, but that currently casues problems later on
+        // Ideally we would pass `env` in directly, but that currently causes problems later on
         // (in alias analysis) with recursive pointers not appearing under recursive layouts. So,
         // we have to clear the `seen` cache before building a lambda set layout.
         //
