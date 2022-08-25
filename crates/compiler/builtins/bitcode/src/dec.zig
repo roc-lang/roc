@@ -40,7 +40,7 @@ pub const RocDec = extern struct {
             return null;
         }
 
-        var ret: RocDec = .{ .num = @floatToInt(i128, result) };
+        var ret: ?RocDec = .{ .num = @floatToInt(i128, result) };
         return ret;
     }
 
@@ -119,12 +119,8 @@ pub const RocDec = extern struct {
                 return null;
             }
         };
-
-        if (is_negative) {
-            return dec.negate();
-        } else {
-            return dec;
-        }
+        var the_result: ?RocDec = if (is_negative) dec.negate() else dec;
+        return the_result;
     }
 
     inline fn isDigit(c: u8) bool {
