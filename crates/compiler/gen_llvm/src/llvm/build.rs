@@ -6266,9 +6266,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
-        | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
-        | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -7072,7 +7072,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_POW_INT[int_width],
         ),
-        NumDivUnchecked => {
+        NumDivTruncUnchecked => {
             if int_width.is_signed() {
                 bd.build_int_signed_div(lhs, rhs, "div_int").into()
             } else {
@@ -7253,7 +7253,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumDivFrac => bd.build_float_div(lhs, rhs, "div_float").into(),
         NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
@@ -7370,7 +7370,7 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             rhs,
             "decimal multiplication overflowed",
         ),
-        NumDivUnchecked => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
+        NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }

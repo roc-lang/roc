@@ -442,6 +442,22 @@ trait Backend<'a> {
                 );
                 self.build_num_mul(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumDiv: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumDiv: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumDiv: expected to have the same argument and return layout"
+                );
+                self.build_num_div(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumNeg => {
                 debug_assert_eq!(
                     1,
@@ -701,6 +717,9 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+
+    /// build_num_mul stores `src1 / src2` into dst.
+    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);

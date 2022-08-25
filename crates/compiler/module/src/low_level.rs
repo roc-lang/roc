@@ -65,7 +65,8 @@ pub enum LowLevel {
     NumLt,
     NumLte,
     NumCompare,
-    NumDivUnchecked,
+    NumDivFrac,
+    NumDivTruncUnchecked,
     NumDivCeilUnchecked,
     NumRemUnchecked,
     NumIsMultipleOf,
@@ -204,7 +205,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::NumToFloatCast => unreachable!(),
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
-                LowLevel::NumDivUnchecked => unreachable!(),
 
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
@@ -279,7 +279,9 @@ map_symbol_to_lowlevel! {
     NumLt <= NUM_LT,
     NumLte <= NUM_LTE,
     NumCompare <= NUM_COMPARE,
+    NumDivFrac <= NUM_DIV_FRAC,
     NumDivCeilUnchecked <= NUM_DIV_CEIL,
+    NumDivTruncUnchecked <= NUM_DIV_TRUNC,
     NumRemUnchecked <= NUM_REM,
     NumIsMultipleOf <= NUM_IS_MULTIPLE_OF,
     NumAbs <= NUM_ABS,
