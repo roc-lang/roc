@@ -7,18 +7,15 @@ use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Instant;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -324,6 +321,11 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_gen_llvm::llvm::build::LlvmBackendMode;
+    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_target::TargetInfo;
+    use std::time::Instant;
+
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -926,6 +928,8 @@ impl ExecutableFile {
 
             #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
+                let _ = argv;
+                let _ = envp;
                 use memexec::memexec_exe;
                 let bytes = std::fs::read(path).unwrap();
                 memexec_exe(&bytes).unwrap();
@@ -1192,7 +1196,10 @@ impl std::str::FromStr for Target {
     }
 }
 
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
 #[cfg(windows)]
+#[allow(unused_imports)]
 use windows_roc_platform_functions::*;
 
 #[cfg(windows)]
