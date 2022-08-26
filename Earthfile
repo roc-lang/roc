@@ -117,8 +117,6 @@ verify-no-git-changes:
     RUN ! git ls-files --deleted --modified --others --exclude-standard | grep -E .
 
 test-all:
-    # Check for duplicate AUTHORS. (The < operator treats a string as a file. diff 'succeeds' if no difference.)
-    RUN diff <(sort AUTHORS) <(sort AUTHORS | uniq)
     BUILD +test-zig
     BUILD +test-rust
     BUILD +verify-no-git-changes
