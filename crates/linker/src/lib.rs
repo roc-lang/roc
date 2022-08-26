@@ -202,6 +202,43 @@ fn collect_roc_undefined_symbols<'file, 'data>(
     .collect()
 }
 
+/// PLT stands for Procedure Linkage Table which is, put simply, used to call external
+/// procedures/functions whose address isn't known in the time of linking, and is left
+/// to be resolved by the dynamic linker at run time.
+fn extract_plt_section_information<'a>(
+    object: &object::File<'a, &'a [u8]>,
+    target: &Triple,
+) -> (u64, u64) {
+    let plt_section_name = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => ".plt",
+        target_lexicon::BinaryFormat::Macho => "__stubs",
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
+
+    match object.section_by_name(plt_section_name) {
+        Some(section) => {
+            let file_offset = match section.compressed_file_range() {
+                Ok(CompressedFileRange {
+                    format: CompressionFormat::None,
+                    offset,
+                    ..
+                }) => offset,
+                _ => {
+                    internal_error!("Surgical linking does not work with compressed plt section");
+                }
+            };
+
+            (section.address(), file_offset)
+        }
+        None => {
+            internal_error!("Failed to find PLT section. Probably an malformed executable.");
+        }
+    }
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -245,38 +282,15 @@ pub fn preprocess(
 
     // Extract PLT related information for app functions.
     let symbol_and_plt_processing_start = Instant::now();
-    let plt_section_name = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => ".plt",
-        target_lexicon::BinaryFormat::Macho => "__stubs",
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    };
-    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
-        Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range @ CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    internal_error!("Surgical linking does not work with compressed plt section");
-                }
-            };
-            (section.address(), file_offset)
-        }
-        None => {
-            internal_error!("Failed to find PLT section. Probably an malformed executable.");
-        }
-    };
+
+    let (plt_address, plt_offset) = extract_plt_section_information(&exec_obj, target);
+
     if verbose {
         println!("PLT Address: {:+x}", plt_address);
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
+    // symbols that are extern in the host and must be provided by the roc application
     let app_syms = collect_roc_undefined_symbols(&exec_obj, target);
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
