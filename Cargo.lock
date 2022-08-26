@@ -475,9 +475,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.11"
+version = "3.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d646c7ade5eb07c4aa20e907a922750df0c448892513714fd3e4acbc7130829f"
+checksum = "29e724a68d9319343bb3328c9cc2dfde263f4b3142ee1059a9980580171c954b"
 dependencies = [
  "atty",
  "bitflags",
@@ -492,9 +492,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.2.7"
+version = "3.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "759bf187376e1afa7b85b959e6a664a3e7a95203415dba952ad19139e798f902"
+checksum = "13547f7012c01ab4a0e8f8967730ada8f9fdf419e8b6c792788f39cf4e46eefa"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -3447,7 +3447,7 @@ name = "roc_cli"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.17",
  "cli_utils",
  "const_format",
  "criterion",
@@ -3591,7 +3591,7 @@ dependencies = [
 name = "roc_docs_cli"
 version = "0.0.1"
 dependencies = [
- "clap 3.2.11",
+ "clap 3.2.17",
  "libc",
  "roc_docs",
 ]
@@ -3738,7 +3738,7 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.17",
  "cli_utils",
  "dircpy",
  "fnv",
@@ -3796,7 +3796,7 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.17",
  "iced-x86",
  "mach_object",
  "memmap2 0.5.5",
