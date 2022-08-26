@@ -11,11 +11,15 @@ use roc_repl_eval::{
 use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 
+#[cfg(not(windows))]
 mod app;
+#[cfg(not(windows))]
 pub mod run;
 
+#[cfg(not(windows))]
 use app::{ExpectMemory, ExpectReplApp};
 
+#[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,
@@ -75,6 +79,7 @@ pub fn get_values<'a>(
     Ok((app.offset, result))
 }
 
+#[cfg(not(windows))]
 #[cfg(test)]
 mod test {
     use indoc::indoc;
