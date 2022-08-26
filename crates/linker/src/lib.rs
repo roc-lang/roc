@@ -142,6 +142,44 @@ fn generate_dynamic_lib(
     std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
+fn is_roc_definition(sym: &object::Symbol) -> bool {
+    if !sym.is_definition() {
+        false
+    } else if let Ok(name) = sym.name() {
+        name.trim_start_matches('_').starts_with("roc_")
+    } else {
+        false
+    }
+}
+
+fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
+    let mut vaddresses = MutMap::default();
+
+    for sym in object.symbols().filter(is_roc_definition) {
+        // remove potentially trailing "@version".
+        let name = sym
+            .name()
+            .unwrap()
+            .trim_start_matches('_')
+            .split('@')
+            .next()
+            .unwrap();
+
+        let address = sym.address() as u64;
+
+        // special exceptions for memcpy and memset.
+        if name == "roc_memcpy" {
+            vaddresses.insert("memcpy".to_string(), address);
+        } else if name == "roc_memset" {
+            vaddresses.insert("memset".to_string(), address);
+        }
+
+        vaddresses.insert(name.to_string(), address);
+    }
+
+    vaddresses
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -169,37 +207,10 @@ pub fn preprocess(
         }
     };
 
-    let mut md: metadata::Metadata = Default::default();
-
-    for sym in exec_obj.symbols().filter(|sym| {
-        sym.is_definition()
-            && sym.name().is_ok()
-            && sym
-                .name()
-                .unwrap()
-                .trim_start_matches('_')
-                .starts_with("roc_")
-    }) {
-        // remove potentially trailing "@version".
-        let name = sym
-            .name()
-            .unwrap()
-            .trim_start_matches('_')
-            .split('@')
-            .next()
-            .unwrap()
-            .to_string();
-
-        // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            md.roc_symbol_vaddresses
-                .insert("memcpy".to_string(), sym.address() as u64);
-        } else if name == "roc_memset" {
-            md.roc_symbol_vaddresses
-                .insert("memset".to_string(), sym.address() as u64);
-        }
-        md.roc_symbol_vaddresses.insert(name, sym.address() as u64);
-    }
+    let mut md = metadata::Metadata {
+        roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
+        ..Default::default()
+    };
 
     if verbose {
         println!(
