@@ -21,8 +21,8 @@ jobs:
       - name: create version.txt
         run: ./ci/write_version.sh
         
-      - name: cargo version
-        run: cargo --version
+      - name: print PATH
+        run: echo $PATH
 
       - name: build release
         run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
