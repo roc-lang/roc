@@ -2869,3 +2869,34 @@ fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) ->
     assert!(tail.is_empty(), "End of data was not aligned");
     body
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_symbols() {
+        let data: &[u8] = include_bytes!("../example_dynhost") as &[_];
+
+        let object = object::File::parse(data).unwrap();
+
+        let symbols = collect_roc_definitions(&object);
+
+        let mut keys = symbols.keys().collect::<Vec<_>>();
+        keys.sort();
+
+        assert_eq!(
+            [
+                "memcpy",
+                "memset",
+                "roc_alloc",
+                "roc_dealloc",
+                "roc_memcpy",
+                "roc_memset",
+                "roc_panic",
+                "roc_realloc"
+            ],
+            keys.as_slice(),
+        )
+    }
+}
