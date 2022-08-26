@@ -2972,7 +2972,7 @@ mod tests {
         let symbols = collect_roc_definitions(&object);
 
         let mut keys = symbols.keys().collect::<Vec<_>>();
-        keys.sort();
+        keys.sort_unstable();
 
         assert_eq!(
             [
