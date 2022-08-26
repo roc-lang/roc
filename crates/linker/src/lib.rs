@@ -239,6 +239,194 @@ fn extract_plt_section_information<'a>(
     }
 }
 
+#[derive(Debug, Default)]
+struct FunctionAddressMapping<'a> {
+    app_func_addresses: MutMap<u64, &'a str>,
+    // offset followed by address.
+    plt_addresses: MutMap<String, (u64, u64)>,
+    macho_load_so_offset: Option<usize>,
+}
+
+impl<'a> FunctionAddressMapping<'a> {
+    fn new_elf(
+        object: &object::File<'a, &'a [u8]>,
+        app_syms: &'a [Symbol],
+        plt_address: u64,
+        plt_offset: u64,
+    ) -> Self {
+        let mut this = Self::default();
+
+        let msg = "Executable does not have any dynamic relocations. No work to do. Probably an invalid input.";
+        let plt_relocs = object
+            .dynamic_relocations()
+            .unwrap_or_else(|| internal_error!("{}", msg))
+            .filter_map(|(_, reloc)| {
+                if let RelocationKind::Elf(7) = reloc.kind() {
+                    Some(reloc)
+                } else {
+                    None
+                }
+            });
+
+        for (i, reloc) in plt_relocs.enumerate() {
+            for symbol in app_syms.iter() {
+                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                    let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
+                    let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
+                    this.app_func_addresses
+                        .insert(func_address, symbol.name().unwrap());
+                    this.plt_addresses.insert(
+                        symbol.name().unwrap().to_string(),
+                        (func_offset, func_address),
+                    );
+                    break;
+                }
+            }
+        }
+
+        this
+    }
+
+    fn new_macho(
+        exec_data: &[u8],
+        shared_lib: &Path,
+        app_syms: &'a [Symbol],
+        plt_address: u64,
+        plt_offset: u64,
+    ) -> Self {
+        use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
+
+        let mut this = Self::default();
+
+        let exec_header = load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
+        let num_load_cmds = exec_header.ncmds.get(NativeEndian);
+
+        let mut offset = mem::size_of_val(exec_header);
+
+        let mut stubs_symbol_index = None;
+        let mut stubs_symbol_count = None;
+
+        'cmds: for _ in 0..num_load_cmds {
+            let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
+            let cmd = info.cmd.get(NativeEndian);
+            let cmdsize = info.cmdsize.get(NativeEndian);
+
+            if cmd == macho::LC_SEGMENT_64 {
+                let info = load_struct_inplace::<SegmentCommand64<LittleEndian>>(exec_data, offset);
+
+                if &info.segname[0..6] == b"__TEXT" {
+                    let sections = info.nsects.get(NativeEndian);
+
+                    let sections_info = load_structs_inplace::<Section64<LittleEndian>>(
+                        exec_data,
+                        offset + mem::size_of_val(info),
+                        sections as usize,
+                    );
+
+                    for section_info in sections_info {
+                        if &section_info.sectname[0..7] == b"__stubs" {
+                            stubs_symbol_index = Some(section_info.reserved1.get(NativeEndian));
+                            stubs_symbol_count =
+                                Some(section_info.size.get(NativeEndian) / STUB_ADDRESS_OFFSET);
+
+                            break 'cmds;
+                        }
+                    }
+                }
+            }
+
+            offset += cmdsize as usize;
+        }
+
+        let stubs_symbol_index = stubs_symbol_index.unwrap_or_else(|| {
+            panic!("Could not find stubs symbol index.");
+        });
+        let stubs_symbol_count = stubs_symbol_count.unwrap_or_else(|| {
+            panic!("Could not find stubs symbol count.");
+        });
+
+        // Reset offset before looping through load commands again
+        offset = mem::size_of_val(exec_header);
+
+        let shared_lib_filename = shared_lib.file_name();
+
+        for _ in 0..num_load_cmds {
+            let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
+            let cmd = info.cmd.get(NativeEndian);
+            let cmdsize = info.cmdsize.get(NativeEndian);
+
+            if cmd == macho::LC_DYLD_INFO_ONLY {
+                let info = load_struct_inplace::<DyldInfoCommand<LittleEndian>>(exec_data, offset);
+
+                let lazy_bind_offset = info.lazy_bind_off.get(NativeEndian) as usize;
+
+                let lazy_bind_symbols = mach_object::LazyBind::parse(
+                    &exec_data[lazy_bind_offset..],
+                    mem::size_of::<usize>(),
+                );
+
+                // Find all the lazily-bound roc symbols
+                // (e.g. "_roc__mainForHost_1_exposed")
+                // For Macho, we may need to deal with some GOT stuff here as well.
+                for (i, symbol) in lazy_bind_symbols
+                    .skip(stubs_symbol_index as usize)
+                    .take(stubs_symbol_count as usize)
+                    .enumerate()
+                {
+                    if let Some(sym) = app_syms
+                        .iter()
+                        .find(|app_sym| app_sym.name() == Ok(&symbol.name))
+                    {
+                        let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
+                        let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
+                        this.app_func_addresses
+                            .insert(func_address, sym.name().unwrap());
+                        this.plt_addresses
+                            .insert(sym.name().unwrap().to_string(), (func_offset, func_address));
+                    }
+                }
+            } else if cmd == macho::LC_LOAD_DYLIB {
+                let info = load_struct_inplace::<DylibCommand<LittleEndian>>(exec_data, offset);
+                let name_offset = info.dylib.name.offset.get(NativeEndian) as usize;
+                let str_start_index = offset + name_offset;
+                let str_end_index = offset + cmdsize as usize;
+                let str_bytes = &exec_data[str_start_index..str_end_index];
+                let path = {
+                    if str_bytes[str_bytes.len() - 1] == 0 {
+                        // If it's nul-terminated, it's a C String.
+                        // Use the unchecked version because these are
+                        // padded with 0s at the end, so since we don't
+                        // know the exact length, using the checked version
+                        // of this can fail due to the interior nul bytes.
+                        //
+                        // Also, we have to use from_ptr instead of
+                        // from_bytes_with_nul_unchecked because currently
+                        // std::ffi::CStr is actually not a char* under
+                        // the hood (!) but rather an array, so to strip
+                        // the trailing null bytes we have to use from_ptr.
+                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const i8) };
+
+                        Path::new(c_str.to_str().unwrap())
+                    } else {
+                        // It wasn't nul-terminated, so treat all the bytes
+                        // as the string
+
+                        Path::new(std::str::from_utf8(str_bytes).unwrap())
+                    }
+                };
+
+                if path.file_name() == shared_lib_filename {
+                    this.macho_load_so_offset = Some(offset);
+                }
+            }
+
+            offset += cmdsize as usize;
+        }
+
+        this
+    }
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -267,6 +455,7 @@ pub fn preprocess(
     };
 
     let mut md = metadata::Metadata {
+        // symbols defined by the host that must be provided to the roc application
         roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
         ..Default::default()
     };
@@ -293,178 +482,24 @@ pub fn preprocess(
     // symbols that are extern in the host and must be provided by the roc application
     let app_syms = collect_roc_undefined_symbols(&exec_obj, target);
 
-    let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
-    let mut macho_load_so_offset = None;
-
-    match target.binary_format {
+    let function_address_mapping = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
-            let plt_relocs = (match exec_obj.dynamic_relocations() {
-                Some(relocs) => relocs,
-                None => {
-                    internal_error!("Executable does not have any dynamic relocations. No work to do. Probably an invalid input.");
-                }
-            })
-            .filter_map(|(_, reloc)| {
-                if let RelocationKind::Elf(7) = reloc.kind() {
-                    Some(reloc)
-                } else {
-                    None
-                }
-            });
-            for (i, reloc) in plt_relocs.enumerate() {
-                for symbol in app_syms.iter() {
-                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                        let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
-                        let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
-                        app_func_addresses.insert(func_address, symbol.name().unwrap());
-                        md.plt_addresses.insert(
-                            symbol.name().unwrap().to_string(),
-                            (func_offset, func_address),
-                        );
-                        break;
-                    }
-                }
-            }
+            FunctionAddressMapping::new_elf(&exec_obj, &app_syms, plt_address, plt_offset)
         }
-        target_lexicon::BinaryFormat::Macho => {
-            use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
-
-            let exec_header =
-                load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
-            let num_load_cmds = exec_header.ncmds.get(NativeEndian);
-
-            let mut offset = mem::size_of_val(exec_header);
-
-            let mut stubs_symbol_index = None;
-            let mut stubs_symbol_count = None;
-
-            'cmds: for _ in 0..num_load_cmds {
-                let info =
-                    load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
-                let cmd = info.cmd.get(NativeEndian);
-                let cmdsize = info.cmdsize.get(NativeEndian);
-
-                if cmd == macho::LC_SEGMENT_64 {
-                    let info =
-                        load_struct_inplace::<SegmentCommand64<LittleEndian>>(exec_data, offset);
-
-                    if &info.segname[0..6] == b"__TEXT" {
-                        let sections = info.nsects.get(NativeEndian);
-
-                        let sections_info = load_structs_inplace::<Section64<LittleEndian>>(
-                            exec_data,
-                            offset + mem::size_of_val(info),
-                            sections as usize,
-                        );
-
-                        for section_info in sections_info {
-                            if &section_info.sectname[0..7] == b"__stubs" {
-                                stubs_symbol_index = Some(section_info.reserved1.get(NativeEndian));
-                                stubs_symbol_count =
-                                    Some(section_info.size.get(NativeEndian) / STUB_ADDRESS_OFFSET);
-
-                                break 'cmds;
-                            }
-                        }
-                    }
-                }
-
-                offset += cmdsize as usize;
-            }
-
-            let stubs_symbol_index = stubs_symbol_index.unwrap_or_else(|| {
-                panic!("Could not find stubs symbol index.");
-            });
-            let stubs_symbol_count = stubs_symbol_count.unwrap_or_else(|| {
-                panic!("Could not find stubs symbol count.");
-            });
-
-            // Reset offset before looping through load commands again
-            offset = mem::size_of_val(exec_header);
-
-            let shared_lib_filename = shared_lib.file_name();
-
-            for _ in 0..num_load_cmds {
-                let info =
-                    load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
-                let cmd = info.cmd.get(NativeEndian);
-                let cmdsize = info.cmdsize.get(NativeEndian);
-
-                if cmd == macho::LC_DYLD_INFO_ONLY {
-                    let info =
-                        load_struct_inplace::<DyldInfoCommand<LittleEndian>>(exec_data, offset);
-
-                    let lazy_bind_offset = info.lazy_bind_off.get(NativeEndian) as usize;
-
-                    let lazy_bind_symbols = mach_object::LazyBind::parse(
-                        &exec_data[lazy_bind_offset..],
-                        mem::size_of::<usize>(),
-                    );
-
-                    // Find all the lazily-bound roc symbols
-                    // (e.g. "_roc__mainForHost_1_exposed")
-                    // For Macho, we may need to deal with some GOT stuff here as well.
-                    for (i, symbol) in lazy_bind_symbols
-                        .skip(stubs_symbol_index as usize)
-                        .take(stubs_symbol_count as usize)
-                        .enumerate()
-                    {
-                        if let Some(sym) = app_syms
-                            .iter()
-                            .find(|app_sym| app_sym.name() == Ok(&symbol.name))
-                        {
-                            let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
-                            let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
-                            app_func_addresses.insert(func_address, sym.name().unwrap());
-                            md.plt_addresses.insert(
-                                sym.name().unwrap().to_string(),
-                                (func_offset, func_address),
-                            );
-                        }
-                    }
-                } else if cmd == macho::LC_LOAD_DYLIB {
-                    let info = load_struct_inplace::<DylibCommand<LittleEndian>>(exec_data, offset);
-                    let name_offset = info.dylib.name.offset.get(NativeEndian) as usize;
-                    let str_start_index = offset + name_offset;
-                    let str_end_index = offset + cmdsize as usize;
-                    let str_bytes = &exec_data[str_start_index..str_end_index];
-                    let path = {
-                        if str_bytes[str_bytes.len() - 1] == 0 {
-                            // If it's nul-terminated, it's a C String.
-                            // Use the unchecked version because these are
-                            // padded with 0s at the end, so since we don't
-                            // know the exact length, using the checked version
-                            // of this can fail due to the interior nul bytes.
-                            //
-                            // Also, we have to use from_ptr instead of
-                            // from_bytes_with_nul_unchecked because currently
-                            // std::ffi::CStr is actually not a char* under
-                            // the hood (!) but rather an array, so to strip
-                            // the trailing null bytes we have to use from_ptr.
-                            let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const i8) };
-
-                            Path::new(c_str.to_str().unwrap())
-                        } else {
-                            // It wasn't nul-terminated, so treat all the bytes
-                            // as the string
-
-                            Path::new(std::str::from_utf8(str_bytes).unwrap())
-                        }
-                    };
-
-                    if path.file_name() == shared_lib_filename {
-                        macho_load_so_offset = Some(offset);
-                    }
-                }
-
-                offset += cmdsize as usize;
-            }
-        }
+        target_lexicon::BinaryFormat::Macho => FunctionAddressMapping::new_macho(
+            exec_data,
+            shared_lib,
+            &app_syms,
+            plt_address,
+            plt_offset,
+        ),
         _ => {
             // We should have verified this via supported() before calling this function
             unreachable!()
         }
     };
+
+    md.plt_addresses = function_address_mapping.plt_addresses;
 
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
@@ -480,7 +515,10 @@ pub fn preprocess(
         }
 
         println!();
-        println!("App Function Address Map: {:+x?}", app_func_addresses);
+        println!(
+            "App Function Address Map: {:+x?}",
+            function_address_mapping.app_func_addresses
+        );
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
@@ -507,12 +545,11 @@ pub fn preprocess(
     let mut indirect_warning_given = false;
     for sec in text_sections {
         let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(
-                range @ CompressedFileRange {
-                    format: CompressionFormat::None,
-                    ..
-                },
-            ) => (range.offset, false),
+            Ok(CompressedFileRange {
+                format: CompressionFormat::None,
+                offset,
+                ..
+            }) => (offset, false),
             Ok(range) => (range.offset, true),
             Err(err) => {
                 internal_error!(
@@ -544,7 +581,9 @@ pub fn preprocess(
                 // Relative Offsets.
                 Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
                     let target = inst.near_branch_target();
-                    if let Some(func_name) = app_func_addresses.get(&target) {
+                    if let Some(func_name) =
+                        function_address_mapping.app_func_addresses.get(&target)
+                    {
                         if compressed {
                             internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
                         }
@@ -687,7 +726,7 @@ pub fn preprocess(
                     platform_gen_start = Instant::now();
 
                     // TODO little endian
-                    let macho_load_so_offset = match macho_load_so_offset {
+                    let macho_load_so_offset = match function_address_mapping.macho_load_so_offset {
                         Some(offset) => offset,
                         None => {
                             internal_error!(
