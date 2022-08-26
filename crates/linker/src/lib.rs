@@ -2976,4 +2976,42 @@ mod tests {
 
         assert_eq!(["roc__mainForHost_1_exposed_generic",], keys.as_slice())
     }
+
+    #[test]
+    fn find_function_address_mapping() {
+        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+
+        let mut triple = Triple::host();
+        triple.binary_format = target_lexicon::BinaryFormat::Elf;
+
+        let symbols = collect_roc_undefined_symbols(&object, &triple);
+
+        let (plt_address, plt_offset) = extract_plt_section_information(&object, &triple);
+
+        assert_eq!(plt_address, 332880);
+        assert_eq!(plt_offset, 328784);
+
+        let mapping = FunctionAddressMapping::new_elf(&object, &symbols, plt_address, plt_offset);
+
+        assert!(mapping.macho_load_so_offset.is_none());
+
+        let i = 7;
+
+        let expected_address = plt_address + (i + 1) * STUB_ADDRESS_OFFSET;
+        let expected_offset = plt_offset + (i + 1) * STUB_ADDRESS_OFFSET;
+
+        assert_eq!(mapping.app_func_addresses.len(), 1);
+        assert_eq!(
+            mapping.app_func_addresses.get(&expected_address),
+            Some(&"roc__mainForHost_1_exposed_generic")
+        );
+
+        assert_eq!(mapping.plt_addresses.len(), 1);
+        assert_eq!(
+            mapping
+                .plt_addresses
+                .get("roc__mainForHost_1_exposed_generic"),
+            Some(&(expected_offset, expected_address))
+        );
+    }
 }
