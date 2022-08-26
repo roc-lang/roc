@@ -1,13 +1,13 @@
-on:
-  schedule:
-    - cron:  '0 9 * * *'
+on: [pull_request]
+#  schedule:
+#    - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
 
 jobs:
   build:
     name: Rust tests, build and package nightly release
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     env:
       FORCE_COLOR: 1 # for earthly logging
