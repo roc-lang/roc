@@ -248,6 +248,21 @@ struct FunctionAddressMapping<'a> {
 }
 
 impl<'a> FunctionAddressMapping<'a> {
+    fn insert_mapping(
+        &mut self,
+        plt_address: u64,
+        plt_offset: u64,
+        sym: &'a object::Symbol,
+        i: usize,
+    ) {
+        let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
+        let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
+        let name = sym.name().unwrap();
+        self.app_func_addresses.insert(func_address, name);
+        self.plt_addresses
+            .insert(name.to_string(), (func_offset, func_address));
+    }
+
     fn new_elf(
         object: &object::File<'a, &'a [u8]>,
         app_syms: &'a [Symbol],
@@ -271,14 +286,8 @@ impl<'a> FunctionAddressMapping<'a> {
         for (i, reloc) in plt_relocs.enumerate() {
             for symbol in app_syms.iter() {
                 if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
-                    let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
-                    this.app_func_addresses
-                        .insert(func_address, symbol.name().unwrap());
-                    this.plt_addresses.insert(
-                        symbol.name().unwrap().to_string(),
-                        (func_offset, func_address),
-                    );
+                    this.insert_mapping(plt_address, plt_offset, symbol, i);
+
                     break;
                 }
             }
@@ -377,12 +386,7 @@ impl<'a> FunctionAddressMapping<'a> {
                         .iter()
                         .find(|app_sym| app_sym.name() == Ok(&symbol.name))
                     {
-                        let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
-                        let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
-                        this.app_func_addresses
-                            .insert(func_address, sym.name().unwrap());
-                        this.plt_addresses
-                            .insert(sym.name().unwrap().to_string(), (func_offset, func_address));
+                        this.insert_mapping(plt_address, plt_offset, sym, i);
                     }
                 }
             } else if cmd == macho::LC_LOAD_DYLIB {
