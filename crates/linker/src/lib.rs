@@ -2956,11 +2956,11 @@ fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) ->
 mod tests {
     use super::*;
 
-    const ELF64_DYNHOST: &[u8] = include_bytes!("../example_dynhost");
+    const DYNHOST_ELF64: &[u8] = include_bytes!("../example_dynhost_elf64");
 
     #[test]
     fn collect_definitions() {
-        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+        let object = object::File::parse(DYNHOST_ELF64).unwrap();
 
         let symbols = collect_roc_definitions(&object);
 
@@ -2984,7 +2984,7 @@ mod tests {
 
     #[test]
     fn collect_undefined_symbols() {
-        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+        let object = object::File::parse(DYNHOST_ELF64).unwrap();
 
         let mut triple = Triple::host();
         triple.binary_format = target_lexicon::BinaryFormat::Elf;
@@ -2999,7 +2999,7 @@ mod tests {
 
     #[test]
     fn find_function_address_mapping() {
-        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+        let object = object::File::parse(DYNHOST_ELF64).unwrap();
 
         let mut triple = Triple::host();
         triple.binary_format = target_lexicon::BinaryFormat::Elf;
