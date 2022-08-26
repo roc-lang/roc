@@ -576,7 +576,7 @@ fn add_tag_union(
                     None,
                     target_info,
                     format!(
-                        r#"
+                        r#"#[repr(transparent)]
 pub struct {name} {{
     pointer: *mut {union_name},
 }}
