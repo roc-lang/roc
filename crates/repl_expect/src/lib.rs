@@ -1,15 +1,18 @@
-use roc_module::symbol::Interns;
-use roc_mono::{
-    ir::ProcLayout,
-    layout::{CapturesNiche, LayoutCache},
+#[cfg(not(windows))]
+use {
+    roc_module::symbol::Interns,
+    roc_mono::{
+        ir::ProcLayout,
+        layout::{CapturesNiche, LayoutCache},
+    },
+    roc_parse::ast::Expr,
+    roc_repl_eval::{
+        eval::{jit_to_ast, ToAstProblem},
+        ReplAppMemory,
+    },
+    roc_target::TargetInfo,
+    roc_types::subs::{Subs, Variable},
 };
-use roc_parse::ast::Expr;
-use roc_repl_eval::{
-    eval::{jit_to_ast, ToAstProblem},
-    ReplAppMemory,
-};
-use roc_target::TargetInfo;
-use roc_types::subs::{Subs, Variable};
 
 #[cfg(not(windows))]
 mod app;
