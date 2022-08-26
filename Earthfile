@@ -129,8 +129,6 @@ build-nightly-release:
     RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
     RUN ./ci/package_release.sh roc_linux_x86_64.tar.gz
     SAVE ARTIFACT ./roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
-    RUN ./ci/www-repl.sh
-    SAVE ARTIFACT ./roc_repl_wasm.tar.gz AS LOCAL roc_repl_wasm.tar.gz
 
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:

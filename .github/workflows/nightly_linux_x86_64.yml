@@ -1,6 +1,6 @@
-on:
-  schedule:
-    - cron:  '0 9 * * *'
+on: [pull_request]
+#  schedule:
+#    - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
 
@@ -24,10 +24,19 @@ jobs:
       - name: Make release tar archive
         run: ./ci/package_release.sh roc_linux_x86_64.tar.gz
 
-      - name: Upload artifact. Actually uploading to github releases has to be done manually.
+      - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
            name: roc_nightly-linux_x86_64.tar.gz
            path: roc_linux_x86_64.tar.gz
            retention-days: 4
 
+      - name: build wasm repl
+        run: ./ci/www-repl.sh
+
+      - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v3
+        with:
+           name: roc_repl_wasm.tar.gz
+           path: roc_repl_wasm.tar.gz
+           retention-days: 4
