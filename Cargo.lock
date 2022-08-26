@@ -3592,6 +3592,7 @@ name = "roc_docs_cli"
 version = "0.0.1"
 dependencies = [
  "clap 3.2.11",
+ "libc",
  "roc_docs",
 ]
 

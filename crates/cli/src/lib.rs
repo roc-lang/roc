@@ -7,19 +7,15 @@ use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_repl_expect::run::expect_mono_module_to_dylib;
-use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Instant;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -318,7 +314,18 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+#[cfg(windows)]
+pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
+    todo!("running tests does not work on windows right now")
+}
+
+#[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_gen_llvm::llvm::build::LlvmBackendMode;
+    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_target::TargetInfo;
+    use std::time::Instant;
+
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -389,7 +396,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = expect_mono_module_to_dylib(
+    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -921,6 +928,8 @@ impl ExecutableFile {
 
             #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
+                let _ = argv;
+                let _ = envp;
                 use memexec::memexec_exe;
                 let bytes = std::fs::read(path).unwrap();
                 memexec_exe(&bytes).unwrap();
@@ -1184,5 +1193,42 @@ impl std::str::FromStr for Target {
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
+    }
+}
+
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
+#[cfg(windows)]
+#[allow(unused_imports)]
+use windows_roc_platform_functions::*;
+
+#[cfg(windows)]
+mod windows_roc_platform_functions {
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        libc::malloc(size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        libc::realloc(c_ptr, new_size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        libc::free(c_ptr)
     }
 }

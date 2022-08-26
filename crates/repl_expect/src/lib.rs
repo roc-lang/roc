@@ -1,21 +1,28 @@
-use roc_module::symbol::Interns;
-use roc_mono::{
-    ir::ProcLayout,
-    layout::{CapturesNiche, LayoutCache},
+#[cfg(not(windows))]
+use {
+    roc_module::symbol::Interns,
+    roc_mono::{
+        ir::ProcLayout,
+        layout::{CapturesNiche, LayoutCache},
+    },
+    roc_parse::ast::Expr,
+    roc_repl_eval::{
+        eval::{jit_to_ast, ToAstProblem},
+        ReplAppMemory,
+    },
+    roc_target::TargetInfo,
+    roc_types::subs::{Subs, Variable},
 };
-use roc_parse::ast::Expr;
-use roc_repl_eval::{
-    eval::{jit_to_ast, ToAstProblem},
-    ReplAppMemory,
-};
-use roc_target::TargetInfo;
-use roc_types::subs::{Subs, Variable};
 
+#[cfg(not(windows))]
 mod app;
+#[cfg(not(windows))]
 pub mod run;
 
+#[cfg(not(windows))]
 use app::{ExpectMemory, ExpectReplApp};
 
+#[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,
@@ -75,6 +82,7 @@ pub fn get_values<'a>(
     Ok((app.offset, result))
 }
 
+#[cfg(not(windows))]
 #[cfg(test)]
 mod test {
     use indoc::indoc;

@@ -59,7 +59,6 @@ roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
-roc_repl_expect = { path = "../repl_expect" }
 roc_tracing = { path = "../tracing" }
 clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }
@@ -80,6 +79,10 @@ signal-hook = "0.3.14"
 
 [target.'cfg(windows)'.dependencies]
 memexec = "0.2.0"
+
+# for now, uses unix/libc functions that windows does not support
+[target.'cfg(not(windows))'.dependencies]
+roc_repl_expect = { path = "../repl_expect" }
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dependencies]
