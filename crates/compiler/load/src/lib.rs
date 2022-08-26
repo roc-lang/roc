@@ -177,7 +177,7 @@ fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
 
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
-    if !cfg!(target_family = "wasm") && !SKIP_SUBS_CACHE {
+    if !cfg!(target_family = "wasm") && !cfg!(windows) && !SKIP_SUBS_CACHE {
         output.insert(ModuleId::BOOL, deserialize_help(BOOL));
         output.insert(ModuleId::RESULT, deserialize_help(RESULT));
         output.insert(ModuleId::NUM, deserialize_help(NUM));
