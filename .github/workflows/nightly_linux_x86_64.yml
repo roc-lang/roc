@@ -23,7 +23,7 @@ jobs:
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
         
       - name: get date
-        run: echo 'DATE=$(date "+%Y-%m-%d")' >> $GITHUB_ENV
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
         
       - name: build file name
         env:
