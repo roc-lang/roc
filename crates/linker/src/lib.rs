@@ -2999,7 +2999,7 @@ mod tests {
         let symbols = collect_roc_undefined_symbols(&object, &triple);
 
         let mut keys: Vec<_> = symbols.iter().filter_map(|s| s.name().ok()).collect();
-        keys.sort();
+        keys.sort_unstable();
 
         assert_eq!(["roc__mainForHost_1_exposed_generic",], keys.as_slice())
     }
