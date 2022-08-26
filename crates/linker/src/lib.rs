@@ -142,14 +142,20 @@ fn generate_dynamic_lib(
     std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
-fn is_roc_definition(sym: &object::Symbol) -> bool {
-    if !sym.is_definition() {
-        false
-    } else if let Ok(name) = sym.name() {
+fn is_roc_symbol(sym: &object::Symbol) -> bool {
+    if let Ok(name) = sym.name() {
         name.trim_start_matches('_').starts_with("roc_")
     } else {
         false
     }
+}
+
+fn is_roc_definition(sym: &object::Symbol) -> bool {
+    sym.is_definition() && is_roc_symbol(sym)
+}
+
+fn is_roc_undefined(sym: &object::Symbol) -> bool {
+    sym.is_undefined() && is_roc_symbol(sym)
 }
 
 fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
@@ -178,6 +184,22 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
     }
 
     vaddresses
+}
+
+fn collect_roc_undefined_symbols<'file, 'data>(
+    object: &'file object::File<'data, &'data [u8]>,
+    target: &Triple,
+) -> Vec<Symbol<'file, 'data>> {
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => object.dynamic_symbols(),
+        target_lexicon::BinaryFormat::Macho => object.symbols(),
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    }
+    .filter(is_roc_undefined)
+    .collect()
 }
 
 // TODO: Most of this file is a mess of giant functions just to check if things work.
@@ -255,24 +277,7 @@ pub fn preprocess(
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
-    let app_syms: Vec<Symbol> = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => exec_obj.dynamic_symbols(),
-        target_lexicon::BinaryFormat::Macho => exec_obj.symbols(),
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    }
-    .filter(|sym| {
-        sym.is_undefined()
-            && sym.name().is_ok()
-            && sym
-                .name()
-                .unwrap()
-                .trim_start_matches('_')
-                .starts_with("roc_")
-    })
-    .collect();
+    let app_syms = collect_roc_undefined_symbols(&exec_obj, target);
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
     let mut macho_load_so_offset = None;
@@ -2874,11 +2879,11 @@ fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) ->
 mod tests {
     use super::*;
 
-    #[test]
-    fn collect_symbols() {
-        let data: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
+    const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
 
-        let object = object::File::parse(data).unwrap();
+    #[test]
+    fn collect_definitions() {
+        let object = object::File::parse(ELF64_DYNHOST).unwrap();
 
         let symbols = collect_roc_definitions(&object);
 
@@ -2901,6 +2906,29 @@ mod tests {
                 "roc_realloc"
             ],
             keys.as_slice(),
+        )
+    }
+
+    #[test]
+    fn collect_undefined_symbols() {
+        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+
+        let mut triple = Triple::host();
+        triple.binary_format = target_lexicon::BinaryFormat::Elf;
+
+        let symbols = collect_roc_undefined_symbols(&object, &triple);
+
+        let mut keys: Vec<_> = symbols.iter().filter_map(|s| s.name().ok()).collect();
+        keys.sort_unstable();
+
+        assert_eq!(
+            [
+                "roc__mainForHost_1__Fx_caller",
+                "roc__mainForHost_1__Fx_result_size",
+                "roc__mainForHost_1_exposed_generic",
+                "roc__mainForHost_size"
+            ],
+            keys.as_slice()
         )
     }
 }
