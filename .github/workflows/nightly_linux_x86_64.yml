@@ -4,6 +4,10 @@ on: [pull_request]
 
 name: Nightly Release Linux x86_64
 
+defaults:
+  run:
+    shell: . "$HOME/.cargo/env" && export PATH=$PATH:/home/anton/Downloads/zig-linux-x86_64-0.9.1
+    
 jobs:
   build:
     name: Rust tests, build and package nightly release
