@@ -1,6 +1,6 @@
-on: [pull_request]
-#  schedule:
-#    - cron:  '0 9 * * *'
+on:
+  schedule:
+    - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
     
@@ -30,8 +30,6 @@ jobs:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
         run: echo "RELEASE_TAR_FILENAME=roc_nightly-linux_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
-        
-      - run: echo ${{ env.RELEASE_TAR_FILENAME }}
        
       - name: Make nightly release tar archive
         run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
