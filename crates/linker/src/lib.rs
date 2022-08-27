@@ -360,7 +360,7 @@ impl<'a> Surgeries<'a> {
                     {
                         self.indirect_warning_given = true;
                         println!();
-                        println!("Cannot analyaze through indirect jmp type instructions");
+                        println!("Cannot analyze through indirect jmp type instructions");
                         println!("Most likely this is not a problem, but it could mean a loss in optimizations");
                         println!();
                     }
@@ -373,8 +373,7 @@ impl<'a> Surgeries<'a> {
     }
 }
 
-// TODO: Most of this file is a mess of giant functions just to check if things work.
-// Clean it all up and refactor nicely.
+/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
 pub fn preprocess(
     target: &Triple,
     exec_filename: &str,
@@ -414,7 +413,9 @@ pub fn preprocess(
 
     let exec_parsing_duration = exec_parsing_start.elapsed();
 
-    // Extract PLT related information for app functions.
+    // PLT stands for Procedure Linkage Table which is, put simply, used to call external
+    // procedures/functions whose address isn't known in the time of linking, and is left
+    // to be resolved by the dynamic linker at run time.
     let symbol_and_plt_processing_start = Instant::now();
     let plt_section_name = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => ".plt",
