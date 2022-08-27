@@ -121,11 +121,19 @@ pub fn build_zig_host_native(
         .env("HOME", env_home);
 
     if let Some(shared_lib_path) = shared_lib_path {
+        let obj = if target.contains("windows") {
+            bitcode::get_builtins_windows_obj_path()
+        } else {
+            bitcode::get_builtins_host_obj_path()
+        };
+
+        dbg!(&obj);
+
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            &obj,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -167,7 +175,7 @@ pub fn build_zig_host_native(
         command.args(&["-O", "ReleaseSmall"]);
     }
 
-    command.output().unwrap()
+    dbg!(command).output().unwrap()
 }
 
 #[cfg(windows)]
@@ -574,7 +582,7 @@ pub fn rebuild_host(
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
-        validate_output("host.zig", &zig_executable(), output)
+        // validate_output("host.zig", &zig_executable(), output)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();

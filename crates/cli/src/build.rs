@@ -331,9 +331,11 @@ pub fn build_file<'a>(
     }
 
     // Step 2: link the precompiled host and compiled app
+    dbg!("here we are");
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
+            dbg!("and here");
             roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path);
             problems
         }

@@ -51,6 +51,7 @@ fn report_timing(label: &str, duration: Duration) {
 }
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
+    dbg!(link_type, target);
     matches!(
         (link_type, target),
         (
@@ -59,6 +60,11 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Linux,
                 binary_format: target_lexicon::BinaryFormat::Elf,
+                ..
+            } | Triple {
+                architecture: target_lexicon::Architecture::X86_64,
+                operating_system: target_lexicon::OperatingSystem::Windows,
+                binary_format: target_lexicon::BinaryFormat::Coff,
                 ..
             } // | Triple {
               //     operating_system: target_lexicon::OperatingSystem::Darwin,
@@ -157,6 +163,11 @@ pub fn preprocess(
         println!("Targeting: {}", target);
     }
 
+    std::fs::copy(
+        exec_filename,
+        "/home/folkertdev/roc/roc/crates/linker/example_dynlib_pe",
+    );
+
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
     let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
@@ -168,6 +179,8 @@ pub fn preprocess(
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
+
+    panic!();
 
     let mut md: metadata::Metadata = Default::default();
 
