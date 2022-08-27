@@ -259,12 +259,11 @@ impl<'a> Surgeries<'a> {
 
     fn append_text_section(&mut self, object_bytes: &[u8], sec: &Section, verbose: bool) {
         let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(
-                range @ CompressedFileRange {
-                    format: CompressionFormat::None,
-                    ..
-                },
-            ) => (range.offset, false),
+            Ok(CompressedFileRange {
+                format: CompressionFormat::None,
+                offset,
+                ..
+            }) => (offset, false),
             Ok(range) => (range.offset, true),
             Err(err) => {
                 internal_error!(
