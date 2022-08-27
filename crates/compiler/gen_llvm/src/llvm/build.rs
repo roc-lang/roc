@@ -476,6 +476,13 @@ pub fn module_from_builtins<'ctx>(
             } => {
                 include_bytes!("../../../builtins/bitcode/builtins-x86_64.bc")
             }
+            Triple {
+                architecture: Architecture::X86_64,
+                operating_system: OperatingSystem::Windows,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-windows-x86_64.bc")
+            }
             _ => panic!(
                 "The zig builtins are not currently built for this target: {:?}",
                 target
