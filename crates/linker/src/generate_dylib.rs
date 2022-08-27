@@ -83,8 +83,6 @@ fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Re
     )
     .expect("failed to write object to file");
 
-
-
     let output = std::process::Command::new("zig")
         .args(&[
             "build-lib",
@@ -111,7 +109,7 @@ fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Re
         }
     }
 
-    Ok(std::fs::read(dummy_dll_file).unwrap())
+    Ok(std::fs::read(dummy_obj_file).unwrap())
 }
 
 #[derive(Debug)]

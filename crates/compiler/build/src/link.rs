@@ -139,9 +139,12 @@ pub fn build_zig_host_native(
         command.args(&["build-obj", "-fPIC"]);
     }
 
+    dbg!(emit_bin);
+
     command.args(&[
         zig_host_src,
-        emit_bin,
+        // emit_bin,
+        "-femit-bin=examples/benchmarks/platform/dynhost.exe",
         "--pkg-begin",
         "str",
         zig_str_path,

@@ -83,7 +83,7 @@ pub fn build_and_preprocess_host(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
-    let dummy_lib = host_input_path.with_file_name("libapp.so");
+    let dummy_lib = host_input_path.with_file_name("libapp.obj");
     generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
     let dynhost = host_input_path.with_file_name("dynhost");

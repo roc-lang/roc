@@ -253,7 +253,7 @@ test "" {
 
 // Export it as weak incase it is already linked in by something else.
 comptime {
-    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    // @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
 }
 fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
     // @setRuntimeSafety(std.builtin.is_test);
