@@ -3,7 +3,6 @@
     ```
     tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
     ```
-0. Some fresh installs require executing `sudo apt update`, it is not needed to execute `sudo apt upgrade` after this.
 0. To be able to run examples:
     - for the Rust example:
     ```
@@ -17,7 +16,11 @@
     ```
     - for the C example:
     ```
-    sudo apt install build-essential clang
+    # On a Debian-based distro like Ubuntu
+    sudo apt update && sudo apt install build-essential clang
+    
+    # On an RPM-based distro like Fedora
+    sudo dnf check-update && sudo dnf install clang
     ```
 0. Run examples with:
     ```
