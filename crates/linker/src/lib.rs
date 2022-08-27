@@ -2675,8 +2675,8 @@ pub fn surgery_elf(
     let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
 
-    let new_rodata_section_index = section_headers.len() - 2;
-    section_headers[new_rodata_section_index] = elf::SectionHeader64 {
+    // set the new rodata section header
+    section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
         sh_name: endian::U32::new(LittleEndian, 0),
         sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
         sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64),
@@ -2689,8 +2689,8 @@ pub fn surgery_elf(
         sh_entsize: endian::U64::new(LittleEndian, 0),
     };
 
-    let new_text_section_index = section_headers.len() - 1;
-    section_headers[new_text_section_index] = elf::SectionHeader64 {
+    // set the new text section header
+    section_headers[section_headers.len() - 1] = elf::SectionHeader64 {
         sh_name: endian::U32::new(LittleEndian, 0),
         sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
         sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
@@ -2715,8 +2715,8 @@ pub fn surgery_elf(
         ph_num as usize,
     );
 
-    let new_rodata_segment_index = program_headers.len() - 2;
-    program_headers[new_rodata_segment_index] = elf::ProgramHeader64 {
+    // set the new rodata section program header
+    program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
         p_flags: endian::U32::new(LittleEndian, elf::PF_R),
         p_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
@@ -2727,8 +2727,9 @@ pub fn surgery_elf(
         p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
     };
 
-    let new_text_segment_index = program_headers.len() - 1;
-    program_headers[new_text_segment_index] = elf::ProgramHeader64 {
+    // set the new text section program header
+    let new_text_section_index = program_headers.len() - 1;
+    program_headers[new_text_section_index] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
         p_flags: endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X),
         p_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
