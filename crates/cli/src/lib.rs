@@ -7,21 +7,15 @@ use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_gen_llvm::run_roc::RocCallResult;
-use roc_gen_llvm::run_roc_dylib;
-use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_repl_expect::run::{expect_mono_module_to_dylib, roc_dev_expect};
-use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Instant;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -320,9 +314,18 @@ pub enum FormatMode {
     CheckOnly,
 }
 
-const SHM_SIZE: i64 = 1024;
+#[cfg(windows)]
+pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
+    todo!("running tests does not work on windows right now")
+}
 
+#[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_gen_llvm::llvm::build::LlvmBackendMode;
+    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_target::TargetInfo;
+    use std::time::Instant;
+
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -393,7 +396,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = expect_mono_module_to_dylib(
+    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -407,13 +410,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let mut shared_buffer = vec![0u8; SHM_SIZE as usize];
-
-    let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
-    let mut result = RocCallResult::default();
-    let slice = (shared_buffer.as_mut_ptr(), shared_buffer.len());
-    unsafe { set_shared_buffer(slice, &mut result) };
-
     let (failed, passed) = roc_repl_expect::run::run_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
@@ -421,7 +417,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         interns,
         &lib,
         &mut expectations,
-        shared_buffer.as_mut_ptr(),
         expects,
     )
     .unwrap();
@@ -931,20 +926,14 @@ impl ExecutableFile {
                 libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
 
-            #[cfg(all(target_family = "windows"))]
+            #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
-                use std::process::Command;
-
                 let _ = argv;
                 let _ = envp;
-
-                let mut command = Command::new(path);
-
-                let output = command.output().unwrap();
-
-                println!("{}", String::from_utf8_lossy(&output.stdout));
-
-                std::process::exit(0)
+                use memexec::memexec_exe;
+                let bytes = std::fs::read(path).unwrap();
+                memexec_exe(&bytes).unwrap();
+                std::process::exit(0);
             }
         }
     }
@@ -953,94 +942,13 @@ impl ExecutableFile {
 // with Expect
 #[cfg(target_family = "unix")]
 unsafe fn roc_run_native_debug(
-    executable: ExecutableFile,
-    argv: &[*const c_char],
-    envp: &[*const c_char],
-    mut expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
+    _executable: ExecutableFile,
+    _argv: &[*const c_char],
+    _envp: &[*const c_char],
+    _expectations: VecMap<ModuleId, Expectations>,
+    _interns: Interns,
 ) {
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
-
-    match libc::fork() {
-        0 => {
-            // we are the child
-
-            if executable.execve(argv, envp) < 0 {
-                // Get the current value of errno
-                let e = errno::errno();
-
-                // Extract the error code as an i32
-                let code = e.0;
-
-                // Display a human-friendly error message
-                println!("💥 Error {}: {}", code, e);
-            }
-        }
-        -1 => {
-            // something failed
-
-            // Get the current value of errno
-            let e = errno::errno();
-
-            // Extract the error code as an i32
-            let code = e.0;
-
-            // Display a human-friendly error message
-            println!("Error {}: {}", code, e);
-
-            process::exit(1)
-        }
-        1.. => {
-            let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-            let cstring = CString::new(name).unwrap();
-
-            let arena = &bumpalo::Bump::new();
-            let interns = arena.alloc(interns);
-
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => {
-                        // clean up
-                        libc::shm_unlink(cstring.as_ptr().cast());
-
-                        // done!
-                        process::exit(0);
-                    }
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
-                        let shared_fd =
-                            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
-
-                        libc::ftruncate(shared_fd, SHM_SIZE);
-
-                        let shared_ptr = libc::mmap(
-                            std::ptr::null_mut(),
-                            SHM_SIZE as usize,
-                            libc::PROT_READ,
-                            libc::MAP_SHARED,
-                            shared_fd,
-                            0,
-                        );
-
-                        let shared_memory_ptr: *mut u8 = shared_ptr.cast();
-
-                        roc_dev_expect(
-                            &mut std::io::stdout(),
-                            arena,
-                            &mut expectations,
-                            interns,
-                            shared_memory_ptr,
-                        )
-                        .unwrap();
-                    }
-                    _ => println!("received signal {}", sig),
-                }
-            }
-        }
-        _ => unreachable!(),
-    }
+    todo!()
 }
 
 #[cfg(target_os = "linux")]
@@ -1296,5 +1204,42 @@ impl std::str::FromStr for Target {
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
+    }
+}
+
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
+#[cfg(windows)]
+#[allow(unused_imports)]
+use windows_roc_platform_functions::*;
+
+#[cfg(windows)]
+mod windows_roc_platform_functions {
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        libc::malloc(size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        libc::realloc(c_ptr, new_size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        libc::free(c_ptr)
     }
 }

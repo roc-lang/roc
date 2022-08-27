@@ -42,7 +42,7 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
     END_COL,
     "\n\n"
 );
-pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
+pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
@@ -423,12 +423,9 @@ pub fn main() -> io::Result<()> {
                         }
                     }
                     ":help" => {
-                        println!("Use :exit or :q to exit.");
+                        println!("Use :exit or :quit or :q to exit.");
                     }
-                    ":exit" => {
-                        break;
-                    }
-                    ":q" => {
+                    ":exit" | ":quit" | ":q" => {
                         break;
                     }
                     _ => {

@@ -467,7 +467,7 @@ Roc's compiler has always been written in [Rust](https://www.rust-lang.org/). Ro
 There were a few reasons for this rewrite.
 
 1. We struggled to get Rust to emit LLVM bitcode in the format we needed, which is important so that LLVM can do whole-program optimizations across the standard library and compiled application.
-2. Since the standard library has to interact with raw generated machine code (or LLVM bitcode), the Rust code unavoidable needed `unsafe` annotations all over the place. This made one of Rust's biggest selling points inapplicable in this particular use case.
+2. Since the standard library has to interact with raw generated machine code (or LLVM bitcode), the Rust code unavoidably needed `unsafe` annotations all over the place. This made one of Rust's biggest selling points inapplicable in this particular use case.
 3. Given that Rust's main selling points are inapplicable (its package ecosystem being another), Zig's much faster compile times are a welcome benefit.
 4. Zig has more tools for working in a memory-unsafe environment, such as reporting memory leaks in tests. These have been helpful in finding bugs that are out of scope for safe Rust.
 

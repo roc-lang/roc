@@ -1,13 +1,11 @@
 use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
-use object::write;
 use object::{elf, endian, macho};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
-    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
-    SectionIndex, SectionKind, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope,
-    SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
+    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
+    SymbolIndex, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -21,11 +19,10 @@ use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
+mod generate_dylib;
 mod metadata;
 use metadata::VirtualOffset;
 
@@ -121,116 +118,28 @@ fn generate_dynamic_lib(
     exported_closure_types: Vec<String>,
     dummy_lib_path: &Path,
 ) {
-    let dummy_obj_file = Builder::new()
-        .prefix("roc_lib")
-        .suffix(".o")
-        .tempfile()
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    let dummy_obj_file = dummy_obj_file.path();
-
-    let obj_target = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => BinaryFormat::Elf,
-        target_lexicon::BinaryFormat::Macho => BinaryFormat::MachO,
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    };
-    let obj_arch = match target.architecture {
-        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    };
-    let mut out_object = write::Object::new(obj_target, obj_arch, Endianness::Little);
-
-    let text_section = out_object.section_id(write::StandardSection::Text);
-
-    let mut add_symbol = |name: &String| {
-        out_object.add_symbol(write::Symbol {
-            name: name.as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: write::SymbolSection::Section(text_section),
-            flags: SymbolFlags::None,
-        });
-    };
+    let mut custom_names = Vec::new();
 
     for sym in exposed_to_host {
-        for name in &[
+        custom_names.extend([
             format!("roc__{}_1_exposed", sym),
             format!("roc__{}_1_exposed_generic", sym),
             format!("roc__{}_size", sym),
-        ] {
-            add_symbol(name);
-        }
+        ]);
 
         for closure_type in &exported_closure_types {
-            for name in &[
+            custom_names.extend([
                 format!("roc__{}_1_{}_caller", sym, closure_type),
                 format!("roc__{}_1_{}_size", sym, closure_type),
                 format!("roc__{}_1_{}_result_size", sym, closure_type),
-            ] {
-                add_symbol(name)
-            }
+            ]);
         }
     }
-    std::fs::write(
-        &dummy_obj_file,
-        out_object.write().expect("failed to build output object"),
-    )
-    .expect("failed to write object to file");
 
-    let (ld_prefix_args, ld_flag_soname) = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => (vec!["-shared"], "-soname"),
-        target_lexicon::BinaryFormat::Macho => {
-            // This path only exists on macOS Big Sur, and it causes ld errors
-            // on Catalina if it's specified with -L, so we replace it with a
-            // redundant -lSystem if the directory isn't there.
-            let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-            let big_sur_fix = if Path::new(big_sur_path).exists() {
-                "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"
-            } else {
-                "-lSystem" // We say -lSystem twice in the case of non-Big-Sur OSes, but it's fine.
-            };
+    let bytes = crate::generate_dylib::generate(target, &custom_names)
+        .unwrap_or_else(|e| internal_error!("{}", e));
 
-            (vec![big_sur_fix, "-lSystem", "-dylib"], "-install_name")
-        }
-        _ => {
-            // The supported() function should have been called earlier
-            // to verify this is a supported platform!
-            unreachable!();
-        }
-    };
-
-    let output = Command::new("ld")
-        .args(ld_prefix_args)
-        .args(&[
-            ld_flag_soname,
-            dummy_lib_path.file_name().unwrap().to_str().unwrap(),
-            dummy_obj_file.to_str().unwrap(),
-            "-o",
-            dummy_lib_path.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    if !output.status.success() {
-        match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
-                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
-                stderr
-            ),
-            Err(utf8_err) => panic!(
-                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
-                utf8_err
-            ),
-        }
-    }
+    std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
 // TODO: Most of this file is a mess of giant functions just to check if things work.

@@ -11,9 +11,9 @@
     ```
     - for the zig example:
     ```
-    wget https://ziglang.org/download/0.8.1/zig-linux-x86_64-0.8.1.tar.xz
-    tar -xf zig-linux-x86_64-0.8.1.tar.xz
-    sudo ln -s  $(pwd)/zig-linux-x86_64-0.8.1/zig /usr/local/bin/zig
+    wget https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz
+    tar -xf zig-linux-x86_64-0.9.1.tar.xz
+    sudo ln -s  $(pwd)/zig-linux-x86_64-0.9.1/zig /usr/local/bin/zig
     ```
     - for the C example:
     ```

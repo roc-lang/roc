@@ -43,5 +43,9 @@ echo 'var __wbg_star0 = { now: Date.now };' > build/$BINDGEN_FILE
 grep -v '^import' pkg/$BINDGEN_FILE >> build/$BINDGEN_FILE
 
 # As of July 2022, the .wasm file is ~4MB, shrinking to ~1MB with Brotli compression (which Netlify does)
-echo "Generated website assets for deployment:"
+echo "Generated REPL assets for website:"
 ls -l build
+
+TARFILE=${1:-roc_repl_wasm.tar.gz}
+cd build
+tar cvzf $TARFILE *

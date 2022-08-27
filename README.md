@@ -1,6 +1,10 @@
 # Work in progress!
 
-Roc is not ready for a 0.1 release yet, but we have [a guide](https://github.com/roc-lang/roc/tree/main/getting_started) for installing it, [a tutorial](https://github.com/roc-lang/roc/blob/main/TUTORIAL.md) for using it, and [a Zulip chat](https://roc.zulipchat.com) for asking questions.
+Roc is not ready for a 0.1 release yet, but we do have:
+- [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
+- [**tutorial**](https://github.com/roc-lang/roc/blob/main/TUTORIAL.md)
+- [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
+- [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions
 
 If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 

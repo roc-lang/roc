@@ -520,6 +520,53 @@ pub fn constrain_expr(
             constraints.exists_many(vars, all_constraints)
         }
 
+        ExpectFx {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let expect_bool = |region| {
+                let bool_type = Type::Variable(Variable::BOOL);
+                Expected::ForReason(Reason::ExpectCondition, bool_type, region)
+            };
+
+            let cond_con = constrain_expr(
+                constraints,
+                env,
+                loc_condition.region,
+                &loc_condition.value,
+                expect_bool(loc_condition.region),
+            );
+
+            let continuation_con = constrain_expr(
+                constraints,
+                env,
+                loc_continuation.region,
+                &loc_continuation.value,
+                expected,
+            );
+
+            // + 2 for cond_con and continuation_con
+            let mut all_constraints = Vec::with_capacity(lookups_in_cond.len() + 2);
+
+            all_constraints.push(cond_con);
+            all_constraints.push(continuation_con);
+
+            let mut vars = Vec::with_capacity(lookups_in_cond.len());
+
+            for (symbol, var) in lookups_in_cond.iter() {
+                vars.push(*var);
+
+                all_constraints.push(constraints.lookup(
+                    *symbol,
+                    NoExpectation(Type::Variable(*var)),
+                    Region::zero(),
+                ));
+            }
+
+            constraints.exists_many(vars, all_constraints)
+        }
+
         If {
             cond_var,
             branch_var,

@@ -199,10 +199,6 @@ impl LlvmBackendMode {
             LlvmBackendMode::CliTest => true,
         }
     }
-
-    fn runs_expects_in_separate_process(self) -> bool {
-        false
-    }
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -2809,15 +2805,67 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             lookups,
                         );
 
-                        // NOTE: signals to the parent process that an expect failed
-                        if env.mode.runs_expects_in_separate_process() {
-                            let func = env
-                                .module
-                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
-                                .unwrap();
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    roc_target::PtrWidth::Bytes4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                }
+            } else {
+                bd.position_at_end(throw_block);
+                bd.build_unconditional_branch(then_block);
+            }
 
-                            bd.build_call(func, &[], "call_expect_finalize_failed");
-                        }
+            bd.position_at_end(then_block);
+
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            )
+        }
+
+        ExpectFx {
+            condition: cond_symbol,
+            region,
+            lookups,
+            layouts: _,
+            remainder,
+        } => {
+            let bd = env.builder;
+            let context = env.context;
+
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                cond.into_int_value(),
+                context.bool_type().const_int(1, false),
+                "is_true",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            if env.mode.runs_expects() {
+                bd.position_at_end(throw_block);
+
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
+                        clone_to_shared_memory(
+                            env,
+                            scope,
+                            layout_ids,
+                            *cond_symbol,
+                            *region,
+                            lookups,
+                        );
 
                         bd.build_unconditional_branch(then_block);
                     }
@@ -6225,9 +6273,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
-        | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
-        | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -7031,7 +7079,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_POW_INT[int_width],
         ),
-        NumDivUnchecked => {
+        NumDivTruncUnchecked => {
             if int_width.is_signed() {
                 bd.build_int_signed_div(lhs, rhs, "div_int").into()
             } else {
@@ -7212,7 +7260,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumDivFrac => bd.build_float_div(lhs, rhs, "div_float").into(),
         NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
@@ -7329,7 +7377,7 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             rhs,
             "decimal multiplication overflowed",
         ),
-        NumDivUnchecked => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
+        NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }

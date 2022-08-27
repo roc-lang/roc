@@ -1,21 +1,28 @@
-use roc_module::symbol::Interns;
-use roc_mono::{
-    ir::ProcLayout,
-    layout::{CapturesNiche, LayoutCache},
+#[cfg(not(windows))]
+use {
+    roc_module::symbol::Interns,
+    roc_mono::{
+        ir::ProcLayout,
+        layout::{CapturesNiche, LayoutCache},
+    },
+    roc_parse::ast::Expr,
+    roc_repl_eval::{
+        eval::{jit_to_ast, ToAstProblem},
+        ReplAppMemory,
+    },
+    roc_target::TargetInfo,
+    roc_types::subs::{Subs, Variable},
 };
-use roc_parse::ast::Expr;
-use roc_repl_eval::{
-    eval::{jit_to_ast, ToAstProblem},
-    ReplAppMemory,
-};
-use roc_target::TargetInfo;
-use roc_types::subs::{Subs, Variable};
 
+#[cfg(not(windows))]
 mod app;
+#[cfg(not(windows))]
 pub mod run;
 
+#[cfg(not(windows))]
 use app::{ExpectMemory, ExpectReplApp};
 
+#[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,
@@ -75,6 +82,7 @@ pub fn get_values<'a>(
     Ok((app.offset, result))
 }
 
+#[cfg(not(windows))]
 #[cfg(test)]
 mod test {
     use indoc::indoc;
@@ -141,6 +149,7 @@ mod test {
         const BUFFER_SIZE: usize = 1024;
 
         let mut shared_buffer = [0u8; BUFFER_SIZE];
+        let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
         let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
@@ -148,15 +157,15 @@ mod test {
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects(
+        let (_failed, _passed) = crate::run::run_expects_with_memory(
             &mut writer,
             RenderTarget::ColorTerminal,
             arena,
             interns,
             &lib,
             &mut expectations,
-            shared_buffer.as_mut_ptr(),
             expects,
+            &mut memory,
         )
         .unwrap();
 

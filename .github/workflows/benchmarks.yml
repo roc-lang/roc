@@ -18,7 +18,7 @@ jobs:
     env:
       FORCE_COLOR: 1
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           ref: "main"
           clean: "true"
@@ -29,7 +29,7 @@ jobs:
       - name: on main; prepare a self-contained benchmark folder
         run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder
 
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           clean: "false" # we want to keep the benchmark folder
 

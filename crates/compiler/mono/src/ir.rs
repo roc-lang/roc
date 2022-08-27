@@ -576,7 +576,8 @@ impl<'a> ExternalSpecializations<'a> {
         env_subs: &mut Subs,
         variable: Variable,
     ) {
-        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let stored_variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        roc_tracing::debug!(original = ?variable, stored = ?stored_variable, "stored needed external");
 
         match self
             .symbol_or_lambda
@@ -585,11 +586,11 @@ impl<'a> ExternalSpecializations<'a> {
         {
             None => {
                 self.symbol_or_lambda.push(symbol_or_lambda);
-                self.types_to_specialize.push(vec![variable]);
+                self.types_to_specialize.push(vec![stored_variable]);
             }
             Some(index) => {
                 let types_to_specialize = &mut self.types_to_specialize[index];
-                types_to_specialize.push(variable);
+                types_to_specialize.push(stored_variable);
             }
         }
     }
@@ -1512,6 +1513,14 @@ pub enum Stmt<'a> {
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
+    ExpectFx {
+        condition: Symbol,
+        region: Region,
+        lookups: &'a [Symbol],
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -2094,6 +2103,17 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
+                .append(symbol_to_doc(alloc, *condition))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc)),
+
+            ExpectFx {
+                condition,
+                remainder,
+                ..
+            } => alloc
+                .text("expect-fx ")
                 .append(symbol_to_doc(alloc, *condition))
                 .append(";")
                 .append(alloc.hardline())
@@ -2890,19 +2910,16 @@ fn specialize_external_specializations<'a>(
 
     for (symbol, solved_types) in it {
         for store_variable in solved_types {
+            let imported_variable = offset_variable(store_variable);
+
+            roc_tracing::debug!(proc_name = ?symbol, ?store_variable, ?imported_variable, "specializing needed external");
+
             // historical note: we used to deduplicate with a hash here,
             // but the cost of that hash is very high. So for now we make
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(
-                env,
-                procs,
-                layout_cache,
-                symbol,
-                offset_variable(store_variable),
-                &[],
-            )
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
         }
     }
 }
@@ -3009,7 +3026,45 @@ fn generate_runtime_error_function<'a>(
     }
 }
 
-fn specialize_external<'a>(
+/// A snapshot of the state of types at a moment in time.
+/// Includes the exact types, but also auxiliary information like layouts.
+struct TypeStateSnapshot {
+    subs_snapshot: roc_types::subs::SubsSnapshot,
+    layout_snapshot: crate::layout::SnapshotKeyPlaceholder,
+}
+
+/// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and
+/// accordingly [rolled back][rollback_typestate] a specialization is complete, so as to not
+/// interfere with other specializations.
+fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> TypeStateSnapshot {
+    TypeStateSnapshot {
+        subs_snapshot: subs.snapshot(),
+        layout_snapshot: layout_cache.snapshot(),
+    }
+}
+
+/// Rolls back the type state to the given [snapshot].
+/// Should be called after a specialization is complete to avoid interfering with other
+/// specializations.
+fn rollback_typestate(
+    subs: &mut Subs,
+    layout_cache: &mut LayoutCache<'_>,
+    snapshot: TypeStateSnapshot,
+) {
+    let TypeStateSnapshot {
+        subs_snapshot,
+        layout_snapshot,
+    } = snapshot;
+
+    subs.rollback_to(subs_snapshot);
+    layout_cache.rollback_to(layout_snapshot);
+}
+
+/// Specialize a single proc.
+///
+/// The caller should snapshot and rollback the type state before and after calling this function,
+/// respectively. This function will not take snapshots itself, but will modify the type state.
+fn specialize_proc_help<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     lambda_name: LambdaName<'a>,
@@ -3020,10 +3075,6 @@ fn specialize_external<'a>(
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
-
-    // unify the called function with the specialized signature, then specialize the function body
-    let snapshot = env.subs.snapshot();
-    let cache_snapshot = layout_cache.snapshot();
 
     let _unified = env.unify(partial_proc.annotation, fn_var);
 
@@ -3172,7 +3223,7 @@ fn specialize_external<'a>(
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
-    match specialized {
+    let specialized_proc = match specialized {
         SpecializedLayout::FunctionPointerBody {
             ret_layout,
             closure: opt_closure_layout,
@@ -3185,10 +3236,6 @@ fn specialize_external<'a>(
             //
             //      foo = \x,y -> Num.add x y
 
-            // reset subs, so we don't get type errors when specializing for a different signature
-            layout_cache.rollback_to(cache_snapshot);
-            env.subs.rollback_to(snapshot);
-
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Layout::LambdaSet(lambda_set),
                 None => Layout::UNIT,
@@ -3197,7 +3244,7 @@ fn specialize_external<'a>(
             // I'm not sure how to handle the closure case, does it ever occur?
             debug_assert!(matches!(captured_symbols, CapturedSymbols::None));
 
-            let proc = Proc {
+            Proc {
                 name: lambda_name,
                 args: &[],
                 body: specialized_body,
@@ -3206,9 +3253,7 @@ fn specialize_external<'a>(
                 is_self_recursive: recursivity,
                 must_own_arguments: false,
                 host_exposed_layouts,
-            };
-
-            Ok(proc)
+            }
         }
         SpecializedLayout::FunctionBody {
             arguments: proc_args,
@@ -3366,16 +3411,12 @@ fn specialize_external<'a>(
                     .unwrap_or(*symbol);
             });
 
-            // reset subs, so we don't get type errors when specializing for a different signature
-            layout_cache.rollback_to(cache_snapshot);
-            env.subs.rollback_to(snapshot);
-
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Some(Layout::LambdaSet(lambda_set)),
                 None => None,
             };
 
-            let proc = Proc {
+            Proc {
                 name: lambda_name,
                 args: proc_args.into_bump_slice(),
                 body: specialized_body,
@@ -3384,11 +3425,11 @@ fn specialize_external<'a>(
                 is_self_recursive: recursivity,
                 must_own_arguments: false,
                 host_exposed_layouts,
-            };
-
-            Ok(proc)
+            }
         }
-    }
+    };
+
+    Ok(specialized_proc)
 }
 
 #[derive(Debug)]
@@ -3597,39 +3638,10 @@ fn specialize_variable<'a>(
     proc_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: &[(Symbol, Variable)],
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    specialize_variable_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        |_| fn_var,
-        host_exposed_aliases,
-        partial_proc_id,
-    )
-}
-
-fn specialize_variable_help<'a, F>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    proc_name: LambdaName<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    fn_var_thunk: F,
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
-where
-    F: FnOnce(&mut Env<'a, '_>) -> Variable,
-{
-    // add the specializations that other modules require of us
-
-    let snapshot = env.subs.snapshot();
-    let cache_snapshot = layout_cache.snapshot();
-
-    // important: evaluate after the snapshot has been created!
-    let fn_var = fn_var_thunk(env);
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    let snapshot = snapshot_typestate(env.subs, layout_cache);
 
     // for debugging only
     let raw = layout_cache
@@ -3652,8 +3664,9 @@ where
     instantiate_rigids(env.subs, annotation_var);
 
     procs.push_active_specialization(proc_name.name());
+    roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
-    let specialized = specialize_external(
+    let specialized = specialize_proc_help(
         env,
         procs,
         proc_name,
@@ -3663,9 +3676,14 @@ where
         partial_proc_id,
     );
 
+    roc_tracing::debug!(
+        ?proc_name,
+        succeeded = specialized.is_ok(),
+        "specialization end"
+    );
     procs.pop_active_specialization(proc_name.name());
 
-    match specialized {
+    let result = match specialized {
         Ok(proc) => {
             // when successful, the layout after unification should be the layout before unification
             //            debug_assert_eq!(
@@ -3675,15 +3693,9 @@ where
             //                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
             //            );
 
-            env.subs.rollback_to(snapshot);
-            layout_cache.rollback_to(cache_snapshot);
-
             Ok((proc, raw))
         }
         Err(error) => {
-            env.subs.rollback_to(snapshot);
-            layout_cache.rollback_to(cache_snapshot);
-
             // earlier we made this information available where we handle the failure
             // but we didn't do anything useful with it. So it's here if we ever need it again
             let _ = error;
@@ -3692,7 +3704,11 @@ where
                 attempted_layout: raw,
             })
         }
-    }
+    };
+
+    rollback_typestate(env.subs, layout_cache, snapshot);
+
+    result
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -4166,6 +4182,7 @@ pub fn with_hole<'a>(
         EmptyRecord => let_empty_struct(assigned, hole),
 
         Expect { .. } => unreachable!("I think this is unreachable"),
+        ExpectFx { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -6136,6 +6153,45 @@ pub fn from_can<'a>(
             stmt
         }
 
+        ExpectFx {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
+            let cond_symbol = env.unique_symbol();
+
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout, "Expect");
+                layouts.push(layout);
+            }
+
+            let mut stmt = Stmt::ExpectFx {
+                condition: cond_symbol,
+                region: loc_condition.region,
+                lookups: lookups.into_bump_slice(),
+                layouts: layouts.into_bump_slice(),
+                remainder: env.arena.alloc(rest),
+            };
+
+            stmt = with_hole(
+                env,
+                loc_condition.value,
+                variable,
+                procs,
+                layout_cache,
+                cond_symbol,
+                env.arena.alloc(stmt),
+            );
+
+            stmt
+        }
+
         LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
@@ -6490,6 +6546,32 @@ fn substitute_in_stmt_help<'a>(
             );
 
             let expect = Expect {
+                condition: substitute(subs, *condition).unwrap_or(*condition),
+                region: *region,
+                lookups: new_lookups.into_bump_slice(),
+                layouts,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
+        }
+
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let new_lookups = Vec::from_iter_in(
+                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
+                arena,
+            );
+
+            let expect = ExpectFx {
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
@@ -7625,6 +7707,8 @@ fn add_needed_external<'a>(
         Vacant(entry) => entry.insert(ExternalSpecializations::new()),
         Occupied(entry) => entry.into_mut(),
     };
+
+    roc_tracing::debug!(proc_name = ?name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "needed external");
 
     existing.insert_external(name, env.subs, fn_var);
 }
