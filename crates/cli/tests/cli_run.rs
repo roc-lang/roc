@@ -297,7 +297,7 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" | "hello-gui" | "breakout" | "ruby" => {
+                        "form" | "hello-gui" | "breakout" | "ruby" | "swiftui" => {
                             // Since these require things the build system often doesn't have
                             // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                             // we do `roc build` on them but don't run them.
@@ -547,6 +547,14 @@ mod cli_run {
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
+        },
+        swiftui:"swiftui" => Example {
+            filename: "main.roc",
+            executable_filename: "swiftui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
         },
     }
 
