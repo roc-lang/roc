@@ -281,7 +281,7 @@ pub fn mono_module_to_dylib<'a>(
     module_pass.run_on(env.module);
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
