@@ -15,9 +15,103 @@ pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Resul
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => create_dylib_elf64(DUMMY_ELF64, custom_names),
         target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
-        target_lexicon::BinaryFormat::Coff => todo!("coff dylib creation"),
+        target_lexicon::BinaryFormat::Coff => create_dylib_pe(target, custom_names),
         other => unimplemented!("dylib creation for {:?}", other),
     }
+}
+
+fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
+    use object::{Architecture, BinaryFormat, SymbolFlags, SymbolKind, SymbolScope};
+    use tempfile::Builder;
+
+    use object::write;
+
+    let dummy_obj_file = Builder::new()
+        .prefix("roc_lib")
+        .suffix(".o")
+        .tempfile()
+        .unwrap_or_else(|e| panic!("{}", e));
+    let dummy_obj_file = dummy_obj_file.path();
+
+    let dummy_dll_file = Builder::new()
+        .prefix("roc_lib")
+        .suffix(".dll")
+        .tempfile()
+        .unwrap_or_else(|e| panic!("{}", e));
+    let dummy_dll_file = dummy_dll_file.path();
+
+    let obj_target = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => BinaryFormat::Elf,
+        target_lexicon::BinaryFormat::Macho => BinaryFormat::MachO,
+        target_lexicon::BinaryFormat::Coff => BinaryFormat::Coff,
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
+    let obj_arch = match target.architecture {
+        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
+    let mut out_object = write::Object::new(obj_target, obj_arch, Endianness::Little);
+
+    let text_section = out_object.section_id(write::StandardSection::Text);
+
+    let mut add_symbol = |name: &String| {
+        out_object.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: write::SymbolSection::Section(text_section),
+            flags: SymbolFlags::None,
+        });
+    };
+
+    for name in custom_names {
+        add_symbol(name);
+    }
+
+    std::fs::write(
+        &dummy_obj_file,
+        out_object.write().expect("failed to build output object"),
+    )
+    .expect("failed to write object to file");
+
+
+
+    let output = std::process::Command::new("zig")
+        .args(&[
+            "build-lib",
+            dummy_obj_file.to_str().unwrap(),
+            "-dynamic",
+            "-target",
+            "x86_64-windows-gnu",
+            "-lc",
+            &format!("-femit-bin={}", dummy_dll_file.to_str().unwrap()),
+        ])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        match std::str::from_utf8(&output.stderr) {
+            Ok(stderr) => panic!(
+                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
+                stderr
+            ),
+            Err(utf8_err) => panic!(
+                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
+                utf8_err
+            ),
+        }
+    }
+
+    Ok(std::fs::read(dummy_dll_file).unwrap())
 }
 
 #[derive(Debug)]
