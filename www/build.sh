@@ -16,14 +16,11 @@ pushd build
 wget https://github.com/roc-lang/roc/archive/www.tar.gz
 
 # Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
-# TODO: When roc repo is public, download it from nightly builds.
-wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
-unzip deploy.zip
-# Explicitly list the filenames, failing the build if they're not found
-mv mock-repl-deploy/roc_repl_wasm.js repl/
-mv mock-repl-deploy/roc_repl_wasm_bg.wasm repl/
-rmdir mock-repl-deploy
-rm deploy.zip
+REPL_TARFILE="roc_repl_wasm.tar.gz"
+wget https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+tar -xzf $REPL_TARFILE -C repl
+rm $REPL_TARFILE
+ls -lh repl
 
 popd
 
