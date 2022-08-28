@@ -512,6 +512,20 @@ impl<'a> PackageModuleIds<'a> {
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
         self.by_id.iter()
     }
+
+    /// Returns true iff two modules belong to the same package.
+    /// Returns [None] if one module is unknown.
+    pub fn package_eq(&self, left: ModuleId, right: ModuleId) -> Option<bool> {
+        if left.is_builtin() ^ right.is_builtin() {
+            return Some(false);
+        }
+        let result = match (self.get_name(left)?, self.get_name(right)?) {
+            (PQModuleName::Unqualified(_), PQModuleName::Unqualified(_)) => true,
+            (PQModuleName::Qualified(pkg1, _), PQModuleName::Qualified(pkg2, _)) => pkg1 == pkg2,
+            _ => false,
+        };
+        Some(result)
+    }
 }
 
 /// Stores a mapping between ModuleId and InlinableString.
