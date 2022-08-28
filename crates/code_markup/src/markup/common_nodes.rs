@@ -114,7 +114,7 @@ pub fn new_assign_mn(
 
 pub fn new_module_name_mn_id(mn_ids: Vec<MarkNodeId>, mark_node_pool: &mut SlowPool) -> MarkNodeId {
     if mn_ids.len() == 1 {
-        *mn_ids.get(0).unwrap() // safe because we checked the length before
+        *mn_ids.first().unwrap() // safe because we checked the length before
     } else {
         let nested_node = make_nested_mn(mn_ids, 0);
         mark_node_pool.add(nested_node)

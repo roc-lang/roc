@@ -391,58 +391,111 @@ fn add_single_tag_struct(
                 ),
             );
         } else {
-            {
-                let mut args: Vec<String> = Vec::with_capacity(payload_fields.len());
-                let mut fields: Vec<String> = Vec::with_capacity(payload_fields.len());
+            let mut args: Vec<String> = Vec::with_capacity(payload_fields.len());
+            let mut fields: Vec<String> = Vec::with_capacity(payload_fields.len());
+            let mut field_types: Vec<String> = Vec::with_capacity(payload_fields.len());
+            let mut field_access: Vec<String> = Vec::with_capacity(payload_fields.len());
 
-                for (index, field_id) in payload_fields.iter().enumerate() {
-                    let field_type = type_name(*field_id, types);
+            for (index, field_id) in payload_fields.iter().enumerate() {
+                let field_type = type_name(*field_id, types);
 
-                    args.push(format!("f{index}: {field_type}"));
-                    fields.push(format!("{INDENT}{INDENT}{INDENT}f{index},"));
-                }
+                field_access.push(format!("self.f{index}"));
+                args.push(format!("f{index}: {field_type}"));
+                fields.push(format!("{INDENT}{INDENT}{INDENT}f{index},"));
+                field_types.push(field_type);
+            }
 
-                let args = args.join(", ");
-                let fields = fields.join("\n");
+            let args = args.join(", ");
+            let fields = fields.join("\n");
 
-                add_decl(
-                    impls,
-                    opt_impl.clone(),
-                    target_info,
-                    format!(
-                        r#"/// A tag named {tag_name}, with the given payload.
+            add_decl(
+                impls,
+                opt_impl.clone(),
+                target_info,
+                format!(
+                    r#"/// A tag named {tag_name}, with the given payload.
     pub fn {tag_name}({args}) -> Self {{
         Self {{
 {fields}
         }}
     }}"#,
-                    ),
-                );
-            }
+                ),
+            );
+
             {
+                // Return a tuple
+                let ret_type = {
+                    let joined = field_types.join(", ");
+
+                    if field_types.len() == 1 {
+                        joined
+                    } else {
+                        format!("({joined})")
+                    }
+                };
+                let ret_expr = {
+                    let joined = field_access.join(", ");
+
+                    if field_access.len() == 1 {
+                        joined
+                    } else {
+                        format!("({joined})")
+                    }
+                };
+
                 add_decl(
                     impls,
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
-        /// has no payload, this does nothing and is only here for completeness.
-        pub fn into_{tag_name}(self) {{
-            ()
-        }}"#,
+                        r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
+    /// convert it to `{tag_name}`'s payload.
+    pub fn into_{tag_name}(self) -> {ret_type} {{
+        {ret_expr}
+    }}"#,
                     ),
                 );
+            }
+
+            {
+                // Return a tuple
+                let ret_type = {
+                    let joined = field_types
+                        .iter()
+                        .map(|field_type| format!("&{field_type}"))
+                        .collect::<Vec<String>>()
+                        .join(", ");
+
+                    if field_types.len() == 1 {
+                        joined
+                    } else {
+                        format!("({joined})")
+                    }
+                };
+                let ret_expr = {
+                    let joined = field_access
+                        .iter()
+                        .map(|field| format!("&{field}"))
+                        .collect::<Vec<String>>()
+                        .join(", ");
+
+                    if field_access.len() == 1 {
+                        joined
+                    } else {
+                        format!("({joined})")
+                    }
+                };
 
                 add_decl(
                     impls,
                     opt_impl,
                     target_info,
                     format!(
-                        r#"/// Other `as` methods return a payload, but since the {tag_name} tag
-        /// has no payload, this does nothing and is only here for completeness.
-        pub fn as_{tag_name}(&self) {{
-            ()
-        }}"#,
+                        r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
+    /// convert it to `{tag_name}`'s payload.
+    pub fn as_{tag_name}(&self) -> {ret_type} {{
+        {ret_expr}
+    }}"#,
                     ),
                 );
             }

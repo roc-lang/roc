@@ -451,7 +451,7 @@ fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagId, Union> {
     let mut ctors = MutMap::default();
 
     for row in matrix {
-        if let Some(Ctor(union, id, _)) = row.get(row.len() - 1) {
+        if let Some(Ctor(union, id, _)) = row.last() {
             ctors.insert(*id, union.clone());
         }
     }

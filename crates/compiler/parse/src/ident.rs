@@ -293,7 +293,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
 /// a `@Token` opaque
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
-    debug_assert_eq!(buffer.get(0), Some(&b'@'));
+    debug_assert_eq!(buffer.first(), Some(&b'@'));
     use encode_unicode::CharExt;
 
     let bad_ident = BadIdent::BadOpaqueRef;
