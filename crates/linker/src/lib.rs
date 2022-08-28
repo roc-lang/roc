@@ -1892,7 +1892,7 @@ pub fn surgery(
     let out_gen_start = Instant::now();
 
     let mut offset = 0;
-    let output = match target.binary_format {
+    match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             surgery_elf(verbose, &md, &mut exec_mmap, &mut offset, app_obj)
         }
@@ -1961,8 +1961,6 @@ pub fn surgery(
         );
         report_timing("Total", total_duration);
     }
-
-    output
 }
 
 #[allow(clippy::too_many_arguments)]

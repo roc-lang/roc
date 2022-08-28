@@ -202,7 +202,7 @@ pub fn constrain_expr(
                     let field_var = field.var;
                     let loc_field_expr = &field.loc_expr;
                     let (field_type, field_con) =
-                        constrain_field(constraints, env, field_var, &*loc_field_expr);
+                        constrain_field(constraints, env, field_var, loc_field_expr);
 
                     field_vars.push(field_var);
                     field_types.insert(label.clone(), RecordField::Required(field_type));

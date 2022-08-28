@@ -1441,7 +1441,7 @@ where
 {
     debug_assert_ne!(word, b'\n');
 
-    move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
+    move |_arena: &'a Bump, state: State<'a>| match state.bytes().first() {
         Some(x) if *x == word => {
             let state = state.advance(1);
             Ok((MadeProgress, (), state))
