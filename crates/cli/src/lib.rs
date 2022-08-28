@@ -132,7 +132,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
-        .about("Run the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
+        .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
