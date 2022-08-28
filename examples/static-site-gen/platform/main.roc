@@ -6,4 +6,4 @@ platform "static-site-gen"
     provides [transformFileContentForHost]
 
 transformFileContentForHost : List U8 -> Result (List U8) Str
-transformFileContentForHost = transformFileContent
+transformFileContentForHost = \list -> transformFileContent list

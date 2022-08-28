@@ -2,7 +2,9 @@ use core::ffi::c_void;
 use libc;
 use roc_std::{RocList, RocResult, RocStr};
 use std::env;
+use std::ffi::CStr;
 use std::fs;
+use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 extern "C" {
@@ -47,10 +49,24 @@ pub extern "C" fn rust_main() -> i32 {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    match tag_id {
+        0 => {
+            let slice = CStr::from_ptr(c_ptr as *const c_char);
+            let string = slice.to_str().unwrap();
+            eprintln!("Roc hit a panic: {}", string);
+            std::process::exit(1);
+        }
+        _ => todo!(),
+    }
+}
+
 fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let input_dir = PathBuf::from(input_dirname)
         .canonicalize()
         .map_err(|e| format!("{}: {}", input_dirname, e))?;
+
     let output_dir = PathBuf::from(output_dirname)
         .canonicalize()
         .map_err(|e| format!("{}: {}", output_dirname, e))?;
@@ -94,13 +110,13 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     };
     let roc_content = RocList::from_iter(rust_content);
     let roc_result = unsafe { roc_transformFileContentForHost(roc_content) };
-    dbg!(&roc_result); // TODO: always seem to be Err(""), I'm not sure why.
     match Result::from(roc_result) {
         Ok(roc_output_bytes) => {
             let relpath = input_file
                 .strip_prefix(input_dir)
                 .map_err(|e| e.to_string())?;
-            let output_file = output_dir.join(relpath);
+            let mut output_file = output_dir.join(relpath);
+            output_file.set_extension("html");
             let rust_output_bytes = Vec::from_iter(roc_output_bytes.into_iter());
             fs::write(output_file, &rust_output_bytes).map_err(|e| format!("{}", e))
         }
