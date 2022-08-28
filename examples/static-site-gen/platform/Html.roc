@@ -136,8 +136,8 @@ text = Text
 ## Define a non-standard HTML Element
 ##
 ## You can use this to add elements that are not already supported.
-## For example, if you wanted to add some 90's nostalgia to your
-## web page, you could bring back the obsolete <blink> element:
+## For example, you could bring back the obsolete <blink> element,
+## and add some 90's nostalgia to your web page!
 ##
 ## blink : List Attribute, List Node -> Node
 ## blink = element "blink"
@@ -166,12 +166,19 @@ nodeSize = \node ->
         Element _ size _ _ ->
             size
 
+## Render a Node to an HTML string
+##
+## The output has no whitespace between nodes, to make it small.
+## This is intended for generating full HTML documents, so it
+## automatically adds `<!DOCTYPE html>` to the start of the string.
+## See also `renderWithoutDocType`.
 render : Node -> Str
 render = \node ->
     buffer = Str.reserve "<!DOCTYPE html>" (nodeSize node)
 
     renderHelp buffer node
 
+## Render a Node to a string, without a DOCTYPE tag
 renderWithoutDocType : Node -> Str
 renderWithoutDocType = \node ->
     buffer = Str.reserve "" (nodeSize node)
