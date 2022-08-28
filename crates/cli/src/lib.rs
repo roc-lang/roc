@@ -94,18 +94,18 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let flag_time = Arg::new(FLAG_TIME)
         .long(FLAG_TIME)
-        .help("Prints detailed compilation time information.")
+        .help("Print detailed compilation time information.")
         .required(false);
 
     let flag_linker = Arg::new(FLAG_LINKER)
         .long(FLAG_LINKER)
-        .help("Sets which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+        .help("Set which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
         .possible_values(["surgical", "legacy"])
         .required(false);
 
     let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
         .long(FLAG_PRECOMPILED)
-        .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+        .help("Assume the host has been precompiled and skip recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
         .possible_values(["true", "false"])
         .required(false);
 
@@ -132,7 +132,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
-        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
+        .about("Run the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
@@ -161,7 +161,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
-                    .help("Does not link. Instead just outputs the `.o` file")
+                    .help("Do not link. Instead, just output the `.o` file")
                     .required(false),
             )
             .arg(
@@ -238,7 +238,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
-            .about("Check the code for problems, but doesn’t build or run it")
+            .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
             .arg(
