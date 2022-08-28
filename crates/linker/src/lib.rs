@@ -12,7 +12,6 @@ use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
-use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
@@ -1772,6 +1771,31 @@ fn gen_elf_le(
 //     // TODO
 // }
 
+fn offset_if_uncompressed(range: CompressedFileRange) -> Option<usize> {
+    if let CompressionFormat::None = range.format {
+        Some(range.offset as usize)
+    } else {
+        None
+    }
+}
+
+fn get_section_offset(exec_obj: &object::File, section_name: &str) -> usize {
+    exec_obj
+        .section_by_name(section_name)
+        .unwrap_or_else(|| {
+            internal_error!("There must be a {} section in the executable", section_name)
+        })
+        .compressed_file_range()
+        .ok()
+        .and_then(offset_if_uncompressed)
+        .unwrap_or_else(|| {
+            internal_error!(
+                "Surgical linking does not work with compressed {} section",
+                section_name
+            )
+        })
+}
+
 fn scan_elf_dynamic_deps(
     exec_obj: &object::File,
     md: &mut metadata::Metadata,
@@ -1780,70 +1804,45 @@ fn scan_elf_dynamic_deps(
     exec_data: &[u8],
     verbose: bool,
 ) -> ElfDynamicDeps {
-    let dyn_sec = match exec_obj.section_by_name(".dynamic") {
-        Some(sec) => sec,
-        None => {
-            panic!("There must be a dynamic section in the executable");
-        }
-    };
-    let dyn_offset = match dyn_sec.compressed_file_range() {
-        Ok(
-            range @ CompressedFileRange {
-                format: CompressionFormat::None,
-                ..
-            },
-        ) => range.offset as usize,
-        _ => {
-            panic!("Surgical linking does not work with compressed dynamic section");
-        }
-    };
+    let dyn_offset = get_section_offset(exec_obj, ".dynamic");
+
     md.dynamic_section_offset = dyn_offset as u64;
 
-    let dynstr_sec = match exec_obj.section_by_name(".dynstr") {
-        Some(sec) => sec,
-        None => {
-            panic!("There must be a dynstr section in the executable");
-        }
-    };
-    let dynstr_data = match dynstr_sec.uncompressed_data() {
-        Ok(data) => data,
-        Err(err) => {
-            panic!("Failed to load dynstr section: {}", err);
-        }
-    };
+    let dynstr_data = exec_obj
+        .section_by_name(".dynstr")
+        .unwrap_or_else(|| internal_error!("There must be a dynstr section in the executable"))
+        .uncompressed_data()
+        .unwrap_or_else(|err| internal_error!("Failed to load dynstr section: {}", err));
 
     let shared_lib_filename = shared_lib.file_name();
 
     let mut dyn_lib_index = 0;
     let mut shared_lib_index = None;
     loop {
-        let dyn_tag = u64::from_le_bytes(
-            <[u8; 8]>::try_from(
-                &exec_data[dyn_offset + dyn_lib_index * 16..dyn_offset + dyn_lib_index * 16 + 8],
-            )
-            .unwrap(),
-        );
-        if dyn_tag == 0 {
-            break;
-        } else if dyn_tag == 1 {
-            let dynstr_off = u64::from_le_bytes(
-                <[u8; 8]>::try_from(
-                    &exec_data
-                        [dyn_offset + dyn_lib_index * 16 + 8..dyn_offset + dyn_lib_index * 16 + 16],
-                )
-                .unwrap(),
-            ) as usize;
-            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
-            let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-            if Path::new(c_str).file_name() == shared_lib_filename {
-                shared_lib_index = Some(dyn_lib_index);
-                if verbose {
-                    println!(
-                        "Found shared lib in dynamic table at index: {}",
-                        dyn_lib_index
-                    );
+        let start = dyn_offset + dyn_lib_index * 16;
+        let dyn_tag = u64::from_le_bytes(exec_data[start..][..8].try_into().unwrap());
+
+        match dyn_tag {
+            0 => break,
+            1 => {
+                // See if it's name is our shared lib filename
+                let offset_bytes = &exec_data[start + 8..][..8];
+                let dynstr_offset = u64::from_le_bytes(offset_bytes.try_into().unwrap());
+
+                let c_buf = dynstr_data[dynstr_offset as usize..].as_ptr() as *const c_char;
+                let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
+
+                if Path::new(c_str).file_name() == shared_lib_filename {
+                    shared_lib_index = Some(dyn_lib_index);
+                    if verbose {
+                        println!(
+                            "Found shared lib in dynamic table at index: {}",
+                            dyn_lib_index
+                        );
+                    }
                 }
             }
+            _ => { /* ignored */ }
         }
 
         dyn_lib_index += 1;
@@ -1855,81 +1854,62 @@ fn scan_elf_dynamic_deps(
     }
     let shared_lib_index = shared_lib_index.unwrap();
 
-    let symtab_sec = match exec_obj.section_by_name(".symtab") {
-        Some(sec) => sec,
-        None => {
-            panic!("There must be a symtab section in the executable");
-        }
-    };
-    let symtab_offset = match symtab_sec.compressed_file_range() {
-        Ok(
-            range @ CompressedFileRange {
-                format: CompressionFormat::None,
-                ..
-            },
-        ) => range.offset as usize,
-        _ => {
-            panic!("Surgical linking does not work with compressed symtab section");
-        }
-    };
+    let symtab_sec = exec_obj
+        .section_by_name(".symtab")
+        .unwrap_or_else(|| internal_error!("There must be a symtab section in the executable"));
+
+    let symtab_offset = symtab_sec
+        .compressed_file_range()
+        .ok()
+        .and_then(offset_if_uncompressed)
+        .unwrap_or_else(|| {
+            internal_error!("Surgical linking does not work with compressed symtab section")
+        });
+
     md.symbol_table_section_offset = symtab_offset as u64;
     md.symbol_table_size = symtab_sec.size();
 
-    let dynsym_sec = match exec_obj.section_by_name(".dynsym") {
-        Some(sec) => sec,
-        None => {
-            panic!("There must be a dynsym section in the executable");
-        }
-    };
-    let dynsym_offset = match dynsym_sec.compressed_file_range() {
-        Ok(
-            range @ CompressedFileRange {
-                format: CompressionFormat::None,
-                ..
-            },
-        ) => range.offset as usize,
-        _ => {
-            panic!("Surgical linking does not work with compressed dynsym section");
-        }
-    };
-    md.dynamic_symbol_table_section_offset = dynsym_offset as u64;
+    md.dynamic_symbol_table_section_offset = get_section_offset(exec_obj, ".dynsym") as u64;
 
-    let mut got_sections: Vec<(usize, usize)> = vec![];
-    for sec in exec_obj
+    let got_sections: Vec<(usize, usize)> = exec_obj
         .sections()
-        .filter(|sec| sec.name().is_ok() && sec.name().unwrap().starts_with(".got"))
-    {
-        match sec.compressed_file_range() {
-            Ok(
-                range @ CompressedFileRange {
-                    format: CompressionFormat::None,
-                    ..
-                },
-            ) => got_sections.push((range.offset as usize, range.uncompressed_size as usize)),
-            _ => {
-                panic!("Surgical linking does not work with compressed got sections");
-            }
-        }
-    }
+        .filter(|sec| sec.name().unwrap_or_default().starts_with(".got"))
+        .map(|sec| {
+            let range = sec
+                .compressed_file_range()
+                .ok()
+                .and_then(|range| {
+                    if let CompressionFormat::None = range.format {
+                        Some(range)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| {
+                    internal_error!("Surgical linking does not work with compressed got sections")
+                });
 
-    let got_app_syms: Vec<(String, usize)> = (match exec_obj.dynamic_relocations() {
-        Some(relocs) => relocs,
-        None => {
+            (range.offset as usize, range.uncompressed_size as usize)
+        })
+        .collect();
+
+    let got_app_syms: Vec<(String, usize)> = exec_obj
+        .dynamic_relocations()
+        .unwrap_or_else(|| {
             eprintln!("Executable never calls any application functions.");
-            panic!("No work to do. Probably an invalid input.");
-        }
-    })
-    .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(6) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+            internal_error!("No work to do. Probably an invalid input.");
+        })
+        .filter_map(|(_, reloc)| {
+            if let RelocationKind::Elf(6) = reloc.kind() {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+                    }
                 }
             }
-        }
-        None
-    })
-    .collect();
+            None
+        })
+        .collect();
 
     ElfDynamicDeps {
         got_app_syms,
