@@ -376,17 +376,6 @@ addAndStringify = \{ birds, iguanas: lizards } ->
 In this version, we created a `lizards` def that's assigned to the record's `iguanas` field.
 (We could also do something similar with the `birds` field if we like.)
 
-It's possible to destructure a record while still naming it. Here's an example where we
-use the `as` keyword to name the record `counts` while also destructuring its fields:
-
-```coffee
-addAndStringify = \{ iguanas: lizards } as counts ->
-    Num.toStr (counts.birds + lizards)
-```
-
-Notice that here we didn't bother destructuring the `birds` field. You can always omit fields
-from a destructure if you aren't going to use them!
-
 Finally, destructuring can be used in defs too:
 
 ```coffee
