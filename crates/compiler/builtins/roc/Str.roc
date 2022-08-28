@@ -130,73 +130,111 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
 ## Returns `True` if the string is empty, and `False` otherwise.
 ##
-## >>> Str.isEmpty "hi!"
+##     Str.isEmpty "hi!" # False
 ##
-## >>> Str.isEmpty ""
+##     Str.isEmpty "" # True
 isEmpty : Str -> Bool
+
+## Combines two strings.
+##
+##     Str.concat "ab" "cd" # "abcd"
+##
+##     Str.concat "hello" "" # "hello"
+##
+##     Str.concat "" "" # ""
 concat : Str, Str -> Str
 
-## Combine a list of strings into a single string, with a separator
+## Combines a list of strings into a single string, with a separator
 ## string in between each.
 ##
-## >>> Str.joinWith ["one", "two", "three"] ", "
+##     Str.joinWith ["one", "two", "three"] ", " # "one, two, three"
+##
+##     Str.joinWith [] ", " # ""
 joinWith : List Str, Str -> Str
 
-## Split a string around a separator.
+## Splits a string around a separator.
 ##
-## >>> Str.split "1,2,3" ","
+##     Str.split "a/b/c" "/" # ["a", "b", "c"]
 ##
-## Passing `""` for the separator is not useful; it returns the original string
-## wrapped in a list.
+## Passing `""` for the separator returns the original string wrapped in a list.
 ##
-## >>> Str.split "1,2,3" ""
+##     Str.split "a/b/c" "" # ["a/b/c"]
 ##
-## To split a string into its individual graphemes, use `Str.graphemes`
+## To split a string into its individual graphemes, use `Str.graphemes` instead.
 split : Str, Str -> List Str
+
+## Repeats a string the given number of times.
+##
+##     Str.repeat "z" 3 # "zzz"
+##
+##     Str.repeat "na" 8 # "nananananananana"
+##
+## Returns `""` when given `""` for the string or `0` for the count.
+##
+##     Str.repeat "" 10 # ""
+##
+##     Str.repeat "anything" 0 # ""
 repeat : Str, Nat -> Str
 
-## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## Counts the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
 ## in the string.
 ##
-##     Str.countGraphemes "Roc!"   # 4
-##     Str.countGraphemes "‰∏ÉÂ∑ßÊùø" # 3
-##     Str.countGraphemes "üïä"     # 1
+## Note that the number of extended grapheme clusters can be different from the number
+## of visual glyphs rendered! Consider the following examples:
+##
+##     Str.countGraphemes "Roc" # 3
+##     Str.countGraphemes "👩‍👩‍👦‍👦"  # 4
+##     Str.countGraphemes "🕊"  # 1
+##
+## Note that "👩‍👩‍👦‍👦" takes up 4 graphemes (even though visually it appears as a single
+## glyph) because under the hood it's represented using an emoji modifier sequence.
+## In contrast, "🕊" only takes up 1 grapheme because under the hood it's represented
+## using a single Unicode code point.
 countGraphemes : Str -> Nat
 
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## If the string begins with a [Unicode scalar value](https://unicode.org/glossary/#unicode_scalar_value)
 ## equal to the given [U32], return `True`. Otherwise return `False`.
 ##
 ## If the given [Str] is empty, or if the given [U32] is not a valid
 ## code point, this will return `False`.
 ##
-## **Performance Note:** This runs slightly faster than [Str.startsWith], so
-## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
-## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)
-## This will not work for graphemes which take up multiple code points, however;
-## `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error because 👩‍👩‍👦‍👦 takes up
-## multiple code points and cannot be represented as a single [U32].
-## You'd need to use `Str.startsWithScalar "🕊"` instead.
+##     Str.startsWithScalar "鹏 means 'roc'" 40527 # True because "鹏" is Unicode scalar 40527
+##
+##     Str.startsWithScalar "9" 9 # False because the Unicode scalar for "9" is 57, not 9
+##
+##     Str.startsWithScalar "" 40527 # False
 startsWithScalar : Str, U32 -> Bool
 
-## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## Return a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
 ## in the given string.
 ##
-## (Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## (Roc strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
 ## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
+##
+##     Str.toScalars "Roc" # [82, 111, 99]
+##
+##     Str.toScalars "鹏" # [40527]
+##
+##     Str.toScalars "சி" # [2970, 3007]
+##
+##     Str.toScalars "🐦" # [128038]
+##
+##     Str.toScalars "👩‍👩‍👦‍👦" # [128105, 8205, 128105, 8205, 128102, 8205, 128102]
+##
+##     Str.toScalars "" # []
 toScalars : Str -> List U32
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
 ##
-## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
+##     Str.toUtf8 "Roc" # [82, 111, 99]
 ##
-## >>> Str.toUtf8 "Roc"
+##     Str.toUtf8 "鹏" # [233, 185, 143]
 ##
-## >>> Str.toUtf8 "鹏"
+##     Str.toUtf8 "சி" # [224, 174, 154, 224, 174, 191]
 ##
-## >>> Str.toUtf8 "🐦"
+##     Str.toUtf8 "🐦" # [240, 159, 144, 166]
 toUtf8 : Str -> List U8
 
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
