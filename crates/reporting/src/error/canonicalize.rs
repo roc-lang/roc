@@ -972,7 +972,7 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(original_opaque),
                     alloc.reflow("."),
                 ]),
-                alloc.reflow("Ability specializations can only provide implementations for one opauqe type, since all opaque types are different!"),
+                alloc.reflow("Ability specializations can only provide implementations for one opaque type, since all opaque types are different!"),
             ]);
             title = "OVERLOADED SPECIALIZATION".to_string();
             severity = Severity::Warning;
