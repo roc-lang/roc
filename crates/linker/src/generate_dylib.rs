@@ -28,7 +28,7 @@ fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Re
 
     let dummy_obj_file = Builder::new()
         .prefix("roc_lib")
-        .suffix(".o")
+        .suffix(".obj")
         .tempfile()
         .unwrap_or_else(|e| panic!("{}", e));
     let dummy_obj_file = dummy_obj_file.path();
@@ -49,6 +49,7 @@ fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Re
             unreachable!()
         }
     };
+
     let obj_arch = match target.architecture {
         target_lexicon::Architecture::X86_64 => Architecture::X86_64,
         _ => {
@@ -109,7 +110,7 @@ fn create_dylib_pe(target: &Triple, custom_names: &[String]) -> object::read::Re
         }
     }
 
-    Ok(std::fs::read(dummy_obj_file).unwrap())
+    Ok(std::fs::read(dummy_dll_file).unwrap())
 }
 
 #[derive(Debug)]
@@ -503,4 +504,54 @@ fn create_dylib_elf64(in_data: &[u8], custom_names: &[String]) -> object::read::
     debug_assert_eq!(writer.reserved_len(), writer.len());
 
     Ok(out_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use object::Object;
+
+    fn check_exports(target: &Triple) {
+        let custom_names = ["foo".to_string(), "bar".to_string()];
+
+        let bytes = generate(target, &custom_names).unwrap();
+
+        std::fs::write("/home/folkertdev/roc/windows-dummy/example.dll", &bytes);
+
+        let object = object::File::parse(bytes.as_slice()).unwrap();
+
+        let exports = object.exports().unwrap();
+        for custom in custom_names {
+            assert!(
+                exports.iter().any(|e| e.name() == custom.as_bytes()),
+                "missing {}",
+                &custom
+            );
+        }
+    }
+
+    #[test]
+    fn check_exports_elf64() {
+        let target = target_lexicon::Triple {
+            architecture: target_lexicon::Architecture::X86_64,
+            operating_system: target_lexicon::OperatingSystem::Linux,
+            binary_format: target_lexicon::BinaryFormat::Elf,
+            ..target_lexicon::Triple::host()
+        };
+
+        check_exports(&target);
+    }
+
+    #[test]
+    fn check_exports_coff() {
+        let target = target_lexicon::Triple {
+            architecture: target_lexicon::Architecture::X86_64,
+            operating_system: target_lexicon::OperatingSystem::Windows,
+            binary_format: target_lexicon::BinaryFormat::Coff,
+            ..target_lexicon::Triple::host()
+        };
+
+        check_exports(&target);
+    }
 }
