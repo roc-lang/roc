@@ -3726,6 +3726,10 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
+        (RocReturn::ByPointer, CCReturn::ByPointer) => {
+            // Both return by pointer but Roc puts it at the end and C puts it at the beginning
+            (&params[1..], &param_types[..param_types.len() - 1])
+        }
         _ => (&params[..], &param_types[..]),
     };
 
