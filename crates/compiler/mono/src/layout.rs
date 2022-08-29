@@ -137,6 +137,7 @@ impl<'a> LayoutCache<'a> {
         value
     }
 
+    #[inline(always)]
     fn get_help<Result: Copy>(
         cache: &[CacheLayer<Result>],
         subs: &Subs,
@@ -154,6 +155,7 @@ impl<'a> LayoutCache<'a> {
         None
     }
 
+    #[inline(always)]
     fn insert_help<Result: std::fmt::Debug + Copy>(
         cache: &mut [CacheLayer<Result>],
         subs: &Subs,
@@ -177,10 +179,12 @@ impl<'a> LayoutCache<'a> {
         }
     }
 
+    #[inline(always)]
     fn get(&self, subs: &Subs, var: Variable) -> Option<(LayoutResult<'a>, CacheMeta)> {
         Self::get_help(&self.cache, subs, var)
     }
 
+    #[inline(always)]
     fn get_raw_function(
         &self,
         subs: &Subs,
@@ -189,6 +193,7 @@ impl<'a> LayoutCache<'a> {
         Self::get_help(&self.raw_function_cache, subs, var)
     }
 
+    #[inline(always)]
     fn insert(
         &mut self,
         subs: &Subs,
@@ -199,6 +204,7 @@ impl<'a> LayoutCache<'a> {
         Self::insert_help(&mut self.cache, subs, var, result, cache_metadata)
     }
 
+    #[inline(always)]
     fn insert_raw_function(
         &mut self,
         subs: &Subs,
@@ -215,6 +221,7 @@ impl<'a> LayoutCache<'a> {
         )
     }
 
+    #[inline(always)]
     pub fn snapshot(&mut self) -> CacheSnapshot {
         debug_assert_eq!(self.raw_function_cache.len(), self.cache.len());
         self.cache.push(Default::default());
@@ -224,6 +231,7 @@ impl<'a> LayoutCache<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn rollback_to(&mut self, snapshot: CacheSnapshot) {
         let CacheSnapshot { layer } = snapshot;
 
@@ -1879,6 +1887,7 @@ impl<'a, 'b> Env<'a, 'b> {
         true
     }
 
+    #[inline(always)]
     fn cached_or(
         &mut self,
         var: Variable,
@@ -1900,6 +1909,7 @@ impl<'a, 'b> Env<'a, 'b> {
         Cacheable(result, criteria)
     }
 
+    #[inline(always)]
     fn cached_raw_function_or(
         &mut self,
         var: Variable,
