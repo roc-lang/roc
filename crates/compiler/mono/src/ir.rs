@@ -5671,26 +5671,14 @@ fn convert_tag_union<'a>(
             ) {
                 Layout::Union(ul) => ul,
                 other => internal_error!(
-                    "unexpected layout {:?} for {:?} ({:?})",
+                    "unexpected layout {:?} for {:?}",
                     other,
                     roc_types::subs::SubsFmtContent(
                         env.subs.get_content_without_compacting(variant_var),
                         env.subs
-                    ),
-                    (
-                        variant_var,
-                        env.subs.get_root_key_without_compacting(variant_var)
                     )
                 ),
             };
-
-            dbg!((
-                &union_layout,
-                roc_types::subs::SubsFmtContent(
-                    env.subs.get_content_without_compacting(variant_var),
-                    env.subs
-                )
-            ));
 
             use WrappedVariant::*;
             let (tag, union_layout) = match variant {
