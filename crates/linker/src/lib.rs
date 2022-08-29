@@ -51,22 +51,35 @@ fn report_timing(label: &str, duration: Duration) {
 }
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
-    matches!(
-        (link_type, target),
-        (
-            LinkType::Executable,
+    if let LinkType::Executable = link_type {
+        match target {
             Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Linux,
                 binary_format: target_lexicon::BinaryFormat::Elf,
                 ..
-            } // | Triple {
-              //     operating_system: target_lexicon::OperatingSystem::Darwin,
-              //     binary_format: target_lexicon::BinaryFormat::Macho,
-              //     ..
-              // }
-        )
-    )
+            } => true,
+
+            // macho support is incomplete
+            Triple {
+                operating_system: target_lexicon::OperatingSystem::Darwin,
+                binary_format: target_lexicon::BinaryFormat::Macho,
+                ..
+            } => false,
+
+            // windows support is incomplete
+            Triple {
+                architecture: target_lexicon::Architecture::X86_64,
+                operating_system: target_lexicon::OperatingSystem::Windows,
+                binary_format: target_lexicon::BinaryFormat::Coff,
+                ..
+            } => false,
+
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 pub fn build_and_preprocess_host(
@@ -77,7 +90,7 @@ pub fn build_and_preprocess_host(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
-    let dummy_lib = host_input_path.with_file_name("libapp.so");
+    let dummy_lib = host_input_path.with_file_name("libapp.obj");
     generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
     let dynhost = host_input_path.with_file_name("dynhost");
@@ -2916,7 +2929,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_undefined_symbols() {
+    fn collect_undefined_symbols_elf() {
         let object = object::File::parse(ELF64_DYNHOST).unwrap();
 
         let mut triple = Triple::host();
