@@ -2659,7 +2659,7 @@ fn update<'a>(
                             ident_ids,
                             subs,
                             module_timing,
-                            layout_cache,
+                            layout_cache: _layout_cache,
                             procs_base: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
@@ -2670,8 +2670,9 @@ fn update<'a>(
                         }
                         state.timings.insert(module_id, module_timing);
 
-                        if cfg!(debug_assertions) {
-                            log_layout_stats(module_id, &layout_cache);
+                        #[cfg(debug_assertions)]
+                        {
+                            log_layout_stats(module_id, &_layout_cache);
                         }
                     }
 

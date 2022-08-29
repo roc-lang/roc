@@ -88,7 +88,8 @@ pub struct CacheStatistics {
 
 macro_rules! inc_stat {
     ($stats:expr, $field:ident) => {
-        if cfg!(debug_assertions) {
+        #[cfg(debug_assertions)]
+        {
             $stats.$field += 1;
         }
     };
