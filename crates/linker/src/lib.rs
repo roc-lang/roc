@@ -2673,31 +2673,33 @@ pub fn surgery_elf(
     let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
 
-    let new_rodata_section = &mut section_headers[section_headers.len() - 2];
-    new_rodata_section.sh_name = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    new_rodata_section.sh_flags = endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64);
-    new_rodata_section.sh_addr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_section.sh_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
-    new_rodata_section.sh_size = endian::U64::new(LittleEndian, new_rodata_section_size);
-    new_rodata_section.sh_link = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_info = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_addralign = endian::U64::new(LittleEndian, 16);
-    new_rodata_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+    // set the new rodata section header
+    section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
+        sh_name: endian::U32::new(LittleEndian, 0),
+        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64),
+        sh_addr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        sh_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
+        sh_size: endian::U64::new(LittleEndian, new_rodata_section_size),
+        sh_link: endian::U32::new(LittleEndian, 0),
+        sh_info: endian::U32::new(LittleEndian, 0),
+        sh_addralign: endian::U64::new(LittleEndian, 16),
+        sh_entsize: endian::U64::new(LittleEndian, 0),
+    };
 
-    let new_text_section_index = section_headers.len() - 1;
-    let new_text_section = &mut section_headers[new_text_section_index];
-    new_text_section.sh_name = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    new_text_section.sh_flags =
-        endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64);
-    new_text_section.sh_addr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_section.sh_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
-    new_text_section.sh_size = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_section.sh_link = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_info = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_addralign = endian::U64::new(LittleEndian, 16);
-    new_text_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+    // set the new text section header
+    section_headers[section_headers.len() - 1] = elf::SectionHeader64 {
+        sh_name: endian::U32::new(LittleEndian, 0),
+        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
+        sh_addr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        sh_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
+        sh_size: endian::U64::new(LittleEndian, new_text_section_size),
+        sh_link: endian::U32::new(LittleEndian, 0),
+        sh_info: endian::U32::new(LittleEndian, 0),
+        sh_addralign: endian::U64::new(LittleEndian, 16),
+        sh_entsize: endian::U64::new(LittleEndian, 0),
+    };
 
     // Reload and update file header and size.
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(exec_mmap, 0);
@@ -2710,25 +2712,31 @@ pub fn surgery_elf(
         ph_offset as usize,
         ph_num as usize,
     );
-    let new_rodata_segment = &mut program_headers[program_headers.len() - 2];
-    new_rodata_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    new_rodata_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R);
-    new_rodata_segment.p_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
-    new_rodata_segment.p_vaddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_segment.p_paddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_segment.p_filesz = endian::U64::new(LittleEndian, new_rodata_section_size);
-    new_rodata_segment.p_memsz = endian::U64::new(LittleEndian, new_rodata_section_virtual_size);
-    new_rodata_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
 
-    let new_text_segment = &mut program_headers[program_headers.len() - 1];
-    new_text_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    new_text_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X);
-    new_text_segment.p_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
-    new_text_segment.p_vaddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_segment.p_paddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_segment.p_filesz = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_segment.p_memsz = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
+    // set the new rodata section program header
+    program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
+        p_flags: endian::U32::new(LittleEndian, elf::PF_R),
+        p_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
+        p_vaddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        p_paddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        p_filesz: endian::U64::new(LittleEndian, new_rodata_section_size),
+        p_memsz: endian::U64::new(LittleEndian, new_rodata_section_virtual_size),
+        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+    };
+
+    // set the new text section program header
+    let new_text_section_index = program_headers.len() - 1;
+    program_headers[new_text_section_index] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
+        p_flags: endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X),
+        p_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
+        p_vaddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        p_paddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        p_filesz: endian::U64::new(LittleEndian, new_text_section_size),
+        p_memsz: endian::U64::new(LittleEndian, new_text_section_size),
+        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+    };
 
     // Update calls from platform and dynamic symbols.
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
