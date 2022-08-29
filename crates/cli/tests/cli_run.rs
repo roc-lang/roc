@@ -548,6 +548,16 @@ mod cli_run {
                 use_valgrind: false,
             }
         },
+        static_site_gen: "static-site-gen" => {
+            Example {
+                filename: "app.roc",
+                executable_filename: "app",
+                stdin: &[],
+                input_paths: &["input", "output"],
+                expected_ending: "hello.txt -> hello.html\n",
+                use_valgrind: false,
+            }
+        },
     }
 
     macro_rules! benchmarks {

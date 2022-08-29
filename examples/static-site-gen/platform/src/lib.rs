@@ -112,13 +112,24 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     let roc_result = unsafe { roc_transformFileContentForHost(roc_content) };
     match Result::from(roc_result) {
         Ok(roc_output_bytes) => {
-            let relpath = input_file
+            let input_relpath = input_file
                 .strip_prefix(input_dir)
-                .map_err(|e| e.to_string())?;
-            let mut output_file = output_dir.join(relpath);
-            output_file.set_extension("html");
+                .map_err(|e| e.to_string())?
+                .to_path_buf();
+
+            let mut output_relpath = input_relpath.clone();
+            output_relpath.set_extension("html");
+
+            let output_file = output_dir.join(&output_relpath);
             let rust_output_bytes = Vec::from_iter(roc_output_bytes.into_iter());
-            fs::write(output_file, &rust_output_bytes).map_err(|e| format!("{}", e))
+            fs::write(&output_file, &rust_output_bytes).map_err(|e| format!("{}", e))?;
+
+            println!(
+                "{} -> {}",
+                input_relpath.display(),
+                output_relpath.display()
+            );
+            Ok(())
         }
         Err(roc_error_str) => Err(format!(
             "Error transforming {}: {}",
