@@ -1429,14 +1429,19 @@ impl<'a, 'i> Env<'a, 'i> {
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
-    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
+    fn unify(
+        &mut self,
+        layout_cache: &mut LayoutCache,
+        left: Variable,
+        right: Variable,
+    ) -> Result<(), UnificationFailed> {
         debug_assert_ne!(
             self.home,
             ModuleId::DERIVED_SYNTH,
             "should never be monomorphizing the derived synth module!"
         );
 
-        roc_late_solve::unify(
+        let changed_variables = roc_late_solve::unify(
             self.home,
             self.arena,
             self.subs,
@@ -1445,7 +1450,11 @@ impl<'a, 'i> Env<'a, 'i> {
             self.exposed_by_module,
             left,
             right,
-        )
+        )?;
+
+        layout_cache.invalidate(changed_variables);
+
+        Ok(())
     }
 }
 
@@ -2455,7 +2464,7 @@ fn from_can_let<'a>(
                         // Make sure rigid variables in the annotation are converted to flex variables.
                         instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
-                        let _res = env.unify(var, def.expr_var);
+                        let _res = env.unify(layout_cache, var, def.expr_var);
 
                         with_hole(
                             env,
@@ -2489,7 +2498,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res = env.unify(var, new_def_expr_var);
+                            let _res = env.unify(layout_cache, var, new_def_expr_var);
 
                             stmt = with_hole(
                                 env,
@@ -3076,7 +3085,7 @@ fn specialize_proc_help<'a>(
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
-    let _unified = env.unify(partial_proc.annotation, fn_var);
+    let _unified = env.unify(layout_cache, partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -5661,8 +5670,27 @@ fn convert_tag_union<'a>(
                 "Wrapped"
             ) {
                 Layout::Union(ul) => ul,
-                _ => unreachable!(),
+                other => internal_error!(
+                    "unexpected layout {:?} for {:?} ({:?})",
+                    other,
+                    roc_types::subs::SubsFmtContent(
+                        env.subs.get_content_without_compacting(variant_var),
+                        env.subs
+                    ),
+                    (
+                        variant_var,
+                        env.subs.get_root_key_without_compacting(variant_var)
+                    )
+                ),
             };
+
+            dbg!((
+                &union_layout,
+                roc_types::subs::SubsFmtContent(
+                    env.subs.get_content_without_compacting(variant_var),
+                    env.subs
+                )
+            ));
 
             use WrappedVariant::*;
             let (tag, union_layout) = match variant {
