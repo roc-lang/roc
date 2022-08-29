@@ -24,6 +24,7 @@ roc_solve_problem = { path = "../solve_problem" }
 roc_late_solve = { path = "../late_solve" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
+roc_tracing = { path = "../../tracing" }
 roc_reporting = { path = "../../reporting" }
 roc_debug_flags = { path = "../debug_flags" }
 ven_pretty = { path = "../../vendor/pretty" }
