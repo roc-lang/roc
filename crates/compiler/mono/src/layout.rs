@@ -50,13 +50,13 @@ struct CacheMeta {
 
 impl CacheMeta {
     #[inline(always)]
-    fn to_criteria(&self) -> CacheCriteria {
+    fn to_criteria(self) -> CacheCriteria {
         let CacheMeta {
             has_recursive_structure,
         } = self;
         CacheCriteria {
             has_naked_recursion_pointer: false,
-            has_recursive_structure: *has_recursive_structure,
+            has_recursive_structure,
         }
     }
 }
