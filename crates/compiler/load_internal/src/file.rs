@@ -461,9 +461,11 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
+                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
+                    && state.module_cache.expectations.contains_key(&module_id);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
-                    execution_mode: state.exec_mode,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -475,6 +477,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    build_expects,
                 }
             }
             Phase::MakeSpecializations => {
@@ -1116,7 +1119,6 @@ enum BuildTask<'a> {
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
-        execution_mode: ExecutionMode,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
@@ -1127,6 +1129,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        build_expects: bool,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -2358,7 +2361,14 @@ fn update<'a>(
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            if !loc_expects.is_empty() {
+            let should_include_expects = !loc_expects.is_empty() && {
+                let modules = state.arc_modules.lock();
+                modules
+                    .package_eq(module_id, state.root_id)
+                    .expect("root or this module is not yet known - that's a bug!")
+            };
+
+            if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
                 let expectations = Expectations {
@@ -4808,7 +4818,6 @@ fn make_specializations<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
-    execution_mode: ExecutionMode,
     solved_subs: Solved<Subs>,
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
@@ -4821,6 +4830,7 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    build_expects: bool,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
 
@@ -5067,11 +5077,8 @@ fn build_pending_specializations<'a>(
             }
             Expectation => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5143,11 +5150,8 @@ fn build_pending_specializations<'a>(
             }
             ExpectationFx => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5422,7 +5426,6 @@ fn run_task<'a>(
         )),
         BuildPendingSpecializations {
             module_id,
-            execution_mode,
             ident_ids,
             decls,
             module_timing,
@@ -5433,9 +5436,9 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            build_expects,
         } => Ok(build_pending_specializations(
             arena,
-            execution_mode,
             solved_subs,
             imported_module_thunks,
             module_id,
@@ -5448,6 +5451,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            build_expects,
         )),
         MakeSpecializations {
             module_id,
