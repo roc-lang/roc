@@ -151,15 +151,16 @@ impl<T, E> RocResult<T, E> {
         matches!(self.tag, RocResultTag::RocErr)
     }
 
-    fn into_payload(mut self) -> RocResultPayload<T, E> {
+    fn into_payload(self) -> RocResultPayload<T, E> {
         let mut value = MaybeUninit::uninit();
-        let ref_mut_value = unsafe { &mut *value.as_mut_ptr() };
 
-        // move the value into our MaybeUninit memory
-        core::mem::swap(&mut self.payload, ref_mut_value);
+        // copy the value into our MaybeUninit memory
+        unsafe {
+            core::ptr::copy_nonoverlapping(&self.payload, value.as_mut_ptr(), 1);
+        }
 
-        // don't run the destructor on self; the `payload` has been moved out
-        // and replaced by uninitialized memory
+        // don't run the destructor on self; the `payload` briefly has two owners
+        // but only `value` is allowed to drop it (after initialization)
         core::mem::forget(self);
 
         unsafe { value.assume_init() }
