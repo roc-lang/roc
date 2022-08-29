@@ -3811,8 +3811,20 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         },
         CCReturn::ByPointer => {
             let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
-
-            env.builder.build_store(out_ptr, value);
+            match roc_return {
+                RocReturn::Return => {
+                    env.builder.build_store(out_ptr, value);
+                }
+                RocReturn::ByPointer => {
+                    // TODO: ideally, in this case, we should pass the C return pointer directly
+                    // into the call_roc_function rather than forcing an extra alloca, load, and
+                    // store!
+                    let value = env
+                        .builder
+                        .build_load(value.into_pointer_value(), "load_roc_result");
+                    env.builder.build_store(out_ptr, value);
+                }
+            }
             env.builder.build_return(None);
         }
         CCReturn::Void => {
