@@ -1216,14 +1216,22 @@ pub fn push_union<'a, L: Label>(
     }
 }
 
-pub fn chase_ext_tag_union<'a>(
-    subs: &'a Subs,
+pub enum ChasedExt {
+    Empty,
+    NonEmpty {
+        variable: Variable,
+        content: Content,
+    },
+}
+
+pub fn chase_ext_tag_union(
+    subs: &'_ Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Result<(), (Variable, &'a Content)> {
+) -> ChasedExt {
     use FlatType::*;
     match subs.get_content_without_compacting(var) {
-        Content::Structure(EmptyTagUnion) => Ok(()),
+        Content::Structure(EmptyTagUnion) => ChasedExt::Empty,
         Content::Structure(TagUnion(tags, ext_var)) => {
             push_union(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
@@ -1241,7 +1249,10 @@ pub fn chase_ext_tag_union<'a>(
 
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
-        content => Err((var, content)),
+        content => ChasedExt::NonEmpty {
+            variable: var,
+            content: *content,
+        },
     }
 }
 

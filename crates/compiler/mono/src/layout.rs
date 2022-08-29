@@ -2712,6 +2712,9 @@ pub fn union_sorted_tags<'a>(
     subs: &Subs,
     target_info: TargetInfo,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
+    use roc_types::pretty_print::ChasedExt;
+    use Content::*;
+
     let var =
         if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
             *structure
@@ -2721,20 +2724,32 @@ pub fn union_sorted_tags<'a>(
 
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(())
-        // Admit type variables in the extension for now. This may come from things that never got
-        // monomorphized, like in
-        //   x : [A]*
-        //   x = A
-        //   x
-        // In such cases it's fine to drop the variable. We may be proven wrong in the future...
-        | Err((_, Content::FlexVar(_) | Content::FlexAbleVar(..) |  Content::RigidVar(_) | Content::RigidAbleVar(..)))
-        | Err((_, Content::RecursionVar { .. })) => {
+        ChasedExt::Empty => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
         }
-        Err((_, Content::Error)) => return Err(LayoutProblem::Erroneous),
-        Err(other) => panic!("invalid content in tag union variable: {:?}", other),
+        ChasedExt::NonEmpty { content, .. } => {
+            match content {
+                FlexVar(_) | FlexAbleVar(..) | RigidVar(_) | RigidAbleVar(..) => {
+                    // Admit type variables in the extension for now. This may come from things that never got
+                    // monomorphized, like in
+                    //   x : [A]*
+                    //   x = A
+                    //   x
+                    // In such cases it's fine to drop the variable. We may be proven wrong in the future...
+                    let opt_rec_var = get_recursion_var(subs, var);
+                    union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
+                }
+                RecursionVar { .. } => {
+                    let opt_rec_var = get_recursion_var(subs, var);
+                    union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
+                }
+
+                Error => return Err(LayoutProblem::Erroneous),
+
+                other => panic!("invalid content in tag union variable: {:?}", other),
+            }
+        }
     };
 
     Ok(result)
@@ -3366,21 +3381,24 @@ pub fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
 
 #[cfg(debug_assertions)]
 pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+    use roc_types::pretty_print::ChasedExt;
+    use Content::*;
+
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(())
-        | Err((
-            _,
-            // Allow flex/rigid to decay away into nothing
-            Content::FlexVar(_)
-            | Content::FlexAbleVar(..)
-            | Content::RigidVar(_)
-            | Content::RigidAbleVar(..)
-            // So that we can continue compiling in the presence of errors
-            | Content::Error,
-        )) => ext_fields.is_empty(),
-        Err(content) => panic!("invalid content in ext_var: {:?}", content),
+        ChasedExt::Empty => ext_fields.is_empty(),
+        ChasedExt::NonEmpty { content, .. } => {
+            match content {
+                // Allow flex/rigid to decay away into nothing
+                FlexVar(_) | FlexAbleVar(..) | RigidVar(_) | RigidAbleVar(..) => {
+                    ext_fields.is_empty()
+                }
+                // So that we can continue compiling in the presence of errors
+                Error => ext_fields.is_empty(),
+                _ => panic!("invalid content in ext_var: {:?}", content),
+            }
+        }
     }
 }
 
