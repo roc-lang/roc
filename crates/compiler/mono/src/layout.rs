@@ -1986,13 +1986,6 @@ macro_rules! cached_or_impl {
 
         if criteria.is_cacheable() {
             // The computed layout is cacheable; insert it.
-            dbg!((
-                $var,
-                roc_types::subs::SubsFmtContent(
-                    $self.subs.get_content_without_compacting($var),
-                    $self.subs
-                )
-            ));
             $self
                 .cache
                 .$insert($self.subs, $var, result, criteria.cache_metadata());
