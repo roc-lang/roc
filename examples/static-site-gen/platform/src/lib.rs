@@ -71,6 +71,10 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| format!("{}: {}", output_dirname, e))?;
 
+    if !output_dir.exists() {
+        fs::create_dir(&output_dir).unwrap();
+    }
+
     let mut input_files: Vec<PathBuf> = vec![];
     find_files(&input_dir, &mut input_files)
         .map_err(|e| format!("Error finding input files: {}", e))?;
