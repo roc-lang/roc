@@ -73,12 +73,40 @@ impl<Result> Default for CacheLayer<Result> {
     }
 }
 
+#[cfg(debug_assertions)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CacheStatistics {
+    pub hits: u64,
+    pub misses: u64,
+    /// How many times we could not cache a calculated layout
+    pub non_insertable: u64,
+    /// How many time we could not reuse a cached layout
+    pub non_reusable: u64,
+    /// How many times an entry was added to the cache
+    pub insertions: u64,
+}
+
+macro_rules! inc_stat {
+    ($stats:expr, $field:ident) => {
+        if cfg!(debug_assertions) {
+            $stats.$field += 1;
+        }
+    };
+}
+
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
     pub target_info: TargetInfo,
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
+
+    /// Statistics on the usage of the layout cache.
+    #[cfg(debug_assertions)]
+    stats: CacheStatistics,
+    #[cfg(debug_assertions)]
+    raw_function_stats: CacheStatistics,
+
     _marker: std::marker::PhantomData<&'a u8>,
 }
 
@@ -92,6 +120,12 @@ impl<'a> LayoutCache<'a> {
             target_info,
             cache,
             raw_function_cache: raw_cache,
+
+            #[cfg(debug_assertions)]
+            stats: CacheStatistics::default(),
+            #[cfg(debug_assertions)]
+            raw_function_stats: CacheStatistics::default(),
+
             _marker: Default::default(),
         }
     }
@@ -253,6 +287,11 @@ impl<'a> LayoutCache<'a> {
 
         self.cache.pop();
         self.raw_function_cache.pop();
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn statistics(&self) -> (CacheStatistics, CacheStatistics) {
+        (self.stats, self.raw_function_stats)
     }
 }
 
@@ -1876,10 +1915,7 @@ impl<'a, 'b> Env<'a, 'b> {
             has_recursive_structure,
         } = cache_metadata;
         if let Some(recursive_structure) = has_recursive_structure {
-            if self.seen.iter().any(|var| {
-                self.subs
-                    .equivalent_without_compacting(*var, recursive_structure)
-            }) {
+            if self.is_seen(recursive_structure) {
                 // If the cached entry references a recursive structure that we're in the process
                 // of visiting currently, we can't use the cached entry, and instead must
                 // recalculate the nested layout, because the nested recursive structure will
@@ -1908,7 +1944,47 @@ impl<'a, 'b> Env<'a, 'b> {
         }
         true
     }
+}
 
+macro_rules! cached_or_impl {
+    ($self:ident, $var:ident, $compute_layout:ident, $get:ident, $insert:ident, $stats:ident) => {{
+        if let Some((result, metadata)) = $self.cache.$get($self.subs, $var) {
+            // cache HIT
+            inc_stat!($self.cache.$stats, hits);
+
+            if $self.can_reuse_cached($var, metadata) {
+                // Happy path - the cached layout can be reused, return it immediately.
+                return Cacheable(result, metadata.to_criteria());
+            } else {
+                // Although we have a cached layout, we cannot readily reuse it at this time. We'll
+                // need to recompute the layout, as done below.
+                inc_stat!($self.cache.$stats, non_reusable);
+            }
+        } else {
+            // cache MISS - compute the layout
+            inc_stat!($self.cache.$stats, misses);
+        }
+
+        let Cacheable(result, criteria) = $compute_layout($self);
+
+        if criteria.is_cacheable() {
+            // The computed layout is cacheable; insert it.
+            $self
+                .cache
+                .$insert($self.subs, $var, result, criteria.cache_metadata());
+            inc_stat!($self.cache.$stats, insertions);
+        } else {
+            // The computed layout is not cacheable. We'll return it with the criteria that made it
+            // non-cacheable.
+            inc_stat!($self.cache.$stats, non_insertable);
+            roc_tracing::debug!(?result, ?$var, "not caching");
+        }
+
+        Cacheable(result, criteria)
+    }};
+}
+
+impl<'a, 'b> Env<'a, 'b> {
     #[inline(always)]
     fn cached_or(
         &mut self,
@@ -1916,19 +1992,11 @@ impl<'a, 'b> Env<'a, 'b> {
         compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> Cacheable<LayoutResult<'a>>,
     ) -> Cacheable<LayoutResult<'a>> {
         if self.is_seen(var) {
+            // Always return recursion pointers directly, NEVER cache them as naked!
             return Cacheable(Ok(Layout::RecursivePointer), NAKED_RECURSION_PTR);
         }
-        if let Some((result, metadata)) = self.cache.get(self.subs, var) {
-            if self.can_reuse_cached(var, metadata) {
-                return Cacheable(result, metadata.to_criteria());
-            }
-        }
-        let Cacheable(result, criteria) = compute_layout(self);
-        if criteria.is_cacheable() {
-            self.cache
-                .insert(self.subs, var, result, criteria.cache_metadata());
-        }
-        Cacheable(result, criteria)
+
+        cached_or_impl!(self, var, compute_layout, get, insert, stats)
     }
 
     #[inline(always)]
@@ -1937,17 +2005,14 @@ impl<'a, 'b> Env<'a, 'b> {
         var: Variable,
         compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> Cacheable<RawFunctionLayoutResult<'a>>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
-        if let Some((result, metadata)) = self.cache.get_raw_function(self.subs, var) {
-            if self.can_reuse_cached(var, metadata) {
-                return Cacheable(result, metadata.to_criteria());
-            }
-        }
-        let Cacheable(result, criteria) = compute_layout(self);
-        if criteria.is_cacheable() {
-            self.cache
-                .insert_raw_function(self.subs, var, result, criteria.cache_metadata());
-        }
-        Cacheable(result, criteria)
+        cached_or_impl!(
+            self,
+            var,
+            compute_layout,
+            get_raw_function,
+            insert_raw_function,
+            raw_function_stats
+        )
     }
 }
 
