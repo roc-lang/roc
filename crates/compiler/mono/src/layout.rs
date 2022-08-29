@@ -1881,6 +1881,7 @@ impl<'a, 'b> Env<'a, 'b> {
                 // but this is not correct; the canonical layout of `[A, B (List r)] as r` is
                 //
                 // Recursive [Unit, (List RecursivePointer)]
+                roc_tracing::debug!(?var, "not reusing cached recursive structure");
                 return false;
             }
         }
