@@ -826,6 +826,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("registers greater than or equal for AArch64");
     }
 
+    fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {
+        todo!("set if overflow for AArch64");
+    }
+
     #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)

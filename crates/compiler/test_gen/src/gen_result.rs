@@ -1,10 +1,8 @@
-#![cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -228,7 +226,7 @@ fn is_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_ok() {
     assert_evals_to!(
         indoc!(
@@ -245,7 +243,7 @@ fn roc_result_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_err() {
     assert_evals_to!(
         indoc!(

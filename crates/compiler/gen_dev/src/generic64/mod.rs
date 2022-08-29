@@ -320,6 +320,8 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
+    fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: GeneralReg);
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -340,6 +342,7 @@ pub struct Backend64Bit<
     // They are likely to be small enough that it is faster to use a vec and linearly scan it or keep it sorted and binary search.
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
+    target_info: TargetInfo,
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -374,6 +377,7 @@ pub fn new_backend_64bit<
     Backend64Bit {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
+        target_info,
         env,
         interns,
         helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
@@ -790,11 +794,62 @@ impl<
         }
     }
 
+    fn build_num_add_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
+    ) {
+        use Builtin::Int;
+
+        let buf = &mut self.buf;
+
+        let struct_size = return_layout.stack_size(self.target_info);
+
+        let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
+
+        match num_layout {
+            Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
+                let dst_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP);
+
+                let overflow_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+                ASM::set_if_overflow(buf, overflow_reg);
+
+                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
+                todo!("addChecked for unsigned integers")
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                todo!("addChecked for f64")
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                todo!("addChecked for f32")
+            }
+            x => todo!("NumAdd: layout, {:?}", x),
+        }
+    }
+
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
+        use Builtin::Int;
+
         match layout {
-            Layout::Builtin(Builtin::Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
+            Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -804,9 +859,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            Layout::Builtin(Builtin::Int(
-                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
-            )) => {
+            Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
