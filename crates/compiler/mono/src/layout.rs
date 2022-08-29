@@ -48,6 +48,19 @@ struct CacheMeta {
     has_recursive_structure: Option<Variable>,
 }
 
+impl CacheMeta {
+    #[inline(always)]
+    fn to_criteria(&self) -> CacheCriteria {
+        let CacheMeta {
+            has_recursive_structure,
+        } = self;
+        CacheCriteria {
+            has_naked_recursion_pointer: false,
+            has_recursive_structure: *has_recursive_structure,
+        }
+    }
+}
+
 /// A single layer of the layout cache.
 /// Snapshots are implemented by operating on new layers, and rollbacks by dropping the latest
 /// layer.
@@ -1907,7 +1920,7 @@ impl<'a, 'b> Env<'a, 'b> {
         }
         if let Some((result, metadata)) = self.cache.get(self.subs, var) {
             if self.can_reuse_cached(var, metadata) {
-                return cacheable(result);
+                return Cacheable(result, metadata.to_criteria());
             }
         }
         let Cacheable(result, criteria) = compute_layout(self);
@@ -1926,7 +1939,7 @@ impl<'a, 'b> Env<'a, 'b> {
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         if let Some((result, metadata)) = self.cache.get_raw_function(self.subs, var) {
             if self.can_reuse_cached(var, metadata) {
-                return cacheable(result);
+                return Cacheable(result, metadata.to_criteria());
             }
         }
         let Cacheable(result, criteria) = compute_layout(self);
