@@ -290,6 +290,22 @@ impl<'a> LayoutCache<'a> {
         self.raw_function_cache.pop();
     }
 
+    /// Invalidates the list of given root variables.
+    /// Usually called after unification, when merged variables with changed contents need to be
+    /// invalidated.
+    pub fn invalidate(&mut self, vars: impl IntoIterator<Item = Variable>) {
+        for var in vars.into_iter() {
+            for layer in self.cache.iter_mut().rev() {
+                layer.0.remove(&var);
+                roc_tracing::debug!(?var, "invalidating cached layout");
+            }
+            for layer in self.raw_function_cache.iter_mut().rev() {
+                layer.0.remove(&var);
+                roc_tracing::debug!(?var, "invalidating cached layout");
+            }
+        }
+    }
+
     #[cfg(debug_assertions)]
     pub fn statistics(&self) -> (CacheStatistics, CacheStatistics) {
         (self.stats, self.raw_function_stats)
@@ -1970,6 +1986,13 @@ macro_rules! cached_or_impl {
 
         if criteria.is_cacheable() {
             // The computed layout is cacheable; insert it.
+            dbg!((
+                $var,
+                roc_types::subs::SubsFmtContent(
+                    $self.subs.get_content_without_compacting($var),
+                    $self.subs
+                )
+            ));
             $self
                 .cache
                 .$insert($self.subs, $var, result, criteria.cache_metadata());
