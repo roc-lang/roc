@@ -269,12 +269,14 @@ const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
 };
 
 impl CacheCriteria {
+    #[inline(always)]
     fn is_cacheable(&self) -> bool {
         // Can't cache if there a naked recursion pointer that isn't covered by a recursive layout.
         !self.has_naked_recursion_pointer
     }
 
     /// Makes `self` cacheable iff self and other are cacheable.
+    #[inline(always)]
     fn and(&mut self, other: Self) {
         self.has_naked_recursion_pointer =
             self.has_naked_recursion_pointer || other.has_naked_recursion_pointer;
@@ -284,11 +286,13 @@ impl CacheCriteria {
             .or(other.has_recursive_structure);
     }
 
+    #[inline(always)]
     fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
         self.has_recursive_structure = Some(recursion_var);
     }
 
+    #[inline(always)]
     fn cache_metadata(&self) -> CacheMeta {
         CacheMeta {
             has_recursive_structure: self.has_recursive_structure,
@@ -300,22 +304,26 @@ impl CacheCriteria {
 pub(crate) struct Cacheable<T>(T, CacheCriteria);
 
 impl<T> Cacheable<T> {
+    #[inline(always)]
     fn map<U>(self, f: impl FnOnce(T) -> U) -> Cacheable<U> {
         Cacheable(f(self.0), self.1)
     }
 
+    #[inline(always)]
     fn decompose(self, and_with: &mut CacheCriteria) -> T {
         let Self(value, criteria) = self;
         and_with.and(criteria);
         value
     }
 
+    #[inline(always)]
     pub fn value(self) -> T {
         self.0
     }
 }
 
 impl<T, E> Cacheable<Result<T, E>> {
+    #[inline(always)]
     fn then<U>(self, f: impl FnOnce(T) -> U) -> Cacheable<Result<U, E>> {
         let Cacheable(result, criteria) = self;
         match result {
