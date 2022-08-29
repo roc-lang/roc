@@ -51,28 +51,35 @@ fn report_timing(label: &str, duration: Duration) {
 }
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
-    dbg!(link_type, target);
-    matches!(
-        (link_type, target),
-        (
-            LinkType::Executable,
+    if let LinkType::Executable = link_type {
+        match target {
             Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Linux,
                 binary_format: target_lexicon::BinaryFormat::Elf,
                 ..
-            } | Triple {
+            } => true,
+
+            // macho support is incomplete
+            Triple {
+                operating_system: target_lexicon::OperatingSystem::Darwin,
+                binary_format: target_lexicon::BinaryFormat::Macho,
+                ..
+            } => false,
+
+            // windows support is incomplete
+            Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Windows,
                 binary_format: target_lexicon::BinaryFormat::Coff,
                 ..
-            } // | Triple {
-              //     operating_system: target_lexicon::OperatingSystem::Darwin,
-              //     binary_format: target_lexicon::BinaryFormat::Macho,
-              //     ..
-              // }
-        )
-    )
+            } => false,
+
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 pub fn build_and_preprocess_host(
@@ -223,11 +230,6 @@ pub fn preprocess(
         println!("Targeting: {}", target);
     }
 
-    std::fs::copy(
-        exec_filename,
-        "/home/folkertdev/roc/roc/crates/linker/example_dynlib_pe",
-    );
-
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
     let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
@@ -239,8 +241,6 @@ pub fn preprocess(
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
-
-    panic!();
 
     let mut md = metadata::Metadata {
         roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
@@ -2921,7 +2921,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_undefined_symbols() {
+    fn collect_undefined_symbols_elf() {
         let object = object::File::parse(ELF64_DYNHOST).unwrap();
 
         let mut triple = Triple::host();

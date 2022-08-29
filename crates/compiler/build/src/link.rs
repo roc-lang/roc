@@ -127,8 +127,6 @@ pub fn build_zig_host_native(
             bitcode::get_builtins_host_obj_path()
         };
 
-        dbg!(&obj);
-
         command.args(&[
             "build-exe",
             "-fPIE",
@@ -139,12 +137,13 @@ pub fn build_zig_host_native(
         command.args(&["build-obj", "-fPIC"]);
     }
 
-    dbg!(emit_bin);
-
     command.args(&[
         zig_host_src,
-        // emit_bin,
-        "-femit-bin=examples/benchmarks/platform/dynhost.exe",
+        if target.contains("windows") {
+            "-femit-bin=examples/benchmarks/platform/dynhost.exe"
+        } else {
+            emit_bin
+        },
         "--pkg-begin",
         "str",
         zig_str_path,
@@ -178,7 +177,7 @@ pub fn build_zig_host_native(
         command.args(&["-O", "ReleaseSmall"]);
     }
 
-    dbg!(command).output().unwrap()
+    command.output().unwrap()
 }
 
 #[cfg(windows)]
@@ -585,7 +584,7 @@ pub fn rebuild_host(
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
-        // validate_output("host.zig", &zig_executable(), output)
+        validate_output("host.zig", &zig_executable(), output)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
