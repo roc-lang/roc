@@ -41,11 +41,18 @@ roc_error_macros::assert_sizeof_default!(LambdaSet, 3 * 8);
 type LayoutResult<'a> = Result<Layout<'a>, LayoutProblem>;
 type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
 
+#[derive(Debug, Clone, Copy)]
+struct CacheMeta {
+    /// Does this cache entry include a recursive structure? If so, what's the recursion variable
+    /// of that structure?
+    has_recursive_structure: Option<Variable>,
+}
+
 /// A single layer of the layout cache.
 /// Snapshots are implemented by operating on new layers, and rollbacks by dropping the latest
 /// layer.
 #[derive(Debug)]
-struct CacheLayer<Result>(MutMap<Variable, Result>);
+struct CacheLayer<Result>(MutMap<Variable, (Result, CacheMeta)>);
 
 impl<Result> Default for CacheLayer<Result> {
     fn default() -> Self {
@@ -95,7 +102,11 @@ impl<'a> LayoutCache<'a> {
 
         // [Layout::from_var] should query the cache!
         let Cacheable(value, criteria) = Layout::from_var(&mut env, var);
-        debug_assert!(criteria.is_cacheable());
+        debug_assert!(
+            criteria.is_cacheable(),
+            "{:?} not cacheable as top-level",
+            value
+        );
         value
     }
 
@@ -118,7 +129,11 @@ impl<'a> LayoutCache<'a> {
 
         // [Layout::from_var] should query the cache!
         let Cacheable(value, criteria) = RawFunctionLayout::from_var(&mut env, var);
-        debug_assert!(criteria.is_cacheable());
+        debug_assert!(
+            criteria.is_cacheable(),
+            "{:?} not cacheable as top-level",
+            value
+        );
         value
     }
 
@@ -126,7 +141,7 @@ impl<'a> LayoutCache<'a> {
         cache: &[CacheLayer<Result>],
         subs: &Subs,
         var: Variable,
-    ) -> Option<Result> {
+    ) -> Option<(Result, CacheMeta)> {
         let root = subs.get_root_key_without_compacting(var);
 
         for layer in cache.iter().rev() {
@@ -139,30 +154,49 @@ impl<'a> LayoutCache<'a> {
         None
     }
 
-    fn insert_help<Result>(
+    fn insert_help<Result: std::fmt::Debug + Copy>(
         cache: &mut [CacheLayer<Result>],
         subs: &Subs,
         var: Variable,
         result: Result,
+        cache_metadata: CacheMeta,
     ) {
         let root = subs.get_root_key_without_compacting(var);
         let layer = cache
             .last_mut()
             .expect("cache must have at least one layer");
-        let opt_old_result = layer.0.insert(root, result);
-        debug_assert!(opt_old_result.is_none(), "overwritting cache result");
+        let opt_old_result = layer.0.insert(root, (result, cache_metadata));
+        if let Some(old_result) = opt_old_result {
+            // Can happen when we need to re-calculate a recursive layout
+            roc_tracing::debug!(
+                ?old_result,
+                new_result=?result,
+                ?var,
+                "overwritting layout cache"
+            );
+        }
     }
 
-    fn get(&self, subs: &Subs, var: Variable) -> Option<LayoutResult<'a>> {
+    fn get(&self, subs: &Subs, var: Variable) -> Option<(LayoutResult<'a>, CacheMeta)> {
         Self::get_help(&self.cache, subs, var)
     }
 
-    fn get_raw_function(&self, subs: &Subs, var: Variable) -> Option<RawFunctionLayoutResult<'a>> {
+    fn get_raw_function(
+        &self,
+        subs: &Subs,
+        var: Variable,
+    ) -> Option<(RawFunctionLayoutResult<'a>, CacheMeta)> {
         Self::get_help(&self.raw_function_cache, subs, var)
     }
 
-    fn insert(&mut self, subs: &Subs, var: Variable, result: LayoutResult<'a>) {
-        Self::insert_help(&mut self.cache, subs, var, result)
+    fn insert(
+        &mut self,
+        subs: &Subs,
+        var: Variable,
+        result: LayoutResult<'a>,
+        cache_metadata: CacheMeta,
+    ) {
+        Self::insert_help(&mut self.cache, subs, var, result, cache_metadata)
     }
 
     fn insert_raw_function(
@@ -170,8 +204,15 @@ impl<'a> LayoutCache<'a> {
         subs: &Subs,
         var: Variable,
         result: RawFunctionLayoutResult<'a>,
+        cache_metadata: CacheMeta,
     ) {
-        Self::insert_help(&mut self.raw_function_cache, subs, var, result)
+        Self::insert_help(
+            &mut self.raw_function_cache,
+            subs,
+            var,
+            result,
+            cache_metadata,
+        )
     }
 
     pub fn snapshot(&mut self) -> CacheSnapshot {
@@ -199,17 +240,24 @@ pub struct CacheSnapshot {
     layer: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct CacheCriteria {
+    /// Whether there is a naked recursion pointer in this layout, that doesn't pass through a
+    /// recursive structure.
     has_naked_recursion_pointer: bool,
+    /// Whether this layout contains a recursive structure. If `Some`, contains the variable of the
+    /// recursion variable of that structure.
+    has_recursive_structure: Option<Variable>,
 }
 
 const CACHEABLE: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: false,
+    has_recursive_structure: None,
 };
 
 const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: true,
+    has_recursive_structure: None,
 };
 
 impl CacheCriteria {
@@ -222,13 +270,25 @@ impl CacheCriteria {
     fn and(&mut self, other: Self) {
         self.has_naked_recursion_pointer =
             self.has_naked_recursion_pointer || other.has_naked_recursion_pointer;
+        // TODO: can these ever conflict?
+        self.has_recursive_structure = self
+            .has_recursive_structure
+            .or(other.has_recursive_structure);
     }
 
-    fn pass_through_recursive_union(&mut self) {
+    fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
+        self.has_recursive_structure = Some(recursion_var);
+    }
+
+    fn cache_metadata(&self) -> CacheMeta {
+        CacheMeta {
+            has_recursive_structure: self.has_recursive_structure,
+        }
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Cacheable<T>(T, CacheCriteria);
 
 impl<T> Cacheable<T> {
@@ -1435,8 +1495,6 @@ impl<'a> LambdaSet<'a> {
 
         match resolve_lambda_set(env.subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
-                let mut criteria = CACHEABLE;
-
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
@@ -1457,6 +1515,9 @@ impl<'a> LambdaSet<'a> {
                     }
 
                     for var in variables {
+                        // We determine cacheability of the lambda set based on the runtime
+                        // representation, so here the criteria doesn't matter.
+                        let mut criteria = CACHEABLE;
                         let arg = cached!(Layout::from_var(env, *var), criteria);
                         arguments.push(arg);
                     }
@@ -1508,11 +1569,12 @@ impl<'a> LambdaSet<'a> {
                     (set, set_with_variables)
                 };
 
-                let representation = env.arena.alloc(Self::make_representation(
+                let Cacheable(representation, criteria) = Self::make_representation(
                     env,
                     set_with_variables,
                     opt_recursion_var.into_variable(),
-                ));
+                );
+                let representation = env.arena.alloc(representation);
 
                 Cacheable(
                     Ok(LambdaSet {
@@ -1537,19 +1599,18 @@ impl<'a> LambdaSet<'a> {
         env: &mut Env<'a, '_>,
         set: std::vec::Vec<(&Symbol, &[Variable])>,
         opt_rec_var: Option<Variable>,
-    ) -> Layout<'a> {
+    ) -> Cacheable<Layout<'a>> {
         let union_labels = UnsortedUnionLabels { tags: set };
 
         match opt_rec_var {
             Some(rec_var) => {
-                let Cacheable(result, _) = layout_from_recursive_union(env, rec_var, &union_labels);
-                result.expect("unable to create lambda set representation")
+                let Cacheable(result, criteria) =
+                    layout_from_recursive_union(env, rec_var, &union_labels);
+                let result = result.expect("unable to create lambda set representation");
+                Cacheable(result, criteria)
             }
 
-            None => {
-                let Cacheable(result, _) = layout_from_non_recursive_union(env, &union_labels);
-                result
-            }
+            None => layout_from_non_recursive_union(env, &union_labels),
         }
     }
 
@@ -1780,17 +1841,61 @@ impl<'a, 'b> Env<'a, 'b> {
         }
     }
 
+    #[inline(always)]
+    fn can_reuse_cached(&self, var: Variable, cache_metadata: CacheMeta) -> bool {
+        let CacheMeta {
+            has_recursive_structure,
+        } = cache_metadata;
+        if let Some(recursive_structure) = has_recursive_structure {
+            if self.seen.iter().any(|var| {
+                self.subs
+                    .equivalent_without_compacting(*var, recursive_structure)
+            }) {
+                // If the cached entry references a recursive structure that we're in the process
+                // of visiting currently, we can't use the cached entry, and instead must
+                // recalculate the nested layout, because the nested recursive structure will
+                // likely turn into a recursive pointer now.
+                //
+                // For example, suppose we are constructing the layout of
+                //
+                // [A, B (List r)] as r
+                //
+                // and we have already constructed and cached the layout of `List r`, which would
+                // be
+                //
+                // List (Recursive [Unit, List RecursivePointer])
+                //
+                // If we use the cached entry of `List r`, we would end up with the layout
+                //
+                // Recursive [Unit, (List (Recursive [Unit, List RecursivePointer]))]
+                //                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cached layout for `List r`
+                //
+                // but this is not correct; the canonical layout of `[A, B (List r)] as r` is
+                //
+                // Recursive [Unit, (List RecursivePointer)]
+                return false;
+            }
+        }
+        true
+    }
+
     fn cached_or(
         &mut self,
         var: Variable,
         compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> Cacheable<LayoutResult<'a>>,
     ) -> Cacheable<LayoutResult<'a>> {
-        if let Some(result) = self.cache.get(self.subs, var) {
-            return cacheable(result);
+        if self.is_seen(var) {
+            return Cacheable(Ok(Layout::RecursivePointer), NAKED_RECURSION_PTR);
+        }
+        if let Some((result, metadata)) = self.cache.get(self.subs, var) {
+            if self.can_reuse_cached(var, metadata) {
+                return cacheable(result);
+            }
         }
         let Cacheable(result, criteria) = compute_layout(self);
         if criteria.is_cacheable() {
-            self.cache.insert(self.subs, var, result);
+            self.cache
+                .insert(self.subs, var, result, criteria.cache_metadata());
         }
         Cacheable(result, criteria)
     }
@@ -1800,12 +1905,15 @@ impl<'a, 'b> Env<'a, 'b> {
         var: Variable,
         compute_layout: impl FnOnce(&mut Env<'a, 'b>) -> Cacheable<RawFunctionLayoutResult<'a>>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
-        if let Some(result) = self.cache.get_raw_function(self.subs, var) {
-            return cacheable(result);
+        if let Some((result, metadata)) = self.cache.get_raw_function(self.subs, var) {
+            if self.can_reuse_cached(var, metadata) {
+                return cacheable(result);
+            }
         }
         let Cacheable(result, criteria) = compute_layout(self);
         if criteria.is_cacheable() {
-            self.cache.insert_raw_function(self.subs, var, result);
+            self.cache
+                .insert_raw_function(self.subs, var, result, criteria.cache_metadata());
         }
         Cacheable(result, criteria)
     }
@@ -1958,12 +2066,8 @@ impl<'a> Layout<'a> {
     /// monomorphized away already!
     fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Cacheable<LayoutResult<'a>> {
         env.cached_or(var, |env| {
-            if env.is_seen(var) {
-                Cacheable(Ok(Layout::RecursivePointer), NAKED_RECURSION_PTR)
-            } else {
-                let content = env.subs.get_content_without_compacting(var);
-                Self::new_help(env, var, *content)
-            }
+            let content = env.subs.get_content_without_compacting(var);
+            Self::new_help(env, var, *content)
         })
     }
 
@@ -3255,12 +3359,12 @@ where
                 } else {
                     Cacheable(UnionVariant::Unit, cache_criteria)
                 }
-            } else if opt_rec_var.is_some() {
+            } else if let Some(rec_var) = opt_rec_var {
                 let variant = UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name: tag_name.into(),
                     fields: layouts.into_bump_slice(),
                 });
-                cache_criteria.pass_through_recursive_union();
+                cache_criteria.pass_through_recursive_union(rec_var);
                 Cacheable(variant, cache_criteria)
             } else {
                 Cacheable(
@@ -3394,7 +3498,11 @@ where
                             sorted_tag_layouts: answer,
                         }
                     };
-                    cache_criteria.pass_through_recursive_union();
+
+                    if let Some(rec_var) = opt_rec_var {
+                        cache_criteria.pass_through_recursive_union(rec_var);
+                        debug_assert!(!matches!(variant, WrappedVariant::NonRecursive { .. }));
+                    }
 
                     Cacheable(UnionVariant::Wrapped(variant), cache_criteria)
                 }
@@ -3579,7 +3687,7 @@ where
     } else {
         UnionLayout::Recursive(tag_layouts.into_bump_slice())
     };
-    criteria.pass_through_recursive_union();
+    criteria.pass_through_recursive_union(rec_var);
 
     Cacheable(Ok(Layout::Union(union_layout)), criteria)
 }
