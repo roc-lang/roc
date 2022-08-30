@@ -15,6 +15,11 @@ On Macos and Linux, we highly recommend Using [nix](https://nixos.org/download.h
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
 Install nix (not necessary on NixOS):
+- If you are using WSL (Windows subsystem for Linux):
+```
+sh <(curl -L https://nixos.org/nix/install) --no-daemon
+```
+- For everything else:
 ```
 sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
