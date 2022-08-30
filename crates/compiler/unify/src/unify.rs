@@ -157,6 +157,8 @@ pub trait MetaCollector: Default + std::fmt::Debug {
     /// associated via [`Self::record_specialization_lambda_set`].
     const UNIFYING_SPECIALIZATION: bool;
 
+    const IS_LATE: bool;
+
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable);
 
     fn record_changed_variable(&mut self, subs: &Subs, var: Variable);
@@ -168,6 +170,7 @@ pub trait MetaCollector: Default + std::fmt::Debug {
 pub struct NoCollector;
 impl MetaCollector for NoCollector {
     const UNIFYING_SPECIALIZATION: bool = false;
+    const IS_LATE: bool = false;
 
     #[inline(always)]
     fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}
@@ -184,6 +187,7 @@ pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
 
 impl MetaCollector for SpecializationLsetCollector {
     const UNIFYING_SPECIALIZATION: bool = true;
+    const IS_LATE: bool = false;
 
     #[inline(always)]
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
@@ -1239,8 +1243,10 @@ fn separate_union_lambdas<M: MetaCollector>(
                             //
                             // Like with tag unions, if it has, we'll always pass through this branch. So, take
                             // this opportunity to promote the lambda set to recursive if need be.
-                            maybe_mark_union_recursive(env, var1);
-                            maybe_mark_union_recursive(env, var2);
+                            //if !M::IS_LATE {
+                                maybe_mark_union_recursive(env, var1);
+                                maybe_mark_union_recursive(env, var2);
+                            //}
 
                             env.actually_merge = false;
                             let outcome = unify_pool::<M>(env, pool, var1, var2, mode);
