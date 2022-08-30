@@ -136,7 +136,7 @@ fn generate_dynamic_lib(
         }
     }
 
-    if !dynhost_is_up_to_date(target, dummy_lib_path, &custom_names) {
+    if !dummy_lib_is_up_to_date(target, dummy_lib_path, &custom_names) {
         let bytes = crate::generate_dylib::generate(target, &custom_names)
             .unwrap_or_else(|e| internal_error!("{}", e));
 
@@ -153,21 +153,27 @@ fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]
                 return false;
             }
 
-            let actual = object.format();
-
-            let expected = match target.operating_system {
+            let target_format = match target.operating_system {
                 TLO::Linux => object::BinaryFormat::Elf,
-                other => internal_error!("unexpected target {:?}", other),
+                TLO::Windows => object::BinaryFormat::Pe,
+                _ => todo!("surgical linker does not support target {:?}", target),
             };
 
-            actual == expected
+            object.format() == target_format
         }
         TLA::Aarch64(_) => object.architecture() == object::Architecture::Aarch64,
-        _ => false,
+        _ => todo!("surgical linker does not support target {:?}", target),
     }
 }
 
-fn dynhost_is_up_to_date(target: &Triple, dummy_lib_path: &Path, custom_names: &[String]) -> bool {
+/// Checks whether the dummy `.dll/.so` is up to date, in other words that it exports exactly the
+/// symbols that it is supposed to export, and is built for the right target. If this is the case,
+/// we can skip rebuildingthe dummy lib.
+fn dummy_lib_is_up_to_date(
+    target: &Triple,
+    dummy_lib_path: &Path,
+    custom_names: &[String],
+) -> bool {
     if !std::path::Path::exists(dummy_lib_path) {
         return false;
     }
