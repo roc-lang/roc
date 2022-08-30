@@ -202,8 +202,178 @@ fn collect_roc_undefined_symbols<'file, 'data>(
     .collect()
 }
 
-// TODO: Most of this file is a mess of giant functions just to check if things work.
-// Clean it all up and refactor nicely.
+struct Surgeries<'a> {
+    surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
+    app_func_addresses: MutMap<u64, &'a str>,
+    indirect_warning_given: bool,
+}
+
+impl<'a> Surgeries<'a> {
+    fn new(application_symbols: &[Symbol], app_func_addresses: MutMap<u64, &'a str>) -> Self {
+        let mut surgeries = MutMap::default();
+
+        // for each symbol that the host expects from the application
+        // we start with an empty set of places to perform surgery
+        for symbol in application_symbols {
+            let name = symbol.name().unwrap().to_string();
+            surgeries.insert(name, vec![]);
+        }
+
+        Self {
+            surgeries,
+            app_func_addresses,
+            indirect_warning_given: false,
+        }
+    }
+
+    fn append_text_sections(
+        &mut self,
+        object_bytes: &[u8],
+        object: &object::File<'a, &'a [u8]>,
+        verbose: bool,
+    ) {
+        let text_sections: Vec<Section> = object
+            .sections()
+            .filter(|sec| sec.kind() == SectionKind::Text)
+            .collect();
+        if text_sections.is_empty() {
+            internal_error!("No text sections found. This application has no code.");
+        }
+        if verbose {
+            println!();
+            println!("Text Sections");
+            for sec in text_sections.iter() {
+                println!("{:+x?}", sec);
+            }
+        }
+
+        if verbose {
+            println!();
+            println!("Analyzing instuctions for branches");
+        }
+
+        for text_section in text_sections {
+            self.append_text_section(object_bytes, &text_section, verbose)
+        }
+    }
+
+    fn append_text_section(&mut self, object_bytes: &[u8], sec: &Section, verbose: bool) {
+        let (file_offset, compressed) = match sec.compressed_file_range() {
+            Ok(CompressedFileRange {
+                format: CompressionFormat::None,
+                offset,
+                ..
+            }) => (offset, false),
+            Ok(range) => (range.offset, true),
+            Err(err) => {
+                internal_error!(
+                    "Issues dealing with section compression for {:+x?}: {}",
+                    sec,
+                    err
+                );
+            }
+        };
+
+        let data = match sec.uncompressed_data() {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
+            }
+        };
+        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
+        let mut inst = Instruction::default();
+
+        while decoder.can_decode() {
+            decoder.decode_out(&mut inst);
+
+            // Note: This gets really complex fast if we want to support more than basic calls/jumps.
+            // A lot of them have to load addresses into registers/memory so we would have to discover that value.
+            // Would probably require some static code analysis and would be impossible in some cases.
+            // As an alternative we can leave in the calls to the plt, but change the plt to jmp to the static function.
+            // That way any indirect call will just have the overhead of an extra jump.
+            match inst.try_op_kind(0) {
+                // Relative Offsets.
+                Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
+                    let target = inst.near_branch_target();
+                    if let Some(func_name) = self.app_func_addresses.get(&target) {
+                        if compressed {
+                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
+                        }
+
+                        if verbose {
+                            println!(
+                                "Found branch from {:+x} to {:+x}({})",
+                                inst.ip(),
+                                target,
+                                func_name
+                            );
+                        }
+
+                        // TODO: Double check these offsets are always correct.
+                        // We may need to do a custom offset based on opcode instead.
+                        let op_kind = inst.op_code().try_op_kind(0).unwrap();
+                        let op_size: u8 = match op_kind {
+                            OpCodeOperandKind::br16_1 | OpCodeOperandKind::br32_1 => 1,
+                            OpCodeOperandKind::br16_2 => 2,
+                            OpCodeOperandKind::br32_4 | OpCodeOperandKind::br64_4 => 4,
+                            _ => {
+                                internal_error!(
+                                    "Ran into an unknown operand kind when analyzing branches: {:?}",
+                                    op_kind
+                                );
+                            }
+                        };
+                        let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
+                        if verbose {
+                            println!(
+                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
+                                op_size, offset,
+                            );
+                            println!(
+                                "\tIts current value is {:+x?}",
+                                &object_bytes[offset as usize..(offset + op_size as u64) as usize]
+                            )
+                        }
+                        self.surgeries
+                            .get_mut(*func_name)
+                            .unwrap()
+                            .push(metadata::SurgeryEntry {
+                                file_offset: offset,
+                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
+                                size: op_size,
+                            });
+                    }
+                }
+                Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
+                    internal_error!(
+                        "Found branch type instruction that is not yet support: {:+x?}",
+                        inst
+                    );
+                }
+                Ok(_) => {
+                    if (inst.is_call_far_indirect()
+                        || inst.is_call_near_indirect()
+                        || inst.is_jmp_far_indirect()
+                        || inst.is_jmp_near_indirect())
+                        && !self.indirect_warning_given
+                        && verbose
+                    {
+                        self.indirect_warning_given = true;
+                        println!();
+                        println!("Cannot analyze through indirect jmp type instructions");
+                        println!("Most likely this is not a problem, but it could mean a loss in optimizations");
+                        println!();
+                    }
+                }
+                Err(err) => {
+                    internal_error!("Failed to decode assembly: {}", err);
+                }
+            }
+        }
+    }
+}
+
+/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
 pub fn preprocess(
     target: &Triple,
     exec_filename: &str,
@@ -243,7 +413,9 @@ pub fn preprocess(
 
     let exec_parsing_duration = exec_parsing_start.elapsed();
 
-    // Extract PLT related information for app functions.
+    // PLT stands for Procedure Linkage Table which is, put simply, used to call external
+    // procedures/functions whose address isn't known in the time of linking, and is left
+    // to be resolved by the dynamic linker at run time.
     let symbol_and_plt_processing_start = Instant::now();
     let plt_section_name = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => ".plt",
@@ -455,7 +627,6 @@ pub fn preprocess(
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
         md.app_functions.push(name.clone());
-        md.surgeries.insert(name.clone(), vec![]);
         md.dynamic_symbol_indices.insert(name, sym.index().0 as u64);
     }
     if verbose {
@@ -470,142 +641,13 @@ pub fn preprocess(
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
+    // look at the text (i.e. code) sections and see collect work needs to be done
     let text_disassembly_start = Instant::now();
-    let text_sections: Vec<Section> = exec_obj
-        .sections()
-        .filter(|sec| sec.kind() == SectionKind::Text)
-        .collect();
-    if text_sections.is_empty() {
-        internal_error!("No text sections found. This application has no code.");
-    }
-    if verbose {
-        println!();
-        println!("Text Sections");
-        for sec in text_sections.iter() {
-            println!("{:+x?}", sec);
-        }
-    }
 
-    if verbose {
-        println!();
-        println!("Analyzing instuctions for branches");
-    }
-    let mut indirect_warning_given = false;
-    for sec in text_sections {
-        let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(
-                range @ CompressedFileRange {
-                    format: CompressionFormat::None,
-                    ..
-                },
-            ) => (range.offset, false),
-            Ok(range) => (range.offset, true),
-            Err(err) => {
-                internal_error!(
-                    "Issues dealing with section compression for {:+x?}: {}",
-                    sec,
-                    err
-                );
-            }
-        };
+    let mut surgeries = Surgeries::new(&app_syms, app_func_addresses);
+    surgeries.append_text_sections(exec_data, &exec_obj, verbose);
+    md.surgeries = surgeries.surgeries;
 
-        let data = match sec.uncompressed_data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
-            }
-        };
-        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
-        let mut inst = Instruction::default();
-
-        while decoder.can_decode() {
-            decoder.decode_out(&mut inst);
-
-            // Note: This gets really complex fast if we want to support more than basic calls/jumps.
-            // A lot of them have to load addresses into registers/memory so we would have to discover that value.
-            // Would probably require some static code analysis and would be impossible in some cases.
-            // As an alternative we can leave in the calls to the plt, but change the plt to jmp to the static function.
-            // That way any indirect call will just have the overhead of an extra jump.
-            match inst.try_op_kind(0) {
-                // Relative Offsets.
-                Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
-                    let target = inst.near_branch_target();
-                    if let Some(func_name) = app_func_addresses.get(&target) {
-                        if compressed {
-                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
-                        }
-
-                        if verbose {
-                            println!(
-                                "Found branch from {:+x} to {:+x}({})",
-                                inst.ip(),
-                                target,
-                                func_name
-                            );
-                        }
-
-                        // TODO: Double check these offsets are always correct.
-                        // We may need to do a custom offset based on opcode instead.
-                        let op_kind = inst.op_code().try_op_kind(0).unwrap();
-                        let op_size: u8 = match op_kind {
-                            OpCodeOperandKind::br16_1 | OpCodeOperandKind::br32_1 => 1,
-                            OpCodeOperandKind::br16_2 => 2,
-                            OpCodeOperandKind::br32_4 | OpCodeOperandKind::br64_4 => 4,
-                            _ => {
-                                internal_error!(
-                                    "Ran into an unknown operand kind when analyzing branches: {:?}",
-                                    op_kind
-                                );
-                            }
-                        };
-                        let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
-                        if verbose {
-                            println!(
-                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
-                                op_size, offset,
-                            );
-                            println!(
-                                "\tIts current value is {:+x?}",
-                                &exec_data[offset as usize..(offset + op_size as u64) as usize]
-                            )
-                        }
-                        md.surgeries
-                            .get_mut(*func_name)
-                            .unwrap()
-                            .push(metadata::SurgeryEntry {
-                                file_offset: offset,
-                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
-                                size: op_size,
-                            });
-                    }
-                }
-                Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
-                    internal_error!(
-                        "Found branch type instruction that is not yet support: {:+x?}",
-                        inst
-                    );
-                }
-                Ok(_) => {
-                    if (inst.is_call_far_indirect()
-                        || inst.is_call_near_indirect()
-                        || inst.is_jmp_far_indirect()
-                        || inst.is_jmp_near_indirect())
-                        && !indirect_warning_given
-                        && verbose
-                    {
-                        indirect_warning_given = true;
-                        println!();
-                        println!("Cannot analyaze through indirect jmp type instructions");
-                        println!("Most likely this is not a problem, but it could mean a loss in optimizations");
-                        println!();
-                    }
-                }
-                Err(err) => {
-                    internal_error!("Failed to decode assembly: {}", err);
-                }
-            }
-        }
-    }
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
     let scanning_dynamic_deps_duration;
