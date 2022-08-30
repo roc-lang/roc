@@ -224,6 +224,37 @@ fn collect_roc_undefined_symbols<'file, 'data>(
     .collect()
 }
 
+fn section_address_and_offset<'a>(
+    object: &object::File<'a, &'a [u8]>,
+    section_name: &str,
+) -> (u64, u64) {
+    match object.section_by_name(section_name) {
+        Some(section) => {
+            let file_offset = match section.compressed_file_range() {
+                Ok(
+                    range @ CompressedFileRange {
+                        format: CompressionFormat::None,
+                        ..
+                    },
+                ) => range.offset,
+                _ => {
+                    internal_error!(
+                        "Surgical linking does not work with compressed {} section",
+                        section_name
+                    );
+                }
+            };
+            (section.address(), file_offset)
+        }
+        None => {
+            internal_error!(
+                "Failed to find {} section. Probably an malformed executable.",
+                section_name
+            );
+        }
+    }
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -275,25 +306,9 @@ pub fn preprocess(
             unreachable!()
         }
     };
-    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
-        Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range @ CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    internal_error!("Surgical linking does not work with compressed plt section");
-                }
-            };
-            (section.address(), file_offset)
-        }
-        None => {
-            internal_error!("Failed to find PLT section. Probably an malformed executable.");
-        }
-    };
+
+    let (plt_address, plt_offset) = section_address_and_offset(&exec_obj, plt_section_name);
+
     if verbose {
         println!("PLT Address: {:+x}", plt_address);
         println!("PLT File Offset: {:+x}", plt_offset);
