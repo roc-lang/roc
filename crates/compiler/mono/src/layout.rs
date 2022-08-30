@@ -1236,7 +1236,7 @@ pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
     set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
-    representation: &'a Layout<'a>,
+    representation: Interned<Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -1290,7 +1290,7 @@ type LI<'a> = LocalInterner<'a, Layout<'a>>;
 
 impl<'a> LambdaSet<'a> {
     pub fn runtime_representation(&self, li: &LI<'a>) -> Layout<'a> {
-        *self.representation
+        *li.get(self.representation)
     }
 
     /// Does the lambda set contain the given symbol?
@@ -1300,12 +1300,12 @@ impl<'a> LambdaSet<'a> {
 
     pub fn is_represented(&self, li: &LI<'a>) -> Option<Layout<'a>> {
         if self.has_unwrapped_capture_repr() {
-            let repr = self.representation;
+            let repr = li.get(self.representation);
             Some(*repr)
         } else if self.has_enum_dispatch_repr() {
             None
         } else {
-            let repr = self.representation;
+            let repr = li.get(self.representation);
             match repr {
                 Layout::Struct {
                     field_layouts: &[], ..
@@ -1422,7 +1422,7 @@ impl<'a> LambdaSet<'a> {
     where
         F: Fn(Symbol, &[Layout]) -> bool,
     {
-        let repr = self.representation;
+        let repr = li.get(self.representation);
         if self.has_unwrapped_capture_repr() {
             // Only one function, that captures one identifier.
             return ClosureRepresentation::UnwrappedCapture(*repr);
@@ -1530,7 +1530,7 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn call_by_name_options(&self, li: &LI<'a>) -> ClosureCallOptions<'a> {
-        let repr = self.representation;
+        let repr = li.get(self.representation);
         if self.has_unwrapped_capture_repr() {
             return ClosureCallOptions::UnwrappedCapture(*repr);
         }
@@ -1753,7 +1753,7 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-                let representation = env.arena.alloc(representation);
+                let representation = env.cache.intern(env.arena.alloc(representation));
 
                 Cacheable(
                     Ok(LambdaSet {
@@ -1768,7 +1768,7 @@ impl<'a> LambdaSet<'a> {
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 cacheable(Ok(LambdaSet {
                     set: &[],
-                    representation: env.arena.alloc(Layout::UNIT),
+                    representation: env.cache.intern(env.arena.alloc(Layout::UNIT)),
                 }))
             }
         }
@@ -1794,17 +1794,17 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn stack_size(&self, li: &LI<'a>, target_info: TargetInfo) -> u32 {
-        self.representation.stack_size(li, target_info)
+        li.get(self.representation).stack_size(li, target_info)
     }
     pub fn contains_refcounted(&self, li: &LI<'a>) -> bool {
-        self.representation.contains_refcounted(li)
+        li.get(self.representation).contains_refcounted(li)
     }
     pub fn safe_to_memcpy(&self, li: &LI<'a>) -> bool {
-        self.representation.safe_to_memcpy(li)
+        li.get(self.representation).safe_to_memcpy(li)
     }
 
     pub fn alignment_bytes(&self, li: &LI<'a>, target_info: TargetInfo) -> u32 {
-        self.representation.alignment_bytes(li, target_info)
+        li.get(self.representation).alignment_bytes(li, target_info)
     }
 }
 
