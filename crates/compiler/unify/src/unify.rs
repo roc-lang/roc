@@ -310,11 +310,15 @@ impl<M: MetaCollector> Outcome<M> {
 
 pub struct Env<'a> {
     pub subs: &'a mut Subs,
+    actually_merge: bool,
 }
 
 impl<'a> Env<'a> {
     pub fn new(subs: &'a mut Subs) -> Self {
-        Self { subs }
+        Self {
+            subs,
+            actually_merge: true,
+        }
     }
 }
 
@@ -1224,7 +1228,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                             continue 'try_next_right;
                         }
 
-                        let snapshot = env.subs.snapshot();
+                        // let snapshot = env.subs.snapshot();
                         for (var1, var2) in (left_slice.into_iter()).zip(right_slice.into_iter()) {
                             let (var1, var2) = (env.subs[var1], env.subs[var2]);
 
@@ -1238,13 +1242,16 @@ fn separate_union_lambdas<M: MetaCollector>(
                             maybe_mark_union_recursive(env, var1);
                             maybe_mark_union_recursive(env, var2);
 
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
+                            env.actually_merge = false;
+                            let outcome = unify_pool::<M>(env, pool, var1, var2, mode);
+                            env.actually_merge = true;
 
                             if !outcome.mismatches.is_empty() {
-                                env.subs.rollback_to(snapshot);
+                                //env.subs.rollback_to(snapshot);
                                 continue 'try_next_right;
                             }
 
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
                             whole_outcome.union(outcome);
                         }
 
@@ -2981,23 +2988,26 @@ fn unify_recursion<M: MetaCollector>(
 }
 
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
-    let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
-    let desc = Descriptor {
-        content,
-        rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
     let mut outcome: Outcome<M> = Outcome::default();
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.first);
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.second);
 
-    env.subs.union(ctx.first, ctx.second, desc);
+    if env.actually_merge {
+        let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
+        let desc = Descriptor {
+            content,
+            rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
+
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.first);
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.second);
+
+        env.subs.union(ctx.first, ctx.second, desc);
+    }
 
     outcome
 }
