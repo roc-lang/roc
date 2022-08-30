@@ -475,9 +475,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.11"
+version = "3.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d646c7ade5eb07c4aa20e907a922750df0c448892513714fd3e4acbc7130829f"
+checksum = "b15f2ea93df33549dbe2e8eecd1ca55269d63ae0b3ba1f55db030817d1c2867f"
 dependencies = [
  "atty",
  "bitflags",
@@ -492,9 +492,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.2.7"
+version = "3.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "759bf187376e1afa7b85b959e6a664a3e7a95203415dba952ad19139e798f902"
+checksum = "ea0c8bce528c4be4da13ea6fead8965e95b6073585a2f05204bd8f4119f82a65"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -1871,14 +1871,13 @@ checksum = "90953f308a79fe6d62a4643e51f848fbfddcd05975a38e69fdf4ab86a7baf7ca"
 
 [[package]]
 name = "insta"
-version = "1.18.2"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57a9aec10c9a062ef0454fd49ebaefa59239f836d1b30891d9cc2289978dd970"
+checksum = "f37dc501f12ec0c339b385787fa89ffda3d5d2caa62e558da731134c24d6e0c4"
 dependencies = [
  "console",
  "linked-hash-map",
  "once_cell",
- "serde",
  "similar",
  "yaml-rust",
 ]
@@ -3447,7 +3446,7 @@ name = "roc_cli"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.18",
  "cli_utils",
  "const_format",
  "criterion",
@@ -3591,7 +3590,7 @@ dependencies = [
 name = "roc_docs_cli"
 version = "0.0.1"
 dependencies = [
- "clap 3.2.11",
+ "clap 3.2.18",
  "libc",
  "roc_docs",
 ]
@@ -3738,7 +3737,7 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.18",
  "cli_utils",
  "dircpy",
  "fnv",
@@ -3796,7 +3795,7 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.11",
+ "clap 3.2.18",
  "iced-x86",
  "mach_object",
  "memmap2 0.5.5",
