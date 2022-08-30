@@ -107,6 +107,8 @@ pub fn build_file<'a>(
         }
     };
 
+    std::process::exit(0);
+
     use target_lexicon::Architecture;
     let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
 
