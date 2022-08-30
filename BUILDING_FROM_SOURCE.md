@@ -4,10 +4,9 @@ Installation should be a smooth process, let us now if anything does not work pe
 
 ## Using Nix
 
-We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+On Macos and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
-> See issue [#3863](https://github.com/roc-lang/roc/issues/3863) if you encounter "version GLIBC_2.34 not found".
-> This error can occur if you ran `cargo build` in the same folder without nix.
+:warning: If you tried to run `cargo` in the repo folder before installing nix, make sure to execute `cargo clean` first. To prevent you from executing `cargo` outside of nix, tools like [direnv](https://github.com/nix-community/nix-direnv) and [lorri](https://github.com/nix-community/lorri) can put you in a nix shell automatically when you `cd` into the directory.
 
 ### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
 
