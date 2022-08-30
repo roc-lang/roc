@@ -278,10 +278,14 @@ pub fn gen_from_mono_module_llvm(
         EntryPoint::Test => None,
     };
 
+    // TODO fixme
+    let procedures = Default::default();
+
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
-        loaded.procedures,
+        // loaded.procedures,
+        procedures,
         opt_entry_point,
         Some(&app_ll_file),
     );
@@ -506,6 +510,9 @@ fn gen_from_mono_module_dev_wasm32(
         )
     });
 
+    // TODO fixme
+    let procedures = Default::default();
+
     let final_binary_bytes =
         roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
 
@@ -555,6 +562,9 @@ fn gen_from_mono_module_dev_assembly(
         lazy_literals,
         generate_allocators,
     };
+
+    // TODO fixme
+    let procedures = Default::default();
 
     let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 

@@ -33,6 +33,8 @@ pub fn get_values<'a>(
     start_offset: usize,
     variables: &[Variable],
 ) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
+    use roc_mono::intern::GlobalInterner;
+
     let mut result = Vec::with_capacity(variables.len());
 
     let memory = ExpectMemory { start };
@@ -53,14 +55,16 @@ pub fn get_values<'a>(
 
             let content = subs.get_content_without_compacting(variable);
 
-            let mut layout_cache = LayoutCache::new(target_info);
+            let interner = GlobalInterner::with_capacity(0);
+            let mut layout_cache = LayoutCache::new(target_info, interner.fork());
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
-            let proc_layout = ProcLayout {
-                arguments: &[],
-                result: layout,
-                captures_niche: CapturesNiche::no_niche(),
-            };
+            let proc_layout = todo!();
+            //ProcLayout {
+            //    arguments: &[],
+            //    result: layout,
+            //    captures_niche: CapturesNiche::no_niche(),
+            //};
 
             jit_to_ast(
                 arena,

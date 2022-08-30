@@ -29,6 +29,7 @@ use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
 };
+use roc_mono::intern::{GlobalInterner, Interned};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
@@ -506,7 +507,7 @@ fn start_phase<'a>(
                             IdentIds::default(),
                             Subs::default(),
                             ProcsBase::default(),
-                            LayoutCache::new(state.target_info),
+                            LayoutCache::new(state.target_info, state.layout_interner.fork()),
                             ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
@@ -721,7 +722,7 @@ pub struct MonomorphizedModule<'a> {
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, Interned<ProcLayout<'a>>), Proc<'a>>,
     pub toplevel_expects: ToplevelExpects,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
@@ -835,7 +836,7 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
         procs_base: ProcsBase<'a>,
-        procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        procedures: std::vec::Vec<((Symbol, &'a ProcLayout<'a>), Proc<'a>)>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -913,7 +914,7 @@ struct State<'a> {
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
-    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, Interned<ProcLayout<'a>>), Proc<'a>>,
     pub toplevel_expects: ToplevelExpects,
     pub exposed_to_host: ExposedToHost,
 
@@ -952,6 +953,9 @@ struct State<'a> {
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
+
+    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
+    proc_layout_interner: Arc<GlobalInterner<'a, ProcLayout<'a>>>,
 }
 
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
@@ -1004,6 +1008,8 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
+            layout_interner: GlobalInterner::with_capacity(128),
+            proc_layout_interner: GlobalInterner::with_capacity(128),
         }
     }
 }
@@ -1985,15 +1991,16 @@ fn start_tasks<'a>(
 macro_rules! debug_print_ir {
     ($state:expr, $flag:path) => {
         dbg_do!($flag, {
-            let procs_string = $state
-                .procedures
-                .values()
-                .map(|proc| proc.to_pretty(200))
-                .collect::<Vec<_>>();
+            todo!()
+            //let procs_string = $state
+            //    .procedures
+            //    .values()
+            //    .map(|proc| proc.to_pretty(200))
+            //    .collect::<Vec<_>>();
 
-            let result = procs_string.join("\n");
+            //let result = procs_string.join("\n");
 
-            eprintln!("{}", result);
+            //eprintln!("{}", result);
         })
     };
 }
@@ -2471,10 +2478,9 @@ fn update<'a>(
                 if state.goal_phase() > Phase::SolveTypes
                     || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
                 {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                    let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
+                        LayoutCache::new(state.target_info, state.layout_interner.fork())
+                    });
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -2584,7 +2590,12 @@ fn update<'a>(
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
             let _ = layout_cache;
 
-            state.procedures.extend(procedures);
+            for ((symbol, layout), proc) in procedures {
+                let layout = state.proc_layout_interner.insert(layout);
+                state.procedures.insert((symbol, layout), proc);
+            }
+
+            //state.procedures.extend(procedures);
             state.module_cache.late_specializations.insert(
                 module_id,
                 LateSpecializationsModule {
@@ -2692,13 +2703,33 @@ fn update<'a>(
 
                     debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
+                    let mut p_interner = Arc::try_unwrap(state.proc_layout_interner)
+                        .expect("outstanding references to interner");
+                    state.proc_layout_interner = GlobalInterner::with_capacity(0);
+
+                    let interner = state.layout_interner.fork();
+
+                    dbg!(2313124);
+
                     Proc::insert_refcount_operations(
                         arena,
+                        &mut p_interner,
+                        &interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
                     );
+
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(&interner, 200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    eprintln!("{}", result);
 
                     debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
 
@@ -2930,23 +2961,29 @@ fn finish_specialization(
                 };
 
                 match procedures.keys().find(|(s, _)| *s == symbol) {
-                    Some((_, layout)) => EntryPoint::Executable {
-                        layout: *layout,
+                    Some((_, _layout)) => EntryPoint::Executable {
+                        // FIXME
+                        layout: ProcLayout {
+                            arguments: &[],
+                            result: unsafe { Interned::fake() },
+                            captures_niche: CapturesNiche::no_niche(),
+                        },
                         symbol,
                         platform_path,
                     },
                     None => {
                         // the entry point is not specialized. This can happen if the repl output
                         // is a function value
-                        EntryPoint::Executable {
-                            layout: roc_mono::ir::ProcLayout {
-                                arguments: &[],
-                                result: Layout::struct_no_name_order(&[]),
-                                captures_niche: CapturesNiche::no_niche(),
-                            },
-                            symbol,
-                            platform_path,
-                        }
+                        todo!()
+                        //EntryPoint::Executable {
+                        //    layout: roc_mono::ir::ProcLayout {
+                        //        arguments: &[],
+                        //        result: Layout::struct_no_name_order(&[]),
+                        //        captures_niche: CapturesNiche::no_niche(),
+                        //    },
+                        //    symbol,
+                        //    platform_path,
+                        //}
                     }
                 }
             }
@@ -4810,7 +4847,8 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc(&mut mono_env);
+    let (procedures, restored_procs_base) =
+        procs.get_specialized_procs_without_rc(&mut mono_env, &mut layout_cache);
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);

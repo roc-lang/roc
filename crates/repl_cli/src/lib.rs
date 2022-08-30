@@ -3,6 +3,7 @@ use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_mono::layout::{CapturesNiche, Layout};
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -16,7 +17,7 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_load::{EntryPoint, MonomorphizedModule};
-use roc_mono::ir::OptLevel;
+use roc_mono::ir::{OptLevel, ProcLayout};
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
@@ -257,6 +258,9 @@ pub fn mono_module_to_dylib<'a>(
         }
     };
 
+    // FIXME
+    let procedures = Default::default();
+
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
         opt_level,
@@ -340,6 +344,14 @@ fn gen_and_eval_llvm<'a>(
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
     let mut app = CliApp { lib };
+
+    // FIXME
+    let main_fn_layout = todo!();
+    //ProcLayout {
+    //    arguments: &[],
+    //    result: Layout::VOID,
+    //    captures_niche: CapturesNiche::no_niche(),
+    //};
 
     let res_answer = jit_to_ast(
         &arena,

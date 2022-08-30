@@ -41,46 +41,47 @@ pub fn insert_wrapper_for_layout<'a>(
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
-    let mut stack_data_structure = || {
-        let size = layout.stack_size(TargetInfo::default_wasm32());
-        if size == 0 {
-            <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        } else {
-            insert_wrapper_metadata(arena, module, wrapper_name);
-            let mut code_builder = CodeBuilder::new(arena);
-            build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
-            module.code.code_builders.push(code_builder);
-        }
-    };
+    todo!()
+    //let mut stack_data_structure = || {
+    //    let size = layout.stack_size(TargetInfo::default_wasm32());
+    //    if size == 0 {
+    //        <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    } else {
+    //        insert_wrapper_metadata(arena, module, wrapper_name);
+    //        let mut code_builder = CodeBuilder::new(arena);
+    //        build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
+    //        module.code.code_builders.push(code_builder);
+    //    }
+    //};
 
-    match layout {
-        Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
-            i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
-            i16::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
-            i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
-            i64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
-            f32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-            f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Builtin(Builtin::Bool) => {
-            bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
-        Layout::Union(_) | Layout::Boxed(_) => {
-            i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
-        }
-        _ => stack_data_structure(),
-    }
+    //match layout {
+    //    Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+    //        i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+    //        i16::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+    //        i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+    //        i64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+    //        f32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+    //        f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Builtin(Builtin::Bool) => {
+    //        bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
+    //    Layout::Union(_) | Layout::Boxed(_) => {
+    //        i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+    //    }
+    //    _ => stack_data_structure(),
+    //}
 }
 
 fn insert_wrapper_metadata<'a>(

@@ -81,9 +81,10 @@ pub(crate) fn layout_width<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    env.ptr_int()
-        .const_int(layout.stack_size(env.target_info) as u64, false)
-        .into()
+    todo!()
+    //env.ptr_int()
+    //    .const_int(layout.stack_size(env.target_info) as u64, false)
+    //    .into()
 }
 
 pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
@@ -317,7 +318,8 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx, 'env>(
 
     // the list has the same alignment as a usize / ptr. The element comes first in the struct if
     // its alignment is bigger than that of a list.
-    let element_align = element_layout.alignment_bytes(env.target_info);
+    let element_align = todo!() as u32;
+    //element_layout.alignment_bytes(env.target_info);
     let element_first = element_align > env.target_info.ptr_width() as u32;
 
     let fields = if element_first {
@@ -712,17 +714,18 @@ pub(crate) fn allocate_list<'a, 'ctx, 'env>(
     elem_layout: &Layout<'a>,
     number_of_elements: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
+    todo!()
+    //let builder = env.builder;
 
-    let len_type = env.ptr_int();
-    let elem_bytes = elem_layout.stack_size(env.target_info) as u64;
-    let bytes_per_element = len_type.const_int(elem_bytes, false);
-    let number_of_data_bytes =
-        builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
+    //let len_type = env.ptr_int();
+    //let elem_bytes = elem_layout.stack_size(env.target_info) as u64;
+    //let bytes_per_element = len_type.const_int(elem_bytes, false);
+    //let number_of_data_bytes =
+    //    builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
-    let basic_type = basic_type_from_layout(env, elem_layout);
-    let alignment_bytes = elem_layout.alignment_bytes(env.target_info);
-    allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes)
+    //let basic_type = basic_type_from_layout(env, elem_layout);
+    //let alignment_bytes = elem_layout.alignment_bytes(env.target_info);
+    //allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes)
 }
 
 pub(crate) fn store_list<'a, 'ctx, 'env>(

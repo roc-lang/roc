@@ -42,68 +42,69 @@ pub enum WasmLayout {
 
 impl WasmLayout {
     pub fn new(layout: &Layout) -> Self {
-        use roc_mono::layout::Builtin::*;
-        use UnionLayout::*;
-        use ValueType::*;
+        todo!()
+        //use roc_mono::layout::Builtin::*;
+        //use UnionLayout::*;
+        //use ValueType::*;
 
-        let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
+        //let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
 
-        match layout {
-            Layout::Builtin(Int(int_width)) => {
-                use IntWidth::*;
+        //match layout {
+        //    Layout::Builtin(Int(int_width)) => {
+        //        use IntWidth::*;
 
-                match int_width {
-                    I32 | U32 | I16 | U16 | I8 | U8 => Self::Primitive(ValueType::I32, size),
-                    I64 | U64 => Self::Primitive(ValueType::I64, size),
-                    I128 | U128 => Self::StackMemory {
-                        size,
-                        alignment_bytes,
-                        format: StackMemoryFormat::Int128,
-                    },
-                }
-            }
+        //        match int_width {
+        //            I32 | U32 | I16 | U16 | I8 | U8 => Self::Primitive(ValueType::I32, size),
+        //            I64 | U64 => Self::Primitive(ValueType::I64, size),
+        //            I128 | U128 => Self::StackMemory {
+        //                size,
+        //                alignment_bytes,
+        //                format: StackMemoryFormat::Int128,
+        //            },
+        //        }
+        //    }
 
-            Layout::Builtin(Bool) => Self::Primitive(I32, size),
+        //    Layout::Builtin(Bool) => Self::Primitive(I32, size),
 
-            Layout::Builtin(Float(float_width)) => {
-                use FloatWidth::*;
+        //    Layout::Builtin(Float(float_width)) => {
+        //        use FloatWidth::*;
 
-                match float_width {
-                    F32 => Self::Primitive(ValueType::F32, size),
-                    F64 => Self::Primitive(ValueType::F64, size),
-                    F128 => Self::StackMemory {
-                        size,
-                        alignment_bytes,
-                        format: StackMemoryFormat::Float128,
-                    },
-                }
-            }
+        //        match float_width {
+        //            F32 => Self::Primitive(ValueType::F32, size),
+        //            F64 => Self::Primitive(ValueType::F64, size),
+        //            F128 => Self::StackMemory {
+        //                size,
+        //                alignment_bytes,
+        //                format: StackMemoryFormat::Float128,
+        //            },
+        //        }
+        //    }
 
-            Layout::Builtin(Decimal) => Self::StackMemory {
-                size,
-                alignment_bytes,
-                format: StackMemoryFormat::Decimal,
-            },
+        //    Layout::Builtin(Decimal) => Self::StackMemory {
+        //        size,
+        //        alignment_bytes,
+        //        format: StackMemoryFormat::Decimal,
+        //    },
 
-            Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
+        //    Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
 
-            Layout::Builtin(Str | List(_))
-            | Layout::Struct { .. }
-            | Layout::Union(NonRecursive(_)) => Self::StackMemory {
-                size,
-                alignment_bytes,
-                format: StackMemoryFormat::DataStructure,
-            },
+        //    Layout::Builtin(Str | List(_))
+        //    | Layout::Struct { .. }
+        //    | Layout::Union(NonRecursive(_)) => Self::StackMemory {
+        //        size,
+        //        alignment_bytes,
+        //        format: StackMemoryFormat::DataStructure,
+        //    },
 
-            Layout::Union(
-                Recursive(_)
-                | NonNullableUnwrapped(_)
-                | NullableWrapped { .. }
-                | NullableUnwrapped { .. },
-            )
-            | Layout::Boxed(_)
-            | Layout::RecursivePointer => Self::Primitive(PTR_TYPE, PTR_SIZE),
-        }
+        //    Layout::Union(
+        //        Recursive(_)
+        //        | NonNullableUnwrapped(_)
+        //        | NullableWrapped { .. }
+        //        | NullableUnwrapped { .. },
+        //    )
+        //    | Layout::Boxed(_)
+        //    | Layout::RecursivePointer => Self::Primitive(PTR_TYPE, PTR_SIZE),
+        //}
     }
 
     /// The `ValueType`s to use for this layout when calling a Wasm function

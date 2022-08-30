@@ -123,53 +123,54 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
-        let alignment = layout
-            .allocation_alignment_bytes(env.target_info)
-            .max(env.target_info.ptr_width() as u32);
+        todo!()
+        //let alignment = layout
+        //    .allocation_alignment_bytes(env.target_info)
+        //    .max(env.target_info.ptr_width() as u32);
 
-        let context = env.context;
-        let block = env.builder.get_insert_block().expect("to be in a function");
-        let di_location = env.builder.get_current_debug_location().unwrap();
+        //let context = env.context;
+        //let block = env.builder.get_insert_block().expect("to be in a function");
+        //let di_location = env.builder.get_current_debug_location().unwrap();
 
-        let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
+        //let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
 
-        let function = match env.module.get_function(fn_name) {
-            Some(function_value) => function_value,
-            None => {
-                // inc and dec return void
-                let fn_type = context.void_type().fn_type(
-                    &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
-                    false,
-                );
+        //let function = match env.module.get_function(fn_name) {
+        //    Some(function_value) => function_value,
+        //    None => {
+        //        // inc and dec return void
+        //        let fn_type = context.void_type().fn_type(
+        //            &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
+        //            false,
+        //        );
 
-                let function_value = add_func(
-                    env.context,
-                    env.module,
-                    fn_name,
-                    FunctionSpec::known_fastcc(fn_type),
-                    Linkage::Internal,
-                );
+        //        let function_value = add_func(
+        //            env.context,
+        //            env.module,
+        //            fn_name,
+        //            FunctionSpec::known_fastcc(fn_type),
+        //            Linkage::Internal,
+        //        );
 
-                let subprogram = env.new_subprogram(fn_name);
-                function_value.set_subprogram(subprogram);
+        //        let subprogram = env.new_subprogram(fn_name);
+        //        function_value.set_subprogram(subprogram);
 
-                Self::build_decrement_function_body(env, function_value, alignment);
+        //        Self::build_decrement_function_body(env, function_value, alignment);
 
-                function_value
-            }
-        };
+        //        function_value
+        //    }
+        //};
 
-        let refcount_ptr = self.value;
+        //let refcount_ptr = self.value;
 
-        env.builder.position_at_end(block);
-        env.builder
-            .set_current_debug_location(env.context, di_location);
+        //env.builder.position_at_end(block);
+        //env.builder
+        //    .set_current_debug_location(env.context, di_location);
 
-        let call = env
-            .builder
-            .build_call(function, &[refcount_ptr.into()], fn_name);
+        //let call = env
+        //    .builder
+        //    .build_call(function, &[refcount_ptr.into()], fn_name);
 
-        call.set_call_convention(FAST_CALL_CONV);
+        //call.set_call_convention(FAST_CALL_CONV);
     }
 
     fn build_decrement_function_body<'a, 'env>(
@@ -332,29 +333,30 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     let wrapper_struct = arg_val.into_struct_value();
 
     for (i, field_layout) in layouts.iter().enumerate() {
-        if field_layout.contains_refcounted() {
-            let raw_value = env
-                .builder
-                .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                .unwrap();
+        todo!()
+        //if field_layout.contains_refcounted() {
+        //    let raw_value = env
+        //        .builder
+        //        .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+        //        .unwrap();
 
-            let field_value = use_roc_value(
-                env,
-                *field_layout,
-                raw_value,
-                "load_struct_tag_field_for_decrement",
-            );
+        //    let field_value = use_roc_value(
+        //        env,
+        //        *field_layout,
+        //        raw_value,
+        //        "load_struct_tag_field_for_decrement",
+        //    );
 
-            modify_refcount_layout_help(
-                env,
-                parent,
-                layout_ids,
-                mode.to_call_mode(fn_val),
-                when_recursive,
-                field_value,
-                field_layout,
-            );
-        }
+        //    modify_refcount_layout_help(
+        //        env,
+        //        parent,
+        //        layout_ids,
+        //        mode.to_call_mode(fn_val),
+        //        when_recursive,
+        //        field_value,
+        //        field_layout,
+        //    );
+        //}
     }
     // this function returns void
     builder.build_return(None);
@@ -613,7 +615,8 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             layout_ids,
             mode,
             when_recursive,
-            &lambda_set.runtime_representation(),
+            todo!(),
+            // &lambda_set.runtime_representation(),
         ),
     }
 }
@@ -717,44 +720,46 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(modification_block);
 
-    if element_layout.contains_refcounted() {
-        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
+    todo!()
 
-        let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
+    //if element_layout.contains_refcounted() {
+    //    let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
 
-        let loop_fn = |_index, element| {
-            modify_refcount_layout_help(
-                env,
-                parent,
-                layout_ids,
-                mode.to_call_mode(fn_val),
-                when_recursive,
-                element,
-                element_layout,
-            );
-        };
+    //    let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
-        incrementing_elem_loop(
-            env,
-            parent,
-            *element_layout,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
-    }
+    //    let loop_fn = |_index, element| {
+    //        modify_refcount_layout_help(
+    //            env,
+    //            parent,
+    //            layout_ids,
+    //            mode.to_call_mode(fn_val),
+    //            when_recursive,
+    //            element,
+    //            element_layout,
+    //        );
+    //    };
 
-    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
-    let call_mode = mode_to_call_mode(fn_val, mode);
-    refcount_ptr.modify(call_mode, layout, env);
+    //    incrementing_elem_loop(
+    //        env,
+    //        parent,
+    //        *element_layout,
+    //        ptr,
+    //        len,
+    //        "modify_rc_index",
+    //        loop_fn,
+    //    );
+    //}
 
-    builder.build_unconditional_branch(cont_block);
+    //let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+    //let call_mode = mode_to_call_mode(fn_val, mode);
+    //refcount_ptr.modify(call_mode, layout, env);
 
-    builder.position_at_end(cont_block);
+    //builder.build_unconditional_branch(cont_block);
 
-    // this function returns void
-    builder.build_return(None);
+    //builder.position_at_end(cont_block);
+
+    //// this function returns void
+    //builder.build_return(None);
 }
 
 fn modify_refcount_str<'a, 'ctx, 'env>(
@@ -818,47 +823,49 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
-        env.builder
-            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
-    } else {
-        // it's already a struct, just do nothing
-        debug_assert!(arg_val.is_struct_value());
-        arg_val
-    };
-    let str_wrapper = arg_val.into_struct_value();
+    todo!()
 
-    let capacity = builder
-        .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
-        .unwrap()
-        .into_int_value();
+    // let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
+    //     env.builder
+    //         .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+    // } else {
+    //     // it's already a struct, just do nothing
+    //     debug_assert!(arg_val.is_struct_value());
+    //     arg_val
+    // };
+    // let str_wrapper = arg_val.into_struct_value();
 
-    // Small strings have 1 as the first bit of capacity, making them negative.
-    // Thus, to check for big and non empty, just needs a signed len > 0.
-    let is_big_and_non_empty = builder.build_int_compare(
-        IntPredicate::SGT,
-        capacity,
-        env.ptr_int().const_zero(),
-        "is_big_str",
-    );
+    // let capacity = builder
+    //     .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
+    //     .unwrap()
+    //     .into_int_value();
 
-    // the block we'll always jump to when we're done
-    let cont_block = ctx.append_basic_block(parent, "modify_rc_str_cont");
-    let modification_block = ctx.append_basic_block(parent, "modify_rc");
+    // // Small strings have 1 as the first bit of capacity, making them negative.
+    // // Thus, to check for big and non empty, just needs a signed len > 0.
+    // let is_big_and_non_empty = builder.build_int_compare(
+    //     IntPredicate::SGT,
+    //     capacity,
+    //     env.ptr_int().const_zero(),
+    //     "is_big_str",
+    // );
 
-    builder.build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
-    builder.position_at_end(modification_block);
+    // // the block we'll always jump to when we're done
+    // let cont_block = ctx.append_basic_block(parent, "modify_rc_str_cont");
+    // let modification_block = ctx.append_basic_block(parent, "modify_rc");
 
-    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
-    let call_mode = mode_to_call_mode(fn_val, mode);
-    refcount_ptr.modify(call_mode, layout, env);
+    // builder.build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
+    // builder.position_at_end(modification_block);
 
-    builder.build_unconditional_branch(cont_block);
+    // let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
+    // let call_mode = mode_to_call_mode(fn_val, mode);
+    // refcount_ptr.modify(call_mode, layout, env);
 
-    builder.position_at_end(cont_block);
+    // builder.build_unconditional_branch(cont_block);
 
-    // this function returns void
-    builder.build_return(None);
+    // builder.position_at_end(cont_block);
+
+    // // this function returns void
+    // builder.build_return(None);
 }
 
 fn modify_refcount_boxed<'a, 'ctx, 'env>(
@@ -1179,9 +1186,10 @@ enum DecOrReuse {
 }
 
 fn fields_need_no_refcounting(field_layouts: &[Layout]) -> bool {
-    !field_layouts
-        .iter()
-        .any(|x| x.is_refcounted() || x.contains_refcounted())
+    todo!()
+    // !field_layouts
+    //    .iter()
+    //    .any(|x| x.is_refcounted() || x.contains_refcounted())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1238,35 +1246,36 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         let mut deferred_nonrec = Vec::new_in(env.arena);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = field_layout {
-                // this field has type `*i64`, but is really a pointer to the data we want
-                let elem_pointer = env
-                    .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
-                    .unwrap();
+            todo!()
+            //if let Layout::RecursivePointer = field_layout {
+            //    // this field has type `*i64`, but is really a pointer to the data we want
+            //    let elem_pointer = env
+            //        .builder
+            //        .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+            //        .unwrap();
 
-                let ptr_as_i64_ptr = env
-                    .builder
-                    .build_load(elem_pointer, "load_recursive_pointer");
+            //    let ptr_as_i64_ptr = env
+            //        .builder
+            //        .build_load(elem_pointer, "load_recursive_pointer");
 
-                debug_assert!(ptr_as_i64_ptr.is_pointer_value());
+            //    debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
-                // therefore we must cast it to our desired type
-                let union_type = basic_type_from_layout(env, &Layout::Union(union_layout));
-                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
+            //    // therefore we must cast it to our desired type
+            //    let union_type = basic_type_from_layout(env, &Layout::Union(union_layout));
+            //    let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
 
-                deferred_rec.push(recursive_field_ptr);
-            } else if field_layout.contains_refcounted() {
-                let elem_pointer = env
-                    .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
-                    .unwrap();
+            //    deferred_rec.push(recursive_field_ptr);
+            //} else if field_layout.contains_refcounted() {
+            //    let elem_pointer = env
+            //        .builder
+            //        .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+            //        .unwrap();
 
-                let field =
-                    load_roc_value(env, *field_layout, elem_pointer, "decrement_struct_field");
+            //    let field =
+            //        load_roc_value(env, *field_layout, elem_pointer, "decrement_struct_field");
 
-                deferred_nonrec.push((field, field_layout));
-            }
+            //    deferred_nonrec.push((field, field_layout));
+            //}
         }
 
         // OPTIMIZATION
@@ -1572,147 +1581,148 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     tags: &[&[Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
 ) {
-    debug_assert!(!tags.is_empty());
+    todo!()
+    //debug_assert!(!tags.is_empty());
 
-    let context = &env.context;
-    let builder = env.builder;
+    //let context = &env.context;
+    //let builder = env.builder;
 
-    // Add a basic block for the entry point
-    let entry = context.append_basic_block(fn_val, "entry");
+    //// Add a basic block for the entry point
+    //let entry = context.append_basic_block(fn_val, "entry");
 
-    builder.position_at_end(entry);
+    //builder.position_at_end(entry);
 
-    debug_info_init!(env, fn_val);
+    //debug_info_init!(env, fn_val);
 
-    // Add args to scope
-    let arg_symbol = Symbol::ARG_1;
-    let arg_ptr = fn_val.get_param_iter().next().unwrap().into_pointer_value();
+    //// Add args to scope
+    //let arg_symbol = Symbol::ARG_1;
+    //let arg_ptr = fn_val.get_param_iter().next().unwrap().into_pointer_value();
 
-    arg_ptr.set_name(arg_symbol.as_str(&env.interns));
+    //arg_ptr.set_name(arg_symbol.as_str(&env.interns));
 
-    let parent = fn_val;
+    //let parent = fn_val;
 
-    let before_block = env.builder.get_insert_block().expect("to be in a function");
+    //let before_block = env.builder.get_insert_block().expect("to be in a function");
 
-    // read the tag_id
-    let tag_id_ptr = env
-        .builder
-        .build_struct_gep(arg_ptr, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
-        .unwrap();
+    //// read the tag_id
+    //let tag_id_ptr = env
+    //    .builder
+    //    .build_struct_gep(arg_ptr, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
+    //    .unwrap();
 
-    let tag_id = env
-        .builder
-        .build_load(tag_id_ptr, "load_tag_id")
-        .into_int_value();
+    //let tag_id = env
+    //    .builder
+    //    .build_load(tag_id_ptr, "load_tag_id")
+    //    .into_int_value();
 
-    let tag_id_u8 =
-        env.builder
-            .build_int_cast_sign_flag(tag_id, env.context.i8_type(), false, "tag_id_u8");
+    //let tag_id_u8 =
+    //    env.builder
+    //        .build_int_cast_sign_flag(tag_id, env.context.i8_type(), false, "tag_id_u8");
 
-    // next, make a jump table for all possible values of the tag_id
-    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+    //// next, make a jump table for all possible values of the tag_id
+    //let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-    let merge_block = env
-        .context
-        .append_basic_block(parent, "modify_rc_union_merge");
+    //let merge_block = env
+    //    .context
+    //    .append_basic_block(parent, "modify_rc_union_merge");
 
-    for (tag_id, field_layouts) in tags.iter().enumerate() {
-        // if none of the fields are or contain anything refcounted, just move on
-        if !field_layouts
-            .iter()
-            .any(|x| x.is_refcounted() || x.contains_refcounted())
-        {
-            continue;
-        }
+    //for (tag_id, field_layouts) in tags.iter().enumerate() {
+    //    // if none of the fields are or contain anything refcounted, just move on
+    //    if !field_layouts
+    //        .iter()
+    //        .any(|x| x.is_refcounted() || x.contains_refcounted())
+    //    {
+    //        continue;
+    //    }
 
-        let block = env.context.append_basic_block(parent, "tag_id_modify");
-        env.builder.position_at_end(block);
+    //    let block = env.context.append_basic_block(parent, "tag_id_modify");
+    //    env.builder.position_at_end(block);
 
-        let wrapper_type =
-            basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
+    //    let wrapper_type =
+    //        basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
-        debug_assert!(wrapper_type.is_struct_type());
-        let opaque_tag_data_ptr = env
-            .builder
-            .build_struct_gep(arg_ptr, RocUnion::TAG_DATA_INDEX, "field_ptr")
-            .unwrap();
+    //    debug_assert!(wrapper_type.is_struct_type());
+    //    let opaque_tag_data_ptr = env
+    //        .builder
+    //        .build_struct_gep(arg_ptr, RocUnion::TAG_DATA_INDEX, "field_ptr")
+    //        .unwrap();
 
-        let cast_tag_data_pointer = env.builder.build_pointer_cast(
-            opaque_tag_data_ptr,
-            wrapper_type.ptr_type(AddressSpace::Generic),
-            "cast_to_concrete_tag",
-        );
+    //    let cast_tag_data_pointer = env.builder.build_pointer_cast(
+    //        opaque_tag_data_ptr,
+    //        wrapper_type.ptr_type(AddressSpace::Generic),
+    //        "cast_to_concrete_tag",
+    //    );
 
-        for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = field_layout {
-                let recursive_union_layout = match when_recursive {
-                    WhenRecursive::Unreachable => {
-                        panic!("non-recursive tag unions cannot contain naked recursion pointers!");
-                    }
-                    WhenRecursive::Loop(recursive_union_layout) => recursive_union_layout,
-                };
+    //    for (i, field_layout) in field_layouts.iter().enumerate() {
+    //        if let Layout::RecursivePointer = field_layout {
+    //            let recursive_union_layout = match when_recursive {
+    //                WhenRecursive::Unreachable => {
+    //                    panic!("non-recursive tag unions cannot contain naked recursion pointers!");
+    //                }
+    //                WhenRecursive::Loop(recursive_union_layout) => recursive_union_layout,
+    //            };
 
-                // This field is a pointer to the recursive pointer.
-                let field_ptr = env
-                    .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
-                    .unwrap();
+    //            // This field is a pointer to the recursive pointer.
+    //            let field_ptr = env
+    //                .builder
+    //                .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+    //                .unwrap();
 
-                // This is the actual pointer to the recursive data.
-                let field_value = env.builder.build_load(field_ptr, "load_recursive_pointer");
+    //            // This is the actual pointer to the recursive data.
+    //            let field_value = env.builder.build_load(field_ptr, "load_recursive_pointer");
 
-                debug_assert!(field_value.is_pointer_value());
+    //            debug_assert!(field_value.is_pointer_value());
 
-                // therefore we must cast it to our desired type
-                let union_type =
-                    basic_type_from_layout(env, &Layout::Union(*recursive_union_layout));
-                let recursive_ptr_field_value =
-                    cast_basic_basic(env.builder, field_value, union_type);
+    //            // therefore we must cast it to our desired type
+    //            let union_type =
+    //                basic_type_from_layout(env, &Layout::Union(*recursive_union_layout));
+    //            let recursive_ptr_field_value =
+    //                cast_basic_basic(env.builder, field_value, union_type);
 
-                modify_refcount_layout_help(
-                    env,
-                    parent,
-                    layout_ids,
-                    mode.to_call_mode(fn_val),
-                    when_recursive,
-                    recursive_ptr_field_value,
-                    &Layout::RecursivePointer,
-                )
-            } else if field_layout.contains_refcounted() {
-                let field_ptr = env
-                    .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
-                    .unwrap();
+    //            modify_refcount_layout_help(
+    //                env,
+    //                parent,
+    //                layout_ids,
+    //                mode.to_call_mode(fn_val),
+    //                when_recursive,
+    //                recursive_ptr_field_value,
+    //                &Layout::RecursivePointer,
+    //            )
+    //        } else if field_layout.contains_refcounted() {
+    //            let field_ptr = env
+    //                .builder
+    //                .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+    //                .unwrap();
 
-                let field_value = if field_layout.is_passed_by_reference(env.target_info) {
-                    field_ptr.into()
-                } else {
-                    env.builder.build_load(field_ptr, "field_value")
-                };
+    //            let field_value = if field_layout.is_passed_by_reference(env.target_info) {
+    //                field_ptr.into()
+    //            } else {
+    //                env.builder.build_load(field_ptr, "field_value")
+    //            };
 
-                modify_refcount_layout_help(
-                    env,
-                    parent,
-                    layout_ids,
-                    mode.to_call_mode(fn_val),
-                    when_recursive,
-                    field_value,
-                    field_layout,
-                );
-            }
-        }
+    //            modify_refcount_layout_help(
+    //                env,
+    //                parent,
+    //                layout_ids,
+    //                mode.to_call_mode(fn_val),
+    //                when_recursive,
+    //                field_value,
+    //                field_layout,
+    //            );
+    //        }
+    //    }
 
-        env.builder.build_unconditional_branch(merge_block);
+    //    env.builder.build_unconditional_branch(merge_block);
 
-        cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
-    }
+    //    cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+    //}
 
-    env.builder.position_at_end(before_block);
+    //env.builder.position_at_end(before_block);
 
-    env.builder.build_switch(tag_id_u8, merge_block, &cases);
+    //env.builder.build_switch(tag_id_u8, merge_block, &cases);
 
-    env.builder.position_at_end(merge_block);
+    //env.builder.position_at_end(merge_block);
 
-    // this function returns void
-    builder.build_return(None);
+    //// this function returns void
+    //builder.build_return(None);
 }

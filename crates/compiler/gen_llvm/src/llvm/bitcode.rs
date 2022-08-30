@@ -203,111 +203,112 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     result_layout: Layout<'a>,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
-    debug_assert!(argument_layouts.len() <= 7);
+    todo!()
+    //debug_assert!(argument_layouts.len() <= 7);
 
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
+    //let block = env.builder.get_insert_block().expect("to be in a function");
+    //let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    //let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let function_value = crate::llvm::refcounting::build_header_help(
-        env,
-        fn_name,
-        env.context.void_type().into(),
-        &(bumpalo::vec![in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2]),
-    );
+    //let function_value = crate::llvm::refcounting::build_header_help(
+    //    env,
+    //    fn_name,
+    //    env.context.void_type().into(),
+    //    &(bumpalo::vec![in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2]),
+    //);
 
-    // called from zig, must use C calling convention
-    function_value.set_call_conventions(C_CALL_CONV);
+    //// called from zig, must use C calling convention
+    //function_value.set_call_conventions(C_CALL_CONV);
 
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
-    function_value.add_attribute(AttributeLoc::Function, attr);
+    //let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    //debug_assert!(kind_id > 0);
+    //let attr = env.context.create_enum_attribute(kind_id, 1);
+    //function_value.add_attribute(AttributeLoc::Function, attr);
 
-    let entry = env.context.append_basic_block(function_value, "entry");
-    env.builder.position_at_end(entry);
+    //let entry = env.context.append_basic_block(function_value, "entry");
+    //env.builder.position_at_end(entry);
 
-    debug_info_init!(env, function_value);
+    //debug_info_init!(env, function_value);
 
-    let mut it = function_value.get_param_iter();
-    let closure_ptr = it.next().unwrap().into_pointer_value();
-    closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+    //let mut it = function_value.get_param_iter();
+    //let closure_ptr = it.next().unwrap().into_pointer_value();
+    //closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-    let arguments =
-        bumpalo::collections::Vec::from_iter_in(it.take(argument_layouts.len()), env.arena);
+    //let arguments =
+    //    bumpalo::collections::Vec::from_iter_in(it.take(argument_layouts.len()), env.arena);
 
-    for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS[1..].iter()) {
-        argument.set_name(name.as_str(&env.interns));
-    }
+    //for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS[1..].iter()) {
+    //    argument.set_name(name.as_str(&env.interns));
+    //}
 
-    let mut arguments_cast =
-        bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+    //let mut arguments_cast =
+    //    bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
-    for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
-        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+    //for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
+    //    let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument = if layout.is_passed_by_reference(env.target_info) {
-            env.builder
-                .build_pointer_cast(
-                    argument_ptr.into_pointer_value(),
-                    basic_type,
-                    "cast_ptr_to_tag_build_transform_caller_help",
-                )
-                .into()
-        } else {
-            let argument_cast = env
-                .builder
-                .build_bitcast(*argument_ptr, basic_type, "load_opaque_1")
-                .into_pointer_value();
+    //    let argument = if layout.is_passed_by_reference(env.target_info) {
+    //        env.builder
+    //            .build_pointer_cast(
+    //                argument_ptr.into_pointer_value(),
+    //                basic_type,
+    //                "cast_ptr_to_tag_build_transform_caller_help",
+    //            )
+    //            .into()
+    //    } else {
+    //        let argument_cast = env
+    //            .builder
+    //            .build_bitcast(*argument_ptr, basic_type, "load_opaque_1")
+    //            .into_pointer_value();
 
-            env.builder.build_load(argument_cast, "load_opaque_2")
-        };
+    //        env.builder.build_load(argument_cast, "load_opaque_2")
+    //    };
 
-        arguments_cast.push(argument);
-    }
+    //    arguments_cast.push(argument);
+    //}
 
-    match (
-        closure_data_layout.is_represented().is_some(),
-        closure_data_layout.runtime_representation(),
-    ) {
-        (false, _) => {
-            // the function doesn't expect a closure argument, nothing to add
-        }
-        (true, layout) => {
-            let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
+    //match (
+    //    closure_data_layout.is_represented().is_some(),
+    //    closure_data_layout.runtime_representation(),
+    //) {
+    //    (false, _) => {
+    //        // the function doesn't expect a closure argument, nothing to add
+    //    }
+    //    (true, layout) => {
+    //        let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
 
-            let closure_cast = env
-                .builder
-                .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                .into_pointer_value();
+    //        let closure_cast = env
+    //            .builder
+    //            .build_bitcast(closure_ptr, closure_type, "load_opaque")
+    //            .into_pointer_value();
 
-            let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+    //        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-            arguments_cast.push(closure_data);
-        }
-    }
+    //        arguments_cast.push(closure_data);
+    //    }
+    //}
 
-    let result = crate::llvm::build::call_roc_function(
-        env,
-        roc_function,
-        &result_layout,
-        arguments_cast.as_slice(),
-    );
+    //let result = crate::llvm::build::call_roc_function(
+    //    env,
+    //    roc_function,
+    //    &result_layout,
+    //    arguments_cast.as_slice(),
+    //);
 
-    let result_u8_ptr = function_value
-        .get_nth_param(argument_layouts.len() as u32 + 1)
-        .unwrap()
-        .into_pointer_value();
+    //let result_u8_ptr = function_value
+    //    .get_nth_param(argument_layouts.len() as u32 + 1)
+    //    .unwrap()
+    //    .into_pointer_value();
 
-    crate::llvm::build::store_roc_value_opaque(env, result_layout, result_u8_ptr, result);
-    env.builder.build_return(None);
+    //crate::llvm::build::store_roc_value_opaque(env, result_layout, result_u8_ptr, result);
+    //env.builder.build_return(None);
 
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    //env.builder.position_at_end(block);
+    //env.builder
+    //    .set_current_debug_location(env.context, di_location);
 
-    function_value
+    //function_value
 }
 
 enum Mode {
@@ -348,100 +349,101 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     rc_operation: Mode,
 ) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
+    todo!()
+    //let block = env.builder.get_insert_block().expect("to be in a function");
+    //let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let symbol = Symbol::GENERIC_RC_REF;
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
+    //let symbol = Symbol::GENERIC_RC_REF;
+    //let fn_name = layout_ids
+    //    .get(symbol, layout)
+    //    .to_symbol_string(symbol, &env.interns);
 
-    let fn_name = match rc_operation {
-        Mode::IncN => format!("{}_inc_n", fn_name),
-        Mode::Inc => format!("{}_inc", fn_name),
-        Mode::Dec => format!("{}_dec", fn_name),
-    };
+    //let fn_name = match rc_operation {
+    //    Mode::IncN => format!("{}_inc_n", fn_name),
+    //    Mode::Inc => format!("{}_inc", fn_name),
+    //    Mode::Dec => format!("{}_dec", fn_name),
+    //};
 
-    let function_value = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    //let function_value = match env.module.get_function(fn_name.as_str()) {
+    //    Some(function_value) => function_value,
+    //    None => {
+    //        let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-            let function_value = match rc_operation {
-                Mode::Inc | Mode::Dec => crate::llvm::refcounting::build_header_help(
-                    env,
-                    &fn_name,
-                    env.context.void_type().into(),
-                    &[arg_type.into()],
-                ),
-                Mode::IncN => crate::llvm::refcounting::build_header_help(
-                    env,
-                    &fn_name,
-                    env.context.void_type().into(),
-                    &[arg_type.into(), env.ptr_int().into()],
-                ),
-            };
+    //        let function_value = match rc_operation {
+    //            Mode::Inc | Mode::Dec => crate::llvm::refcounting::build_header_help(
+    //                env,
+    //                &fn_name,
+    //                env.context.void_type().into(),
+    //                &[arg_type.into()],
+    //            ),
+    //            Mode::IncN => crate::llvm::refcounting::build_header_help(
+    //                env,
+    //                &fn_name,
+    //                env.context.void_type().into(),
+    //                &[arg_type.into(), env.ptr_int().into()],
+    //            ),
+    //        };
 
-            // called from zig, must use C calling convention
-            function_value.set_call_conventions(C_CALL_CONV);
+    //        // called from zig, must use C calling convention
+    //        function_value.set_call_conventions(C_CALL_CONV);
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+    //        let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    //        debug_assert!(kind_id > 0);
+    //        let attr = env.context.create_enum_attribute(kind_id, 1);
+    //        function_value.add_attribute(AttributeLoc::Function, attr);
 
-            let entry = env.context.append_basic_block(function_value, "entry");
-            env.builder.position_at_end(entry);
+    //        let entry = env.context.append_basic_block(function_value, "entry");
+    //        env.builder.position_at_end(entry);
 
-            debug_info_init!(env, function_value);
+    //        debug_info_init!(env, function_value);
 
-            let mut it = function_value.get_param_iter();
-            let value_ptr = it.next().unwrap().into_pointer_value();
+    //        let mut it = function_value.get_param_iter();
+    //        let value_ptr = it.next().unwrap().into_pointer_value();
 
-            value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+    //        value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+    //        let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-            let value = if layout.is_passed_by_reference(env.target_info) {
-                env.builder
-                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
-                    .into()
-            } else {
-                let value_cast = env
-                    .builder
-                    .build_bitcast(value_ptr, value_type, "load_opaque")
-                    .into_pointer_value();
+    //        let value = if layout.is_passed_by_reference(env.target_info) {
+    //            env.builder
+    //                .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
+    //                .into()
+    //        } else {
+    //            let value_cast = env
+    //                .builder
+    //                .build_bitcast(value_ptr, value_type, "load_opaque")
+    //                .into_pointer_value();
 
-                env.builder.build_load(value_cast, "load_opaque")
-            };
+    //            env.builder.build_load(value_cast, "load_opaque")
+    //        };
 
-            match rc_operation {
-                Mode::Inc => {
-                    let n = 1;
-                    increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
-                }
-                Mode::IncN => {
-                    let n = it.next().unwrap().into_int_value();
-                    n.set_name(Symbol::ARG_2.as_str(&env.interns));
+    //        match rc_operation {
+    //            Mode::Inc => {
+    //                let n = 1;
+    //                increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
+    //            }
+    //            Mode::IncN => {
+    //                let n = it.next().unwrap().into_int_value();
+    //                n.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-                    increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
-                }
-                Mode::Dec => {
-                    decrement_refcount_layout(env, function_value, layout_ids, value, layout);
-                }
-            }
+    //                increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
+    //            }
+    //            Mode::Dec => {
+    //                decrement_refcount_layout(env, function_value, layout_ids, value, layout);
+    //            }
+    //        }
 
-            env.builder.build_return(None);
+    //        env.builder.build_return(None);
 
-            function_value
-        }
-    };
+    //        function_value
+    //    }
+    //};
 
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    //env.builder.position_at_end(block);
+    //env.builder
+    //    .set_current_debug_location(env.context, di_location);
 
-    function_value
+    //function_value
 }
 
 pub fn build_eq_wrapper<'a, 'ctx, 'env>(
@@ -527,115 +529,116 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     closure_data_layout: LambdaSet<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
+    todo!()
+    //let block = env.builder.get_insert_block().expect("to be in a function");
+    //let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let fn_name: &str = &format!(
-        "{}_compare_wrapper",
-        roc_function.get_name().to_string_lossy()
-    );
+    //let fn_name: &str = &format!(
+    //    "{}_compare_wrapper",
+    //    roc_function.get_name().to_string_lossy()
+    //);
 
-    let function_value = match env.module.get_function(fn_name) {
-        Some(function_value) => function_value,
-        None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    //let function_value = match env.module.get_function(fn_name) {
+    //    Some(function_value) => function_value,
+    //    None => {
+    //        let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-            let function_value = crate::llvm::refcounting::build_header_help(
-                env,
-                fn_name,
-                env.context.i8_type().into(),
-                &[arg_type.into(), arg_type.into(), arg_type.into()],
-            );
+    //        let function_value = crate::llvm::refcounting::build_header_help(
+    //            env,
+    //            fn_name,
+    //            env.context.i8_type().into(),
+    //            &[arg_type.into(), arg_type.into(), arg_type.into()],
+    //        );
 
-            // called from zig, must use C calling convention
-            function_value.set_call_conventions(C_CALL_CONV);
+    //        // called from zig, must use C calling convention
+    //        function_value.set_call_conventions(C_CALL_CONV);
 
-            // we expose this function to zig; must use c calling convention
-            function_value.set_call_conventions(C_CALL_CONV);
+    //        // we expose this function to zig; must use c calling convention
+    //        function_value.set_call_conventions(C_CALL_CONV);
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+    //        let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    //        debug_assert!(kind_id > 0);
+    //        let attr = env.context.create_enum_attribute(kind_id, 1);
+    //        function_value.add_attribute(AttributeLoc::Function, attr);
 
-            let entry = env.context.append_basic_block(function_value, "entry");
-            env.builder.position_at_end(entry);
+    //        let entry = env.context.append_basic_block(function_value, "entry");
+    //        env.builder.position_at_end(entry);
 
-            debug_info_init!(env, function_value);
+    //        debug_info_init!(env, function_value);
 
-            let mut it = function_value.get_param_iter();
-            let closure_ptr = it.next().unwrap().into_pointer_value();
-            let value_ptr1 = it.next().unwrap().into_pointer_value();
-            let value_ptr2 = it.next().unwrap().into_pointer_value();
+    //        let mut it = function_value.get_param_iter();
+    //        let closure_ptr = it.next().unwrap().into_pointer_value();
+    //        let value_ptr1 = it.next().unwrap().into_pointer_value();
+    //        let value_ptr2 = it.next().unwrap().into_pointer_value();
 
-            closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
-            value_ptr1.set_name(Symbol::ARG_2.as_str(&env.interns));
-            value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
+    //        closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+    //        value_ptr1.set_name(Symbol::ARG_2.as_str(&env.interns));
+    //        value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout);
-            let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
+    //        let value_type = basic_type_from_layout(env, layout);
+    //        let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-            let value_cast1 = env
-                .builder
-                .build_bitcast(value_ptr1, value_ptr_type, "load_opaque")
-                .into_pointer_value();
+    //        let value_cast1 = env
+    //            .builder
+    //            .build_bitcast(value_ptr1, value_ptr_type, "load_opaque")
+    //            .into_pointer_value();
 
-            let value_cast2 = env
-                .builder
-                .build_bitcast(value_ptr2, value_ptr_type, "load_opaque")
-                .into_pointer_value();
+    //        let value_cast2 = env
+    //            .builder
+    //            .build_bitcast(value_ptr2, value_ptr_type, "load_opaque")
+    //            .into_pointer_value();
 
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+    //        let value1 = env.builder.build_load(value_cast1, "load_opaque");
+    //        let value2 = env.builder.build_load(value_cast2, "load_opaque");
 
-            let default = [value1.into(), value2.into()];
+    //        let default = [value1.into(), value2.into()];
 
-            let arguments_cast = match closure_data_layout.runtime_representation() {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => {
-                    // nothing to add
-                    &default
-                }
-                other => {
-                    let closure_type =
-                        basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+    //        let arguments_cast = match closure_data_layout.runtime_representation() {
+    //            Layout::Struct {
+    //                field_layouts: &[], ..
+    //            } => {
+    //                // nothing to add
+    //                &default
+    //            }
+    //            other => {
+    //                let closure_type =
+    //                    basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
 
-                    let closure_cast = env
-                        .builder
-                        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                        .into_pointer_value();
+    //                let closure_cast = env
+    //                    .builder
+    //                    .build_bitcast(closure_ptr, closure_type, "load_opaque")
+    //                    .into_pointer_value();
 
-                    let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+    //                let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-                    env.arena
-                        .alloc([value1.into(), value2.into(), closure_data.into()])
-                        as &[_]
-                }
-            };
+    //                env.arena
+    //                    .alloc([value1.into(), value2.into(), closure_data.into()])
+    //                    as &[_]
+    //            }
+    //        };
 
-            let call = env.builder.build_call(
-                roc_function,
-                arguments_cast,
-                "call_user_defined_compare_function",
-            );
+    //        let call = env.builder.build_call(
+    //            roc_function,
+    //            arguments_cast,
+    //            "call_user_defined_compare_function",
+    //        );
 
-            let result = call.try_as_basic_value().left().unwrap();
+    //        let result = call.try_as_basic_value().left().unwrap();
 
-            // IMPORTANT! we call a user function, so it has the fast calling convention
-            call.set_call_convention(FAST_CALL_CONV);
+    //        // IMPORTANT! we call a user function, so it has the fast calling convention
+    //        call.set_call_convention(FAST_CALL_CONV);
 
-            env.builder.build_return(Some(&result));
+    //        env.builder.build_return(Some(&result));
 
-            function_value
-        }
-    };
+    //        function_value
+    //    }
+    //};
 
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    //env.builder.position_at_end(block);
+    //env.builder
+    //    .set_current_debug_location(env.context, di_location);
 
-    function_value
+    //function_value
 }
 
 enum BitcodeReturnValue<'ctx> {

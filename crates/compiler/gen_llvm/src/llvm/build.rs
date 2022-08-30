@@ -311,10 +311,11 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {
-        let alignment = element_layout.alignment_bytes(self.target_info);
-        let alignment_iv = self.alignment_const(alignment);
+        todo!()
+        //let alignment = element_layout.alignment_bytes(self.target_info);
+        //let alignment_iv = self.alignment_const(alignment);
 
-        alignment_iv.into()
+        //alignment_iv.into()
     }
 
     pub fn call_alloc(
@@ -758,46 +759,47 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     symbol: Symbol,
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let it = top_level.arguments.iter().copied();
-    let bytes = roc_alias_analysis::func_name_bytes_help(
-        symbol,
-        it,
-        CapturesNiche::no_niche(),
-        &top_level.result,
-    );
-    let func_name = FuncName(&bytes);
-    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+    todo!();
+    //let it = top_level.arguments.iter().copied();
+    //let bytes = roc_alias_analysis::func_name_bytes_help(
+    //    symbol,
+    //    it,
+    //    CapturesNiche::no_niche(),
+    //    &top_level.result,
+    //);
+    //let func_name = FuncName(&bytes);
+    //let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-    let mut it = func_solutions.specs();
-    let func_spec = it.next().unwrap();
-    debug_assert!(
-        it.next().is_none(),
-        "we expect only one specialization of this symbol"
-    );
+    //let mut it = func_solutions.specs();
+    //let func_spec = it.next().unwrap();
+    //debug_assert!(
+    //    it.next().is_none(),
+    //    "we expect only one specialization of this symbol"
+    //);
 
-    // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(
-        env,
-        *func_spec,
-        symbol,
-        &[],
-        CapturesNiche::no_niche(),
-        &Layout::UNIT,
-    );
+    //// NOTE fake layout; it is only used for debug prints
+    //let roc_main_fn = function_value_by_func_spec(
+    //    env,
+    //    *func_spec,
+    //    symbol,
+    //    &[],
+    //    CapturesNiche::no_niche(),
+    //    &Layout::UNIT,
+    //);
 
-    let main_fn_name = "$Test.main";
+    //let main_fn_name = "$Test.main";
 
-    // Add main to the module.
-    let main_fn = expose_function_to_host_help_c_abi(
-        env,
-        main_fn_name,
-        roc_main_fn,
-        top_level.arguments,
-        top_level.result,
-        main_fn_name,
-    );
+    //// Add main to the module.
+    //let main_fn = expose_function_to_host_help_c_abi(
+    //    env,
+    //    main_fn_name,
+    //    roc_main_fn,
+    //    top_level.arguments,
+    //    top_level.result,
+    //    main_fn_name,
+    //);
 
-    (main_fn_name, main_fn)
+    //(main_fn_name, main_fn)
 }
 
 fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
@@ -806,6 +808,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
     symbol: Symbol,
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
+    todo!()
     // generates roughly
     //
     // fn test_wrapper() -> *T {
@@ -815,85 +818,85 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
     //     ret ptr;
     // }
 
-    let main_fn_name = "test_wrapper";
+    //let main_fn_name = "test_wrapper";
 
-    let it = top_level.arguments.iter().copied();
-    let bytes = roc_alias_analysis::func_name_bytes_help(
-        symbol,
-        it,
-        CapturesNiche::no_niche(),
-        &top_level.result,
-    );
-    let func_name = FuncName(&bytes);
-    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+    //let it = top_level.arguments.iter().copied();
+    //let bytes = roc_alias_analysis::func_name_bytes_help(
+    //    symbol,
+    //    it,
+    //    CapturesNiche::no_niche(),
+    //    &top_level.result,
+    //);
+    //let func_name = FuncName(&bytes);
+    //let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-    let mut it = func_solutions.specs();
-    let func_spec = it.next().unwrap();
-    debug_assert!(
-        it.next().is_none(),
-        "we expect only one specialization of this symbol"
-    );
+    //let mut it = func_solutions.specs();
+    //let func_spec = it.next().unwrap();
+    //debug_assert!(
+    //    it.next().is_none(),
+    //    "we expect only one specialization of this symbol"
+    //);
 
-    // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(
-        env,
-        *func_spec,
-        symbol,
-        &[],
-        CapturesNiche::no_niche(),
-        &Layout::UNIT,
-    );
+    //// NOTE fake layout; it is only used for debug prints
+    //let roc_main_fn = function_value_by_func_spec(
+    //    env,
+    //    *func_spec,
+    //    symbol,
+    //    &[],
+    //    CapturesNiche::no_niche(),
+    //    &Layout::UNIT,
+    //);
 
-    let output_type = match roc_main_fn.get_type().get_return_type() {
-        Some(return_type) => {
-            let output_type = return_type.ptr_type(AddressSpace::Generic);
-            output_type.into()
-        }
-        None => {
-            assert_eq!(roc_main_fn.get_type().get_param_types().len(), 1);
-            let output_type = roc_main_fn.get_type().get_param_types()[0];
-            output_type
-        }
-    };
+    //let output_type = match roc_main_fn.get_type().get_return_type() {
+    //    Some(return_type) => {
+    //        let output_type = return_type.ptr_type(AddressSpace::Generic);
+    //        output_type.into()
+    //    }
+    //    None => {
+    //        assert_eq!(roc_main_fn.get_type().get_param_types().len(), 1);
+    //        let output_type = roc_main_fn.get_type().get_param_types()[0];
+    //        output_type
+    //    }
+    //};
 
-    let main_fn = {
-        let c_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(output_type), &[]);
+    //let main_fn = {
+    //    let c_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(output_type), &[]);
 
-        let c_function = add_func(
-            env.context,
-            env.module,
-            main_fn_name,
-            c_function_spec,
-            Linkage::External,
-        );
+    //    let c_function = add_func(
+    //        env.context,
+    //        env.module,
+    //        main_fn_name,
+    //        c_function_spec,
+    //        Linkage::External,
+    //    );
 
-        let subprogram = env.new_subprogram(main_fn_name);
-        c_function.set_subprogram(subprogram);
+    //    let subprogram = env.new_subprogram(main_fn_name);
+    //    c_function.set_subprogram(subprogram);
 
-        // STEP 2: build the exposed function's body
-        let builder = env.builder;
-        let context = env.context;
+    //    // STEP 2: build the exposed function's body
+    //    let builder = env.builder;
+    //    let context = env.context;
 
-        let entry = context.append_basic_block(c_function, "entry");
-        builder.position_at_end(entry);
+    //    let entry = context.append_basic_block(c_function, "entry");
+    //    builder.position_at_end(entry);
 
-        let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
+    //    let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
 
-        // For consistency, we always return with a heap-allocated value
-        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
-        let number_of_bytes = env.ptr_int().const_int(size as _, false);
-        let void_ptr = env.call_alloc(number_of_bytes, alignment);
+    //    // For consistency, we always return with a heap-allocated value
+    //    let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
+    //    let number_of_bytes = env.ptr_int().const_int(size as _, false);
+    //    let void_ptr = env.call_alloc(number_of_bytes, alignment);
 
-        let ptr = builder.build_pointer_cast(void_ptr, output_type.into_pointer_type(), "cast_ptr");
+    //    let ptr = builder.build_pointer_cast(void_ptr, output_type.into_pointer_type(), "cast_ptr");
 
-        store_roc_value(env, top_level.result, ptr, roc_main_fn_result);
+    //    store_roc_value(env, top_level.result, ptr, roc_main_fn_result);
 
-        builder.build_return(Some(&ptr));
+    //    builder.build_return(Some(&ptr));
 
-        c_function
-    };
+    //    c_function
+    //};
 
-    (main_fn_name, main_fn)
+    //(main_fn_name, main_fn)
 }
 
 fn int_with_precision<'a, 'ctx, 'env>(
@@ -1072,72 +1075,73 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     call: &roc_mono::ir::Call<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let roc_mono::ir::Call {
-        call_type,
-        arguments,
-    } = call;
+    todo!()
+    // let roc_mono::ir::Call {
+    //     call_type,
+    //     arguments,
+    // } = call;
 
-    match call_type {
-        CallType::ByName {
-            name,
-            specialization_id,
-            arg_layouts,
-            ret_layout,
-            ..
-        } => {
-            let mut arg_tuples: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(arguments.len(), env.arena);
+    // match call_type {
+    //     CallType::ByName {
+    //         name,
+    //         specialization_id,
+    //         arg_layouts,
+    //         ret_layout,
+    //         ..
+    //     } => {
+    //         let mut arg_tuples: Vec<BasicValueEnum> =
+    //             Vec::with_capacity_in(arguments.len(), env.arena);
 
-            for symbol in arguments.iter() {
-                arg_tuples.push(load_symbol(scope, symbol));
-            }
+    //         for symbol in arguments.iter() {
+    //             arg_tuples.push(load_symbol(scope, symbol));
+    //         }
 
-            let bytes = specialization_id.to_bytes();
-            let callee_var = CalleeSpecVar(&bytes);
-            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+    //         let bytes = specialization_id.to_bytes();
+    //         let callee_var = CalleeSpecVar(&bytes);
+    //         let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            roc_call_with_args(
-                env,
-                arg_layouts,
-                ret_layout,
-                *name,
-                func_spec,
-                arg_tuples.into_bump_slice(),
-            )
-        }
+    //         roc_call_with_args(
+    //             env,
+    //             arg_layouts,
+    //             ret_layout,
+    //             *name,
+    //             func_spec,
+    //             arg_tuples.into_bump_slice(),
+    //         )
+    //     }
 
-        CallType::LowLevel { op, update_mode } => {
-            let bytes = update_mode.to_bytes();
-            let update_var = UpdateModeVar(&bytes);
-            let update_mode = func_spec_solutions
-                .update_mode(update_var)
-                .unwrap_or(UpdateMode::Immutable);
+    //     CallType::LowLevel { op, update_mode } => {
+    //         let bytes = update_mode.to_bytes();
+    //         let update_var = UpdateModeVar(&bytes);
+    //         let update_mode = func_spec_solutions
+    //             .update_mode(update_var)
+    //             .unwrap_or(UpdateMode::Immutable);
 
-            run_low_level(
-                env,
-                layout_ids,
-                scope,
-                parent,
-                layout,
-                *op,
-                arguments,
-                update_mode,
-            )
-        }
+    //         run_low_level(
+    //             env,
+    //             layout_ids,
+    //             scope,
+    //             parent,
+    //             layout,
+    //             *op,
+    //             arguments,
+    //             update_mode,
+    //         )
+    //     }
 
-        CallType::HigherOrder(higher_order) => {
-            let bytes = higher_order.passed_function.specialization_id.to_bytes();
-            let callee_var = CalleeSpecVar(&bytes);
-            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+    //     CallType::HigherOrder(higher_order) => {
+    //         let bytes = higher_order.passed_function.specialization_id.to_bytes();
+    //         let callee_var = CalleeSpecVar(&bytes);
+    //         let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            run_higher_order_low_level(env, layout_ids, scope, layout, func_spec, higher_order)
-        }
+    //         run_higher_order_low_level(env, layout_ids, scope, layout, func_spec, higher_order)
+    //     }
 
-        CallType::Foreign {
-            foreign_symbol,
-            ret_layout,
-        } => build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout),
-    }
+    //     CallType::Foreign {
+    //         foreign_symbol,
+    //         ret_layout,
+    //     } => build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout),
+    // }
 }
 
 pub fn struct_from_fields<'a, 'ctx, 'env, I>(
@@ -1202,317 +1206,318 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::Expr::*;
 
-    match expr {
-        Literal(literal) => build_exp_literal(env, parent, layout, literal),
+    todo!()
+    //match expr {
+    //    Literal(literal) => build_exp_literal(env, parent, layout, literal),
 
-        Call(call) => build_exp_call(
-            env,
-            layout_ids,
-            func_spec_solutions,
-            scope,
-            parent,
-            layout,
-            call,
-        ),
+    //    Call(call) => build_exp_call(
+    //        env,
+    //        layout_ids,
+    //        func_spec_solutions,
+    //        scope,
+    //        parent,
+    //        layout,
+    //        call,
+    //    ),
 
-        Struct(sorted_fields) => build_struct(env, scope, sorted_fields).into(),
+    //    Struct(sorted_fields) => build_struct(env, scope, sorted_fields).into(),
 
-        Reuse {
-            arguments,
-            tag_layout: union_layout,
-            tag_id,
-            symbol,
-            ..
-        } => {
-            let reset = load_symbol(scope, symbol).into_pointer_value();
-            build_tag(
-                env,
-                scope,
-                union_layout,
-                *tag_id,
-                arguments,
-                Some(reset),
-                parent,
-            )
-        }
+    //    Reuse {
+    //        arguments,
+    //        tag_layout: union_layout,
+    //        tag_id,
+    //        symbol,
+    //        ..
+    //    } => {
+    //        let reset = load_symbol(scope, symbol).into_pointer_value();
+    //        build_tag(
+    //            env,
+    //            scope,
+    //            union_layout,
+    //            *tag_id,
+    //            arguments,
+    //            Some(reset),
+    //            parent,
+    //        )
+    //    }
 
-        Tag {
-            arguments,
-            tag_layout: union_layout,
-            tag_id,
-            ..
-        } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
+    //    Tag {
+    //        arguments,
+    //        tag_layout: union_layout,
+    //        tag_id,
+    //        ..
+    //    } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
-        ExprBox { symbol } => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
-            let basic_type = basic_type_from_layout(env, layout);
-            let allocation = reserve_with_refcount_help(
-                env,
-                basic_type,
-                layout.stack_size(env.target_info),
-                layout.alignment_bytes(env.target_info),
-            );
+    //    ExprBox { symbol } => {
+    //        let (value, layout) = load_symbol_and_layout(scope, symbol);
+    //        let basic_type = basic_type_from_layout(env, layout);
+    //        let allocation = reserve_with_refcount_help(
+    //            env,
+    //            basic_type,
+    //            layout.stack_size(env.target_info),
+    //            layout.alignment_bytes(env.target_info),
+    //        );
 
-            store_roc_value(env, *layout, allocation, value);
+    //        store_roc_value(env, *layout, allocation, value);
 
-            allocation.into()
-        }
+    //        allocation.into()
+    //    }
 
-        ExprUnbox { symbol } => {
-            let value = load_symbol(scope, symbol);
+    //    ExprUnbox { symbol } => {
+    //        let value = load_symbol(scope, symbol);
 
-            debug_assert!(value.is_pointer_value());
+    //        debug_assert!(value.is_pointer_value());
 
-            load_roc_value(env, *layout, value.into_pointer_value(), "load_boxed_value")
-        }
+    //        load_roc_value(env, *layout, value.into_pointer_value(), "load_boxed_value")
+    //    }
 
-        Reset { symbol, .. } => {
-            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
-            let tag_ptr = tag_ptr.into_pointer_value();
+    //    Reset { symbol, .. } => {
+    //        let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+    //        let tag_ptr = tag_ptr.into_pointer_value();
 
-            // reset is only generated for union values
-            let union_layout = match layout {
-                Layout::Union(ul) => ul,
-                _ => unreachable!(),
-            };
+    //        // reset is only generated for union values
+    //        let union_layout = match layout {
+    //            Layout::Union(ul) => ul,
+    //            _ => unreachable!(),
+    //        };
 
-            let ctx = env.context;
-            let then_block = ctx.append_basic_block(parent, "then_reset");
-            let else_block = ctx.append_basic_block(parent, "else_decref");
-            let cont_block = ctx.append_basic_block(parent, "cont");
+    //        let ctx = env.context;
+    //        let then_block = ctx.append_basic_block(parent, "then_reset");
+    //        let else_block = ctx.append_basic_block(parent, "else_decref");
+    //        let cont_block = ctx.append_basic_block(parent, "cont");
 
-            let refcount_ptr =
-                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
-            let is_unique = refcount_ptr.is_1(env);
+    //        let refcount_ptr =
+    //            PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+    //        let is_unique = refcount_ptr.is_1(env);
 
-            env.builder
-                .build_conditional_branch(is_unique, then_block, else_block);
+    //        env.builder
+    //            .build_conditional_branch(is_unique, then_block, else_block);
 
-            {
-                // reset, when used on a unique reference, eagerly decrements the components of the
-                // referenced value, and returns the location of the now-invalid cell
-                env.builder.position_at_end(then_block);
+    //        {
+    //            // reset, when used on a unique reference, eagerly decrements the components of the
+    //            // referenced value, and returns the location of the now-invalid cell
+    //            env.builder.position_at_end(then_block);
 
-                let reset_function = build_reset(env, layout_ids, *union_layout);
-                let call = env
-                    .builder
-                    .build_call(reset_function, &[tag_ptr.into()], "call_reset");
+    //            let reset_function = build_reset(env, layout_ids, *union_layout);
+    //            let call = env
+    //                .builder
+    //                .build_call(reset_function, &[tag_ptr.into()], "call_reset");
 
-                call.set_call_convention(FAST_CALL_CONV);
+    //            call.set_call_convention(FAST_CALL_CONV);
 
-                let _ = call.try_as_basic_value();
+    //            let _ = call.try_as_basic_value();
 
-                env.builder.build_unconditional_branch(cont_block);
-            }
-            {
-                // If reset is used on a shared, non-reusable reference, it behaves
-                // like dec and returns NULL, which instructs reuse to behave like ctor
-                env.builder.position_at_end(else_block);
-                refcount_ptr.decrement(env, layout);
-                env.builder.build_unconditional_branch(cont_block);
-            }
-            {
-                env.builder.position_at_end(cont_block);
-                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+    //            env.builder.build_unconditional_branch(cont_block);
+    //        }
+    //        {
+    //            // If reset is used on a shared, non-reusable reference, it behaves
+    //            // like dec and returns NULL, which instructs reuse to behave like ctor
+    //            env.builder.position_at_end(else_block);
+    //            refcount_ptr.decrement(env, layout);
+    //            env.builder.build_unconditional_branch(cont_block);
+    //        }
+    //        {
+    //            env.builder.position_at_end(cont_block);
+    //            let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
 
-                let null_ptr = tag_ptr.get_type().const_null();
-                phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+    //            let null_ptr = tag_ptr.get_type().const_null();
+    //            phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
 
-                phi.as_basic_value()
-            }
-        }
+    //            phi.as_basic_value()
+    //        }
+    //    }
 
-        StructAtIndex {
-            index, structure, ..
-        } => {
-            let (value, layout) = load_symbol_and_layout(scope, structure);
+    //    StructAtIndex {
+    //        index, structure, ..
+    //    } => {
+    //        let (value, layout) = load_symbol_and_layout(scope, structure);
 
-            let layout = if let Layout::LambdaSet(lambda_set) = layout {
-                lambda_set.runtime_representation()
-            } else {
-                *layout
-            };
+    //        let layout = if let Layout::LambdaSet(lambda_set) = layout {
+    //            lambda_set.runtime_representation()
+    //        } else {
+    //            *layout
+    //        };
 
-            // extract field from a record
-            match (value, layout) {
-                (StructValue(argument), Layout::Struct { field_layouts, .. }) => {
-                    debug_assert!(!field_layouts.is_empty());
+    //        // extract field from a record
+    //        match (value, layout) {
+    //            (StructValue(argument), Layout::Struct { field_layouts, .. }) => {
+    //                debug_assert!(!field_layouts.is_empty());
 
-                    let field_value = env
-                        .builder
-                        .build_extract_value(
-                            argument,
-                            *index as u32,
-                            env.arena
-                                .alloc(format!("struct_field_access_record_{}", index)),
-                        )
-                        .unwrap();
+    //                let field_value = env
+    //                    .builder
+    //                    .build_extract_value(
+    //                        argument,
+    //                        *index as u32,
+    //                        env.arena
+    //                            .alloc(format!("struct_field_access_record_{}", index)),
+    //                    )
+    //                    .unwrap();
 
-                    let field_layout = field_layouts[*index as usize];
-                    use_roc_value(env, field_layout, field_value, "struct_field_tag")
-                }
-                (
-                    PointerValue(argument),
-                    Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
-                ) => {
-                    let struct_layout = Layout::struct_no_name_order(fields);
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
+    //                let field_layout = field_layouts[*index as usize];
+    //                use_roc_value(env, field_layout, field_value, "struct_field_tag")
+    //            }
+    //            (
+    //                PointerValue(argument),
+    //                Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
+    //            ) => {
+    //                let struct_layout = Layout::struct_no_name_order(fields);
+    //                let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    let cast_argument = env
-                        .builder
-                        .build_bitcast(
-                            argument,
-                            struct_type.ptr_type(AddressSpace::Generic),
-                            "cast_rosetree_like",
-                        )
-                        .into_pointer_value();
+    //                let cast_argument = env
+    //                    .builder
+    //                    .build_bitcast(
+    //                        argument,
+    //                        struct_type.ptr_type(AddressSpace::Generic),
+    //                        "cast_rosetree_like",
+    //                    )
+    //                    .into_pointer_value();
 
-                    let ptr = env
-                        .builder
-                        .build_struct_gep(
-                            cast_argument,
-                            *index as u32,
-                            env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
-                        )
-                        .unwrap();
+    //                let ptr = env
+    //                    .builder
+    //                    .build_struct_gep(
+    //                        cast_argument,
+    //                        *index as u32,
+    //                        env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
+    //                    )
+    //                    .unwrap();
 
-                    env.builder.build_load(ptr, "load_rosetree_like")
-                }
-                (other, layout) => {
-                    // potential cause: indexing into an unwrapped 1-element record/tag?
-                    unreachable!(
-                        "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                        other, layout, index
-                    )
-                }
-            }
-        }
+    //                env.builder.build_load(ptr, "load_rosetree_like")
+    //            }
+    //            (other, layout) => {
+    //                // potential cause: indexing into an unwrapped 1-element record/tag?
+    //                unreachable!(
+    //                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+    //                    other, layout, index
+    //                )
+    //            }
+    //        }
+    //    }
 
-        EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => list_literal(env, parent, scope, elem_layout, elems),
-        RuntimeErrorFunction(_) => todo!(),
+    //    EmptyArray => empty_polymorphic_list(env),
+    //    Array { elem_layout, elems } => list_literal(env, parent, scope, elem_layout, elems),
+    //    RuntimeErrorFunction(_) => todo!(),
 
-        UnionAtIndex {
-            tag_id,
-            structure,
-            index,
-            union_layout,
-        } => {
-            // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+    //    UnionAtIndex {
+    //        tag_id,
+    //        structure,
+    //        index,
+    //        union_layout,
+    //    } => {
+    //        // cast the argument bytes into the desired shape for this tag
+    //        let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            match union_layout {
-                UnionLayout::NonRecursive(tag_layouts) => {
-                    debug_assert!(argument.is_pointer_value());
+    //        match union_layout {
+    //            UnionLayout::NonRecursive(tag_layouts) => {
+    //                debug_assert!(argument.is_pointer_value());
 
-                    let field_layouts = tag_layouts[*tag_id as usize];
+    //                let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let struct_layout = Layout::struct_no_name_order(field_layouts);
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
+    //                let struct_layout = Layout::struct_no_name_order(field_layouts);
+    //                let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    let opaque_data_ptr = env
-                        .builder
-                        .build_struct_gep(
-                            argument.into_pointer_value(),
-                            RocUnion::TAG_DATA_INDEX,
-                            "get_opaque_data_ptr",
-                        )
-                        .unwrap();
+    //                let opaque_data_ptr = env
+    //                    .builder
+    //                    .build_struct_gep(
+    //                        argument.into_pointer_value(),
+    //                        RocUnion::TAG_DATA_INDEX,
+    //                        "get_opaque_data_ptr",
+    //                    )
+    //                    .unwrap();
 
-                    let data_ptr = env.builder.build_pointer_cast(
-                        opaque_data_ptr,
-                        struct_type.ptr_type(AddressSpace::Generic),
-                        "to_data_pointer",
-                    );
+    //                let data_ptr = env.builder.build_pointer_cast(
+    //                    opaque_data_ptr,
+    //                    struct_type.ptr_type(AddressSpace::Generic),
+    //                    "to_data_pointer",
+    //                );
 
-                    let element_ptr = env
-                        .builder
-                        .build_struct_gep(data_ptr, *index as _, "get_opaque_data_ptr")
-                        .unwrap();
+    //                let element_ptr = env
+    //                    .builder
+    //                    .build_struct_gep(data_ptr, *index as _, "get_opaque_data_ptr")
+    //                    .unwrap();
 
-                    load_roc_value(
-                        env,
-                        field_layouts[*index as usize],
-                        element_ptr,
-                        "load_element",
-                    )
-                }
-                UnionLayout::Recursive(tag_layouts) => {
-                    debug_assert!(argument.is_pointer_value());
+    //                load_roc_value(
+    //                    env,
+    //                    field_layouts[*index as usize],
+    //                    element_ptr,
+    //                    "load_element",
+    //                )
+    //            }
+    //            UnionLayout::Recursive(tag_layouts) => {
+    //                debug_assert!(argument.is_pointer_value());
 
-                    let field_layouts = tag_layouts[*tag_id as usize];
+    //                let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+    //                let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
 
-                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
-                }
-                UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = Layout::struct_no_name_order(field_layouts);
+    //                lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
+    //            }
+    //            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+    //                let struct_layout = Layout::struct_no_name_order(field_layouts);
 
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
+    //                let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    lookup_at_index_ptr(
-                        env,
-                        union_layout,
-                        field_layouts,
-                        *index as usize,
-                        argument.into_pointer_value(),
-                        struct_type.into_struct_type(),
-                    )
-                }
-                UnionLayout::NullableWrapped {
-                    nullable_id,
-                    other_tags,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id, *nullable_id);
+    //                lookup_at_index_ptr(
+    //                    env,
+    //                    union_layout,
+    //                    field_layouts,
+    //                    *index as usize,
+    //                    argument.into_pointer_value(),
+    //                    struct_type.into_struct_type(),
+    //                )
+    //            }
+    //            UnionLayout::NullableWrapped {
+    //                nullable_id,
+    //                other_tags,
+    //            } => {
+    //                debug_assert!(argument.is_pointer_value());
+    //                debug_assert_ne!(*tag_id, *nullable_id);
 
-                    let tag_index = if *tag_id < *nullable_id {
-                        *tag_id
-                    } else {
-                        tag_id - 1
-                    };
+    //                let tag_index = if *tag_id < *nullable_id {
+    //                    *tag_id
+    //                } else {
+    //                    tag_id - 1
+    //                };
 
-                    let field_layouts = other_tags[tag_index as usize];
+    //                let field_layouts = other_tags[tag_index as usize];
 
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
-                }
-                UnionLayout::NullableUnwrapped {
-                    nullable_id,
-                    other_fields,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id != 0, *nullable_id);
+    //                let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+    //                lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
+    //            }
+    //            UnionLayout::NullableUnwrapped {
+    //                nullable_id,
+    //                other_fields,
+    //            } => {
+    //                debug_assert!(argument.is_pointer_value());
+    //                debug_assert_ne!(*tag_id != 0, *nullable_id);
 
-                    let field_layouts = other_fields;
-                    let struct_layout = Layout::struct_no_name_order(field_layouts);
+    //                let field_layouts = other_fields;
+    //                let struct_layout = Layout::struct_no_name_order(field_layouts);
 
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
+    //                let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    lookup_at_index_ptr(
-                        env,
-                        union_layout,
-                        field_layouts,
-                        // the tag id is not stored
-                        *index as usize,
-                        argument.into_pointer_value(),
-                        struct_type.into_struct_type(),
-                    )
-                }
-            }
-        }
+    //                lookup_at_index_ptr(
+    //                    env,
+    //                    union_layout,
+    //                    field_layouts,
+    //                    // the tag id is not stored
+    //                    *index as usize,
+    //                    argument.into_pointer_value(),
+    //                    struct_type.into_struct_type(),
+    //                )
+    //            }
+    //        }
+    //    }
 
-        GetTagId {
-            structure,
-            union_layout,
-        } => {
-            // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+    //    GetTagId {
+    //        structure,
+    //        union_layout,
+    //    } => {
+    //        // cast the argument bytes into the desired shape for this tag
+    //        let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            get_tag_id(env, parent, union_layout, argument).into()
-        }
-    }
+    //        get_tag_id(env, parent, union_layout, argument).into()
+    //    }
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1591,27 +1596,28 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     tag_field_layout: Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    if let Layout::RecursivePointer = tag_field_layout {
-        debug_assert!(value.is_pointer_value());
+    todo!()
+    //if let Layout::RecursivePointer = tag_field_layout {
+    //    debug_assert!(value.is_pointer_value());
 
-        // we store recursive pointers as `i64*`
-        env.builder.build_bitcast(
-            value,
-            env.context.i64_type().ptr_type(AddressSpace::Generic),
-            "cast_recursive_pointer",
-        )
-    } else if tag_field_layout.is_passed_by_reference(env.target_info) {
-        debug_assert!(value.is_pointer_value());
+    //    // we store recursive pointers as `i64*`
+    //    env.builder.build_bitcast(
+    //        value,
+    //        env.context.i64_type().ptr_type(AddressSpace::Generic),
+    //        "cast_recursive_pointer",
+    //    )
+    //} else if tag_field_layout.is_passed_by_reference(env.target_info) {
+    //    debug_assert!(value.is_pointer_value());
 
-        // NOTE: we rely on this being passed to `store_roc_value` so that
-        // the value is memcpy'd
-        value
-    } else {
-        // this check fails for recursive tag unions, but can be helpful while debugging
-        // debug_assert_eq!(tag_field_layout, val_layout);
+    //    // NOTE: we rely on this being passed to `store_roc_value` so that
+    //    // the value is memcpy'd
+    //    value
+    //} else {
+    //    // this check fails for recursive tag unions, but can be helpful while debugging
+    //    // debug_assert_eq!(tag_field_layout, val_layout);
 
-        value
-    }
+    //    value
+    //}
 }
 
 fn build_tag_fields<'a, 'ctx, 'env>(
@@ -1647,37 +1653,38 @@ fn build_struct<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     sorted_fields: &[Symbol],
 ) -> StructValue<'ctx> {
-    let ctx = env.context;
+    todo!()
+    //let ctx = env.context;
 
-    // Determine types
-    let num_fields = sorted_fields.len();
-    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+    //// Determine types
+    //let num_fields = sorted_fields.len();
+    //let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+    //let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-    for symbol in sorted_fields.iter() {
-        // Zero-sized fields have no runtime representation.
-        // The layout of the struct expects them to be dropped!
-        let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
-        if !field_layout.is_dropped_because_empty() {
-            field_types.push(basic_type_from_layout(env, field_layout));
+    //for symbol in sorted_fields.iter() {
+    //    // Zero-sized fields have no runtime representation.
+    //    // The layout of the struct expects them to be dropped!
+    //    let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
+    //    if !field_layout.is_dropped_because_empty() {
+    //        field_types.push(basic_type_from_layout(env, field_layout));
 
-            if field_layout.is_passed_by_reference(env.target_info) {
-                let field_value = env
-                    .builder
-                    .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
+    //        if field_layout.is_passed_by_reference(env.target_info) {
+    //            let field_value = env
+    //                .builder
+    //                .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
 
-                field_vals.push(field_value);
-            } else {
-                field_vals.push(field_expr);
-            }
-        }
-    }
+    //            field_vals.push(field_value);
+    //        } else {
+    //            field_vals.push(field_expr);
+    //        }
+    //    }
+    //}
 
-    // Create the struct_type
-    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+    //// Create the struct_type
+    //let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
 
-    // Insert field exprs into struct_val
-    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
+    //// Insert field exprs into struct_val
+    //struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
 }
 
 fn build_tag<'a, 'ctx, 'env>(
@@ -2104,12 +2111,13 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let stack_size = layout.stack_size(env.target_info);
-    let alignment_bytes = layout.alignment_bytes(env.target_info);
+    todo!()
+    //let stack_size = layout.stack_size(env.target_info);
+    //let alignment_bytes = layout.alignment_bytes(env.target_info);
 
-    let basic_type = basic_type_from_layout(env, layout);
+    //let basic_type = basic_type_from_layout(env, layout);
 
-    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+    //reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
 }
 
 fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
@@ -2209,140 +2217,141 @@ fn list_literal<'a, 'ctx, 'env>(
     // TODO re-enable, currently causes morphic segfaults because it tries to update
     // constants in-place...
     // if element_type.is_int_type() {
-    if false {
-        let element_type = element_type.into_int_type();
-        let element_width = element_layout.stack_size(env.target_info);
-        let size = list_length * element_width as usize;
-        let alignment = element_layout
-            .alignment_bytes(env.target_info)
-            .max(env.target_info.ptr_width() as u32);
+    todo!()
+    //if false {
+    //    let element_type = element_type.into_int_type();
+    //    let element_width = element_layout.stack_size(env.target_info);
+    //    let size = list_length * element_width as usize;
+    //    let alignment = element_layout
+    //        .alignment_bytes(env.target_info)
+    //        .max(env.target_info.ptr_width() as u32);
 
-        let mut is_all_constant = true;
-        let zero_elements =
-            (env.target_info.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
+    //    let mut is_all_constant = true;
+    //    let zero_elements =
+    //        (env.target_info.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
 
-        // runtime-evaluated elements
-        let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
+    //    // runtime-evaluated elements
+    //    let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
 
-        // set up a global that contains all the literal elements of the array
-        // any variables or expressions are represented as `undef`
-        let global = {
-            let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
+    //    // set up a global that contains all the literal elements of the array
+    //    // any variables or expressions are represented as `undef`
+    //    let global = {
+    //        let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
 
-            // Add zero bytes that represent the refcount
-            //
-            // - if all elements are const, then we store the whole list as a constant.
-            //      It then needs a refcount before the first element.
-            // - but if the list is not all constants, then we will just copy the constant values,
-            //      and we do not need that refcount at the start
-            //
-            // In the latter case, we won't store the zeros in the globals
-            // (we slice them off again below)
-            for _ in 0..zero_elements {
-                global_elements.push(element_type.const_zero());
-            }
+    //        // Add zero bytes that represent the refcount
+    //        //
+    //        // - if all elements are const, then we store the whole list as a constant.
+    //        //      It then needs a refcount before the first element.
+    //        // - but if the list is not all constants, then we will just copy the constant values,
+    //        //      and we do not need that refcount at the start
+    //        //
+    //        // In the latter case, we won't store the zeros in the globals
+    //        // (we slice them off again below)
+    //        for _ in 0..zero_elements {
+    //            global_elements.push(element_type.const_zero());
+    //        }
 
-            // Copy the elements from the list literal into the array
-            for (index, element) in elems.iter().enumerate() {
-                match element {
-                    ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(env, parent, element_layout, literal);
-                        global_elements.push(val.into_int_value());
-                    }
-                    ListLiteralElement::Symbol(symbol) => {
-                        let val = load_symbol(scope, symbol);
+    //        // Copy the elements from the list literal into the array
+    //        for (index, element) in elems.iter().enumerate() {
+    //            match element {
+    //                ListLiteralElement::Literal(literal) => {
+    //                    let val = build_exp_literal(env, parent, element_layout, literal);
+    //                    global_elements.push(val.into_int_value());
+    //                }
+    //                ListLiteralElement::Symbol(symbol) => {
+    //                    let val = load_symbol(scope, symbol);
 
-                        // here we'd like to furthermore check for intval.is_const().
-                        // if all elements are const for LLVM, we could make the array a constant.
-                        // BUT morphic does not know about this, and could allow us to modify that
-                        // array in-place. That would cause a segfault. So, we'll have to find
-                        // constants ourselves and cannot lean on LLVM here.
+    //                    // here we'd like to furthermore check for intval.is_const().
+    //                    // if all elements are const for LLVM, we could make the array a constant.
+    //                    // BUT morphic does not know about this, and could allow us to modify that
+    //                    // array in-place. That would cause a segfault. So, we'll have to find
+    //                    // constants ourselves and cannot lean on LLVM here.
 
-                        is_all_constant = false;
+    //                    is_all_constant = false;
 
-                        runtime_evaluated_elements.push((index, val));
+    //                    runtime_evaluated_elements.push((index, val));
 
-                        global_elements.push(element_type.get_undef());
-                    }
-                };
-            }
+    //                    global_elements.push(element_type.get_undef());
+    //                }
+    //            };
+    //        }
 
-            let const_elements = if is_all_constant {
-                global_elements.into_bump_slice()
-            } else {
-                &global_elements[zero_elements..]
-            };
+    //        let const_elements = if is_all_constant {
+    //            global_elements.into_bump_slice()
+    //        } else {
+    //            &global_elements[zero_elements..]
+    //        };
 
-            // use None for the address space (e.g. Const does not work)
-            let typ = element_type.array_type(const_elements.len() as u32);
-            let global = env.module.add_global(typ, None, "roc__list_literal");
+    //        // use None for the address space (e.g. Const does not work)
+    //        let typ = element_type.array_type(const_elements.len() as u32);
+    //        let global = env.module.add_global(typ, None, "roc__list_literal");
 
-            global.set_constant(true);
-            global.set_alignment(alignment);
-            global.set_unnamed_addr(true);
-            global.set_linkage(inkwell::module::Linkage::Private);
+    //        global.set_constant(true);
+    //        global.set_alignment(alignment);
+    //        global.set_unnamed_addr(true);
+    //        global.set_linkage(inkwell::module::Linkage::Private);
 
-            global.set_initializer(&element_type.const_array(const_elements));
-            global.as_pointer_value()
-        };
+    //        global.set_initializer(&element_type.const_array(const_elements));
+    //        global.as_pointer_value()
+    //    };
 
-        if is_all_constant {
-            // all elements are constants, so we can use the memory in the constants section directly
-            // here we make a pointer to the first actual element (skipping the 0 bytes that
-            // represent the refcount)
-            let zero = env.ptr_int().const_zero();
-            let offset = env.ptr_int().const_int(zero_elements as _, false);
+    //    if is_all_constant {
+    //        // all elements are constants, so we can use the memory in the constants section directly
+    //        // here we make a pointer to the first actual element (skipping the 0 bytes that
+    //        // represent the refcount)
+    //        let zero = env.ptr_int().const_zero();
+    //        let offset = env.ptr_int().const_int(zero_elements as _, false);
 
-            let ptr = unsafe {
-                env.builder
-                    .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
-            };
+    //        let ptr = unsafe {
+    //            env.builder
+    //                .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
+    //        };
 
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        } else {
-            // some of our elements are non-constant, so we must allocate space on the heap
-            let ptr = allocate_list(env, element_layout, list_length_intval);
+    //        super::build_list::store_list(env, ptr, list_length_intval).into()
+    //    } else {
+    //        // some of our elements are non-constant, so we must allocate space on the heap
+    //        let ptr = allocate_list(env, element_layout, list_length_intval);
 
-            // then, copy the relevant segment from the constant section into the heap
-            env.builder
-                .build_memcpy(
-                    ptr,
-                    alignment,
-                    global,
-                    alignment,
-                    env.ptr_int().const_int(size as _, false),
-                )
-                .unwrap();
+    //        // then, copy the relevant segment from the constant section into the heap
+    //        env.builder
+    //            .build_memcpy(
+    //                ptr,
+    //                alignment,
+    //                global,
+    //                alignment,
+    //                env.ptr_int().const_int(size as _, false),
+    //            )
+    //            .unwrap();
 
-            // then replace the `undef`s with the values that we evaluate at runtime
-            for (index, val) in runtime_evaluated_elements {
-                let index_val = ctx.i64_type().const_int(index as u64, false);
-                let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+    //        // then replace the `undef`s with the values that we evaluate at runtime
+    //        for (index, val) in runtime_evaluated_elements {
+    //            let index_val = ctx.i64_type().const_int(index as u64, false);
+    //            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-                builder.build_store(elem_ptr, val);
-            }
+    //            builder.build_store(elem_ptr, val);
+    //        }
 
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        }
-    } else {
-        let ptr = allocate_list(env, element_layout, list_length_intval);
+    //        super::build_list::store_list(env, ptr, list_length_intval).into()
+    //    }
+    //} else {
+    //    let ptr = allocate_list(env, element_layout, list_length_intval);
 
-        // Copy the elements from the list literal into the array
-        for (index, element) in elems.iter().enumerate() {
-            let val = match element {
-                ListLiteralElement::Literal(literal) => {
-                    build_exp_literal(env, parent, element_layout, literal)
-                }
-                ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
-            };
-            let index_val = ctx.i64_type().const_int(index as u64, false);
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+    //    // Copy the elements from the list literal into the array
+    //    for (index, element) in elems.iter().enumerate() {
+    //        let val = match element {
+    //            ListLiteralElement::Literal(literal) => {
+    //                build_exp_literal(env, parent, element_layout, literal)
+    //            }
+    //            ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+    //        };
+    //        let index_val = ctx.i64_type().const_int(index as u64, false);
+    //        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-            store_roc_value(env, *element_layout, elem_ptr, val);
-        }
+    //        store_roc_value(env, *element_layout, elem_ptr, val);
+    //    }
 
-        super::build_list::store_list(env, ptr, list_length_intval).into()
-    }
+    //    super::build_list::store_list(env, ptr, list_length_intval).into()
+    //}
 }
 
 pub fn load_roc_value<'a, 'ctx, 'env>(
@@ -2351,15 +2360,16 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference(env.target_info) {
-        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
+    todo!()
+    //if layout.is_passed_by_reference(env.target_info) {
+    //    let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
-        store_roc_value(env, layout, alloca, source.into());
+    //    store_roc_value(env, layout, alloca, source.into());
 
-        alloca.into()
-    } else {
-        env.builder.build_load(source, name)
-    }
+    //    alloca.into()
+    //} else {
+    //    env.builder.build_load(source, name)
+    //}
 }
 
 pub fn use_roc_value<'a, 'ctx, 'env>(
@@ -2368,15 +2378,16 @@ pub fn use_roc_value<'a, 'ctx, 'env>(
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference(env.target_info) {
-        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
+    todo!()
+    //if layout.is_passed_by_reference(env.target_info) {
+    //    let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
-        env.builder.build_store(alloca, source);
+    //    env.builder.build_store(alloca, source);
 
-        alloca.into()
-    } else {
-        source
-    }
+    //    alloca.into()
+    //} else {
+    //    source
+    //}
 }
 
 pub fn store_roc_value_opaque<'a, 'ctx, 'env>(
@@ -2399,29 +2410,30 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout.is_passed_by_reference(env.target_info) {
-        debug_assert!(value.is_pointer_value());
+    todo!()
+    //if layout.is_passed_by_reference(env.target_info) {
+    //    debug_assert!(value.is_pointer_value());
 
-        let align_bytes = layout.alignment_bytes(env.target_info);
+    //    let align_bytes = layout.alignment_bytes(env.target_info);
 
-        if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(layout.stack_size(env.target_info) as u64, false);
+    //    if align_bytes > 0 {
+    //        let size = env
+    //            .ptr_int()
+    //            .const_int(layout.stack_size(env.target_info) as u64, false);
 
-            env.builder
-                .build_memcpy(
-                    destination,
-                    align_bytes,
-                    value.into_pointer_value(),
-                    align_bytes,
-                    size,
-                )
-                .unwrap();
-        }
-    } else {
-        env.builder.build_store(destination, value);
-    }
+    //        env.builder
+    //            .build_memcpy(
+    //                destination,
+    //                align_bytes,
+    //                value.into_pointer_value(),
+    //                align_bytes,
+    //                size,
+    //            )
+    //            .unwrap();
+    //    }
+    //} else {
+    //    env.builder.build_store(destination, value);
+    //}
 }
 
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
@@ -2433,472 +2445,473 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     stmt: &roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::Stmt::*;
-
-    match stmt {
-        Let(first_symbol, first_expr, first_layout, mut cont) => {
-            let mut queue = Vec::new_in(env.arena);
-
-            queue.push((first_symbol, first_expr, first_layout));
-
-            while let Let(symbol, expr, layout, new_cont) = cont {
-                queue.push((symbol, expr, layout));
-
-                cont = new_cont;
-            }
-
-            let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
-
-            for (symbol, expr, layout) in queue {
-                debug_assert!(layout != &Layout::RecursivePointer);
-
-                let val = build_exp_expr(
-                    env,
-                    layout_ids,
-                    func_spec_solutions,
-                    scope,
-                    parent,
-                    layout,
-                    expr,
-                );
-
-                // Make a new scope which includes the binding we just encountered.
-                // This should be done *after* compiling the bound expr, since any
-                // recursive (in the LetRec sense) bindings should already have
-                // been extracted as procedures. Nothing in here should need to
-                // access itself!
-                // scope = scope.clone();
-
-                scope.insert(*symbol, (*layout, val));
-                stack.push(*symbol);
-            }
-
-            let result = build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont);
-
-            for symbol in stack {
-                scope.remove(&symbol);
-            }
-
-            result
-        }
-        Ret(symbol) => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
-
-            match RocReturn::from_layout(env, layout) {
-                RocReturn::Return => {
-                    if let Some(block) = env.builder.get_insert_block() {
-                        if block.get_terminator().is_none() {
-                            env.builder.build_return(Some(&value));
-                        }
-                    }
-
-                    value
-                }
-                RocReturn::ByPointer => {
-                    // we need to write our value into the final argument of the current function
-                    let parameters = parent.get_params();
-                    let out_parameter = parameters.last().unwrap();
-                    debug_assert!(out_parameter.is_pointer_value());
-
-                    // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
-
-                    let destination = out_parameter.into_pointer_value();
-                    if layout.is_passed_by_reference(env.target_info) {
-                        let align_bytes = layout.alignment_bytes(env.target_info);
-
-                        if align_bytes > 0 {
-                            debug_assert!(
-                                value.is_pointer_value(),
-                                "{:?}: {:?}\n{:?}",
-                                parent.get_name(),
-                                value,
-                                layout
-                            );
-
-                            // What we want to do here is
-                            //
-                            // let value_ptr = value.into_pointer_value();
-                            // if value_ptr.get_first_use().is_some() {
-                            //   value_ptr.replace_all_uses_with(destination);
-                            //
-                            // In other words, if the source pointer is used,
-                            // then we just subsitute the source for the input pointer, done.
-                            //
-                            // Only that does not work if the source is not written to.
-                            // A simple example is the identity function
-                            //
-                            // A slightly more complex case that will also make the above not
-                            // work is when the source pointer is only incremented, but not
-                            // written to. Then there is a first_use, but it's still invalid to
-                            // subsitute source with destination
-                            //
-                            // Hence, we explicitly memcpy source to destination, and rely on
-                            // LLVM optimizing away any inefficiencies.
-                            let target_info = env.target_info;
-                            let width = layout.stack_size(target_info);
-                            let size = env.ptr_int().const_int(width as _, false);
-
-                            env.builder
-                                .build_memcpy(
-                                    destination,
-                                    align_bytes,
-                                    value.into_pointer_value(),
-                                    align_bytes,
-                                    size,
-                                )
-                                .unwrap();
-                        }
-                    } else {
-                        env.builder.build_store(destination, value);
-                    }
-
-                    if let Some(block) = env.builder.get_insert_block() {
-                        match block.get_terminator() {
-                            None => {
-                                env.builder.build_return(None);
-                            }
-                            Some(terminator) => {
-                                terminator.remove_from_basic_block();
-                                env.builder.build_return(None);
-                            }
-                        }
-                    }
-
-                    env.context.i8_type().const_zero().into()
-                }
-            }
-        }
-
-        Switch {
-            branches,
-            default_branch,
-            ret_layout,
-            cond_layout,
-            cond_symbol,
-        } => {
-            let ret_type = basic_type_from_layout(env, ret_layout);
-
-            let switch_args = SwitchArgsIr {
-                cond_layout: *cond_layout,
-                cond_symbol: *cond_symbol,
-                branches,
-                default_branch: default_branch.1,
-                ret_type,
-            };
-
-            build_switch_ir(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                switch_args,
-            )
-        }
-        Join {
-            id,
-            parameters,
-            remainder,
-            body: continuation,
-        } => {
-            let builder = env.builder;
-            let context = env.context;
-
-            // create new block
-            let cont_block = context.append_basic_block(parent, "joinpointcont");
-
-            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
-            {
-                let current = builder.get_insert_block().unwrap();
-                builder.position_at_end(cont_block);
-
-                for param in parameters.iter() {
-                    let basic_type = basic_type_from_layout(env, &param.layout);
-
-                    let phi_type = if param.layout.is_passed_by_reference(env.target_info) {
-                        basic_type.ptr_type(AddressSpace::Generic).into()
-                    } else {
-                        basic_type
-                    };
-
-                    let phi_node = env.builder.build_phi(phi_type, "joinpointarg");
-                    joinpoint_args.push(phi_node);
-                }
-
-                builder.position_at_end(current);
-            }
-
-            // store this join point
-            let joinpoint_args = joinpoint_args.into_bump_slice();
-            scope.join_points.insert(*id, (cont_block, joinpoint_args));
-
-            // construct the blocks that may jump to this join point
-            build_exp_stmt(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                remainder,
-            );
-
-            let phi_block = builder.get_insert_block().unwrap();
-
-            // put the cont block at the back
-            builder.position_at_end(cont_block);
-
-            // bind the values
-            for (phi_value, param) in joinpoint_args.iter().zip(parameters.iter()) {
-                let value = phi_value.as_basic_value();
-                scope.insert(param.symbol, (param.layout, value));
-            }
-
-            // put the continuation in
-            let result = build_exp_stmt(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                continuation,
-            );
-
-            // remove this join point again
-            scope.join_points.remove(id);
-
-            cont_block.move_after(phi_block).unwrap();
-
-            result
-        }
-
-        Jump(join_point, arguments) => {
-            let builder = env.builder;
-            let context = env.context;
-            let (cont_block, argument_phi_values) = scope.join_points.get(join_point).unwrap();
-
-            let current_block = builder.get_insert_block().unwrap();
-
-            for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
-                let (value, _) = load_symbol_and_layout(scope, argument);
-
-                phi_value.add_incoming(&[(&value, current_block)]);
-            }
-
-            builder.build_unconditional_branch(*cont_block);
-
-            // This doesn't currently do anything
-            context.i64_type().const_zero().into()
-        }
-
-        Refcounting(modify, cont) => {
-            use ModifyRc::*;
-
-            match modify {
-                Inc(symbol, inc_amount) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
-                    let layout = *layout;
-
-                    if layout.contains_refcounted() {
-                        increment_refcount_layout(
-                            env,
-                            parent,
-                            layout_ids,
-                            *inc_amount,
-                            value,
-                            &layout,
-                        );
-                    }
-
-                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
-                }
-                Dec(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
-
-                    if layout.contains_refcounted() {
-                        decrement_refcount_layout(env, parent, layout_ids, value, layout);
-                    }
-
-                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
-                }
-                DecRef(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
-
-                    match layout {
-                        Layout::Builtin(Builtin::Str) => todo!(),
-                        Layout::Builtin(Builtin::List(element_layout)) => {
-                            debug_assert!(value.is_struct_value());
-                            let alignment = element_layout.alignment_bytes(env.target_info);
-
-                            build_list::decref(env, value.into_struct_value(), alignment);
-                        }
-
-                        _ if layout.is_refcounted() => {
-                            if value.is_pointer_value() {
-                                let value_ptr = value.into_pointer_value();
-
-                                let then_block = env.context.append_basic_block(parent, "then");
-                                let done_block = env.context.append_basic_block(parent, "done");
-
-                                let condition =
-                                    env.builder.build_is_not_null(value_ptr, "box_is_not_null");
-                                env.builder
-                                    .build_conditional_branch(condition, then_block, done_block);
-
-                                {
-                                    env.builder.position_at_end(then_block);
-                                    let refcount_ptr =
-                                        PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                                    refcount_ptr.decrement(env, layout);
-
-                                    env.builder.build_unconditional_branch(done_block);
-                                }
-
-                                env.builder.position_at_end(done_block);
-                            } else {
-                                eprint!("we're likely leaking memory; see issue #985 for details");
-                            }
-                        }
-                        _ => {
-                            // nothing to do
-                        }
-                    }
-
-                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
-                }
-            }
-        }
-
-        Expect {
-            condition: cond_symbol,
-            region,
-            lookups,
-            layouts: _,
-            remainder,
-        } => {
-            let bd = env.builder;
-            let context = env.context;
-
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            if env.mode.runs_expects() {
-                bd.position_at_end(throw_block);
-
-                match env.target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        clone_to_shared_memory(
-                            env,
-                            scope,
-                            layout_ids,
-                            *cond_symbol,
-                            *region,
-                            lookups,
-                        );
-
-                        bd.build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
-                    }
-                }
-            } else {
-                bd.position_at_end(throw_block);
-                bd.build_unconditional_branch(then_block);
-            }
-
-            bd.position_at_end(then_block);
-
-            build_exp_stmt(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                remainder,
-            )
-        }
-
-        ExpectFx {
-            condition: cond_symbol,
-            region,
-            lookups,
-            layouts: _,
-            remainder,
-        } => {
-            let bd = env.builder;
-            let context = env.context;
-
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            if env.mode.runs_expects() {
-                bd.position_at_end(throw_block);
-
-                match env.target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        clone_to_shared_memory(
-                            env,
-                            scope,
-                            layout_ids,
-                            *cond_symbol,
-                            *region,
-                            lookups,
-                        );
-
-                        bd.build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
-                    }
-                }
-            } else {
-                bd.position_at_end(throw_block);
-                bd.build_unconditional_branch(then_block);
-            }
-
-            bd.position_at_end(then_block);
-
-            build_exp_stmt(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                remainder,
-            )
-        }
-
-        RuntimeError(error_msg) => {
-            throw_exception(env, error_msg);
-
-            // unused value (must return a BasicValue)
-            let zero = env.context.i64_type().const_zero();
-            zero.into()
-        }
-    }
+    todo!();
+
+    //match stmt {
+    //    Let(first_symbol, first_expr, first_layout, mut cont) => {
+    //        let mut queue = Vec::new_in(env.arena);
+
+    //        queue.push((first_symbol, first_expr, first_layout));
+
+    //        while let Let(symbol, expr, layout, new_cont) = cont {
+    //            queue.push((symbol, expr, layout));
+
+    //            cont = new_cont;
+    //        }
+
+    //        let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
+
+    //        for (symbol, expr, layout) in queue {
+    //            debug_assert!(layout != &Layout::RecursivePointer);
+
+    //            let val = build_exp_expr(
+    //                env,
+    //                layout_ids,
+    //                func_spec_solutions,
+    //                scope,
+    //                parent,
+    //                layout,
+    //                expr,
+    //            );
+
+    //            // Make a new scope which includes the binding we just encountered.
+    //            // This should be done *after* compiling the bound expr, since any
+    //            // recursive (in the LetRec sense) bindings should already have
+    //            // been extracted as procedures. Nothing in here should need to
+    //            // access itself!
+    //            // scope = scope.clone();
+
+    //            scope.insert(*symbol, (*layout, val));
+    //            stack.push(*symbol);
+    //        }
+
+    //        let result = build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont);
+
+    //        for symbol in stack {
+    //            scope.remove(&symbol);
+    //        }
+
+    //        result
+    //    }
+    //    Ret(symbol) => {
+    //        let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+    //        match RocReturn::from_layout(env, layout) {
+    //            RocReturn::Return => {
+    //                if let Some(block) = env.builder.get_insert_block() {
+    //                    if block.get_terminator().is_none() {
+    //                        env.builder.build_return(Some(&value));
+    //                    }
+    //                }
+
+    //                value
+    //            }
+    //            RocReturn::ByPointer => {
+    //                // we need to write our value into the final argument of the current function
+    //                let parameters = parent.get_params();
+    //                let out_parameter = parameters.last().unwrap();
+    //                debug_assert!(out_parameter.is_pointer_value());
+
+    //                // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
+
+    //                let destination = out_parameter.into_pointer_value();
+    //                if layout.is_passed_by_reference(env.target_info) {
+    //                    let align_bytes = layout.alignment_bytes(env.target_info);
+
+    //                    if align_bytes > 0 {
+    //                        debug_assert!(
+    //                            value.is_pointer_value(),
+    //                            "{:?}: {:?}\n{:?}",
+    //                            parent.get_name(),
+    //                            value,
+    //                            layout
+    //                        );
+
+    //                        // What we want to do here is
+    //                        //
+    //                        // let value_ptr = value.into_pointer_value();
+    //                        // if value_ptr.get_first_use().is_some() {
+    //                        //   value_ptr.replace_all_uses_with(destination);
+    //                        //
+    //                        // In other words, if the source pointer is used,
+    //                        // then we just subsitute the source for the input pointer, done.
+    //                        //
+    //                        // Only that does not work if the source is not written to.
+    //                        // A simple example is the identity function
+    //                        //
+    //                        // A slightly more complex case that will also make the above not
+    //                        // work is when the source pointer is only incremented, but not
+    //                        // written to. Then there is a first_use, but it's still invalid to
+    //                        // subsitute source with destination
+    //                        //
+    //                        // Hence, we explicitly memcpy source to destination, and rely on
+    //                        // LLVM optimizing away any inefficiencies.
+    //                        let target_info = env.target_info;
+    //                        let width = layout.stack_size(target_info);
+    //                        let size = env.ptr_int().const_int(width as _, false);
+
+    //                        env.builder
+    //                            .build_memcpy(
+    //                                destination,
+    //                                align_bytes,
+    //                                value.into_pointer_value(),
+    //                                align_bytes,
+    //                                size,
+    //                            )
+    //                            .unwrap();
+    //                    }
+    //                } else {
+    //                    env.builder.build_store(destination, value);
+    //                }
+
+    //                if let Some(block) = env.builder.get_insert_block() {
+    //                    match block.get_terminator() {
+    //                        None => {
+    //                            env.builder.build_return(None);
+    //                        }
+    //                        Some(terminator) => {
+    //                            terminator.remove_from_basic_block();
+    //                            env.builder.build_return(None);
+    //                        }
+    //                    }
+    //                }
+
+    //                env.context.i8_type().const_zero().into()
+    //            }
+    //        }
+    //    }
+
+    //    Switch {
+    //        branches,
+    //        default_branch,
+    //        ret_layout,
+    //        cond_layout,
+    //        cond_symbol,
+    //    } => {
+    //        let ret_type = basic_type_from_layout(env, ret_layout);
+
+    //        let switch_args = SwitchArgsIr {
+    //            cond_layout: *cond_layout,
+    //            cond_symbol: *cond_symbol,
+    //            branches,
+    //            default_branch: default_branch.1,
+    //            ret_type,
+    //        };
+
+    //        build_switch_ir(
+    //            env,
+    //            layout_ids,
+    //            func_spec_solutions,
+    //            scope,
+    //            parent,
+    //            switch_args,
+    //        )
+    //    }
+    //    Join {
+    //        id,
+    //        parameters,
+    //        remainder,
+    //        body: continuation,
+    //    } => {
+    //        let builder = env.builder;
+    //        let context = env.context;
+
+    //        // create new block
+    //        let cont_block = context.append_basic_block(parent, "joinpointcont");
+
+    //        let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
+    //        {
+    //            let current = builder.get_insert_block().unwrap();
+    //            builder.position_at_end(cont_block);
+
+    //            for param in parameters.iter() {
+    //                let basic_type = basic_type_from_layout(env, &param.layout);
+
+    //                let phi_type = if param.layout.is_passed_by_reference(env.target_info) {
+    //                    basic_type.ptr_type(AddressSpace::Generic).into()
+    //                } else {
+    //                    basic_type
+    //                };
+
+    //                let phi_node = env.builder.build_phi(phi_type, "joinpointarg");
+    //                joinpoint_args.push(phi_node);
+    //            }
+
+    //            builder.position_at_end(current);
+    //        }
+
+    //        // store this join point
+    //        let joinpoint_args = joinpoint_args.into_bump_slice();
+    //        scope.join_points.insert(*id, (cont_block, joinpoint_args));
+
+    //        // construct the blocks that may jump to this join point
+    //        build_exp_stmt(
+    //            env,
+    //            layout_ids,
+    //            func_spec_solutions,
+    //            scope,
+    //            parent,
+    //            remainder,
+    //        );
+
+    //        let phi_block = builder.get_insert_block().unwrap();
+
+    //        // put the cont block at the back
+    //        builder.position_at_end(cont_block);
+
+    //        // bind the values
+    //        for (phi_value, param) in joinpoint_args.iter().zip(parameters.iter()) {
+    //            let value = phi_value.as_basic_value();
+    //            scope.insert(param.symbol, (param.layout, value));
+    //        }
+
+    //        // put the continuation in
+    //        let result = build_exp_stmt(
+    //            env,
+    //            layout_ids,
+    //            func_spec_solutions,
+    //            scope,
+    //            parent,
+    //            continuation,
+    //        );
+
+    //        // remove this join point again
+    //        scope.join_points.remove(id);
+
+    //        cont_block.move_after(phi_block).unwrap();
+
+    //        result
+    //    }
+
+    //    Jump(join_point, arguments) => {
+    //        let builder = env.builder;
+    //        let context = env.context;
+    //        let (cont_block, argument_phi_values) = scope.join_points.get(join_point).unwrap();
+
+    //        let current_block = builder.get_insert_block().unwrap();
+
+    //        for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
+    //            let (value, _) = load_symbol_and_layout(scope, argument);
+
+    //            phi_value.add_incoming(&[(&value, current_block)]);
+    //        }
+
+    //        builder.build_unconditional_branch(*cont_block);
+
+    //        // This doesn't currently do anything
+    //        context.i64_type().const_zero().into()
+    //    }
+
+    //    Refcounting(modify, cont) => {
+    //        use ModifyRc::*;
+
+    //        match modify {
+    //            Inc(symbol, inc_amount) => {
+    //                let (value, layout) = load_symbol_and_layout(scope, symbol);
+    //                let layout = *layout;
+
+    //                if layout.contains_refcounted() {
+    //                    increment_refcount_layout(
+    //                        env,
+    //                        parent,
+    //                        layout_ids,
+    //                        *inc_amount,
+    //                        value,
+    //                        &layout,
+    //                    );
+    //                }
+
+    //                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
+    //            }
+    //            Dec(symbol) => {
+    //                let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+    //                if layout.contains_refcounted() {
+    //                    decrement_refcount_layout(env, parent, layout_ids, value, layout);
+    //                }
+
+    //                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
+    //            }
+    //            DecRef(symbol) => {
+    //                let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+    //                match layout {
+    //                    Layout::Builtin(Builtin::Str) => todo!(),
+    //                    Layout::Builtin(Builtin::List(element_layout)) => {
+    //                        debug_assert!(value.is_struct_value());
+    //                        let alignment = element_layout.alignment_bytes(env.target_info);
+
+    //                        build_list::decref(env, value.into_struct_value(), alignment);
+    //                    }
+
+    //                    _ if layout.is_refcounted() => {
+    //                        if value.is_pointer_value() {
+    //                            let value_ptr = value.into_pointer_value();
+
+    //                            let then_block = env.context.append_basic_block(parent, "then");
+    //                            let done_block = env.context.append_basic_block(parent, "done");
+
+    //                            let condition =
+    //                                env.builder.build_is_not_null(value_ptr, "box_is_not_null");
+    //                            env.builder
+    //                                .build_conditional_branch(condition, then_block, done_block);
+
+    //                            {
+    //                                env.builder.position_at_end(then_block);
+    //                                let refcount_ptr =
+    //                                    PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    //                                refcount_ptr.decrement(env, layout);
+
+    //                                env.builder.build_unconditional_branch(done_block);
+    //                            }
+
+    //                            env.builder.position_at_end(done_block);
+    //                        } else {
+    //                            eprint!("we're likely leaking memory; see issue #985 for details");
+    //                        }
+    //                    }
+    //                    _ => {
+    //                        // nothing to do
+    //                    }
+    //                }
+
+    //                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
+    //            }
+    //        }
+    //    }
+
+    //    Expect {
+    //        condition: cond_symbol,
+    //        region,
+    //        lookups,
+    //        layouts: _,
+    //        remainder,
+    //    } => {
+    //        let bd = env.builder;
+    //        let context = env.context;
+
+    //        let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+
+    //        let condition = bd.build_int_compare(
+    //            IntPredicate::EQ,
+    //            cond.into_int_value(),
+    //            context.bool_type().const_int(1, false),
+    //            "is_true",
+    //        );
+
+    //        let then_block = context.append_basic_block(parent, "then_block");
+    //        let throw_block = context.append_basic_block(parent, "throw_block");
+
+    //        bd.build_conditional_branch(condition, then_block, throw_block);
+
+    //        if env.mode.runs_expects() {
+    //            bd.position_at_end(throw_block);
+
+    //            match env.target_info.ptr_width() {
+    //                roc_target::PtrWidth::Bytes8 => {
+    //                    clone_to_shared_memory(
+    //                        env,
+    //                        scope,
+    //                        layout_ids,
+    //                        *cond_symbol,
+    //                        *region,
+    //                        lookups,
+    //                    );
+
+    //                    bd.build_unconditional_branch(then_block);
+    //                }
+    //                roc_target::PtrWidth::Bytes4 => {
+    //                    // temporary WASM implementation
+    //                    throw_exception(env, "An expectation failed!");
+    //                }
+    //            }
+    //        } else {
+    //            bd.position_at_end(throw_block);
+    //            bd.build_unconditional_branch(then_block);
+    //        }
+
+    //        bd.position_at_end(then_block);
+
+    //        build_exp_stmt(
+    //            env,
+    //            layout_ids,
+    //            func_spec_solutions,
+    //            scope,
+    //            parent,
+    //            remainder,
+    //        )
+    //    }
+
+    //    ExpectFx {
+    //        condition: cond_symbol,
+    //        region,
+    //        lookups,
+    //        layouts: _,
+    //        remainder,
+    //    } => {
+    //        let bd = env.builder;
+    //        let context = env.context;
+
+    //        let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+
+    //        let condition = bd.build_int_compare(
+    //            IntPredicate::EQ,
+    //            cond.into_int_value(),
+    //            context.bool_type().const_int(1, false),
+    //            "is_true",
+    //        );
+
+    //        let then_block = context.append_basic_block(parent, "then_block");
+    //        let throw_block = context.append_basic_block(parent, "throw_block");
+
+    //        bd.build_conditional_branch(condition, then_block, throw_block);
+
+    //        if env.mode.runs_expects() {
+    //            bd.position_at_end(throw_block);
+
+    //            match env.target_info.ptr_width() {
+    //                roc_target::PtrWidth::Bytes8 => {
+    //                    clone_to_shared_memory(
+    //                        env,
+    //                        scope,
+    //                        layout_ids,
+    //                        *cond_symbol,
+    //                        *region,
+    //                        lookups,
+    //                    );
+
+    //                    bd.build_unconditional_branch(then_block);
+    //                }
+    //                roc_target::PtrWidth::Bytes4 => {
+    //                    // temporary WASM implementation
+    //                    throw_exception(env, "An expectation failed!");
+    //                }
+    //            }
+    //        } else {
+    //            bd.position_at_end(throw_block);
+    //            bd.build_unconditional_branch(then_block);
+    //        }
+
+    //        bd.position_at_end(then_block);
+
+    //        build_exp_stmt(
+    //            env,
+    //            layout_ids,
+    //            func_spec_solutions,
+    //            scope,
+    //            parent,
+    //            remainder,
+    //        )
+    //    }
+
+    //    RuntimeError(error_msg) => {
+    //        throw_exception(env, error_msg);
+
+    //        // unused value (must return a BasicValue)
+    //        let zero = env.context.i64_type().const_zero();
+    //        zero.into()
+    //    }
+    //}
 }
 
 pub fn load_symbol<'a, 'ctx>(scope: &Scope<'a, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
@@ -3380,26 +3393,27 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
-    let ident_string = symbol.as_str(&env.interns);
+    todo!()
+    //let ident_string = symbol.as_str(&env.interns);
 
-    let proc_layout = ProcLayout {
-        arguments,
-        result: return_layout,
-        captures_niche,
-    };
+    //let proc_layout = ProcLayout {
+    //    arguments,
+    //    result: return_layout,
+    //    captures_niche,
+    //};
 
-    let c_function_name: String = layout_ids
-        .get_toplevel(symbol, &proc_layout)
-        .to_exposed_symbol_string(symbol, &env.interns);
+    //let c_function_name: String = layout_ids
+    //    .get_toplevel(symbol, &proc_layout)
+    //    .to_exposed_symbol_string(symbol, &env.interns);
 
-    expose_function_to_host_help_c_abi(
-        env,
-        ident_string,
-        roc_function,
-        arguments,
-        return_layout,
-        &c_function_name,
-    );
+    //expose_function_to_host_help_c_abi(
+    //    env,
+    //    ident_string,
+    //    roc_function,
+    //    arguments,
+    //    return_layout,
+    //    &c_function_name,
+    //);
 }
 
 fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
@@ -4130,30 +4144,31 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     return_value: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let context = env.context;
-    let builder = env.builder;
+    todo!()
+    //let context = env.context;
+    //let builder = env.builder;
 
-    let v1 = roc_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
+    //let v1 = roc_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
-    let v2 = builder
-        .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
-        .unwrap();
+    //let v2 = builder
+    //    .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
+    //    .unwrap();
 
-    let v3 = if return_layout.is_passed_by_reference(env.target_info) {
-        let loaded = env.builder.build_load(
-            return_value.into_pointer_value(),
-            "load_call_result_passed_by_ptr",
-        );
-        builder
-            .build_insert_value(v2, loaded, 2, "set_call_result")
-            .unwrap()
-    } else {
-        builder
-            .build_insert_value(v2, return_value, 2, "set_call_result")
-            .unwrap()
-    };
+    //let v3 = if return_layout.is_passed_by_reference(env.target_info) {
+    //    let loaded = env.builder.build_load(
+    //        return_value.into_pointer_value(),
+    //        "load_call_result_passed_by_ptr",
+    //    );
+    //    builder
+    //        .build_insert_value(v2, loaded, 2, "set_call_result")
+    //        .unwrap()
+    //} else {
+    //    builder
+    //        .build_insert_value(v2, return_value, 2, "set_call_result")
+    //        .unwrap()
+    //};
 
-    v3.into_struct_value().into()
+    //v3.into_struct_value().into()
 }
 
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
@@ -4328,66 +4343,67 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     opt_entry_point: Option<EntryPoint<'a>>,
 ) -> Vec<'a, &'a str> {
-    let mod_solutions = build_procedures_help(
-        env,
-        opt_level,
-        procedures,
-        opt_entry_point,
-        Some(&std::env::temp_dir().join("test.ll")),
-    );
+    todo!();
+    //let mod_solutions = build_procedures_help(
+    //    env,
+    //    opt_level,
+    //    procedures,
+    //    opt_entry_point,
+    //    Some(&std::env::temp_dir().join("test.ll")),
+    //);
 
-    let captures_niche = CapturesNiche::no_niche();
+    //let captures_niche = CapturesNiche::no_niche();
 
-    let top_level = ProcLayout {
-        arguments: &[],
-        result: Layout::UNIT,
-        captures_niche,
-    };
+    //let top_level = ProcLayout {
+    //    arguments: &[],
+    //    result: Layout::UNIT,
+    //    captures_niche,
+    //};
 
-    let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
+    //let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
 
-    for symbol in expects.iter().copied() {
-        let it = top_level.arguments.iter().copied();
-        let bytes =
-            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
-        let func_name = FuncName(&bytes);
-        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+    //for symbol in expects.iter().copied() {
+    //    let it = top_level.arguments.iter().copied();
+    //    let bytes =
+    //        roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
+    //    let func_name = FuncName(&bytes);
+    //    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-        let mut it = func_solutions.specs();
-        let func_spec = it.next().unwrap();
-        debug_assert!(
-            it.next().is_none(),
-            "we expect only one specialization of this symbol"
-        );
+    //    let mut it = func_solutions.specs();
+    //    let func_spec = it.next().unwrap();
+    //    debug_assert!(
+    //        it.next().is_none(),
+    //        "we expect only one specialization of this symbol"
+    //    );
 
-        // NOTE fake layout; it is only used for debug prints
-        let roc_main_fn = function_value_by_func_spec(
-            env,
-            *func_spec,
-            symbol,
-            &[],
-            captures_niche,
-            &Layout::UNIT,
-        );
+    //    // NOTE fake layout; it is only used for debug prints
+    //    let roc_main_fn = function_value_by_func_spec(
+    //        env,
+    //        *func_spec,
+    //        symbol,
+    //        &[],
+    //        captures_niche,
+    //        &Layout::UNIT,
+    //    );
 
-        let name = roc_main_fn.get_name().to_str().unwrap();
+    //    let name = roc_main_fn.get_name().to_str().unwrap();
 
-        let expect_name = &format!("Expect_{}", name);
-        let expect_name = env.arena.alloc_str(expect_name);
-        expect_names.push(&*expect_name);
+    //    let expect_name = &format!("Expect_{}", name);
+    //    let expect_name = env.arena.alloc_str(expect_name);
+    //    expect_names.push(&*expect_name);
 
-        // Add main to the module.
-        let _ = expose_function_to_host_help_c_abi(
-            env,
-            name,
-            roc_main_fn,
-            top_level.arguments,
-            top_level.result,
-            &format!("Expect_{}", name),
-        );
-    }
+    //    // Add main to the module.
+    //    let _ = expose_function_to_host_help_c_abi(
+    //        env,
+    //        name,
+    //        roc_main_fn,
+    //        top_level.arguments,
+    //        top_level.result,
+    //        &format!("Expect_{}", name),
+    //    );
+    //}
 
-    expect_names
+    //expect_names
 }
 
 fn build_procedures_help<'a, 'ctx, 'env>(
@@ -4575,79 +4591,80 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
     layout: RawFunctionLayout<'a>,
 ) {
-    let ident_string = proc_name.name().as_str(&env.interns);
-    let fn_name: String = format!("{}_1", ident_string);
+    todo!();
+    //let ident_string = proc_name.name().as_str(&env.interns);
+    //let fn_name: String = format!("{}_1", ident_string);
 
-    match layout {
-        RawFunctionLayout::Function(arguments, closure, result) => {
-            // define closure size and return value size, e.g.
-            //
-            // * roc__mainForHost_1_Update_size() -> i64
-            // * roc__mainForHost_1_Update_result_size() -> i64
+    //match layout {
+    //    RawFunctionLayout::Function(arguments, closure, result) => {
+    //        // define closure size and return value size, e.g.
+    //        //
+    //        // * roc__mainForHost_1_Update_size() -> i64
+    //        // * roc__mainForHost_1_Update_result_size() -> i64
 
-            let it = top_level.arguments.iter().copied();
-            let bytes = roc_alias_analysis::func_name_bytes_help(
-                exposed_function_symbol,
-                it,
-                CapturesNiche::no_niche(),
-                &top_level.result,
-            );
-            let func_name = FuncName(&bytes);
-            let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+    //        let it = top_level.arguments.iter().copied();
+    //        let bytes = roc_alias_analysis::func_name_bytes_help(
+    //            exposed_function_symbol,
+    //            it,
+    //            CapturesNiche::no_niche(),
+    //            &top_level.result,
+    //        );
+    //        let func_name = FuncName(&bytes);
+    //        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-            let mut it = func_solutions.specs();
-            let evaluator = match it.next() {
-                Some(func_spec) => {
-                    debug_assert!(
-                        it.next().is_none(),
-                        "we expect only one specialization of this symbol"
-                    );
+    //        let mut it = func_solutions.specs();
+    //        let evaluator = match it.next() {
+    //            Some(func_spec) => {
+    //                debug_assert!(
+    //                    it.next().is_none(),
+    //                    "we expect only one specialization of this symbol"
+    //                );
 
-                    function_value_by_func_spec(
-                        env,
-                        *func_spec,
-                        exposed_function_symbol,
-                        top_level.arguments,
-                        CapturesNiche::no_niche(),
-                        &top_level.result,
-                    )
-                }
-                None => {
-                    // morphic did not generate a specialization for this function,
-                    // therefore it must actually be unused.
-                    // An example is our closure callers
-                    panic!("morphic did not specialize {:?}", exposed_function_symbol);
-                }
-            };
+    //                function_value_by_func_spec(
+    //                    env,
+    //                    *func_spec,
+    //                    exposed_function_symbol,
+    //                    top_level.arguments,
+    //                    CapturesNiche::no_niche(),
+    //                    &top_level.result,
+    //                )
+    //            }
+    //            None => {
+    //                // morphic did not generate a specialization for this function,
+    //                // therefore it must actually be unused.
+    //                // An example is our closure callers
+    //                panic!("morphic did not specialize {:?}", exposed_function_symbol);
+    //            }
+    //        };
 
-            build_closure_caller(
-                env,
-                &fn_name,
-                evaluator,
-                alias_symbol,
-                arguments,
-                result,
-                closure,
-                result,
-            )
-        }
+    //        build_closure_caller(
+    //            env,
+    //            &fn_name,
+    //            evaluator,
+    //            alias_symbol,
+    //            arguments,
+    //            result,
+    //            closure,
+    //            result,
+    //        )
+    //    }
 
-        RawFunctionLayout::ZeroArgumentThunk(result) => {
-            // Define only the return value size, since this is a thunk
-            //
-            // * roc__mainForHost_1_Update_result_size() -> i64
+    //    RawFunctionLayout::ZeroArgumentThunk(result) => {
+    //        // Define only the return value size, since this is a thunk
+    //        //
+    //        // * roc__mainForHost_1_Update_result_size() -> i64
 
-            let result_type = basic_type_from_layout(env, &result);
+    //        let result_type = basic_type_from_layout(env, &result);
 
-            build_host_exposed_alias_size_help(
-                env,
-                &fn_name,
-                alias_symbol,
-                Some("result"),
-                result_type,
-            );
-        }
-    }
+    //        build_host_exposed_alias_size_help(
+    //            env,
+    //            &fn_name,
+    //            alias_symbol,
+    //            Some("result"),
+    //            result_type,
+    //        );
+    //    }
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4661,119 +4678,120 @@ fn build_closure_caller<'a, 'ctx, 'env>(
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
-    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
+    todo!()
+    //let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
-    for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout);
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
+    //for layout in arguments {
+    //    let arg_type = basic_type_from_layout(env, layout);
+    //    let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
 
-        argument_types.push(arg_ptr_type.into());
-    }
+    //    argument_types.push(arg_ptr_type.into());
+    //}
 
-    let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &lambda_set.runtime_representation());
+    //let closure_argument_type = {
+    //    let basic_type = basic_type_from_layout(env, &lambda_set.runtime_representation());
 
-        basic_type.ptr_type(AddressSpace::Generic)
-    };
-    argument_types.push(closure_argument_type.into());
+    //    basic_type.ptr_type(AddressSpace::Generic)
+    //};
+    //argument_types.push(closure_argument_type.into());
 
-    let context = &env.context;
-    let builder = env.builder;
+    //let context = &env.context;
+    //let builder = env.builder;
 
-    let result_type = basic_type_from_layout(env, result);
+    //let result_type = basic_type_from_layout(env, result);
 
-    let output_type = { result_type.ptr_type(AddressSpace::Generic) };
-    argument_types.push(output_type.into());
+    //let output_type = { result_type.ptr_type(AddressSpace::Generic) };
+    //argument_types.push(output_type.into());
 
-    // STEP 1: build function header
+    //// STEP 1: build function header
 
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc__{}_{}_{}_caller",
-        def_name,
-        alias_symbol.module_string(&env.interns),
-        alias_symbol.as_str(&env.interns)
-    );
+    //// e.g. `roc__main_1_Fx_caller`
+    //let function_name = format!(
+    //    "roc__{}_{}_{}_caller",
+    //    def_name,
+    //    alias_symbol.module_string(&env.interns),
+    //    alias_symbol.as_str(&env.interns)
+    //);
 
-    let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
+    //let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
-    let function_value = add_func(
-        env.context,
-        env.module,
-        function_name.as_str(),
-        function_spec,
-        Linkage::External,
-    );
+    //let function_value = add_func(
+    //    env.context,
+    //    env.module,
+    //    function_name.as_str(),
+    //    function_spec,
+    //    Linkage::External,
+    //);
 
-    // STEP 2: build function body
+    //// STEP 2: build function body
 
-    let entry = context.append_basic_block(function_value, "entry");
+    //let entry = context.append_basic_block(function_value, "entry");
 
-    builder.position_at_end(entry);
+    //builder.position_at_end(entry);
 
-    let mut evaluator_arguments = function_value.get_params();
+    //let mut evaluator_arguments = function_value.get_params();
 
-    // the final parameter is the output pointer, pop it
-    let output = evaluator_arguments.pop().unwrap().into_pointer_value();
+    //// the final parameter is the output pointer, pop it
+    //let output = evaluator_arguments.pop().unwrap().into_pointer_value();
 
-    // NOTE this may be incorrect in the long run
-    // here we load any argument that is a pointer
-    let closure_layout = lambda_set.runtime_representation();
-    let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
-    for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
-        if param.is_pointer_value() && !layout.is_passed_by_reference(env.target_info) {
-            *param = builder.build_load(param.into_pointer_value(), "load_param");
-        }
-    }
+    //// NOTE this may be incorrect in the long run
+    //// here we load any argument that is a pointer
+    //let closure_layout = lambda_set.runtime_representation();
+    //let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
+    //for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
+    //    if param.is_pointer_value() && !layout.is_passed_by_reference(env.target_info) {
+    //        *param = builder.build_load(param.into_pointer_value(), "load_param");
+    //    }
+    //}
 
-    if env.mode.returns_roc_result() {
-        let call_result = set_jump_and_catch_long_jump(
-            env,
-            function_value,
-            evaluator,
-            &evaluator_arguments,
-            *return_layout,
-        );
+    //if env.mode.returns_roc_result() {
+    //    let call_result = set_jump_and_catch_long_jump(
+    //        env,
+    //        function_value,
+    //        evaluator,
+    //        &evaluator_arguments,
+    //        *return_layout,
+    //    );
 
-        builder.build_store(output, call_result);
-    } else {
-        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+    //    builder.build_store(output, call_result);
+    //} else {
+    //    let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        if return_layout.is_passed_by_reference(env.target_info) {
-            let align_bytes = return_layout.alignment_bytes(env.target_info);
+    //    if return_layout.is_passed_by_reference(env.target_info) {
+    //        let align_bytes = return_layout.alignment_bytes(env.target_info);
 
-            if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
+    //        if align_bytes > 0 {
+    //            let size = env
+    //                .ptr_int()
+    //                .const_int(return_layout.stack_size(env.target_info) as u64, false);
 
-                env.builder
-                    .build_memcpy(
-                        output,
-                        align_bytes,
-                        call_result.into_pointer_value(),
-                        align_bytes,
-                        size,
-                    )
-                    .unwrap();
-            }
-        } else {
-            builder.build_store(output, call_result);
-        }
-    };
+    //            env.builder
+    //                .build_memcpy(
+    //                    output,
+    //                    align_bytes,
+    //                    call_result.into_pointer_value(),
+    //                    align_bytes,
+    //                    size,
+    //                )
+    //                .unwrap();
+    //        }
+    //    } else {
+    //        builder.build_store(output, call_result);
+    //    }
+    //};
 
-    builder.build_return(None);
+    //builder.build_return(None);
 
-    // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(env, def_name, alias_symbol, Some("result"), result_type);
+    //// STEP 3: build a {} -> u64 function that gives the size of the return type
+    //build_host_exposed_alias_size_help(env, def_name, alias_symbol, Some("result"), result_type);
 
-    // STEP 4: build a {} -> u64 function that gives the size of the closure
-    build_host_exposed_alias_size(
-        env,
-        def_name,
-        alias_symbol,
-        lambda_set.runtime_representation(),
-    );
+    //// STEP 4: build a {} -> u64 function that gives the size of the closure
+    //build_host_exposed_alias_size(
+    //    env,
+    //    def_name,
+    //    alias_symbol,
+    //    lambda_set.runtime_representation(),
+    //);
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
@@ -5042,12 +5060,13 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            if result_layout.is_passed_by_reference(env.target_info) {
-                result_alloca.into()
-            } else {
-                env.builder
-                    .build_load(result_alloca, "return_by_pointer_load_result")
-            }
+            todo!()
+            //if result_layout.is_passed_by_reference(env.target_info) {
+            //    result_alloca.into()
+            //} else {
+            //    env.builder
+            //        .build_load(result_alloca, "return_by_pointer_load_result")
+            //}
         }
         RocReturn::Return => {
             debug_assert_eq!(
@@ -5112,34 +5131,35 @@ fn roc_function_call<'a, 'ctx, 'env>(
     argument_layouts: &[Layout<'a>],
     result_layout: Layout<'a>,
 ) -> RocFunctionCall<'ctx> {
-    use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
+    todo!()
+    //use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
-    let closure_data_ptr = env
-        .builder
-        .build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
+    //let closure_data_ptr = env
+    //    .builder
+    //    .build_alloca(closure_data.get_type(), "closure_data_ptr");
+    //env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller =
-        build_transform_caller(env, transform, lambda_set, argument_layouts, result_layout)
-            .as_global_value()
-            .as_pointer_value();
+    //let stepper_caller =
+    //    build_transform_caller(env, transform, lambda_set, argument_layouts, result_layout)
+    //        .as_global_value()
+    //        .as_pointer_value();
 
-    let inc_closure_data =
-        build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
-            .as_global_value()
-            .as_pointer_value();
+    //let inc_closure_data =
+    //    build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
+    //        .as_global_value()
+    //        .as_pointer_value();
 
-    let closure_data_is_owned = env
-        .context
-        .bool_type()
-        .const_int(closure_data_is_owned as u64, false);
+    //let closure_data_is_owned = env
+    //    .context
+    //    .bool_type()
+    //    .const_int(closure_data_is_owned as u64, false);
 
-    RocFunctionCall {
-        caller: stepper_caller,
-        inc_n_data: inc_closure_data,
-        data_is_owned: closure_data_is_owned,
-        data: closure_data_ptr,
-    }
+    //RocFunctionCall {
+    //    caller: stepper_caller,
+    //    inc_n_data: inc_closure_data,
+    //    data_is_owned: closure_data_is_owned,
+    //    data: closure_data_ptr,
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5151,6 +5171,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
+    todo!();
     use roc_mono::ir::PassedFunction;
     use roc_mono::low_level::HigherOrder::*;
 
@@ -5170,235 +5191,235 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     } = *passed_function;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
-    macro_rules! function_details {
-        () => {{
-            let function = function_value_by_func_spec(
-                env,
-                func_spec,
-                function_name.name(),
-                argument_layouts,
-                function_name.captures_niche(),
-                return_layout,
-            );
+    //macro_rules! function_details {
+    //    () => {{
+    //        let function = function_value_by_func_spec(
+    //            env,
+    //            func_spec,
+    //            function_name.name(),
+    //            argument_layouts,
+    //            function_name.captures_niche(),
+    //            return_layout,
+    //        );
 
-            let (closure, closure_layout) =
-                load_symbol_and_lambda_set(scope, &captured_environment);
+    //        let (closure, closure_layout) =
+    //            load_symbol_and_lambda_set(scope, &captured_environment);
 
-            (function, closure, closure_layout)
-        }};
-    }
+    //        (function, closure, closure_layout)
+    //    }};
+    //}
 
-    match op {
-        ListMap { xs } => {
-            // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+    //match op {
+    //    ListMap { xs } => {
+    //        // List.map : List before, (before -> after) -> List after
+    //        let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
-            let (function, closure, closure_layout) = function_details!();
+    //        let (function, closure, closure_layout) = function_details!();
 
-            match (list_layout, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(element_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[**element_layout];
+    //        match (list_layout, return_layout) {
+    //            (
+    //                Layout::Builtin(Builtin::List(element_layout)),
+    //                Layout::Builtin(Builtin::List(result_layout)),
+    //            ) => {
+    //                let argument_layouts = &[**element_layout];
 
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        **result_layout,
-                    );
+    //                let roc_function_call = roc_function_call(
+    //                    env,
+    //                    layout_ids,
+    //                    function,
+    //                    closure,
+    //                    closure_layout,
+    //                    function_owns_closure_data,
+    //                    argument_layouts,
+    //                    **result_layout,
+    //                );
 
-                    list_map(env, roc_function_call, list, element_layout, result_layout)
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+    //                list_map(env, roc_function_call, list, element_layout, result_layout)
+    //            }
+    //            _ => unreachable!("invalid list layout"),
+    //        }
+    //    }
+    //    ListMap2 { xs, ys } => {
+    //        let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+    //        let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
 
-            let (function, closure, closure_layout) = function_details!();
+    //        let (function, closure, closure_layout) = function_details!();
 
-            match (list1_layout, list2_layout, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[**element1_layout, **element2_layout];
+    //        match (list1_layout, list2_layout, return_layout) {
+    //            (
+    //                Layout::Builtin(Builtin::List(element1_layout)),
+    //                Layout::Builtin(Builtin::List(element2_layout)),
+    //                Layout::Builtin(Builtin::List(result_layout)),
+    //            ) => {
+    //                let argument_layouts = &[**element1_layout, **element2_layout];
 
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        **result_layout,
-                    );
+    //                let roc_function_call = roc_function_call(
+    //                    env,
+    //                    layout_ids,
+    //                    function,
+    //                    closure,
+    //                    closure_layout,
+    //                    function_owns_closure_data,
+    //                    argument_layouts,
+    //                    **result_layout,
+    //                );
 
-                    list_map2(
-                        env,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        element1_layout,
-                        element2_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+    //                list_map2(
+    //                    env,
+    //                    layout_ids,
+    //                    roc_function_call,
+    //                    list1,
+    //                    list2,
+    //                    element1_layout,
+    //                    element2_layout,
+    //                    result_layout,
+    //                )
+    //            }
+    //            _ => unreachable!("invalid list layout"),
+    //        }
+    //    }
+    //    ListMap3 { xs, ys, zs } => {
+    //        let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+    //        let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+    //        let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
 
-            let (function, closure, closure_layout) = function_details!();
+    //        let (function, closure, closure_layout) = function_details!();
 
-            match (list1_layout, list2_layout, list3_layout, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(element3_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts =
-                        &[**element1_layout, **element2_layout, **element3_layout];
+    //        match (list1_layout, list2_layout, list3_layout, return_layout) {
+    //            (
+    //                Layout::Builtin(Builtin::List(element1_layout)),
+    //                Layout::Builtin(Builtin::List(element2_layout)),
+    //                Layout::Builtin(Builtin::List(element3_layout)),
+    //                Layout::Builtin(Builtin::List(result_layout)),
+    //            ) => {
+    //                let argument_layouts =
+    //                    &[**element1_layout, **element2_layout, **element3_layout];
 
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        **result_layout,
-                    );
+    //                let roc_function_call = roc_function_call(
+    //                    env,
+    //                    layout_ids,
+    //                    function,
+    //                    closure,
+    //                    closure_layout,
+    //                    function_owns_closure_data,
+    //                    argument_layouts,
+    //                    **result_layout,
+    //                );
 
-                    list_map3(
-                        env,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        list3,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
+    //                list_map3(
+    //                    env,
+    //                    layout_ids,
+    //                    roc_function_call,
+    //                    list1,
+    //                    list2,
+    //                    list3,
+    //                    element1_layout,
+    //                    element2_layout,
+    //                    element3_layout,
+    //                    result_layout,
+    //                )
+    //            }
+    //            _ => unreachable!("invalid list layout"),
+    //        }
+    //    }
+    //    ListMap4 { xs, ys, zs, ws } => {
+    //        let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+    //        let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+    //        let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+    //        let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
 
-            let (function, closure, closure_layout) = function_details!();
+    //        let (function, closure, closure_layout) = function_details!();
 
-            match (
-                list1_layout,
-                list2_layout,
-                list3_layout,
-                list4_layout,
-                return_layout,
-            ) {
-                (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(element3_layout)),
-                    Layout::Builtin(Builtin::List(element4_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[
-                        **element1_layout,
-                        **element2_layout,
-                        **element3_layout,
-                        **element4_layout,
-                    ];
+    //        match (
+    //            list1_layout,
+    //            list2_layout,
+    //            list3_layout,
+    //            list4_layout,
+    //            return_layout,
+    //        ) {
+    //            (
+    //                Layout::Builtin(Builtin::List(element1_layout)),
+    //                Layout::Builtin(Builtin::List(element2_layout)),
+    //                Layout::Builtin(Builtin::List(element3_layout)),
+    //                Layout::Builtin(Builtin::List(element4_layout)),
+    //                Layout::Builtin(Builtin::List(result_layout)),
+    //            ) => {
+    //                let argument_layouts = &[
+    //                    **element1_layout,
+    //                    **element2_layout,
+    //                    **element3_layout,
+    //                    **element4_layout,
+    //                ];
 
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        **result_layout,
-                    );
+    //                let roc_function_call = roc_function_call(
+    //                    env,
+    //                    layout_ids,
+    //                    function,
+    //                    closure,
+    //                    closure_layout,
+    //                    function_owns_closure_data,
+    //                    argument_layouts,
+    //                    **result_layout,
+    //                );
 
-                    list_map4(
-                        env,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        list3,
-                        list4,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        element4_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListSortWith { xs } => {
-            // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+    //                list_map4(
+    //                    env,
+    //                    layout_ids,
+    //                    roc_function_call,
+    //                    list1,
+    //                    list2,
+    //                    list3,
+    //                    list4,
+    //                    element1_layout,
+    //                    element2_layout,
+    //                    element3_layout,
+    //                    element4_layout,
+    //                    result_layout,
+    //                )
+    //            }
+    //            _ => unreachable!("invalid list layout"),
+    //        }
+    //    }
+    //    ListSortWith { xs } => {
+    //        // List.sortWith : List a, (a, a -> Ordering) -> List a
+    //        let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
-            let (function, closure, closure_layout) = function_details!();
+    //        let (function, closure, closure_layout) = function_details!();
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    use crate::llvm::bitcode::build_compare_wrapper;
+    //        match list_layout {
+    //            Layout::Builtin(Builtin::List(element_layout)) => {
+    //                use crate::llvm::bitcode::build_compare_wrapper;
 
-                    let argument_layouts = &[**element_layout, **element_layout];
+    //                let argument_layouts = &[**element_layout, **element_layout];
 
-                    let compare_wrapper =
-                        build_compare_wrapper(env, function, closure_layout, element_layout)
-                            .as_global_value()
-                            .as_pointer_value();
+    //                let compare_wrapper =
+    //                    build_compare_wrapper(env, function, closure_layout, element_layout)
+    //                        .as_global_value()
+    //                        .as_pointer_value();
 
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
+    //                let roc_function_call = roc_function_call(
+    //                    env,
+    //                    layout_ids,
+    //                    function,
+    //                    closure,
+    //                    closure_layout,
+    //                    function_owns_closure_data,
+    //                    argument_layouts,
+    //                    result_layout,
+    //                );
 
-                    list_sort_with(
-                        env,
-                        roc_function_call,
-                        compare_wrapper,
-                        list,
-                        element_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-    }
+    //                list_sort_with(
+    //                    env,
+    //                    roc_function_call,
+    //                    compare_wrapper,
+    //                    list,
+    //                    element_layout,
+    //                )
+    //            }
+    //            _ => unreachable!("invalid list layout"),
+    //        }
+    //    }
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6466,13 +6487,14 @@ fn to_cc_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout.runtime_representation() {
-        Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
-        layout => {
-            // TODO this is almost certainly incorrect for bigger structs
-            basic_type_from_layout(env, &layout)
-        }
-    }
+    todo!()
+    //match layout.runtime_representation() {
+    //    Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
+    //    layout => {
+    //        // TODO this is almost certainly incorrect for bigger structs
+    //        basic_type_from_layout(env, &layout)
+    //    }
+    //}
 }
 
 fn to_cc_type_builtin<'a, 'ctx, 'env>(
@@ -6524,7 +6546,8 @@ impl RocReturn {
             }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
             Layout::LambdaSet(lambda_set) => {
-                RocReturn::roc_return_by_pointer(target_info, lambda_set.runtime_representation())
+                todo!()
+                //RocReturn::roc_return_by_pointer(target_info, lambda_set.runtime_representation())
             }
             _ => false,
         }
@@ -6669,16 +6692,17 @@ impl<'ctx> FunctionSpec<'ctx> {
 
 /// According to the C ABI, how should we return a value with the given layout?
 pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
-    let return_size = layout.stack_size(env.target_info);
-    let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
+    todo!()
+    //let return_size = layout.stack_size(env.target_info);
+    //let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
 
-    if return_size == 0 {
-        CCReturn::Void
-    } else if pass_result_by_pointer {
-        CCReturn::ByPointer
-    } else {
-        CCReturn::Return
-    }
+    //if return_size == 0 {
+    //    CCReturn::Void
+    //} else if pass_result_by_pointer {
+    //    CCReturn::ByPointer
+    //} else {
+    //    CCReturn::Return
+    //}
 }
 
 fn function_arguments<'a, 'ctx, 'env>(

@@ -263,47 +263,48 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) {
-        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
-        let mut general_i = 0;
-        let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
-            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
-            general_i += 1;
-        }
-        for (layout, sym) in args.iter() {
-            let stack_size = layout.stack_size(TARGET_INFO);
-            match layout {
-                single_register_integers!() => {
-                    if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
-                        general_i += 1;
-                    } else {
-                        storage_manager.primitive_stack_arg(sym, arg_offset);
-                        arg_offset += 8;
-                    }
-                }
-                single_register_floats!() => {
-                    if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[float_i]);
-                        float_i += 1;
-                    } else {
-                        storage_manager.primitive_stack_arg(sym, arg_offset);
-                        arg_offset += 8;
-                    }
-                }
-                _ if stack_size == 0 => {
-                    storage_manager.no_data_arg(sym);
-                }
-                _ if stack_size > 16 => {
-                    // TODO: Double check this.
-                    storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
-                    arg_offset += stack_size as i32;
-                }
-                x => {
-                    todo!("Loading args with layout {:?}", x);
-                }
-            }
-        }
+        todo!()
+        //let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
+        //let mut general_i = 0;
+        //let mut float_i = 0;
+        //if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
+        //    storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
+        //    general_i += 1;
+        //}
+        //for (layout, sym) in args.iter() {
+        //    let stack_size = layout.stack_size(TARGET_INFO);
+        //    match layout {
+        //        single_register_integers!() => {
+        //            if general_i < Self::GENERAL_PARAM_REGS.len() {
+        //                storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
+        //                general_i += 1;
+        //            } else {
+        //                storage_manager.primitive_stack_arg(sym, arg_offset);
+        //                arg_offset += 8;
+        //            }
+        //        }
+        //        single_register_floats!() => {
+        //            if float_i < Self::FLOAT_PARAM_REGS.len() {
+        //                storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[float_i]);
+        //                float_i += 1;
+        //            } else {
+        //                storage_manager.primitive_stack_arg(sym, arg_offset);
+        //                arg_offset += 8;
+        //            }
+        //        }
+        //        _ if stack_size == 0 => {
+        //            storage_manager.no_data_arg(sym);
+        //        }
+        //        _ if stack_size > 16 => {
+        //            // TODO: Double check this.
+        //            storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
+        //            arg_offset += stack_size as i32;
+        //        }
+        //        x => {
+        //            todo!("Loading args with layout {:?}", x);
+        //        }
+        //    }
+        //}
     }
 
     #[inline(always)]
@@ -321,98 +322,99 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
-        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        let mut general_i = 0;
-        let mut float_i = 0;
-        if Self::returns_via_arg_pointer(ret_layout) {
-            // Save space on the stack for the result we will be return.
-            let base_offset =
-                storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
-            // Set the first reg to the address base + offset.
-            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
-            general_i += 1;
-            X86_64Assembler::add_reg64_reg64_imm32(
-                buf,
-                ret_reg,
-                X86_64GeneralReg::RBP,
-                base_offset,
-            );
-        }
-        for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
-            match layout {
-                single_register_integers!() => {
-                    if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_PARAM_REGS[general_i],
-                        );
-                        general_i += 1;
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_reg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
-                    }
-                }
-                single_register_floats!() => {
-                    if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_PARAM_REGS[float_i],
-                        );
-                        float_i += 1;
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_freg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
-                    }
-                }
-                x if x.stack_size(TARGET_INFO) == 0 => {}
-                x if x.stack_size(TARGET_INFO) > 16 => {
-                    // TODO: Double check this.
-                    // Just copy onto the stack.
-                    // Use return reg as buffer because it will be empty right now.
-                    let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
-                    debug_assert_eq!(base_offset % 8, 0);
-                    for i in (0..size as i32).step_by(8) {
-                        X86_64Assembler::mov_reg64_base32(
-                            buf,
-                            Self::GENERAL_RETURN_REGS[0],
-                            base_offset + i,
-                        );
-                        X86_64Assembler::mov_stack32_reg64(
-                            buf,
-                            tmp_stack_offset + i,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                    }
-                    tmp_stack_offset += size as i32;
-                }
-                x => {
-                    todo!("calling with arg type, {:?}", x);
-                }
-            }
-        }
-        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
+        todo!()
+        //let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+        //let mut general_i = 0;
+        //let mut float_i = 0;
+        //if Self::returns_via_arg_pointer(ret_layout) {
+        //    // Save space on the stack for the result we will be return.
+        //    let base_offset =
+        //        storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+        //    // Set the first reg to the address base + offset.
+        //    let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
+        //    general_i += 1;
+        //    X86_64Assembler::add_reg64_reg64_imm32(
+        //        buf,
+        //        ret_reg,
+        //        X86_64GeneralReg::RBP,
+        //        base_offset,
+        //    );
+        //}
+        //for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
+        //    match layout {
+        //        single_register_integers!() => {
+        //            if general_i < Self::GENERAL_PARAM_REGS.len() {
+        //                storage_manager.load_to_specified_general_reg(
+        //                    buf,
+        //                    sym,
+        //                    Self::GENERAL_PARAM_REGS[general_i],
+        //                );
+        //                general_i += 1;
+        //            } else {
+        //                // Copy to stack using return reg as buffer.
+        //                storage_manager.load_to_specified_general_reg(
+        //                    buf,
+        //                    sym,
+        //                    Self::GENERAL_RETURN_REGS[0],
+        //                );
+        //                X86_64Assembler::mov_stack32_reg64(
+        //                    buf,
+        //                    tmp_stack_offset,
+        //                    Self::GENERAL_RETURN_REGS[0],
+        //                );
+        //                tmp_stack_offset += 8;
+        //            }
+        //        }
+        //        single_register_floats!() => {
+        //            if float_i < Self::FLOAT_PARAM_REGS.len() {
+        //                storage_manager.load_to_specified_float_reg(
+        //                    buf,
+        //                    sym,
+        //                    Self::FLOAT_PARAM_REGS[float_i],
+        //                );
+        //                float_i += 1;
+        //            } else {
+        //                // Copy to stack using return reg as buffer.
+        //                storage_manager.load_to_specified_float_reg(
+        //                    buf,
+        //                    sym,
+        //                    Self::FLOAT_RETURN_REGS[0],
+        //                );
+        //                X86_64Assembler::mov_stack32_freg64(
+        //                    buf,
+        //                    tmp_stack_offset,
+        //                    Self::FLOAT_RETURN_REGS[0],
+        //                );
+        //                tmp_stack_offset += 8;
+        //            }
+        //        }
+        //        //x if x.stack_size(TARGET_INFO) == 0 => {}
+        //        //x if x.stack_size(TARGET_INFO) > 16 => {
+        //        //    // TODO: Double check this.
+        //        //    // Just copy onto the stack.
+        //        //    // Use return reg as buffer because it will be empty right now.
+        //        //    let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+        //        //    debug_assert_eq!(base_offset % 8, 0);
+        //        //    for i in (0..size as i32).step_by(8) {
+        //        //        X86_64Assembler::mov_reg64_base32(
+        //        //            buf,
+        //        //            Self::GENERAL_RETURN_REGS[0],
+        //        //            base_offset + i,
+        //        //        );
+        //        //        X86_64Assembler::mov_stack32_reg64(
+        //        //            buf,
+        //        //            tmp_stack_offset + i,
+        //        //            Self::GENERAL_RETURN_REGS[0],
+        //        //        );
+        //        //    }
+        //        //    tmp_stack_offset += size as i32;
+        //        //}
+        //        x => {
+        //            todo!("calling with arg type, {:?}", x);
+        //        }
+        //    }
+        //}
+        //storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a>(
@@ -431,7 +433,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(TARGET_INFO) == 0 => {}
+            //x if x.stack_size(TARGET_INFO) == 0 => {}
             x if !Self::returns_via_arg_pointer(x) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
@@ -487,25 +489,26 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(TARGET_INFO) == 0 => {}
-            x if !Self::returns_via_arg_pointer(x) => {
-                let size = layout.stack_size(TARGET_INFO);
-                let offset = storage_manager.claim_stack_area(sym, size);
-                if size <= 8 {
-                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
-                } else if size <= 16 {
-                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
-                    X86_64Assembler::mov_base32_reg64(
-                        buf,
-                        offset + 8,
-                        Self::GENERAL_RETURN_REGS[1],
-                    );
-                } else {
-                    internal_error!(
-                        "types that don't return via arg pointer must be less than 16 bytes"
-                    );
-                }
-            }
+            _ => todo!(),
+            //x if x.stack_size(TARGET_INFO) == 0 => {}
+            //x if !Self::returns_via_arg_pointer(x) => {
+            //    let size = layout.stack_size(TARGET_INFO);
+            //    let offset = storage_manager.claim_stack_area(sym, size);
+            //    if size <= 8 {
+            //        X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+            //    } else if size <= 16 {
+            //        X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+            //        X86_64Assembler::mov_base32_reg64(
+            //            buf,
+            //            offset + 8,
+            //            Self::GENERAL_RETURN_REGS[1],
+            //        );
+            //    } else {
+            //        internal_error!(
+            //            "types that don't return via arg pointer must be less than 16 bytes"
+            //        );
+            //    }
+            //}
             _ => {
                 // This should have been recieved via an arg pointer.
                 // That means the value is already loaded onto the stack area we allocated before the call.
@@ -519,7 +522,8 @@ impl X86_64SystemV {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This will need to be more complex/extended to fully support the calling convention.
         // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        ret_layout.stack_size(TARGET_INFO) > 16
+        todo!()
+        //ret_layout.stack_size(TARGET_INFO) > 16
     }
 }
 
@@ -682,7 +686,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
                         i += 1;
                     }
-                    x if x.stack_size(TARGET_INFO) == 0 => {}
+                    //x if x.stack_size(TARGET_INFO) == 0 => {}
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
@@ -719,7 +723,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         if Self::returns_via_arg_pointer(ret_layout) {
             // Save space on the stack for the arg we will return.
-            storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+
+            todo!();
+            //storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
             todo!("claim first parama reg for the address");
         }
         for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
@@ -768,7 +774,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         tmp_stack_offset += 8;
                     }
                 }
-                x if x.stack_size(TARGET_INFO) == 0 => {}
+                //x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
@@ -812,7 +818,8 @@ impl X86_64WindowsFastcall {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        ret_layout.stack_size(TARGET_INFO) > 8
+        todo!()
+        //ret_layout.stack_size(TARGET_INFO) > 8
     }
 }
 

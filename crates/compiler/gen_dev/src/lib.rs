@@ -253,62 +253,63 @@ trait Backend<'a> {
                 call_type,
                 arguments,
             }) => {
-                match call_type {
-                    CallType::ByName {
-                        name: func_sym,
-                        arg_layouts,
-                        ret_layout,
-                        ..
-                    } => {
-                        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
-                            LowLevelWrapperType::from_symbol(func_sym.name())
-                        {
-                            self.build_run_low_level(
-                                sym,
-                                &lowlevel,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            )
-                        } else if self.defined_in_app_module(func_sym.name()) {
-                            let layout_id = LayoutIds::default().get(func_sym.name(), layout);
-                            let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
-                            // Now that the arguments are needed, load them if they are literals.
-                            self.load_literal_symbols(arguments);
-                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                        } else {
-                            self.build_builtin(
-                                sym,
-                                func_sym.name(),
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            )
-                        }
-                    }
+                todo!();
+                //match call_type {
+                //    CallType::ByName {
+                //        name: func_sym,
+                //        arg_layouts,
+                //        ret_layout,
+                //        ..
+                //    } => {
+                //        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                //            LowLevelWrapperType::from_symbol(func_sym.name())
+                //        {
+                //            self.build_run_low_level(
+                //                sym,
+                //                &lowlevel,
+                //                arguments,
+                //                arg_layouts,
+                //                ret_layout,
+                //            )
+                //        } else if self.defined_in_app_module(func_sym.name()) {
+                //            let layout_id = LayoutIds::default().get(func_sym.name(), layout);
+                //            let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
+                //            // Now that the arguments are needed, load them if they are literals.
+                //            self.load_literal_symbols(arguments);
+                //            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                //        } else {
+                //            self.build_builtin(
+                //                sym,
+                //                func_sym.name(),
+                //                arguments,
+                //                arg_layouts,
+                //                ret_layout,
+                //            )
+                //        }
+                //    }
 
-                    CallType::LowLevel { op: lowlevel, .. } => {
-                        let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
-                            bumpalo::vec![in self.env().arena];
-                        arg_layouts.reserve(arguments.len());
-                        let layout_map = self.layout_map();
-                        for arg in *arguments {
-                            if let Some(layout) = layout_map.get(arg) {
-                                arg_layouts.push(*layout);
-                            } else {
-                                internal_error!("the argument, {:?}, has no know layout", arg);
-                            }
-                        }
-                        self.build_run_low_level(
-                            sym,
-                            lowlevel,
-                            arguments,
-                            arg_layouts.into_bump_slice(),
-                            layout,
-                        )
-                    }
-                    x => todo!("the call type, {:?}", x),
-                }
+                //    CallType::LowLevel { op: lowlevel, .. } => {
+                //        let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
+                //            bumpalo::vec![in self.env().arena];
+                //        arg_layouts.reserve(arguments.len());
+                //        let layout_map = self.layout_map();
+                //        for arg in *arguments {
+                //            if let Some(layout) = layout_map.get(arg) {
+                //                arg_layouts.push(*layout);
+                //            } else {
+                //                internal_error!("the argument, {:?}, has no know layout", arg);
+                //            }
+                //        }
+                //        self.build_run_low_level(
+                //            sym,
+                //            lowlevel,
+                //            arguments,
+                //            arg_layouts.into_bump_slice(),
+                //            layout,
+                //        )
+                //    }
+                //    x => todo!("the call type, {:?}", x),
+                //}
             }
             Expr::EmptyArray => {
                 self.create_empty_array(sym);

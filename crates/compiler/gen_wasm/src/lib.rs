@@ -89,101 +89,102 @@ pub fn build_app_module<'a>(
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, BitVec<usize>, u32) {
-    let mut layout_ids = LayoutIds::default();
-    let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
-    let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
-    let mut maybe_main_fn_index = None;
+    todo!();
+    //let mut layout_ids = LayoutIds::default();
+    //let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
+    //let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    //let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
+    //let mut maybe_main_fn_index = None;
 
-    // Adjust Wasm function indices to account for functions from the object file
-    let fn_index_offset: u32 =
-        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
+    //// Adjust Wasm function indices to account for functions from the object file
+    //let fn_index_offset: u32 =
+    //    host_module.import.function_count() as u32 + host_module.code.preloaded_count;
 
-    // Pre-pass over the procedure names & layouts
-    // Create a lookup to tell us the final index of each proc in the output file
-    for (i, ((sym, proc_layout), proc)) in procedures.into_iter().enumerate() {
-        let fn_index = fn_index_offset + i as u32;
-        procs.push(proc);
-        if env.exposed_to_host.contains(&sym) {
-            maybe_main_fn_index = Some(fn_index);
+    //// Pre-pass over the procedure names & layouts
+    //// Create a lookup to tell us the final index of each proc in the output file
+    //for (i, ((sym, proc_layout), proc)) in procedures.into_iter().enumerate() {
+    //    let fn_index = fn_index_offset + i as u32;
+    //    procs.push(proc);
+    //    if env.exposed_to_host.contains(&sym) {
+    //        maybe_main_fn_index = Some(fn_index);
 
-            let exposed_name = layout_ids
-                .get_toplevel(sym, &proc_layout)
-                .to_exposed_symbol_string(sym, interns);
+    //        let exposed_name = layout_ids
+    //            .get_toplevel(sym, &proc_layout)
+    //            .to_exposed_symbol_string(sym, interns);
 
-            let exposed_name_bump: &'a str = env.arena.alloc_str(&exposed_name);
+    //        let exposed_name_bump: &'a str = env.arena.alloc_str(&exposed_name);
 
-            host_to_app_map.push((exposed_name_bump, fn_index));
-        }
+    //        host_to_app_map.push((exposed_name_bump, fn_index));
+    //    }
 
-        proc_lookup.push(ProcLookupData {
-            name: sym,
-            layout: proc_layout,
-            source: ProcSource::Roc,
-        });
-    }
+    //    proc_lookup.push(ProcLookupData {
+    //        name: sym,
+    //        layout: proc_layout,
+    //        source: ProcSource::Roc,
+    //    });
+    //}
 
-    let mut backend = WasmBackend::new(
-        env,
-        interns,
-        layout_ids,
-        proc_lookup,
-        host_to_app_map,
-        host_module,
-        fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
-    );
+    //let mut backend = WasmBackend::new(
+    //    env,
+    //    interns,
+    //    layout_ids,
+    //    proc_lookup,
+    //    host_to_app_map,
+    //    host_module,
+    //    fn_index_offset,
+    //    CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+    //);
 
-    if DEBUG_SETTINGS.user_procs_ir {
-        println!("## procs");
-        for proc in procs.iter() {
-            println!("{}", proc.to_pretty(200));
-            // println!("{:?}", proc);
-        }
-    }
+    //if DEBUG_SETTINGS.user_procs_ir {
+    //    println!("## procs");
+    //    for proc in procs.iter() {
+    //        println!("{}", proc.to_pretty(200));
+    //        // println!("{:?}", proc);
+    //    }
+    //}
 
-    // Generate procs from user code
-    for proc in procs.iter() {
-        backend.build_proc(proc);
-    }
+    //// Generate procs from user code
+    //for proc in procs.iter() {
+    //    backend.build_proc(proc);
+    //}
 
-    // Generate specialized helpers for refcounting & equality
-    let helper_procs = backend.get_helpers();
+    //// Generate specialized helpers for refcounting & equality
+    //let helper_procs = backend.get_helpers();
 
-    backend.register_symbol_debug_names();
+    //backend.register_symbol_debug_names();
 
-    if DEBUG_SETTINGS.helper_procs_ir {
-        println!("## helper_procs");
-        for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(200));
-            // println!("{:#?}", proc);
-        }
-    }
+    //if DEBUG_SETTINGS.helper_procs_ir {
+    //    println!("## helper_procs");
+    //    for proc in helper_procs.iter() {
+    //        println!("{}", proc.to_pretty(200));
+    //        // println!("{:#?}", proc);
+    //    }
+    //}
 
-    // Generate Wasm for helpers and Zig/Roc wrappers
-    let sources = Vec::from_iter_in(
-        backend
-            .proc_lookup
-            .iter()
-            .map(|ProcLookupData { source, .. }| *source),
-        env.arena,
-    );
-    let mut helper_iter = helper_procs.iter();
-    for (idx, source) in sources.iter().enumerate() {
-        use ProcSource::*;
-        match source {
-            Roc => { /* already generated */ }
-            Helper => backend.build_proc(helper_iter.next().unwrap()),
-            HigherOrderMapper(inner_idx) => backend.build_higher_order_mapper(idx, *inner_idx),
-            HigherOrderCompare(inner_idx) => backend.build_higher_order_compare(idx, *inner_idx),
-        }
-    }
+    //// Generate Wasm for helpers and Zig/Roc wrappers
+    //let sources = Vec::from_iter_in(
+    //    backend
+    //        .proc_lookup
+    //        .iter()
+    //        .map(|ProcLookupData { source, .. }| *source),
+    //    env.arena,
+    //);
+    //let mut helper_iter = helper_procs.iter();
+    //for (idx, source) in sources.iter().enumerate() {
+    //    use ProcSource::*;
+    //    match source {
+    //        Roc => { /* already generated */ }
+    //        Helper => backend.build_proc(helper_iter.next().unwrap()),
+    //        HigherOrderMapper(inner_idx) => backend.build_higher_order_mapper(idx, *inner_idx),
+    //        HigherOrderCompare(inner_idx) => backend.build_higher_order_compare(idx, *inner_idx),
+    //    }
+    //}
 
-    let (module, called_preload_fns) = backend.finalize();
-    let main_function_index =
-        maybe_main_fn_index.expect("The app must expose at least one value to the host");
+    //let (module, called_preload_fns) = backend.finalize();
+    //let main_function_index =
+    //    maybe_main_fn_index.expect("The app must expose at least one value to the host");
 
-    (module, called_preload_fns, main_function_index)
+    //(module, called_preload_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {

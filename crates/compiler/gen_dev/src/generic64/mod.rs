@@ -374,25 +374,26 @@ pub fn new_backend_64bit<
     target_info: TargetInfo,
     interns: &'a mut Interns,
 ) -> Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC> {
-    Backend64Bit {
-        phantom_asm: PhantomData,
-        phantom_cc: PhantomData,
-        target_info,
-        env,
-        interns,
-        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
-        helper_proc_symbols: bumpalo::vec![in env.arena],
-        proc_name: None,
-        is_self_recursive: None,
-        buf: bumpalo::vec![in env.arena],
-        relocs: bumpalo::vec![in env.arena],
-        last_seen_map: MutMap::default(),
-        layout_map: MutMap::default(),
-        free_map: MutMap::default(),
-        literal_map: MutMap::default(),
-        join_map: MutMap::default(),
-        storage_manager: storage::new_storage_manager(env, target_info),
-    }
+    todo!()
+    //Backend64Bit {
+    //    phantom_asm: PhantomData,
+    //    phantom_cc: PhantomData,
+    //    target_info,
+    //    env,
+    //    interns,
+    //    helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
+    //    helper_proc_symbols: bumpalo::vec![in env.arena],
+    //    proc_name: None,
+    //    is_self_recursive: None,
+    //    buf: bumpalo::vec![in env.arena],
+    //    relocs: bumpalo::vec![in env.arena],
+    //    last_seen_map: MutMap::default(),
+    //    layout_map: MutMap::default(),
+    //    free_map: MutMap::default(),
+    //    literal_map: MutMap::default(),
+    //    join_map: MutMap::default(),
+    //    storage_manager: storage::new_storage_manager(env, target_info),
+    //}
 }
 
 macro_rules! quadword_and_smaller {
@@ -802,47 +803,48 @@ impl<
         num_layout: &Layout<'a>,
         return_layout: &Layout<'a>,
     ) {
-        use Builtin::Int;
+        todo!()
+        //use Builtin::Int;
 
-        let buf = &mut self.buf;
+        //let buf = &mut self.buf;
 
-        let struct_size = return_layout.stack_size(self.target_info);
+        //let struct_size = return_layout.stack_size(self.target_info);
 
-        let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
+        //let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
 
-        match num_layout {
-            Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
+        //match num_layout {
+        //    Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
+        //        let dst_reg = self
+        //            .storage_manager
+        //            .claim_general_reg(buf, &Symbol::DEV_TMP);
 
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+        //        let overflow_reg = self
+        //            .storage_manager
+        //            .claim_general_reg(buf, &Symbol::DEV_TMP2);
 
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+        //        let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+        //        let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
 
-                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
+        //        ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+        //        ASM::set_if_overflow(buf, overflow_reg);
 
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
+        //        ASM::mov_base32_reg64(buf, base_offset, dst_reg);
+        //        ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
 
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
-                todo!("addChecked for unsigned integers")
-            }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                todo!("addChecked for f64")
-            }
-            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                todo!("addChecked for f32")
-            }
-            x => todo!("NumAdd: layout, {:?}", x),
-        }
+        //        self.free_symbol(&Symbol::DEV_TMP);
+        //        self.free_symbol(&Symbol::DEV_TMP2);
+        //    }
+        //    Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
+        //        todo!("addChecked for unsigned integers")
+        //    }
+        //    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+        //        todo!("addChecked for f64")
+        //    }
+        //    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+        //        todo!("addChecked for f32")
+        //    }
+        //    x => todo!("NumAdd: layout, {:?}", x),
+        //}
     }
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
@@ -1139,31 +1141,32 @@ impl<
         index: &Symbol,
         ret_layout: &Layout<'a>,
     ) {
-        let (base_offset, _) = self.storage_manager.stack_offset_and_size(list);
-        let index_reg = self
-            .storage_manager
-            .load_to_general_reg(&mut self.buf, index);
-        let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
-        // TODO: This can be optimized with smarter instructions.
-        // Also can probably be moved into storage manager at least partly.
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |storage_manager, buf, list_ptr| {
-                ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
-                storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
-                    ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
-                    ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
-                    ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
-                    match ret_layout {
-                        single_register_integers!() if ret_stack_size == 8 => {
-                            let dst_reg = storage_manager.claim_general_reg(buf, dst);
-                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
-                        }
-                        x => internal_error!("Loading list element with layout: {:?}", x),
-                    }
-                });
-            },
-        );
+        todo!()
+        //let (base_offset, _) = self.storage_manager.stack_offset_and_size(list);
+        //let index_reg = self
+        //    .storage_manager
+        //    .load_to_general_reg(&mut self.buf, index);
+        //let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
+        //// TODO: This can be optimized with smarter instructions.
+        //// Also can probably be moved into storage manager at least partly.
+        //self.storage_manager.with_tmp_general_reg(
+        //    &mut self.buf,
+        //    |storage_manager, buf, list_ptr| {
+        //        ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
+        //        storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
+        //            ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
+        //            ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
+        //            ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
+        //            match ret_layout {
+        //                single_register_integers!() if ret_stack_size == 8 => {
+        //                    let dst_reg = storage_manager.claim_general_reg(buf, dst);
+        //                    ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
+        //                }
+        //                x => internal_error!("Loading list element with layout: {:?}", x),
+        //            }
+        //        });
+        //    },
+        //);
     }
 
     fn build_list_replace_unsafe(
@@ -1177,116 +1180,117 @@ impl<
         // Firstly, it takes the alignment of the list.
         // Secondly, it takes the stack size of an element.
         // Thirdly, it takes a pointer that it will write the output element to.
-        let list = args[0];
-        let list_layout = arg_layouts[0];
-        let index = args[1];
-        let index_layout = arg_layouts[1];
-        let elem = args[2];
-        let elem_layout = arg_layouts[2];
+        todo!()
+        // let list = args[0];
+        // let list_layout = arg_layouts[0];
+        // let index = args[1];
+        // let index_layout = arg_layouts[1];
+        // let elem = args[2];
+        // let elem_layout = arg_layouts[2];
 
-        let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
-        let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        // let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
+        // let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
+        // self.load_literal(
+        //     &Symbol::DEV_TMP,
+        //     u32_layout,
+        //     &Literal::Int((list_alignment as i128).to_ne_bytes()),
+        // );
 
-        // Have to pass the input element by pointer, so put it on the stack and load it's address.
-        self.storage_manager
-            .ensure_symbol_on_stack(&mut self.buf, &elem);
-        let u64_layout = &Layout::Builtin(Builtin::Int(IntWidth::U64));
-        let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
-        // Load address of output element into register.
-        let reg = self
-            .storage_manager
-            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP2);
-        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+        // // Have to pass the input element by pointer, so put it on the stack and load it's address.
+        // self.storage_manager
+        //     .ensure_symbol_on_stack(&mut self.buf, &elem);
+        // let u64_layout = &Layout::Builtin(Builtin::Int(IntWidth::U64));
+        // let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
+        // // Load address of output element into register.
+        // let reg = self
+        //     .storage_manager
+        //     .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP2);
+        // ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
-        // Load the elements size.
-        let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
-        self.load_literal(
-            &Symbol::DEV_TMP3,
-            u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        // // Load the elements size.
+        // let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
+        // self.load_literal(
+        //     &Symbol::DEV_TMP3,
+        //     u64_layout,
+        //     &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
+        // );
 
-        // Setup the return location.
-        let base_offset = self.storage_manager.claim_stack_area(
-            dst,
-            ret_layout.stack_size(self.storage_manager.target_info()),
-        );
+        // // Setup the return location.
+        // let base_offset = self.storage_manager.claim_stack_area(
+        //     dst,
+        //     ret_layout.stack_size(self.storage_manager.target_info()),
+        // );
 
-        let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
-            field_layouts
-        } else {
-            internal_error!(
-                "Expected replace to return a struct instead found: {:?}",
-                ret_layout
-            )
-        };
+        // let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
+        //     field_layouts
+        // } else {
+        //     internal_error!(
+        //         "Expected replace to return a struct instead found: {:?}",
+        //         ret_layout
+        //     )
+        // };
 
-        // Only return list and old element.
-        debug_assert_eq!(ret_fields.len(), 2);
+        // // Only return list and old element.
+        // debug_assert_eq!(ret_fields.len(), 2);
 
-        let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
-            (
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
-                base_offset,
-            )
-        } else {
-            (
-                base_offset,
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
-            )
-        };
+        // let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
+        //     (
+        //         base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+        //         base_offset,
+        //     )
+        // } else {
+        //     (
+        //         base_offset,
+        //         base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+        //     )
+        // };
 
-        // Load address of output element into register.
-        let reg = self
-            .storage_manager
-            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
-        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
+        // // Load address of output element into register.
+        // let reg = self
+        //     .storage_manager
+        //     .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+        // ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
 
-        let lowlevel_args = bumpalo::vec![
-        in self.env.arena;
-            list,
-            Symbol::DEV_TMP,
-            index,
-            Symbol::DEV_TMP2,
-            Symbol::DEV_TMP3,
-            Symbol::DEV_TMP4,
-         ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-                list_layout,
-                *u32_layout,
-                index_layout,
-                *u64_layout,
-                *u64_layout,
-                *u64_layout,
-        ];
+        // let lowlevel_args = bumpalo::vec![
+        // in self.env.arena;
+        //     list,
+        //     Symbol::DEV_TMP,
+        //     index,
+        //     Symbol::DEV_TMP2,
+        //     Symbol::DEV_TMP3,
+        //     Symbol::DEV_TMP4,
+        //  ];
+        // let lowlevel_arg_layouts = bumpalo::vec![
+        // in self.env.arena;
+        //         list_layout,
+        //         *u32_layout,
+        //         index_layout,
+        //         *u64_layout,
+        //         *u64_layout,
+        //         *u64_layout,
+        // ];
 
-        self.build_fn_call(
-            &Symbol::DEV_TMP5,
-            bitcode::LIST_REPLACE.to_string(),
-            &lowlevel_args,
-            &lowlevel_arg_layouts,
-            &list_layout,
-        );
-        self.free_symbol(&Symbol::DEV_TMP);
-        self.free_symbol(&Symbol::DEV_TMP2);
-        self.free_symbol(&Symbol::DEV_TMP3);
-        self.free_symbol(&Symbol::DEV_TMP4);
+        // self.build_fn_call(
+        //     &Symbol::DEV_TMP5,
+        //     bitcode::LIST_REPLACE.to_string(),
+        //     &lowlevel_args,
+        //     &lowlevel_arg_layouts,
+        //     &list_layout,
+        // );
+        // self.free_symbol(&Symbol::DEV_TMP);
+        // self.free_symbol(&Symbol::DEV_TMP2);
+        // self.free_symbol(&Symbol::DEV_TMP3);
+        // self.free_symbol(&Symbol::DEV_TMP4);
 
-        // Copy from list to the output record.
-        self.storage_manager.copy_symbol_to_stack_offset(
-            &mut self.buf,
-            out_list_offset,
-            &Symbol::DEV_TMP5,
-            &list_layout,
-        );
+        // // Copy from list to the output record.
+        // self.storage_manager.copy_symbol_to_stack_offset(
+        //     &mut self.buf,
+        //     out_list_offset,
+        //     &Symbol::DEV_TMP5,
+        //     &list_layout,
+        // );
 
-        self.free_symbol(&Symbol::DEV_TMP5);
+        // self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
@@ -1316,112 +1320,113 @@ impl<
     ) {
         // Allocate
         // This requires at least 8 for the refcount alignment.
-        let allocation_alignment = std::cmp::max(
-            8,
-            elem_layout.allocation_alignment_bytes(self.storage_manager.target_info()) as u64,
-        );
+        todo!()
+        //let allocation_alignment = std::cmp::max(
+        //    8,
+        //    elem_layout.allocation_alignment_bytes(self.storage_manager.target_info()) as u64,
+        //);
 
-        let elem_size = elem_layout.stack_size(self.storage_manager.target_info()) as u64;
-        let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
-        let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u64_layout,
-            &Literal::Int((allocation_size as i128).to_ne_bytes()),
-        );
-        let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u32_layout,
-            &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
-        );
+        //let elem_size = elem_layout.stack_size(self.storage_manager.target_info()) as u64;
+        //let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
+        //let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
+        //self.load_literal(
+        //    &Symbol::DEV_TMP,
+        //    &u64_layout,
+        //    &Literal::Int((allocation_size as i128).to_ne_bytes()),
+        //);
+        //let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+        //self.load_literal(
+        //    &Symbol::DEV_TMP2,
+        //    &u32_layout,
+        //    &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
+        //);
 
-        self.build_fn_call(
-            &Symbol::DEV_TMP3,
-            "roc_alloc".to_string(),
-            &[Symbol::DEV_TMP, Symbol::DEV_TMP2],
-            &[u64_layout, u32_layout],
-            &u64_layout,
-        );
-        self.free_symbol(&Symbol::DEV_TMP);
-        self.free_symbol(&Symbol::DEV_TMP2);
+        //self.build_fn_call(
+        //    &Symbol::DEV_TMP3,
+        //    "roc_alloc".to_string(),
+        //    &[Symbol::DEV_TMP, Symbol::DEV_TMP2],
+        //    &[u64_layout, u32_layout],
+        //    &u64_layout,
+        //);
+        //self.free_symbol(&Symbol::DEV_TMP);
+        //self.free_symbol(&Symbol::DEV_TMP2);
 
-        // Fill pointer with elems
-        let ptr_reg = self
-            .storage_manager
-            .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
-        // Point to first element of array.
-        ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, allocation_alignment as i32);
+        //// Fill pointer with elems
+        //let ptr_reg = self
+        //    .storage_manager
+        //    .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
+        //// Point to first element of array.
+        //ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, allocation_alignment as i32);
 
-        // fill refcount at -8.
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, tmp_reg| {
-                ASM::mov_reg64_imm64(buf, tmp_reg, REFCOUNT_ONE as i64);
-                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, -8, tmp_reg);
-            },
-        );
+        //// fill refcount at -8.
+        //self.storage_manager.with_tmp_general_reg(
+        //    &mut self.buf,
+        //    |_storage_manager, buf, tmp_reg| {
+        //        ASM::mov_reg64_imm64(buf, tmp_reg, REFCOUNT_ONE as i64);
+        //        ASM::mov_mem64_offset32_reg64(buf, ptr_reg, -8, tmp_reg);
+        //    },
+        //);
 
-        // Copy everything into output array.
-        let mut elem_offset = 0;
-        for elem in elems {
-            // TODO: this could be a lot faster when loading large lists
-            // if we move matching on the element layout to outside this loop.
-            // It also greatly bloats the code here.
-            // Refactor this and switch to one external match.
-            // We also could make loadining indivitual literals much faster
-            let elem_sym = match elem {
-                ListLiteralElement::Symbol(sym) => sym,
-                ListLiteralElement::Literal(lit) => {
-                    self.load_literal(&Symbol::DEV_TMP, elem_layout, lit);
-                    &Symbol::DEV_TMP
-                }
-            };
-            // TODO: Expand to all types.
-            match elem_layout {
-                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
-                    let sym_reg = self
-                        .storage_manager
-                        .load_to_general_reg(&mut self.buf, elem_sym);
-                    ASM::mov_mem64_offset32_reg64(&mut self.buf, ptr_reg, elem_offset, sym_reg);
-                }
-                _ if elem_size == 0 => {}
-                _ if elem_size > 8 => {
-                    let (from_offset, size) = self.storage_manager.stack_offset_and_size(elem_sym);
-                    debug_assert!(from_offset % 8 == 0);
-                    debug_assert!(size % 8 == 0);
-                    debug_assert_eq!(size as u64, elem_size);
-                    self.storage_manager.with_tmp_general_reg(
-                        &mut self.buf,
-                        |_storage_manager, buf, tmp_reg| {
-                            for i in (0..size as i32).step_by(8) {
-                                ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, elem_offset, tmp_reg);
-                            }
-                        },
-                    );
-                }
-                x => todo!("copying data to list with layout, {:?}", x),
-            }
-            elem_offset += elem_size as i32;
-            if elem_sym == &Symbol::DEV_TMP {
-                self.free_symbol(elem_sym);
-            }
-        }
+        //// Copy everything into output array.
+        //let mut elem_offset = 0;
+        //for elem in elems {
+        //    // TODO: this could be a lot faster when loading large lists
+        //    // if we move matching on the element layout to outside this loop.
+        //    // It also greatly bloats the code here.
+        //    // Refactor this and switch to one external match.
+        //    // We also could make loadining indivitual literals much faster
+        //    let elem_sym = match elem {
+        //        ListLiteralElement::Symbol(sym) => sym,
+        //        ListLiteralElement::Literal(lit) => {
+        //            self.load_literal(&Symbol::DEV_TMP, elem_layout, lit);
+        //            &Symbol::DEV_TMP
+        //        }
+        //    };
+        //    // TODO: Expand to all types.
+        //    match elem_layout {
+        //        Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+        //            let sym_reg = self
+        //                .storage_manager
+        //                .load_to_general_reg(&mut self.buf, elem_sym);
+        //            ASM::mov_mem64_offset32_reg64(&mut self.buf, ptr_reg, elem_offset, sym_reg);
+        //        }
+        //        _ if elem_size == 0 => {}
+        //        _ if elem_size > 8 => {
+        //            let (from_offset, size) = self.storage_manager.stack_offset_and_size(elem_sym);
+        //            debug_assert!(from_offset % 8 == 0);
+        //            debug_assert!(size % 8 == 0);
+        //            debug_assert_eq!(size as u64, elem_size);
+        //            self.storage_manager.with_tmp_general_reg(
+        //                &mut self.buf,
+        //                |_storage_manager, buf, tmp_reg| {
+        //                    for i in (0..size as i32).step_by(8) {
+        //                        ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
+        //                        ASM::mov_mem64_offset32_reg64(buf, ptr_reg, elem_offset, tmp_reg);
+        //                    }
+        //                },
+        //            );
+        //        }
+        //        x => todo!("copying data to list with layout, {:?}", x),
+        //    }
+        //    elem_offset += elem_size as i32;
+        //    if elem_sym == &Symbol::DEV_TMP {
+        //        self.free_symbol(elem_sym);
+        //    }
+        //}
 
-        // Setup list on stack.
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |storage_manager, buf, tmp_reg| {
-                let base_offset = storage_manager.claim_stack_area(sym, 24);
-                ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
+        //// Setup list on stack.
+        //self.storage_manager.with_tmp_general_reg(
+        //    &mut self.buf,
+        //    |storage_manager, buf, tmp_reg| {
+        //        let base_offset = storage_manager.claim_stack_area(sym, 24);
+        //        ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
 
-                ASM::mov_reg64_imm64(buf, tmp_reg, elems.len() as i64);
-                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
-            },
-        );
-        self.free_symbol(&Symbol::DEV_TMP3);
+        //        ASM::mov_reg64_imm64(buf, tmp_reg, elems.len() as i64);
+        //        ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+        //        ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
+        //    },
+        //);
+        //self.free_symbol(&Symbol::DEV_TMP3);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {

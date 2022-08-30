@@ -29,26 +29,27 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 ) -> BasicTypeEnum<'ctx> {
     use Layout::*;
 
-    match layout {
-        Struct {
-            field_layouts: sorted_fields,
-            ..
-        } => basic_type_from_record(env, sorted_fields),
-        LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
-        Boxed(inner_layout) => {
-            let inner_type = basic_type_from_layout(env, inner_layout);
+    todo!()
+    //match layout {
+    //    Struct {
+    //        field_layouts: sorted_fields,
+    //        ..
+    //    } => basic_type_from_record(env, sorted_fields),
+    //    LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
+    //    Boxed(inner_layout) => {
+    //        let inner_type = basic_type_from_layout(env, inner_layout);
 
-            inner_type.ptr_type(AddressSpace::Generic).into()
-        }
-        Union(union_layout) => basic_type_from_union_layout(env, union_layout),
-        RecursivePointer => env
-            .context
-            .i64_type()
-            .ptr_type(AddressSpace::Generic)
-            .as_basic_type_enum(),
+    //        inner_type.ptr_type(AddressSpace::Generic).into()
+    //    }
+    //    Union(union_layout) => basic_type_from_union_layout(env, union_layout),
+    //    RecursivePointer => env
+    //        .context
+    //        .i64_type()
+    //        .ptr_type(AddressSpace::Generic)
+    //        .as_basic_type_enum(),
 
-        Builtin(builtin) => basic_type_from_builtin(env, builtin),
-    }
+    //    Builtin(builtin) => basic_type_from_builtin(env, builtin),
+    //}
 }
 
 pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
@@ -130,22 +131,23 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
 ) -> BasicTypeEnum<'ctx> {
     use Layout::*;
 
-    match layout {
-        LambdaSet(lambda_set) => {
-            argument_type_from_layout(env, &lambda_set.runtime_representation())
-        }
-        Union(union_layout) => argument_type_from_union_layout(env, union_layout),
-        Builtin(_) => {
-            let base = basic_type_from_layout(env, layout);
+    todo!()
+    //match layout {
+    //    LambdaSet(lambda_set) => {
+    //        argument_type_from_layout(env, &lambda_set.runtime_representation())
+    //    }
+    //    Union(union_layout) => argument_type_from_union_layout(env, union_layout),
+    //    Builtin(_) => {
+    //        let base = basic_type_from_layout(env, layout);
 
-            if layout.is_passed_by_reference(env.target_info) {
-                base.ptr_type(AddressSpace::Generic).into()
-            } else {
-                base
-            }
-        }
-        other => basic_type_from_layout(env, other),
-    }
+    //        if layout.is_passed_by_reference(env.target_info) {
+    //            base.ptr_type(AddressSpace::Generic).into()
+    //        } else {
+    //            base
+    //        }
+    //    }
+    //    other => basic_type_from_layout(env, other),
+    //}
 }
 
 /// Non-recursive tag unions are stored on the stack, but passed by-reference
@@ -279,15 +281,16 @@ impl<'ctx> RocUnion<'ctx> {
         layouts: &[&[Layout<'_>]],
         target_info: TargetInfo,
     ) -> Self {
-        let tag_type = match layouts.len() {
-            0..=255 => TagType::I8,
-            _ => TagType::I16,
-        };
+        todo!()
+        //let tag_type = match layouts.len() {
+        //    0..=255 => TagType::I8,
+        //    _ => TagType::I16,
+        //};
 
-        let (data_width, data_align) =
-            Layout::stack_size_and_alignment_slices(layouts, target_info);
+        //let (data_width, data_align) =
+        //    Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        Self::new(context, target_info, data_align, data_width, Some(tag_type))
+        //Self::new(context, target_info, data_align, data_width, Some(tag_type))
     }
 
     pub fn untagged_from_slices(
@@ -295,10 +298,11 @@ impl<'ctx> RocUnion<'ctx> {
         layouts: &[&[Layout<'_>]],
         target_info: TargetInfo,
     ) -> Self {
-        let (data_width, data_align) =
-            Layout::stack_size_and_alignment_slices(layouts, target_info);
+        todo!()
+        //let (data_width, data_align) =
+        //    Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        Self::new(context, target_info, data_align, data_width, None)
+        //Self::new(context, target_info, data_align, data_width, None)
     }
 
     pub fn tag_alignment(&self) -> u32 {

@@ -484,6 +484,9 @@ pub fn expect_mono_module_to_dylib<'a>(
         ..
     } = loaded;
 
+    // FIXME
+    let procedures = Default::default();
+
     let context = Context::create();
     let builder = context.create_builder();
     let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(

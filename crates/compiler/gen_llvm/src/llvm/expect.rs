@@ -101,83 +101,84 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     region: Region,
     lookups: &[Symbol],
 ) {
-    let func = env
-        .module
-        .get_function(bitcode::UTILS_EXPECT_FAILED_START)
-        .unwrap();
+    todo!()
+    //let func = env
+    //    .module
+    //    .get_function(bitcode::UTILS_EXPECT_FAILED_START)
+    //    .unwrap();
 
-    let call_result = env
-        .builder
-        .build_call(func, &[], "call_expect_start_failed");
+    //let call_result = env
+    //    .builder
+    //    .build_call(func, &[], "call_expect_start_failed");
 
-    let original_ptr = call_result
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_pointer_value();
+    //let original_ptr = call_result
+    //    .try_as_basic_value()
+    //    .left()
+    //    .unwrap()
+    //    .into_pointer_value();
 
-    let (count, mut offset) = read_state(env, original_ptr);
+    //let (count, mut offset) = read_state(env, original_ptr);
 
-    offset = write_header(env, original_ptr, offset, condition, region);
+    //offset = write_header(env, original_ptr, offset, condition, region);
 
-    let after_header = offset;
+    //let after_header = offset;
 
-    let space_for_offsets = env
-        .ptr_int()
-        .const_int((lookups.len() * env.target_info.ptr_size()) as _, false);
+    //let space_for_offsets = env
+    //    .ptr_int()
+    //    .const_int((lookups.len() * env.target_info.ptr_size()) as _, false);
 
-    let mut lookup_starts = bumpalo::collections::Vec::with_capacity_in(lookups.len(), env.arena);
+    //let mut lookup_starts = bumpalo::collections::Vec::with_capacity_in(lookups.len(), env.arena);
 
-    offset = env
-        .builder
-        .build_int_add(offset, space_for_offsets, "offset");
+    //offset = env
+    //    .builder
+    //    .build_int_add(offset, space_for_offsets, "offset");
 
-    for lookup in lookups.iter() {
-        lookup_starts.push(offset);
+    //for lookup in lookups.iter() {
+    //    lookup_starts.push(offset);
 
-        let (value, layout) = load_symbol_and_layout(scope, lookup);
+    //    let (value, layout) = load_symbol_and_layout(scope, lookup);
 
-        let stack_size = env
-            .ptr_int()
-            .const_int(layout.stack_size(env.target_info) as u64, false);
+    //    let stack_size = env
+    //        .ptr_int()
+    //        .const_int(layout.stack_size(env.target_info) as u64, false);
 
-        let mut extra_offset = env.builder.build_int_add(offset, stack_size, "offset");
+    //    let mut extra_offset = env.builder.build_int_add(offset, stack_size, "offset");
 
-        let cursors = Cursors {
-            offset,
-            extra_offset,
-        };
+    //    let cursors = Cursors {
+    //        offset,
+    //        extra_offset,
+    //    };
 
-        extra_offset = build_clone(
-            env,
-            layout_ids,
-            original_ptr,
-            cursors,
-            value,
-            *layout,
-            WhenRecursive::Unreachable,
-        );
+    //    extra_offset = build_clone(
+    //        env,
+    //        layout_ids,
+    //        original_ptr,
+    //        cursors,
+    //        value,
+    //        *layout,
+    //        WhenRecursive::Unreachable,
+    //    );
 
-        offset = extra_offset;
-    }
+    //    offset = extra_offset;
+    //}
 
-    {
-        let mut offset = after_header;
+    //{
+    //    let mut offset = after_header;
 
-        for lookup_start in lookup_starts {
-            build_copy(env, original_ptr, offset, lookup_start.into());
+    //    for lookup_start in lookup_starts {
+    //        build_copy(env, original_ptr, offset, lookup_start.into());
 
-            let ptr_width = env
-                .ptr_int()
-                .const_int(env.target_info.ptr_size() as _, false);
+    //        let ptr_width = env
+    //            .ptr_int()
+    //            .const_int(env.target_info.ptr_size() as _, false);
 
-            offset = env.builder.build_int_add(offset, ptr_width, "offset")
-        }
-    }
+    //        offset = env.builder.build_int_add(offset, ptr_width, "offset")
+    //    }
+    //}
 
-    let one = env.ptr_int().const_int(1, false);
-    let new_count = env.builder.build_int_add(count, one, "inc");
-    write_state(env, original_ptr, new_count, offset)
+    //let one = env.ptr_int().const_int(1, false);
+    //let new_count = env.builder.build_int_add(count, one, "inc");
+    //write_state(env, original_ptr, new_count, offset)
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -197,113 +198,114 @@ fn build_clone<'a, 'ctx, 'env>(
     layout: Layout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    match layout {
-        Layout::Builtin(builtin) => build_clone_builtin(
-            env,
-            layout_ids,
-            ptr,
-            cursors,
-            value,
-            builtin,
-            when_recursive,
-        ),
+    todo!()
+    //match layout {
+    //    Layout::Builtin(builtin) => build_clone_builtin(
+    //        env,
+    //        layout_ids,
+    //        ptr,
+    //        cursors,
+    //        value,
+    //        builtin,
+    //        when_recursive,
+    //    ),
 
-        Layout::Struct { field_layouts, .. } => build_clone_struct(
-            env,
-            layout_ids,
-            ptr,
-            cursors,
-            value,
-            field_layouts,
-            when_recursive,
-        ),
+    //    Layout::Struct { field_layouts, .. } => build_clone_struct(
+    //        env,
+    //        layout_ids,
+    //        ptr,
+    //        cursors,
+    //        value,
+    //        field_layouts,
+    //        when_recursive,
+    //    ),
 
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+    //    Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
-        Layout::Union(union_layout) => {
-            if layout.safe_to_memcpy() {
-                let ptr = unsafe {
-                    env.builder
-                        .build_in_bounds_gep(ptr, &[cursors.offset], "at_current_offset")
-                };
+    //    Layout::Union(union_layout) => {
+    //        if layout.safe_to_memcpy() {
+    //            let ptr = unsafe {
+    //                env.builder
+    //                    .build_in_bounds_gep(ptr, &[cursors.offset], "at_current_offset")
+    //            };
 
-                let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
-                let ptr = env
-                    .builder
-                    .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
+    //            let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
+    //            let ptr = env
+    //                .builder
+    //                .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
 
-                store_roc_value(env, layout, ptr, value);
+    //            store_roc_value(env, layout, ptr, value);
 
-                cursors.extra_offset
-            } else {
-                build_clone_tag(
-                    env,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    value,
-                    union_layout,
-                    WhenRecursive::Loop(union_layout),
-                )
-            }
-        }
+    //            cursors.extra_offset
+    //        } else {
+    //            build_clone_tag(
+    //                env,
+    //                layout_ids,
+    //                ptr,
+    //                cursors,
+    //                value,
+    //                union_layout,
+    //                WhenRecursive::Loop(union_layout),
+    //            )
+    //        }
+    //    }
 
-        Layout::Boxed(inner_layout) => {
-            // write the offset
-            build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
+    //    Layout::Boxed(inner_layout) => {
+    //        // write the offset
+    //        build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
-            let source = value.into_pointer_value();
-            let value = load_roc_value(env, *inner_layout, source, "inner");
+    //        let source = value.into_pointer_value();
+    //        let value = load_roc_value(env, *inner_layout, source, "inner");
 
-            let inner_width = env
-                .ptr_int()
-                .const_int(inner_layout.stack_size(env.target_info) as u64, false);
+    //        let inner_width = env
+    //            .ptr_int()
+    //            .const_int(inner_layout.stack_size(env.target_info) as u64, false);
 
-            let new_extra = env
-                .builder
-                .build_int_add(cursors.offset, inner_width, "new_extra");
+    //        let new_extra = env
+    //            .builder
+    //            .build_int_add(cursors.offset, inner_width, "new_extra");
 
-            let cursors = Cursors {
-                offset: cursors.extra_offset,
-                extra_offset: new_extra,
-            };
+    //        let cursors = Cursors {
+    //            offset: cursors.extra_offset,
+    //            extra_offset: new_extra,
+    //        };
 
-            build_clone(
-                env,
-                layout_ids,
-                ptr,
-                cursors,
-                value,
-                *inner_layout,
-                when_recursive,
-            )
-        }
+    //        build_clone(
+    //            env,
+    //            layout_ids,
+    //            ptr,
+    //            cursors,
+    //            value,
+    //            *inner_layout,
+    //            when_recursive,
+    //        )
+    //    }
 
-        Layout::RecursivePointer => match when_recursive {
-            WhenRecursive::Unreachable => {
-                unreachable!("recursion pointers should never be compared directly")
-            }
+    //    Layout::RecursivePointer => match when_recursive {
+    //        WhenRecursive::Unreachable => {
+    //            unreachable!("recursion pointers should never be compared directly")
+    //        }
 
-            WhenRecursive::Loop(union_layout) => {
-                let layout = Layout::Union(union_layout);
+    //        WhenRecursive::Loop(union_layout) => {
+    //            let layout = Layout::Union(union_layout);
 
-                let bt = basic_type_from_layout(env, &layout);
+    //            let bt = basic_type_from_layout(env, &layout);
 
-                // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
+    //            // cast the i64 pointer to a pointer to block of memory
+    //            let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
 
-                build_clone_tag(
-                    env,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    field1_cast,
-                    union_layout,
-                    WhenRecursive::Loop(union_layout),
-                )
-            }
-        },
-    }
+    //            build_clone_tag(
+    //                env,
+    //                layout_ids,
+    //                ptr,
+    //                cursors,
+    //                field1_cast,
+    //                union_layout,
+    //                WhenRecursive::Loop(union_layout),
+    //            )
+    //        }
+    //    },
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -316,45 +318,46 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     field_layouts: &[Layout<'a>],
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    let layout = Layout::struct_no_name_order(field_layouts);
+    todo!()
+    //let layout = Layout::struct_no_name_order(field_layouts);
 
-    if layout.safe_to_memcpy() {
-        build_copy(env, ptr, cursors.offset, value)
-    } else {
-        let mut cursors = cursors;
+    //if layout.safe_to_memcpy() {
+    //    build_copy(env, ptr, cursors.offset, value)
+    //} else {
+    //    let mut cursors = cursors;
 
-        let structure = value.into_struct_value();
+    //    let structure = value.into_struct_value();
 
-        for (i, field_layout) in field_layouts.iter().enumerate() {
-            let field = env
-                .builder
-                .build_extract_value(structure, i as _, "extract")
-                .unwrap();
+    //    for (i, field_layout) in field_layouts.iter().enumerate() {
+    //        let field = env
+    //            .builder
+    //            .build_extract_value(structure, i as _, "extract")
+    //            .unwrap();
 
-            let field = use_roc_value(env, *field_layout, field, "field");
+    //        let field = use_roc_value(env, *field_layout, field, "field");
 
-            let new_extra = build_clone(
-                env,
-                layout_ids,
-                ptr,
-                cursors,
-                field,
-                *field_layout,
-                when_recursive,
-            );
+    //        let new_extra = build_clone(
+    //            env,
+    //            layout_ids,
+    //            ptr,
+    //            cursors,
+    //            field,
+    //            *field_layout,
+    //            when_recursive,
+    //        );
 
-            let field_width = env
-                .ptr_int()
-                .const_int(field_layout.stack_size(env.target_info) as u64, false);
+    //        let field_width = env
+    //            .ptr_int()
+    //            .const_int(field_layout.stack_size(env.target_info) as u64, false);
 
-            cursors.extra_offset = new_extra;
-            cursors.offset = env
-                .builder
-                .build_int_add(cursors.offset, field_width, "offset");
-        }
+    //        cursors.extra_offset = new_extra;
+    //        cursors.offset = env
+    //            .builder
+    //            .build_int_add(cursors.offset, field_width, "offset");
+    //    }
 
-        cursors.extra_offset
-    }
+    //    cursors.extra_offset
+    //}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -442,371 +445,372 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
     when_recursive: WhenRecursive<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
-    use bumpalo::collections::Vec;
+    todo!();
+    //use bumpalo::collections::Vec;
 
-    let context = &env.context;
-    let builder = env.builder;
+    //let context = &env.context;
+    //let builder = env.builder;
 
-    // Add a basic block for the entry point
-    let entry = context.append_basic_block(fn_val, "entry");
+    //// Add a basic block for the entry point
+    //let entry = context.append_basic_block(fn_val, "entry");
 
-    builder.position_at_end(entry);
+    //builder.position_at_end(entry);
 
-    debug_info_init!(env, fn_val);
+    //debug_info_init!(env, fn_val);
 
-    // Add args to scope
-    // let arg_symbol = Symbol::ARG_1;
-    // tag_value.set_name(arg_symbol.as_str(&env.interns));
+    //// Add args to scope
+    //// let arg_symbol = Symbol::ARG_1;
+    //// tag_value.set_name(arg_symbol.as_str(&env.interns));
 
-    let mut it = fn_val.get_param_iter();
+    //let mut it = fn_val.get_param_iter();
 
-    let ptr = it.next().unwrap().into_pointer_value();
-    let offset = it.next().unwrap().into_int_value();
-    let extra_offset = it.next().unwrap().into_int_value();
-    let tag_value = it.next().unwrap();
+    //let ptr = it.next().unwrap().into_pointer_value();
+    //let offset = it.next().unwrap().into_int_value();
+    //let extra_offset = it.next().unwrap().into_int_value();
+    //let tag_value = it.next().unwrap();
 
-    let cursors = Cursors {
-        offset,
-        extra_offset,
-    };
+    //let cursors = Cursors {
+    //    offset,
+    //    extra_offset,
+    //};
 
-    let parent = fn_val;
-
-    debug_assert!(tag_value.is_pointer_value());
-
-    use UnionLayout::*;
-
-    match union_layout {
-        NonRecursive(&[]) => {
-            // we're comparing empty tag unions; this code is effectively unreachable
-            env.builder.build_unreachable();
-        }
-        NonRecursive(tags) => {
-            let id = get_tag_id(env, parent, &union_layout, tag_value);
-
-            let switch_block = env.context.append_basic_block(parent, "switch_block");
-            env.builder.build_unconditional_branch(switch_block);
-
-            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
-
-            for (tag_id, field_layouts) in tags.iter().enumerate() {
-                let block = env.context.append_basic_block(parent, "tag_id_modify");
-                env.builder.position_at_end(block);
-
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(
-                        tag_value.into_pointer_value(),
-                        RocUnion::TAG_DATA_INDEX,
-                        "tag_data",
-                    )
-                    .unwrap();
+    //let parent = fn_val;
+
+    //debug_assert!(tag_value.is_pointer_value());
+
+    //use UnionLayout::*;
+
+    //match union_layout {
+    //    NonRecursive(&[]) => {
+    //        // we're comparing empty tag unions; this code is effectively unreachable
+    //        env.builder.build_unreachable();
+    //    }
+    //    NonRecursive(tags) => {
+    //        let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+    //        let switch_block = env.context.append_basic_block(parent, "switch_block");
+    //        env.builder.build_unconditional_branch(switch_block);
+
+    //        let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    //        for (tag_id, field_layouts) in tags.iter().enumerate() {
+    //            let block = env.context.append_basic_block(parent, "tag_id_modify");
+    //            env.builder.position_at_end(block);
+
+    //            let raw_data_ptr = env
+    //                .builder
+    //                .build_struct_gep(
+    //                    tag_value.into_pointer_value(),
+    //                    RocUnion::TAG_DATA_INDEX,
+    //                    "tag_data",
+    //                )
+    //                .unwrap();
 
-                let layout = Layout::struct_no_name_order(field_layouts);
-                let layout = Layout::struct_no_name_order(
-                    env.arena.alloc([layout, union_layout.tag_id_layout()]),
-                );
-                let basic_type = basic_type_from_layout(env, &layout);
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
-
-                let answer =
-                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+    //            let layout = Layout::struct_no_name_order(field_layouts);
+    //            let layout = Layout::struct_no_name_order(
+    //                env.arena.alloc([layout, union_layout.tag_id_layout()]),
+    //            );
+    //            let basic_type = basic_type_from_layout(env, &layout);
+
+    //            let data_ptr = env.builder.build_pointer_cast(
+    //                raw_data_ptr,
+    //                basic_type.ptr_type(AddressSpace::Generic),
+    //                "data_ptr",
+    //            );
+
+    //            let data = env.builder.build_load(data_ptr, "load_data");
+
+    //            let answer =
+    //                build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+    //            env.builder.build_return(Some(&answer));
 
-                env.builder.build_return(Some(&answer));
-
-                cases.push((id.get_type().const_int(tag_id as u64, false), block));
-            }
-
-            env.builder.position_at_end(switch_block);
-
-            match cases.pop() {
-                Some((_, default)) => {
-                    env.builder.build_switch(id, default, &cases);
-                }
-                None => {
-                    // we're serializing an empty tag union; this code is effectively unreachable
-                    env.builder.build_unreachable();
-                }
-            }
-        }
-        Recursive(tags) => {
-            let id = get_tag_id(env, parent, &union_layout, tag_value);
-
-            let switch_block = env.context.append_basic_block(parent, "switch_block");
-            env.builder.build_unconditional_branch(switch_block);
-
-            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
-
-            for (tag_id, field_layouts) in tags.iter().enumerate() {
-                let block = env.context.append_basic_block(parent, "tag_id_modify");
-                env.builder.position_at_end(block);
-
-                // write the "pointer" of the current offset
-                write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, tag_id);
-
-                let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
-
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                    .unwrap();
-
-                let layout = Layout::struct_no_name_order(field_layouts);
-                let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
-                    layout
-                } else {
-                    Layout::struct_no_name_order(
-                        env.arena.alloc([layout, union_layout.tag_id_layout()]),
-                    )
-                };
-                let basic_type = basic_type_from_layout(env, &layout);
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
-
-                let (width, _) = union_layout.data_size_and_alignment(env.target_info);
-
-                let cursors = Cursors {
-                    offset: extra_offset,
-                    extra_offset: env.builder.build_int_add(
-                        extra_offset,
-                        env.ptr_int().const_int(width as _, false),
-                        "new_offset",
-                    ),
-                };
-
-                let when_recursive = WhenRecursive::Loop(union_layout);
-                let answer =
-                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
-
-                env.builder.build_return(Some(&answer));
-
-                cases.push((id.get_type().const_int(tag_id as u64, false), block));
-            }
-
-            env.builder.position_at_end(switch_block);
-
-            match cases.pop() {
-                Some((_, default)) => {
-                    env.builder.build_switch(id, default, &cases);
-                }
-                None => {
-                    // we're serializing an empty tag union; this code is effectively unreachable
-                    env.builder.build_unreachable();
-                }
-            }
-        }
-        NonNullableUnwrapped(fields) => {
-            //
-
-            let tag_value = tag_value.into_pointer_value();
-
-            build_copy(env, ptr, offset, extra_offset.into());
-
-            let layout = Layout::struct_no_name_order(fields);
-            let basic_type = basic_type_from_layout(env, &layout);
-
-            let (width, _) = union_layout.data_size_and_alignment(env.target_info);
-
-            let cursors = Cursors {
-                offset: extra_offset,
-                extra_offset: env.builder.build_int_add(
-                    extra_offset,
-                    env.ptr_int().const_int(width as _, false),
-                    "new_offset",
-                ),
-            };
-
-            let raw_data_ptr = env
-                .builder
-                .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                .unwrap();
-
-            let data_ptr = env.builder.build_pointer_cast(
-                raw_data_ptr,
-                basic_type.ptr_type(AddressSpace::Generic),
-                "data_ptr",
-            );
-
-            let data = env.builder.build_load(data_ptr, "load_data");
-
-            let when_recursive = WhenRecursive::Loop(union_layout);
-            let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
-
-            env.builder.build_return(Some(&answer));
-        }
-        NullableWrapped {
-            nullable_id,
-            other_tags,
-        } => {
-            let switch_block = env.context.append_basic_block(parent, "switch_block");
-            let null_block = env.context.append_basic_block(parent, "null_block");
-
-            let id = get_tag_id(env, parent, &union_layout, tag_value);
-
-            let comparison = env
-                .builder
-                .build_is_null(tag_value.into_pointer_value(), "is_null");
-
-            env.builder
-                .build_conditional_branch(comparison, null_block, switch_block);
-
-            {
-                let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
-
-                for i in 0..other_tags.len() + 1 {
-                    if i == nullable_id as _ {
-                        continue;
-                    }
-
-                    let block = env.context.append_basic_block(parent, "tag_id_modify");
-                    env.builder.position_at_end(block);
-
-                    // write the "pointer" of the current offset
-                    write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, i);
-
-                    let fields = if i >= nullable_id as _ {
-                        other_tags[i - 1]
-                    } else {
-                        other_tags[i]
-                    };
-
-                    let layout = Layout::struct_no_name_order(fields);
-                    let basic_type = basic_type_from_layout(env, &layout);
-
-                    let (width, _) = union_layout.data_size_and_alignment(env.target_info);
-
-                    let cursors = Cursors {
-                        offset: extra_offset,
-                        extra_offset: env.builder.build_int_add(
-                            extra_offset,
-                            env.ptr_int().const_int(width as _, false),
-                            "new_offset",
-                        ),
-                    };
-
-                    let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
-
-                    let raw_data_ptr = env
-                        .builder
-                        .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                        .unwrap();
-
-                    let data_ptr = env.builder.build_pointer_cast(
-                        raw_data_ptr,
-                        basic_type.ptr_type(AddressSpace::Generic),
-                        "data_ptr",
-                    );
-
-                    let data = env.builder.build_load(data_ptr, "load_data");
-
-                    let when_recursive = WhenRecursive::Loop(union_layout);
-                    let answer =
-                        build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
-
-                    env.builder.build_return(Some(&answer));
-
-                    cases.push((id.get_type().const_int(i as u64, false), block));
-                }
-
-                env.builder.position_at_end(switch_block);
-
-                match cases.pop() {
-                    Some((_, default)) => {
-                        env.builder.build_switch(id, default, &cases);
-                    }
-                    None => {
-                        // we're serializing an empty tag union; this code is effectively unreachable
-                        env.builder.build_unreachable();
-                    }
-                }
-            }
-
-            {
-                env.builder.position_at_end(null_block);
-
-                let value = env.ptr_int().const_zero();
-                build_copy(env, ptr, offset, value.into());
-
-                env.builder.build_return(Some(&extra_offset));
-            }
-        }
-        NullableUnwrapped { other_fields, .. } => {
-            let other_block = env.context.append_basic_block(parent, "other_block");
-            let null_block = env.context.append_basic_block(parent, "null_block");
-
-            let comparison = env
-                .builder
-                .build_is_null(tag_value.into_pointer_value(), "is_null");
-
-            env.builder
-                .build_conditional_branch(comparison, null_block, other_block);
-
-            {
-                env.builder.position_at_end(null_block);
-
-                let value = env.ptr_int().const_zero();
-                build_copy(env, ptr, offset, value.into());
-
-                env.builder.build_return(Some(&extra_offset));
-            }
-
-            {
-                env.builder.position_at_end(other_block);
-
-                // write the "pointer" af the current offset
-                build_copy(env, ptr, offset, extra_offset.into());
-
-                let layout = Layout::struct_no_name_order(other_fields);
-                let basic_type = basic_type_from_layout(env, &layout);
-
-                let cursors = Cursors {
-                    offset: extra_offset,
-                    extra_offset: env.builder.build_int_add(
-                        extra_offset,
-                        env.ptr_int()
-                            .const_int(layout.stack_size(env.target_info) as _, false),
-                        "new_offset",
-                    ),
-                };
-
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(
-                        tag_value.into_pointer_value(),
-                        RocUnion::TAG_DATA_INDEX,
-                        "tag_data",
-                    )
-                    .unwrap();
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
-
-                let when_recursive = WhenRecursive::Loop(union_layout);
-                let answer =
-                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
-
-                env.builder.build_return(Some(&answer));
-            }
-        }
-    }
+    //            cases.push((id.get_type().const_int(tag_id as u64, false), block));
+    //        }
+
+    //        env.builder.position_at_end(switch_block);
+
+    //        match cases.pop() {
+    //            Some((_, default)) => {
+    //                env.builder.build_switch(id, default, &cases);
+    //            }
+    //            None => {
+    //                // we're serializing an empty tag union; this code is effectively unreachable
+    //                env.builder.build_unreachable();
+    //            }
+    //        }
+    //    }
+    //    Recursive(tags) => {
+    //        let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+    //        let switch_block = env.context.append_basic_block(parent, "switch_block");
+    //        env.builder.build_unconditional_branch(switch_block);
+
+    //        let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    //        for (tag_id, field_layouts) in tags.iter().enumerate() {
+    //            let block = env.context.append_basic_block(parent, "tag_id_modify");
+    //            env.builder.position_at_end(block);
+
+    //            // write the "pointer" of the current offset
+    //            write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, tag_id);
+
+    //            let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
+
+    //            let raw_data_ptr = env
+    //                .builder
+    //                .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+    //                .unwrap();
+
+    //            let layout = Layout::struct_no_name_order(field_layouts);
+    //            let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+    //                layout
+    //            } else {
+    //                Layout::struct_no_name_order(
+    //                    env.arena.alloc([layout, union_layout.tag_id_layout()]),
+    //                )
+    //            };
+    //            let basic_type = basic_type_from_layout(env, &layout);
+
+    //            let data_ptr = env.builder.build_pointer_cast(
+    //                raw_data_ptr,
+    //                basic_type.ptr_type(AddressSpace::Generic),
+    //                "data_ptr",
+    //            );
+
+    //            let data = env.builder.build_load(data_ptr, "load_data");
+
+    //            let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+    //            let cursors = Cursors {
+    //                offset: extra_offset,
+    //                extra_offset: env.builder.build_int_add(
+    //                    extra_offset,
+    //                    env.ptr_int().const_int(width as _, false),
+    //                    "new_offset",
+    //                ),
+    //            };
+
+    //            let when_recursive = WhenRecursive::Loop(union_layout);
+    //            let answer =
+    //                build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+    //            env.builder.build_return(Some(&answer));
+
+    //            cases.push((id.get_type().const_int(tag_id as u64, false), block));
+    //        }
+
+    //        env.builder.position_at_end(switch_block);
+
+    //        match cases.pop() {
+    //            Some((_, default)) => {
+    //                env.builder.build_switch(id, default, &cases);
+    //            }
+    //            None => {
+    //                // we're serializing an empty tag union; this code is effectively unreachable
+    //                env.builder.build_unreachable();
+    //            }
+    //        }
+    //    }
+    //    NonNullableUnwrapped(fields) => {
+    //        //
+
+    //        let tag_value = tag_value.into_pointer_value();
+
+    //        build_copy(env, ptr, offset, extra_offset.into());
+
+    //        let layout = Layout::struct_no_name_order(fields);
+    //        let basic_type = basic_type_from_layout(env, &layout);
+
+    //        let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+    //        let cursors = Cursors {
+    //            offset: extra_offset,
+    //            extra_offset: env.builder.build_int_add(
+    //                extra_offset,
+    //                env.ptr_int().const_int(width as _, false),
+    //                "new_offset",
+    //            ),
+    //        };
+
+    //        let raw_data_ptr = env
+    //            .builder
+    //            .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+    //            .unwrap();
+
+    //        let data_ptr = env.builder.build_pointer_cast(
+    //            raw_data_ptr,
+    //            basic_type.ptr_type(AddressSpace::Generic),
+    //            "data_ptr",
+    //        );
+
+    //        let data = env.builder.build_load(data_ptr, "load_data");
+
+    //        let when_recursive = WhenRecursive::Loop(union_layout);
+    //        let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+    //        env.builder.build_return(Some(&answer));
+    //    }
+    //    NullableWrapped {
+    //        nullable_id,
+    //        other_tags,
+    //    } => {
+    //        let switch_block = env.context.append_basic_block(parent, "switch_block");
+    //        let null_block = env.context.append_basic_block(parent, "null_block");
+
+    //        let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+    //        let comparison = env
+    //            .builder
+    //            .build_is_null(tag_value.into_pointer_value(), "is_null");
+
+    //        env.builder
+    //            .build_conditional_branch(comparison, null_block, switch_block);
+
+    //        {
+    //            let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
+
+    //            for i in 0..other_tags.len() + 1 {
+    //                if i == nullable_id as _ {
+    //                    continue;
+    //                }
+
+    //                let block = env.context.append_basic_block(parent, "tag_id_modify");
+    //                env.builder.position_at_end(block);
+
+    //                // write the "pointer" of the current offset
+    //                write_pointer_with_tag_id(env, ptr, offset, extra_offset, union_layout, i);
+
+    //                let fields = if i >= nullable_id as _ {
+    //                    other_tags[i - 1]
+    //                } else {
+    //                    other_tags[i]
+    //                };
+
+    //                let layout = Layout::struct_no_name_order(fields);
+    //                let basic_type = basic_type_from_layout(env, &layout);
+
+    //                let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+
+    //                let cursors = Cursors {
+    //                    offset: extra_offset,
+    //                    extra_offset: env.builder.build_int_add(
+    //                        extra_offset,
+    //                        env.ptr_int().const_int(width as _, false),
+    //                        "new_offset",
+    //                    ),
+    //                };
+
+    //                let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
+
+    //                let raw_data_ptr = env
+    //                    .builder
+    //                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+    //                    .unwrap();
+
+    //                let data_ptr = env.builder.build_pointer_cast(
+    //                    raw_data_ptr,
+    //                    basic_type.ptr_type(AddressSpace::Generic),
+    //                    "data_ptr",
+    //                );
+
+    //                let data = env.builder.build_load(data_ptr, "load_data");
+
+    //                let when_recursive = WhenRecursive::Loop(union_layout);
+    //                let answer =
+    //                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+    //                env.builder.build_return(Some(&answer));
+
+    //                cases.push((id.get_type().const_int(i as u64, false), block));
+    //            }
+
+    //            env.builder.position_at_end(switch_block);
+
+    //            match cases.pop() {
+    //                Some((_, default)) => {
+    //                    env.builder.build_switch(id, default, &cases);
+    //                }
+    //                None => {
+    //                    // we're serializing an empty tag union; this code is effectively unreachable
+    //                    env.builder.build_unreachable();
+    //                }
+    //            }
+    //        }
+
+    //        {
+    //            env.builder.position_at_end(null_block);
+
+    //            let value = env.ptr_int().const_zero();
+    //            build_copy(env, ptr, offset, value.into());
+
+    //            env.builder.build_return(Some(&extra_offset));
+    //        }
+    //    }
+    //    NullableUnwrapped { other_fields, .. } => {
+    //        let other_block = env.context.append_basic_block(parent, "other_block");
+    //        let null_block = env.context.append_basic_block(parent, "null_block");
+
+    //        let comparison = env
+    //            .builder
+    //            .build_is_null(tag_value.into_pointer_value(), "is_null");
+
+    //        env.builder
+    //            .build_conditional_branch(comparison, null_block, other_block);
+
+    //        {
+    //            env.builder.position_at_end(null_block);
+
+    //            let value = env.ptr_int().const_zero();
+    //            build_copy(env, ptr, offset, value.into());
+
+    //            env.builder.build_return(Some(&extra_offset));
+    //        }
+
+    //        {
+    //            env.builder.position_at_end(other_block);
+
+    //            // write the "pointer" af the current offset
+    //            build_copy(env, ptr, offset, extra_offset.into());
+
+    //            let layout = Layout::struct_no_name_order(other_fields);
+    //            let basic_type = basic_type_from_layout(env, &layout);
+
+    //            let cursors = Cursors {
+    //                offset: extra_offset,
+    //                extra_offset: env.builder.build_int_add(
+    //                    extra_offset,
+    //                    env.ptr_int()
+    //                        .const_int(layout.stack_size(env.target_info) as _, false),
+    //                    "new_offset",
+    //                ),
+    //            };
+
+    //            let raw_data_ptr = env
+    //                .builder
+    //                .build_struct_gep(
+    //                    tag_value.into_pointer_value(),
+    //                    RocUnion::TAG_DATA_INDEX,
+    //                    "tag_data",
+    //                )
+    //                .unwrap();
+
+    //            let data_ptr = env.builder.build_pointer_cast(
+    //                raw_data_ptr,
+    //                basic_type.ptr_type(AddressSpace::Generic),
+    //                "data_ptr",
+    //            );
+
+    //            let data = env.builder.build_load(data_ptr, "load_data");
+
+    //            let when_recursive = WhenRecursive::Loop(union_layout);
+    //            let answer =
+    //                build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+    //            env.builder.build_return(Some(&answer));
+    //        }
+    //    }
+    //}
 }
 
 fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
@@ -870,121 +874,122 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     use Builtin::*;
+    todo!()
 
-    match builtin {
-        Int(_) | Float(_) | Bool | Decimal => {
-            build_copy(env, ptr, cursors.offset, value);
+    //match builtin {
+    //    Int(_) | Float(_) | Bool | Decimal => {
+    //        build_copy(env, ptr, cursors.offset, value);
 
-            cursors.extra_offset
-        }
+    //        cursors.extra_offset
+    //    }
 
-        Builtin::Str => {
-            //
+    //    Builtin::Str => {
+    //        //
 
-            call_str_bitcode_fn(
-                env,
-                &[value],
-                &[
-                    ptr.into(),
-                    cursors.offset.into(),
-                    cursors.extra_offset.into(),
-                ],
-                crate::llvm::bitcode::BitcodeReturns::Basic,
-                bitcode::STR_CLONE_TO,
-            )
-            .into_int_value()
-        }
-        Builtin::List(elem) => {
-            let bd = env.builder;
+    //        call_str_bitcode_fn(
+    //            env,
+    //            &[value],
+    //            &[
+    //                ptr.into(),
+    //                cursors.offset.into(),
+    //                cursors.extra_offset.into(),
+    //            ],
+    //            crate::llvm::bitcode::BitcodeReturns::Basic,
+    //            bitcode::STR_CLONE_TO,
+    //        )
+    //        .into_int_value()
+    //    }
+    //    Builtin::List(elem) => {
+    //        let bd = env.builder;
 
-            let list = value.into_struct_value();
-            let (elements, len, _cap) = build_list::destructure(env.builder, list);
+    //        let list = value.into_struct_value();
+    //        let (elements, len, _cap) = build_list::destructure(env.builder, list);
 
-            let mut offset = cursors.offset;
+    //        let mut offset = cursors.offset;
 
-            // we only copy the elements we actually have (and skip extra capacity)
-            offset = build_copy(env, ptr, offset, cursors.extra_offset.into());
-            offset = build_copy(env, ptr, offset, len.into());
-            offset = build_copy(env, ptr, offset, len.into());
+    //        // we only copy the elements we actually have (and skip extra capacity)
+    //        offset = build_copy(env, ptr, offset, cursors.extra_offset.into());
+    //        offset = build_copy(env, ptr, offset, len.into());
+    //        offset = build_copy(env, ptr, offset, len.into());
 
-            let (element_width, _element_align) = elem.stack_size_and_alignment(env.target_info);
-            let element_width = env.ptr_int().const_int(element_width as _, false);
+    //        let (element_width, _element_align) = elem.stack_size_and_alignment(env.target_info);
+    //        let element_width = env.ptr_int().const_int(element_width as _, false);
 
-            let elements_width = bd.build_int_mul(element_width, len, "elements_width");
+    //        let elements_width = bd.build_int_mul(element_width, len, "elements_width");
 
-            if elem.safe_to_memcpy() {
-                // NOTE we are not actually sure the dest is properly aligned
-                let dest = pointer_at_offset(bd, ptr, offset);
-                let src = bd.build_pointer_cast(
-                    elements,
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
-                    "to_bytes_pointer",
-                );
-                bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
+    //        if elem.safe_to_memcpy() {
+    //            // NOTE we are not actually sure the dest is properly aligned
+    //            let dest = pointer_at_offset(bd, ptr, offset);
+    //            let src = bd.build_pointer_cast(
+    //                elements,
+    //                env.context.i8_type().ptr_type(AddressSpace::Generic),
+    //                "to_bytes_pointer",
+    //            );
+    //            bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
 
-                bd.build_int_add(offset, elements_width, "new_offset")
-            } else {
-                let elements_start_offset = offset;
+    //            bd.build_int_add(offset, elements_width, "new_offset")
+    //        } else {
+    //            let elements_start_offset = offset;
 
-                let element_type = basic_type_from_layout(env, elem);
-                let elements = bd.build_pointer_cast(
-                    elements,
-                    element_type.ptr_type(AddressSpace::Generic),
-                    "elements",
-                );
+    //            let element_type = basic_type_from_layout(env, elem);
+    //            let elements = bd.build_pointer_cast(
+    //                elements,
+    //                element_type.ptr_type(AddressSpace::Generic),
+    //                "elements",
+    //            );
 
-                // if the element has any pointers, we clone them to this offset
-                let rest_offset = bd.build_alloca(env.ptr_int(), "rest_offset");
+    //            // if the element has any pointers, we clone them to this offset
+    //            let rest_offset = bd.build_alloca(env.ptr_int(), "rest_offset");
 
-                let element_stack_size = env
-                    .ptr_int()
-                    .const_int(elem.stack_size(env.target_info) as u64, false);
-                let rest_start_offset = bd.build_int_add(
-                    cursors.extra_offset,
-                    bd.build_int_mul(len, element_stack_size, "elements_width"),
-                    "rest_start_offset",
-                );
-                bd.build_store(rest_offset, rest_start_offset);
+    //            let element_stack_size = env
+    //                .ptr_int()
+    //                .const_int(elem.stack_size(env.target_info) as u64, false);
+    //            let rest_start_offset = bd.build_int_add(
+    //                cursors.extra_offset,
+    //                bd.build_int_mul(len, element_stack_size, "elements_width"),
+    //                "rest_start_offset",
+    //            );
+    //            bd.build_store(rest_offset, rest_start_offset);
 
-                let body = |index, element| {
-                    let current_offset =
-                        bd.build_int_mul(element_stack_size, index, "current_offset");
-                    let current_offset =
-                        bd.build_int_add(elements_start_offset, current_offset, "current_offset");
-                    let current_extra_offset = bd.build_load(rest_offset, "element_offset");
+    //            let body = |index, element| {
+    //                let current_offset =
+    //                    bd.build_int_mul(element_stack_size, index, "current_offset");
+    //                let current_offset =
+    //                    bd.build_int_add(elements_start_offset, current_offset, "current_offset");
+    //                let current_extra_offset = bd.build_load(rest_offset, "element_offset");
 
-                    let offset = current_offset;
-                    let extra_offset = current_extra_offset.into_int_value();
+    //                let offset = current_offset;
+    //                let extra_offset = current_extra_offset.into_int_value();
 
-                    let cursors = Cursors {
-                        offset,
-                        extra_offset,
-                    };
+    //                let cursors = Cursors {
+    //                    offset,
+    //                    extra_offset,
+    //                };
 
-                    let new_offset = build_clone(
-                        env,
-                        layout_ids,
-                        ptr,
-                        cursors,
-                        element,
-                        *elem,
-                        when_recursive,
-                    );
+    //                let new_offset = build_clone(
+    //                    env,
+    //                    layout_ids,
+    //                    ptr,
+    //                    cursors,
+    //                    element,
+    //                    *elem,
+    //                    when_recursive,
+    //                );
 
-                    bd.build_store(rest_offset, new_offset);
-                };
+    //                bd.build_store(rest_offset, new_offset);
+    //            };
 
-                let parent = env
-                    .builder
-                    .get_insert_block()
-                    .and_then(|b| b.get_parent())
-                    .unwrap();
+    //            let parent = env
+    //                .builder
+    //                .get_insert_block()
+    //                .and_then(|b| b.get_parent())
+    //                .unwrap();
 
-                incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
+    //            incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
 
-                bd.build_load(rest_offset, "rest_start_offset")
-                    .into_int_value()
-            }
-        }
-    }
+    //            bd.build_load(rest_offset, "rest_start_offset")
+    //                .into_int_value()
+    //        }
+    //    }
+    //}
 }

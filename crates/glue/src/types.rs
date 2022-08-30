@@ -11,9 +11,12 @@ use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
 };
-use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, UnionLayout,
+use roc_mono::{
+    intern::GlobalInterner,
+    layout::{
+        cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
+        Layout, LayoutCache, UnionLayout,
+    },
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -348,16 +351,17 @@ impl Types {
     }
 
     pub fn add_anonymous(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
-        let id = TypeId(self.types.len());
+        todo!()
+        //let id = TypeId(self.types.len());
 
-        assert!(id.0 <= TypeId::MAX.0);
+        //assert!(id.0 <= TypeId::MAX.0);
 
-        self.types.push(typ);
-        self.sizes
-            .push(layout.stack_size_without_alignment(self.target));
-        self.aligns.push(layout.alignment_bytes(self.target));
+        //self.types.push(typ);
+        //self.sizes
+        //    .push(layout.stack_size_without_alignment(self.target));
+        //self.aligns.push(layout.alignment_bytes(self.target));
 
-        id
+        //id
     }
 
     pub fn depends(&mut self, id: TypeId, depends_on: TypeId) {
@@ -611,6 +615,7 @@ impl<'a> Env<'a> {
         interns: &'a mut Interns,
         target: TargetInfo,
     ) -> Self {
+        let interner = GlobalInterner::with_capacity(0);
         Env {
             arena,
             subs,
@@ -619,7 +624,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
-            layout_cache: LayoutCache::new(target),
+            layout_cache: LayoutCache::new(target, interner.fork()),
             target,
         }
     }
@@ -1041,41 +1046,42 @@ where
     L: Display + Ord,
     F: FnOnce(String, Vec<(L, TypeId)>) -> RocType,
 {
-    let subs = env.subs;
-    let fields_iter = &mut fields.into_iter();
-    let mut sortables =
-        bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, env.arena);
+    todo!()
+    //let subs = env.subs;
+    //let fields_iter = &mut fields.into_iter();
+    //let mut sortables =
+    //    bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, env.arena);
 
-    for (label, field_var) in fields_iter {
-        sortables.push((
-            label,
-            field_var,
-            env.layout_cache
-                .from_var(env.arena, field_var, subs)
-                .unwrap(),
-        ));
-    }
+    //for (label, field_var) in fields_iter {
+    //    sortables.push((
+    //        label,
+    //        field_var,
+    //        env.layout_cache
+    //            .from_var(env.arena, field_var, subs)
+    //            .unwrap(),
+    //    ));
+    //}
 
-    sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
-        cmp_fields(
-            label1,
-            layout1,
-            label2,
-            layout2,
-            env.layout_cache.target_info,
-        )
-    });
+    //sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+    //    cmp_fields(
+    //        label1,
+    //        layout1,
+    //        label2,
+    //        layout2,
+    //        env.layout_cache.target_info,
+    //    )
+    //});
 
-    let fields = sortables
-        .into_iter()
-        .map(|(label, field_var, field_layout)| {
-            let type_id = add_type_help(env, field_layout, field_var, None, types);
+    //let fields = sortables
+    //    .into_iter()
+    //    .map(|(label, field_var, field_layout)| {
+    //        let type_id = add_type_help(env, field_layout, field_var, None, types);
 
-            (label, type_id)
-        })
-        .collect::<Vec<(L, TypeId)>>();
+    //        (label, type_id)
+    //    })
+    //    .collect::<Vec<(L, TypeId)>>();
 
-    types.add_named(name.clone(), to_type(name, fields), layout)
+    //types.add_named(name.clone(), to_type(name, fields), layout)
 }
 
 fn add_tag_union<'a>(
@@ -1087,194 +1093,195 @@ fn add_tag_union<'a>(
     layout: Layout<'a>,
     rec_root: Option<Variable>,
 ) -> TypeId {
-    let subs = env.subs;
-    let name = match opt_name {
-        Some(sym) => sym.as_str(env.interns).to_string(),
-        None => env.enum_names.get_name(var),
-    };
+    todo!()
+    //let subs = env.subs;
+    //let name = match opt_name {
+    //    Some(sym) => sym.as_str(env.interns).to_string(),
+    //    None => env.enum_names.get_name(var),
+    //};
 
-    let tag_union_type = match layout {
-        Layout::Union(union_layout) => {
-            use UnionLayout::*;
+    //let tag_union_type = match layout {
+    //    Layout::Union(union_layout) => {
+    //        use UnionLayout::*;
 
-            match union_layout {
-                // A non-recursive tag union
-                // e.g. `Result ok err : [Ok ok, Err err]`
-                NonRecursive(_) => {
-                    let tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, false);
-                    // TODO deal with empty tag union
-                    let discriminant_size = Discriminant::from_number_of_tags(tags.len())
-                        .stack_size()
-                        .max(1);
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+    //        match union_layout {
+    //            // A non-recursive tag union
+    //            // e.g. `Result ok err : [Ok ok, Err err]`
+    //            NonRecursive(_) => {
+    //                let tags =
+    //                    union_tags_to_types(&name, union_tags, subs, env, types, layout, false);
+    //                // TODO deal with empty tag union
+    //                let discriminant_size = Discriminant::from_number_of_tags(tags.len())
+    //                    .stack_size()
+    //                    .max(1);
+    //                let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
-                    RocTagUnion::NonRecursive {
-                        name: name.clone(),
-                        tags,
-                        discriminant_size,
-                        discriminant_offset,
-                    }
-                }
-                // A recursive tag union (general case)
-                // e.g. `Expr : [Sym Str, Add Expr Expr]`
-                Recursive(_) => {
-                    let tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
-                    let discriminant_size =
-                        Discriminant::from_number_of_tags(tags.len()).stack_size();
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+    //                RocTagUnion::NonRecursive {
+    //                    name: name.clone(),
+    //                    tags,
+    //                    discriminant_size,
+    //                    discriminant_offset,
+    //                }
+    //            }
+    //            // A recursive tag union (general case)
+    //            // e.g. `Expr : [Sym Str, Add Expr Expr]`
+    //            Recursive(_) => {
+    //                let tags =
+    //                    union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
+    //                let discriminant_size =
+    //                    Discriminant::from_number_of_tags(tags.len()).stack_size();
+    //                let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
-                    RocTagUnion::Recursive {
-                        name: name.clone(),
-                        tags,
-                        discriminant_size,
-                        discriminant_offset,
-                    }
-                }
-                NonNullableUnwrapped(_) => {
-                    let mut tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
+    //                RocTagUnion::Recursive {
+    //                    name: name.clone(),
+    //                    tags,
+    //                    discriminant_size,
+    //                    discriminant_offset,
+    //                }
+    //            }
+    //            NonNullableUnwrapped(_) => {
+    //                let mut tags =
+    //                    union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
 
-                    debug_assert_eq!(tags.len(), 1);
+    //                debug_assert_eq!(tags.len(), 1);
 
-                    let (tag_name, opt_payload) = tags.pop().unwrap();
+    //                let (tag_name, opt_payload) = tags.pop().unwrap();
 
-                    // A recursive tag union with just one constructor
-                    // Optimization: No need to store a tag ID (the payload is "unwrapped")
-                    // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-                    RocTagUnion::NonNullableUnwrapped {
-                        name: name.clone(),
-                        tag_name,
-                        payload: opt_payload.unwrap(),
-                    }
-                }
-                // A recursive tag union that has an empty variant
-                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
-                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
-                // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
-                // see also: https://youtu.be/ip92VMpf_-A?t=164
-                NullableWrapped {
-                    nullable_id,
-                    other_tags,
-                } => {
-                    let tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
-                    let discriminant_size =
-                        Discriminant::from_number_of_tags(other_tags.len()).stack_size();
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+    //                // A recursive tag union with just one constructor
+    //                // Optimization: No need to store a tag ID (the payload is "unwrapped")
+    //                // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
+    //                RocTagUnion::NonNullableUnwrapped {
+    //                    name: name.clone(),
+    //                    tag_name,
+    //                    payload: opt_payload.unwrap(),
+    //                }
+    //            }
+    //            // A recursive tag union that has an empty variant
+    //            // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+    //            // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+    //            // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
+    //            // see also: https://youtu.be/ip92VMpf_-A?t=164
+    //            NullableWrapped {
+    //                nullable_id,
+    //                other_tags,
+    //            } => {
+    //                let tags =
+    //                    union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
+    //                let discriminant_size =
+    //                    Discriminant::from_number_of_tags(other_tags.len()).stack_size();
+    //                let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
-                    // nullable_id refers to the index of the tag that is represented at runtime as NULL.
-                    // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
-                    // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
-                    // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
-                    // and since Empty's tag id is 0, here nullable_id would be 0.
-                    RocTagUnion::NullableWrapped {
-                        name: name.clone(),
-                        index_of_null_tag: nullable_id,
-                        tags,
-                        discriminant_size,
-                        discriminant_offset,
-                    }
-                }
-                // A recursive tag union with only two variants, where one is empty.
-                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
-                // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
-                NullableUnwrapped {
-                    nullable_id: null_represents_first_tag,
-                    other_fields: _, // TODO use this!
-                } => {
-                    let mut tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
-                    // NullableUnwrapped tag unions should always have exactly 2 tags.
-                    debug_assert_eq!(tags.len(), 2);
+    //                // nullable_id refers to the index of the tag that is represented at runtime as NULL.
+    //                // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
+    //                // the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+    //                // ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+    //                // and since Empty's tag id is 0, here nullable_id would be 0.
+    //                RocTagUnion::NullableWrapped {
+    //                    name: name.clone(),
+    //                    index_of_null_tag: nullable_id,
+    //                    tags,
+    //                    discriminant_size,
+    //                    discriminant_offset,
+    //                }
+    //            }
+    //            // A recursive tag union with only two variants, where one is empty.
+    //            // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+    //            // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
+    //            NullableUnwrapped {
+    //                nullable_id: null_represents_first_tag,
+    //                other_fields: _, // TODO use this!
+    //            } => {
+    //                let mut tags =
+    //                    union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
+    //                // NullableUnwrapped tag unions should always have exactly 2 tags.
+    //                debug_assert_eq!(tags.len(), 2);
 
-                    let null_tag;
-                    let non_null;
+    //                let null_tag;
+    //                let non_null;
 
-                    if null_represents_first_tag {
-                        // If nullable_id is true, then the null tag is second, which means
-                        // pop() will return it because it's at the end of the vec.
-                        null_tag = tags.pop().unwrap().0;
-                        non_null = tags.pop().unwrap();
-                    } else {
-                        // The null tag is first, which means the tag with the payload is second.
-                        non_null = tags.pop().unwrap();
-                        null_tag = tags.pop().unwrap().0;
-                    }
+    //                if null_represents_first_tag {
+    //                    // If nullable_id is true, then the null tag is second, which means
+    //                    // pop() will return it because it's at the end of the vec.
+    //                    null_tag = tags.pop().unwrap().0;
+    //                    non_null = tags.pop().unwrap();
+    //                } else {
+    //                    // The null tag is first, which means the tag with the payload is second.
+    //                    non_null = tags.pop().unwrap();
+    //                    null_tag = tags.pop().unwrap().0;
+    //                }
 
-                    let (non_null_tag, non_null_payload) = non_null;
+    //                let (non_null_tag, non_null_payload) = non_null;
 
-                    RocTagUnion::NullableUnwrapped {
-                        name: name.clone(),
-                        null_tag,
-                        non_null_tag,
-                        non_null_payload: non_null_payload.unwrap(),
-                        null_represents_first_tag,
-                    }
-                }
-            }
-        }
-        Layout::Builtin(Builtin::Int(int_width)) => {
-            add_int_enumeration(union_tags, subs, &name, int_width)
-        }
-        Layout::Struct { field_layouts, .. } => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
+    //                RocTagUnion::NullableUnwrapped {
+    //                    name: name.clone(),
+    //                    null_tag,
+    //                    non_null_tag,
+    //                    non_null_payload: non_null_payload.unwrap(),
+    //                    null_represents_first_tag,
+    //                }
+    //            }
+    //        }
+    //    }
+    //    Layout::Builtin(Builtin::Int(int_width)) => {
+    //        add_int_enumeration(union_tags, subs, &name, int_width)
+    //    }
+    //    Layout::Struct { field_layouts, .. } => {
+    //        let (tag_name, payload_fields) =
+    //            single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
 
-            // A recursive tag union with just one constructor
-            // Optimization: No need to store a tag ID (the payload is "unwrapped")
-            // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-            RocTagUnion::SingleTagStruct {
-                name: name.clone(),
-                tag_name,
-                payload_fields,
-            }
-        }
-        Layout::Builtin(Builtin::Bool) => {
-            // This isn't actually a Bool, but rather a 2-tag union with no payloads
-            // (so it has the same layout as a Bool, but actually isn't one; if it were
-            // a real Bool, it would have been handled elsewhere already!)
-            add_int_enumeration(union_tags, subs, &name, IntWidth::U8)
-        }
-        Layout::Builtin(builtin) => {
-            let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
-            let (tag_name, _) = single_tag_payload(union_tags, subs);
+    //        // A recursive tag union with just one constructor
+    //        // Optimization: No need to store a tag ID (the payload is "unwrapped")
+    //        // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
+    //        RocTagUnion::SingleTagStruct {
+    //            name: name.clone(),
+    //            tag_name,
+    //            payload_fields,
+    //        }
+    //    }
+    //    Layout::Builtin(Builtin::Bool) => {
+    //        // This isn't actually a Bool, but rather a 2-tag union with no payloads
+    //        // (so it has the same layout as a Bool, but actually isn't one; if it were
+    //        // a real Bool, it would have been handled elsewhere already!)
+    //        add_int_enumeration(union_tags, subs, &name, IntWidth::U8)
+    //    }
+    //    Layout::Builtin(builtin) => {
+    //        let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
+    //        let (tag_name, _) = single_tag_payload(union_tags, subs);
 
-            RocTagUnion::SingleTagStruct {
-                name: name.clone(),
-                tag_name,
-                payload_fields: vec![type_id],
-            }
-        }
-        Layout::Boxed(elem_layout) => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
+    //        RocTagUnion::SingleTagStruct {
+    //            name: name.clone(),
+    //            tag_name,
+    //            payload_fields: vec![type_id],
+    //        }
+    //    }
+    //    Layout::Boxed(elem_layout) => {
+    //        let (tag_name, payload_fields) =
+    //            single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
 
-            RocTagUnion::SingleTagStruct {
-                name: name.clone(),
-                tag_name,
-                payload_fields,
-            }
-        }
-        Layout::LambdaSet(_) => {
-            todo!();
-        }
-        Layout::RecursivePointer => {
-            // A single-tag union which only wraps itself is erroneous and should have
-            // been turned into an error earlier in the process.
-            unreachable!();
-        }
-    };
+    //        RocTagUnion::SingleTagStruct {
+    //            name: name.clone(),
+    //            tag_name,
+    //            payload_fields,
+    //        }
+    //    }
+    //    Layout::LambdaSet(_) => {
+    //        todo!();
+    //    }
+    //    Layout::RecursivePointer => {
+    //        // A single-tag union which only wraps itself is erroneous and should have
+    //        // been turned into an error earlier in the process.
+    //        unreachable!();
+    //    }
+    //};
 
-    let typ = RocType::TagUnion(tag_union_type);
-    let type_id = types.add_named(name, typ, layout);
+    //let typ = RocType::TagUnion(tag_union_type);
+    //let type_id = types.add_named(name, typ, layout);
 
-    if let Some(rec_var) = rec_root {
-        env.known_recursive_types.insert(rec_var, type_id);
-    }
+    //if let Some(rec_var) = rec_root {
+    //    env.known_recursive_types.insert(rec_var, type_id);
+    //}
 
-    type_id
+    //type_id
 }
 
 fn add_int_enumeration(
