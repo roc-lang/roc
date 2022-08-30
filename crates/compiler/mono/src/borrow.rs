@@ -1,3 +1,4 @@
+use crate::intern::{Interned, Interner};
 use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -18,12 +19,14 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
-    procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    interner: &'a mut Interner<ProcLayout<'a>>,
+    procs: &MutMap<(Symbol, Interned<ProcLayout<'a>>), Proc<'a>>,
 ) -> ParamMap<'a> {
     // intern the layouts
 
     let mut param_map = {
-        let (declaration_to_index, total_number_of_params) = DeclarationToIndex::new(arena, procs);
+        let (declaration_to_index, total_number_of_params) =
+            DeclarationToIndex::new(arena, interner, procs);
 
         ParamMap {
             declaration_to_index,
@@ -42,6 +45,7 @@ pub fn infer_borrow<'a>(
         owned: MutMap::default(),
         modified: false,
         arena,
+        interner,
     };
 
     // next we first partition the functions into strongly connected components, then do a
@@ -107,18 +111,22 @@ impl From<ParamOffset> for usize {
 
 #[derive(Debug)]
 struct DeclarationToIndex<'a> {
-    elements: Vec<'a, ((Symbol, ProcLayout<'a>), ParamOffset)>,
+    elements: Vec<'a, ((Symbol, Interned<ProcLayout<'a>>), ParamOffset)>,
 }
 
 impl<'a> DeclarationToIndex<'a> {
-    fn new(arena: &'a Bump, procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) -> (Self, usize) {
+    fn new(
+        arena: &'a Bump,
+        interner: &Interner<'a, ProcLayout<'a>>,
+        procs: &MutMap<(Symbol, Interned<ProcLayout<'a>>), Proc<'a>>,
+    ) -> (Self, usize) {
         let mut declaration_to_index = Vec::with_capacity_in(procs.len(), arena);
 
         let mut i = 0;
         for key in procs.keys().copied() {
             declaration_to_index.push((key, ParamOffset(i)));
 
-            i += key.1.arguments.len();
+            i += interner.get(key.1).arguments.len();
         }
 
         declaration_to_index.sort_unstable_by_key(|t| t.0 .0);
@@ -134,7 +142,7 @@ impl<'a> DeclarationToIndex<'a> {
     fn get_param_offset(
         &self,
         needle_symbol: Symbol,
-        needle_layout: ProcLayout<'a>,
+        needle_layout: Interned<ProcLayout<'a>>,
     ) -> ParamOffset {
         if let Ok(middle_index) = self
             .elements
@@ -184,15 +192,25 @@ pub struct ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_param_offset(&self, symbol: Symbol, layout: ProcLayout<'a>) -> ParamOffset {
+    pub fn get_param_offset(
+        &self,
+        symbol: Symbol,
+        layout: Interned<ProcLayout<'a>>,
+    ) -> ParamOffset {
         self.declaration_to_index.get_param_offset(symbol, layout)
     }
 
-    pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&[Param<'a>]> {
+    pub fn get_symbol(
+        &self,
+        symbol: Symbol,
+        interner: &Interner<ProcLayout<'a>>,
+        layout: Interned<ProcLayout<'a>>,
+    ) -> Option<&[Param<'a>]> {
         // let index: usize = self.declaration_to_index[&(symbol, layout)].into();
         let index: usize = self.get_param_offset(symbol, layout).into();
 
-        self.declarations.get(index..index + layout.arguments.len())
+        self.declarations
+            .get(index..index + interner.get(layout).arguments.len())
     }
 
     pub fn get_join_point(&self, id: JoinPointId) -> &'a [Param<'a>] {
@@ -247,7 +265,12 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, ProcLayout<'a>)) {
+    fn visit_proc(
+        &mut self,
+        arena: &'a Bump,
+        proc: &Proc<'a>,
+        key: (Symbol, Interned<ProcLayout<'a>>),
+    ) {
         if proc.must_own_arguments {
             self.visit_proc_always_owned(arena, proc, key);
             return;
@@ -270,7 +293,7 @@ impl<'a> ParamMap<'a> {
         &mut self,
         arena: &'a Bump,
         proc: &Proc<'a>,
-        key: (Symbol, ProcLayout<'a>),
+        key: (Symbol, Interned<ProcLayout<'a>>),
     ) {
         let index: usize = self.get_param_offset(key.0, key.1).into();
 
@@ -337,6 +360,7 @@ struct BorrowInfState<'a> {
     owned: MutMap<Symbol, MutSet<Symbol>>,
     modified: bool,
     arena: &'a Bump,
+    interner: &'a mut Interner<'a, ProcLayout<'a>>,
 }
 
 impl<'a> BorrowInfState<'a> {
@@ -502,12 +526,16 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
+                let top_level = self.interner.insert(self.arena.alloc(ProcLayout::new(
+                    self.arena,
+                    arg_layouts,
+                    name.captures_niche(),
+                    *ret_layout,
+                )));
 
                 // get the borrow signature of the applied function
                 let ps = param_map
-                    .get_symbol(name.name(), top_level)
+                    .get_symbol(name.name(), self.interner, top_level)
                     .expect("function is defined");
 
                 // the return value will be owned
@@ -549,11 +577,15 @@ impl<'a> BorrowInfState<'a> {
                     captures_niche: passed_function.name.captures_niche(),
                 };
 
-                let function_ps =
-                    match param_map.get_symbol(passed_function.name.name(), closure_layout) {
-                        Some(function_ps) => function_ps,
-                        None => unreachable!(),
-                    };
+                let closure_layout = self.interner.insert(self.arena.alloc(closure_layout));
+                let function_ps = match param_map.get_symbol(
+                    passed_function.name.name(),
+                    self.interner,
+                    closure_layout,
+                ) {
+                    Some(function_ps) => function_ps,
+                    None => unreachable!(),
+                };
 
                 match op {
                     ListMap { xs } => {
@@ -729,13 +761,17 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level =
-                ProcLayout::new(self.arena, arg_layouts, g.captures_niche(), **ret_layout);
+            let top_level = self.interner.insert(self.arena.alloc(ProcLayout::new(
+                self.arena,
+                arg_layouts,
+                g.captures_niche(),
+                *ret_layout,
+            )));
 
             if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
-                if let Some(ps) = param_map.get_symbol(g.name(), top_level) {
+                if let Some(ps) = param_map.get_symbol(g.name(), self.interner, top_level) {
                     self.own_params_using_args(ys, ps)
                 }
             }

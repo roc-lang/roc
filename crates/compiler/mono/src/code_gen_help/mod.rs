@@ -4,6 +4,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
+use crate::intern::{Interned, Interner, LocalInterner};
 use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
@@ -73,26 +74,39 @@ pub struct Context<'a> {
 ///
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
+    p_interner: &'a mut Interner<'a, Layout<'a>>,
+    interner: &'a LocalInterner<'a, Layout<'a>>,
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: Layout<'a>,
+    layout_isize_interned: Interned<Layout<'a>>,
     union_refcount: UnionLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
+    pub fn new(
+        arena: &'a Bump,
+        p_interner: &'a mut Interner<'a, Layout<'a>>,
+        interner: &'a LocalInterner<'a, Layout<'a>>,
+        target_info: TargetInfo,
+        home: ModuleId,
+    ) -> Self {
         let layout_isize = Layout::isize(target_info);
+        let layout_isize_interned = p_interner.insert(arena.alloc(layout_isize));
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
         let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
 
         CodeGenHelp {
             arena,
+            p_interner,
+            interner,
             home,
             target_info,
             layout_isize,
+            layout_isize_interned,
             union_refcount,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
@@ -122,7 +136,7 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        if !refcount::is_rc_implemented_yet(&layout) {
+        if !refcount::is_rc_implemented_yet(self.interner, &layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
@@ -166,8 +180,10 @@ impl<'a> CodeGenHelp<'a> {
         let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
 
         let arguments = self.arena.alloc([argument]);
-        let ret_layout = self.arena.alloc(layout);
-        let arg_layouts = self.arena.alloc([layout]);
+        let ret_layout = self.p_interner.insert(self.arena.alloc(layout));
+        let arg_layouts = self
+            .arena
+            .alloc([self.p_interner.insert(self.arena.alloc(layout))]);
         let expr = Expr::Call(Call {
             call_type: CallType::ByName {
                 name: LambdaName::no_niche(proc_name),
@@ -250,13 +266,19 @@ impl<'a> CodeGenHelp<'a> {
         if layout_needs_helper_proc(&layout, ctx.op) {
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
 
-            let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
+            let (ret_layout, arg_layouts): (Interned<Layout<'a>>, &'a [Interned<Layout<'a>>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
-                    Reset => (self.arena.alloc(layout), self.arena.alloc([layout])),
-                    Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
-                    Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
+                    Dec | DecRef(_) => (self.i(LAYOUT_UNIT), self.arena.alloc([self.i(arg)])),
+                    Reset => (self.i(layout), self.arena.alloc([self.i(layout)])),
+                    Inc => (
+                        self.i(LAYOUT_UNIT),
+                        self.arena.alloc([self.i(arg), self.layout_isize_interned]),
+                    ),
+                    Eq => (
+                        self.i(LAYOUT_BOOL),
+                        self.arena.alloc([self.i(arg), self.i(arg)]),
+                    ),
                 }
             };
 
@@ -373,29 +395,39 @@ impl<'a> CodeGenHelp<'a> {
 
         let proc_layout = match ctx.op {
             HelperOp::Inc => ProcLayout {
-                arguments: self.arena.alloc([*layout, self.layout_isize]),
-                result: LAYOUT_UNIT,
+                arguments: self.arena.alloc([
+                    self.p_interner.insert(self.arena.alloc(*layout)),
+                    self.layout_isize_interned,
+                ]),
+                result: self.i(LAYOUT_UNIT),
                 captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::Dec => ProcLayout {
-                arguments: self.arena.alloc([*layout]),
-                result: LAYOUT_UNIT,
+                arguments: self.arena.alloc([self.i(*layout)]),
+                result: self.i(LAYOUT_UNIT),
                 captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::Reset => ProcLayout {
-                arguments: self.arena.alloc([*layout]),
-                result: *layout,
+                arguments: self.arena.alloc([self.i(*layout)]),
+                result: self.i(*layout),
                 captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
-            HelperOp::Eq => ProcLayout {
-                arguments: self.arena.alloc([*layout, *layout]),
-                result: LAYOUT_BOOL,
-                captures_niche: CapturesNiche::no_niche(),
-            },
+            HelperOp::Eq => {
+                let ilayout = self.i(*layout);
+                ProcLayout {
+                    arguments: self.arena.alloc([ilayout, ilayout]),
+                    result: self.i(LAYOUT_BOOL),
+                    captures_niche: CapturesNiche::no_niche(),
+                }
+            }
         };
 
         (proc_symbol, proc_layout)
+    }
+
+    fn i(&self, l: Layout<'a>) -> Interned<Layout<'a>> {
+        self.p_interner.insert(self.arena.alloc(l))
     }
 
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
@@ -450,7 +482,7 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             Layout::LambdaSet(lambda_set) => {
-                self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
+                self.replace_rec_ptr(ctx, lambda_set.runtime_representation(self.interner))
             }
 
             // This line is the whole point of the function

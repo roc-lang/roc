@@ -1,4 +1,5 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::intern::{Interned, Interner, LocalInterner};
 use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
     UpdateModeIds,
@@ -8,6 +9,12 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+
+macro_rules! u {
+    ($e:expr) => {
+        unsafe { std::mem::transmute(&mut *$e) }
+    };
+}
 
 /// Data and Function ownership relation for higher-order lowlevels
 ///
@@ -238,8 +245,9 @@ pub type LiveVarSet = MutSet<Symbol>;
 pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
-struct Context<'a> {
+struct Context<'a, 'i> {
     arena: &'a Bump,
+    interner: &'i LocalInterner<'a, Layout<'a>>,
     vars: VarMap,
     jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
@@ -313,8 +321,12 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
-impl<'a> Context<'a> {
-    pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
+impl<'a, 'j> Context<'a, 'j> {
+    pub fn new(
+        arena: &'a Bump,
+        interner: &'j LocalInterner<'a, Layout<'a>>,
+        param_map: &'a ParamMap<'a>,
+    ) -> Self {
         let mut vars = MutMap::default();
 
         for symbol in param_map.iter_symbols() {
@@ -331,6 +343,7 @@ impl<'a> Context<'a> {
 
         Self {
             arena,
+            interner,
             vars,
             jp_live_vars: MutMap::default(),
             param_map,
@@ -534,6 +547,7 @@ impl<'a> Context<'a> {
     #[allow(clippy::too_many_arguments)]
     fn visit_call<'i>(
         &self,
+        interner: &'a mut Interner<'a, ProcLayout<'a>>,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
         call_type: crate::ir::CallType<'a>,
@@ -557,9 +571,16 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrder(lowlevel) => {
-                self.visit_higher_order_lowlevel(codegen, z, lowlevel, arguments, l, b, b_live_vars)
-            }
+            HigherOrder(lowlevel) => self.visit_higher_order_lowlevel(
+                interner,
+                codegen,
+                z,
+                lowlevel,
+                arguments,
+                l,
+                b,
+                b_live_vars,
+            ),
 
             Foreign { .. } => {
                 let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
@@ -579,13 +600,17 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
+                let top_level = interner.insert(self.arena.alloc(ProcLayout::new(
+                    self.arena,
+                    arg_layouts,
+                    name.captures_niche(),
+                    *ret_layout,
+                )));
 
                 // get the borrow signature
                 let ps = self
                     .param_map
-                    .get_symbol(name.name(), top_level)
+                    .get_symbol(name.name(), interner, top_level)
                     .expect("function is defined");
 
                 let v = Expr::Call(crate::ir::Call {
@@ -604,6 +629,7 @@ impl<'a> Context<'a> {
     #[allow(clippy::too_many_arguments)]
     fn visit_higher_order_lowlevel<'i>(
         &self,
+        interner: &'a mut Interner<'a, ProcLayout<'a>>,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
         lowlevel: &'a crate::ir::HigherOrderLowLevel,
@@ -627,19 +653,20 @@ impl<'a> Context<'a> {
             };
         }
 
-        let function_layout = ProcLayout {
+        let function_layout = interner.insert(self.arena.alloc(ProcLayout {
             arguments: passed_function.argument_layouts,
             result: passed_function.return_layout,
             captures_niche: passed_function.name.captures_niche(),
-        };
+        }));
 
-        let function_ps = match self
-            .param_map
-            .get_symbol(passed_function.name.name(), function_layout)
-        {
-            Some(function_ps) => function_ps,
-            None => unreachable!(),
-        };
+        let function_ps =
+            match self
+                .param_map
+                .get_symbol(passed_function.name.name(), interner, function_layout)
+            {
+                Some(function_ps) => function_ps,
+                None => unreachable!(),
+            };
 
         macro_rules! handle_ownerships_post {
             ($stmt:expr, $args:expr) => {{
@@ -833,6 +860,7 @@ impl<'a> Context<'a> {
     #[allow(clippy::many_single_char_names)]
     fn visit_variable_declaration<'i>(
         &self,
+        interner: &'a mut Interner<'a, ProcLayout<'a>>,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
         v: Expr<'a>,
@@ -865,7 +893,16 @@ impl<'a> Context<'a> {
             Call(crate::ir::Call {
                 call_type,
                 arguments,
-            }) => self.visit_call(codegen, z, call_type, arguments, l, b, b_live_vars),
+            }) => self.visit_call(
+                interner,
+                codegen,
+                z,
+                call_type,
+                arguments,
+                l,
+                b,
+                b_live_vars,
+            ),
 
             StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
@@ -955,7 +992,7 @@ impl<'a> Context<'a> {
         reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
-        let reference = layout.contains_refcounted();
+        let reference = layout.contains_refcounted(self.interner);
 
         let info = VarInfo {
             reference,
@@ -971,12 +1008,12 @@ impl<'a> Context<'a> {
         ctx
     }
 
-    fn update_var_info_with_params(&self, ps: &[Param]) -> Self {
+    fn update_var_info_with_params(&self, ps: &[Param<'a>]) -> Self {
         let mut ctx = self.clone();
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: p.layout.contains_refcounted(),
+                reference: p.layout.contains_refcounted(self.interner),
                 consume: !p.borrow,
                 persistent: false,
                 reset: false,
@@ -999,7 +1036,10 @@ impl<'a> Context<'a> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow && p.layout.contains_refcounted() && !b_live_vars.contains(&p.symbol) {
+            if !p.borrow
+                && p.layout.contains_refcounted(self.interner)
+                && !b_live_vars.contains(&p.symbol)
+            {
                 b = self.add_dec(p.symbol, b)
             }
         }
@@ -1024,6 +1064,7 @@ impl<'a> Context<'a> {
 
     fn visit_stmt<'i>(
         &self,
+        interner: &'a mut Interner<'a, ProcLayout<'a>>,
         codegen: &mut CodegenTools<'i>,
         stmt: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, LiveVarSet) {
@@ -1045,9 +1086,10 @@ impl<'a> Context<'a> {
                 for (symbol, expr, layout) in triples.iter() {
                     ctx = ctx.update_var_info(**symbol, layout, expr);
                 }
-                let (mut b, mut b_live_vars) = ctx.visit_stmt(codegen, cont);
+                let (mut b, mut b_live_vars) = ctx.visit_stmt(u!(interner), codegen, cont);
                 for (symbol, expr, layout) in triples.into_iter().rev() {
                     let pair = ctx.visit_variable_declaration(
+                        u!(interner),
                         codegen,
                         *symbol,
                         (*expr).clone(),
@@ -1067,8 +1109,9 @@ impl<'a> Context<'a> {
         match stmt {
             Let(symbol, expr, layout, cont) => {
                 let ctx = self.update_var_info(*symbol, layout, expr);
-                let (b, b_live_vars) = ctx.visit_stmt(codegen, cont);
+                let (b, b_live_vars) = ctx.visit_stmt(u!(interner), codegen, cont);
                 ctx.visit_variable_declaration(
+                    u!(interner),
                     codegen,
                     *symbol,
                     expr.clone(),
@@ -1089,7 +1132,7 @@ impl<'a> Context<'a> {
 
                 let (v, v_live_vars) = {
                     let ctx = self.update_var_info_with_params(xs);
-                    ctx.visit_stmt(codegen, v)
+                    ctx.visit_stmt(u!(interner), codegen, v)
                 };
 
                 let mut ctx = self.clone();
@@ -1097,7 +1140,7 @@ impl<'a> Context<'a> {
 
                 update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
-                let (b, b_live_vars) = ctx.visit_stmt(codegen, b);
+                let (b, b_live_vars) = ctx.visit_stmt(u!(interner), codegen, b);
 
                 (
                     ctx.arena.alloc(Join {
@@ -1148,23 +1191,33 @@ impl<'a> Context<'a> {
             } => {
                 let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
-                let branches = Vec::from_iter_in(
-                    branches.iter().map(|(label, info, branch)| {
-                        // TODO should we use ctor info like Lean?
-                        let ctx = self.clone();
-                        let (b, alt_live_vars) = ctx.visit_stmt(codegen, branch);
-                        let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
+                let branches: &'a _ = branches;
 
-                        (*label, info.clone(), b.clone())
-                    }),
-                    self.arena,
-                )
-                .into_bump_slice();
+                let mut new_branches: Vec<(u64, crate::ir::BranchInfo, Stmt)> =
+                    Vec::with_capacity_in(branches.len(), self.arena);
+                for (label, info, branch) in branches.iter() {
+                    // TODO should we use ctor info like Lean?
+                    let ctx = self.clone();
+                    let (b, alt_live_vars) = ctx.visit_stmt(u!(interner), codegen, branch);
+                    let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
+
+                    new_branches.push((*label, info.clone(), b.clone()));
+                }
+                let branches = new_branches.into_bump_slice();
+
+                //let branches = Vec::from_iter_in(
+                //    branches.iter().map(
+                //        |(label, info, branch): &(u64, crate::ir::BranchInfo<'a>, Stmt<'a>)| {},
+                //    ),
+                //    self.arena,
+                //)
+                //.into_bump_slice();
 
                 let default_branch = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(codegen, default_branch.1);
+                    let (b, alt_live_vars) =
+                        ctx.visit_stmt(u!(interner), codegen, default_branch.1);
 
                     (
                         default_branch.0.clone(),
@@ -1190,7 +1243,7 @@ impl<'a> Context<'a> {
                 lookups,
                 layouts,
             } => {
-                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+                let (b, mut b_live_vars) = self.visit_stmt(interner, codegen, remainder);
 
                 let expect = self.arena.alloc(Stmt::Expect {
                     condition: *condition,
@@ -1214,7 +1267,7 @@ impl<'a> Context<'a> {
                 lookups,
                 layouts,
             } => {
-                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+                let (b, mut b_live_vars) = self.visit_stmt(interner, codegen, remainder);
 
                 let expect = self.arena.alloc(Stmt::ExpectFx {
                     condition: *condition,
@@ -1425,13 +1478,15 @@ struct CodegenTools<'i> {
 
 pub fn visit_procs<'a, 'i>(
     arena: &'a Bump,
+    interner: &'a mut Interner<'a, ProcLayout<'a>>,
+    layout_interner: &'i LocalInterner<'a, Layout<'a>>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
     param_map: &'a ParamMap<'a>,
-    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    procs: &mut MutMap<(Symbol, Interned<ProcLayout<'a>>), Proc<'a>>,
 ) {
-    let ctx = Context::new(arena, param_map);
+    let ctx = Context::new(arena, layout_interner, param_map);
 
     let mut codegen = CodegenTools {
         home,
@@ -1440,19 +1495,28 @@ pub fn visit_procs<'a, 'i>(
     };
 
     for (key, proc) in procs.iter_mut() {
-        visit_proc(arena, &mut codegen, param_map, &ctx, proc, key.1);
+        visit_proc(
+            arena,
+            u!(interner),
+            &mut codegen,
+            param_map,
+            &ctx,
+            proc,
+            key.1,
+        );
     }
 }
 
 fn visit_proc<'a, 'i>(
     arena: &'a Bump,
+    interner: &'a mut Interner<'a, ProcLayout<'a>>,
     codegen: &mut CodegenTools<'i>,
     param_map: &'a ParamMap<'a>,
-    ctx: &Context<'a>,
+    ctx: &Context<'a, '_>,
     proc: &mut Proc<'a>,
-    layout: ProcLayout<'a>,
+    layout: Interned<ProcLayout<'a>>,
 ) {
-    let params = match param_map.get_symbol(proc.name.name(), layout) {
+    let params = match param_map.get_symbol(proc.name.name(), interner, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {
@@ -1467,7 +1531,7 @@ fn visit_proc<'a, 'i>(
 
     let stmt = arena.alloc(proc.body.clone());
     let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(codegen, stmt);
+    let (b, b_live_vars) = ctx.visit_stmt(interner, codegen, stmt);
     let b = ctx.add_dec_for_dead_params(params, b, &b_live_vars);
 
     proc.body = b.clone();

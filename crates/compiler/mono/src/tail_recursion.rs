@@ -1,5 +1,6 @@
 #![allow(clippy::manual_map)]
 
+use crate::intern::{Interned, LocalInterner};
 use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
 use crate::layout::{LambdaName, Layout};
 use bumpalo::collections::Vec;
@@ -30,11 +31,12 @@ use roc_module::symbol::Symbol;
 /// won't grow the call stack for each iteration
 pub fn make_tail_recursive<'a>(
     arena: &'a Bump,
+    interner: &LocalInterner<'a, Layout<'a>>,
     id: JoinPointId,
     needle: LambdaName,
     stmt: Stmt<'a>,
-    args: &'a [(Layout<'a>, Symbol, Symbol)],
-    ret_layout: Layout,
+    args: &'a [(Interned<Layout<'a>>, Symbol, Symbol)],
+    ret_layout: Interned<Layout>,
 ) -> Option<Stmt<'a>> {
     let allocated = arena.alloc(stmt);
 
@@ -45,7 +47,7 @@ pub fn make_tail_recursive<'a>(
     let params = Vec::from_iter_in(
         args.iter().map(|(layout, symbol, _)| Param {
             symbol: *symbol,
-            layout: *layout,
+            layout: *interner.get(*layout),
             borrow: true,
         }),
         arena,
@@ -72,8 +74,8 @@ fn insert_jumps<'a>(
     stmt: &'a Stmt<'a>,
     goal_id: JoinPointId,
     needle: LambdaName,
-    needle_arguments: &'a [(Layout<'a>, Symbol, Symbol)],
-    needle_result: Layout,
+    needle_arguments: &'a [(Interned<Layout<'a>>, Symbol, Symbol)],
+    needle_result: Interned<Layout>,
 ) -> Option<&'a Stmt<'a>> {
     use Stmt::*;
 
@@ -100,7 +102,7 @@ fn insert_jumps<'a>(
             }),
             _,
             Stmt::Ret(rsym),
-        ) if symbol == rsym && is_equal_function(*fsym, arg_layouts, **ret_layout) => {
+        ) if symbol == rsym && is_equal_function(*fsym, arg_layouts, *ret_layout) => {
             // replace the call and return with a jump
 
             let jump = Stmt::Jump(goal_id, arguments);
