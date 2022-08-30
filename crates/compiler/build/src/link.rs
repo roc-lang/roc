@@ -121,11 +121,20 @@ pub fn build_zig_host_native(
         .env("HOME", env_home);
 
     if let Some(shared_lib_path) = shared_lib_path {
+        // with LLVM, the builtins are already part of the roc app,
+        // but with the dev backend, they are missing. To minimize work,
+        // we link them as part of the host executable
+        let builtins_obj = if target.contains("windows") {
+            bitcode::get_builtins_windows_obj_path()
+        } else {
+            bitcode::get_builtins_host_obj_path()
+        };
+
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            &builtins_obj,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
