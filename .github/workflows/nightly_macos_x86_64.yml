@@ -36,7 +36,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --locked opaque_wrap_function
+          args: --release --locked -- --skip opaque_wrap_function
           
       - name: write version to file
         run: ./ci/write_version.sh
