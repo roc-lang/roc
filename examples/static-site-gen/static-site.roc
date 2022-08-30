@@ -1,4 +1,4 @@
-app "app"
+app "static-site"
     packages { pf: "platform/main.roc" }
     imports [pf.Html.{ html, head, body, div, text }]
     provides [transformFileContent] to pf

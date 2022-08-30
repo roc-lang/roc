@@ -275,6 +275,11 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
+                    let mut app_args: Vec<String> = vec![];
+                    for file in example.input_paths {
+                        app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
+                    }
+
                     match example.executable_filename {
                         "form" | "hello-gui" | "breakout" | "ruby" => {
                             // Since these require things the build system often doesn't have
@@ -294,12 +299,11 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
+                        "static-site" => {
+                            run_roc_on(&file_name, [LINKER_FLAG, "legacy"], &[], &app_args);
+                            return;
+                        }
                         _ => {}
-                    }
-
-                    let mut app_args: Vec<String> = vec![];
-                    for file in example.input_paths {
-                        app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
                     }
 
                     // Check with and without optimizations
@@ -534,8 +538,8 @@ mod cli_run {
         },
         static_site_gen: "static-site-gen" => {
             Example {
-                filename: "app.roc",
-                executable_filename: "app",
+                filename: "static-site.roc",
+                executable_filename: "static-site",
                 stdin: &[],
                 input_paths: &["input", "output"],
                 expected_ending: "hello.txt -> hello.html\n",
