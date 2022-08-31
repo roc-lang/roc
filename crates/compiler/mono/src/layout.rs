@@ -107,8 +107,6 @@ pub struct LayoutCache<'a> {
     stats: CacheStatistics,
     #[cfg(debug_assertions)]
     raw_function_stats: CacheStatistics,
-
-    _marker: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> LayoutCache<'a> {
@@ -126,8 +124,6 @@ impl<'a> LayoutCache<'a> {
             stats: CacheStatistics::default(),
             #[cfg(debug_assertions)]
             raw_function_stats: CacheStatistics::default(),
-
-            _marker: Default::default(),
         }
     }
 
