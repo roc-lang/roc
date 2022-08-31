@@ -136,10 +136,68 @@ fn generate_dynamic_lib(
         }
     }
 
-    let bytes = crate::generate_dylib::generate(target, &custom_names)
-        .unwrap_or_else(|e| internal_error!("{}", e));
+    if !dummy_lib_is_up_to_date(target, dummy_lib_path, &custom_names) {
+        let bytes = crate::generate_dylib::generate(target, &custom_names)
+            .unwrap_or_else(|e| internal_error!("{}", e));
 
-    std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
+        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
+    }
+}
+
+fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]>) -> bool {
+    use target_lexicon::{Architecture as TLA, OperatingSystem as TLO};
+
+    match target.architecture {
+        TLA::X86_64 => {
+            if object.architecture() != object::Architecture::X86_64 {
+                return false;
+            }
+
+            let target_format = match target.operating_system {
+                TLO::Linux => object::BinaryFormat::Elf,
+                TLO::Windows => object::BinaryFormat::Pe,
+                _ => todo!("surgical linker does not support target {:?}", target),
+            };
+
+            object.format() == target_format
+        }
+        TLA::Aarch64(_) => object.architecture() == object::Architecture::Aarch64,
+        _ => todo!("surgical linker does not support target {:?}", target),
+    }
+}
+
+/// Checks whether the dummy `.dll/.so` is up to date, in other words that it exports exactly the
+/// symbols that it is supposed to export, and is built for the right target. If this is the case,
+/// we can skip rebuildingthe dummy lib.
+fn dummy_lib_is_up_to_date(
+    target: &Triple,
+    dummy_lib_path: &Path,
+    custom_names: &[String],
+) -> bool {
+    if !std::path::Path::exists(dummy_lib_path) {
+        return false;
+    }
+
+    let exec_file = fs::File::open(dummy_lib_path).unwrap_or_else(|e| internal_error!("{}", e));
+    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let exec_data = &*exec_mmap;
+
+    let object = object::File::parse(exec_data).unwrap();
+
+    // the user may have been cross-compiling.
+    // The dynhost on disk must match our current target
+    if !object_matches_target(target, &object) {
+        return false;
+    }
+
+    // we made this dynhost file. For the file to be the same as what we'd generate,
+    // we need all symbols to be there and in the correct order
+    let dynamic_symbols: Vec<_> = object.exports().unwrap();
+
+    let it1 = dynamic_symbols.iter().map(|e| e.name());
+    let it2 = custom_names.iter().map(|s| s.as_bytes());
+
+    it1.eq(it2)
 }
 
 fn is_roc_symbol(sym: &object::Symbol) -> bool {
