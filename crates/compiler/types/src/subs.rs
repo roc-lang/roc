@@ -1057,6 +1057,12 @@ impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
 
     #[inline(always)]
+    pub fn some(v: Variable) -> OptVariable {
+        debug_assert_ne!(v, Variable::NULL);
+        OptVariable(v.0)
+    }
+
+    #[inline(always)]
     pub const fn is_none(self) -> bool {
         self.0 == Self::NONE.0
     }
@@ -1094,6 +1100,15 @@ impl OptVariable {
             .map(f)
             .map(OptVariable::from)
             .unwrap_or(OptVariable::NONE)
+    }
+
+    #[inline(always)]
+    pub fn or(self, other: Self) -> Self {
+        if self.is_none() {
+            other
+        } else {
+            self
+        }
     }
 }
 

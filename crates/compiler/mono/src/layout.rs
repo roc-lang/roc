@@ -45,7 +45,7 @@ type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
 struct CacheMeta {
     /// Does this cache entry include a recursive structure? If so, what's the recursion variable
     /// of that structure?
-    has_recursive_structure: Option<Variable>,
+    has_recursive_structure: OptVariable,
 }
 
 impl CacheMeta {
@@ -320,17 +320,17 @@ struct CacheCriteria {
     has_naked_recursion_pointer: bool,
     /// Whether this layout contains a recursive structure. If `Some`, contains the variable of the
     /// recursion variable of that structure.
-    has_recursive_structure: Option<Variable>,
+    has_recursive_structure: OptVariable,
 }
 
 const CACHEABLE: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: false,
-    has_recursive_structure: None,
+    has_recursive_structure: OptVariable::NONE,
 };
 
 const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: true,
-    has_recursive_structure: None,
+    has_recursive_structure: OptVariable::NONE,
 };
 
 impl CacheCriteria {
@@ -354,7 +354,7 @@ impl CacheCriteria {
     #[inline(always)]
     fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
-        self.has_recursive_structure = Some(recursion_var);
+        self.has_recursive_structure = OptVariable::some(recursion_var);
     }
 
     #[inline(always)]
@@ -1927,7 +1927,7 @@ impl<'a, 'b> Env<'a, 'b> {
         let CacheMeta {
             has_recursive_structure,
         } = cache_metadata;
-        if let Some(recursive_structure) = has_recursive_structure {
+        if let Some(recursive_structure) = has_recursive_structure.into_variable() {
             if self.is_seen(recursive_structure) {
                 // If the cached entry references a recursive structure that we're in the process
                 // of visiting currently, we can't use the cached entry, and instead must
