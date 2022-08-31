@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::{Interner, SingleThreadedInterner, ThreadLocalInterner};
+use roc_intern::{Interned, Interner, SingleThreadedInterner, ThreadLocalInterner};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -1251,7 +1251,7 @@ pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
     set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
-    representation: &'a Layout<'a>,
+    representation: Interned<Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -1302,11 +1302,11 @@ pub enum ClosureCallOptions<'a> {
 }
 
 impl<'a> LambdaSet<'a> {
-    pub fn runtime_representation<I>(&self, _interner: &I) -> Layout<'a>
+    pub fn runtime_representation<I>(&self, interner: &I) -> Layout<'a>
     where
         I: Interner<'a, Layout<'a>>,
     {
-        *self.representation
+        *interner.get(self.representation)
     }
 
     /// Does the lambda set contain the given symbol?
@@ -1314,16 +1314,18 @@ impl<'a> LambdaSet<'a> {
         self.set.iter().any(|(s, _)| *s == symbol)
     }
 
-    pub fn is_represented<I>(&self, _interner: &I) -> Option<Layout<'a>>
+    pub fn is_represented<I>(&self, interner: &I) -> Option<Layout<'a>>
     where
         I: Interner<'a, Layout<'a>>,
     {
         if self.has_unwrapped_capture_repr() {
-            Some(*self.representation)
+            let repr = interner.get(self.representation);
+            Some(*repr)
         } else if self.has_enum_dispatch_repr() {
             None
         } else {
-            match self.representation {
+            let repr = interner.get(self.representation);
+            match repr {
                 Layout::Struct {
                     field_layouts: &[], ..
                 } => None,
@@ -1349,10 +1351,14 @@ impl<'a> LambdaSet<'a> {
         self.set.is_empty()
     }
 
-    pub fn layout_for_member_with_lambda_name(
+    pub fn layout_for_member_with_lambda_name<I>(
         &self,
+        interner: &I,
         lambda_name: LambdaName,
-    ) -> ClosureRepresentation<'a> {
+    ) -> ClosureRepresentation<'a>
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
         debug_assert!(self.contains(lambda_name.name));
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
@@ -1363,7 +1369,7 @@ impl<'a> LambdaSet<'a> {
                     .eq(lambda_name.captures_niche.0)
         };
 
-        self.layout_for_member(comparator)
+        self.layout_for_member(interner, comparator)
     }
 
     /// Finds an alias name for a possible-multimorphic lambda variant in the lambda set.
@@ -1441,16 +1447,19 @@ impl<'a> LambdaSet<'a> {
         left == right
     }
 
-    fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
+    fn layout_for_member<I, F>(&self, interner: &I, comparator: F) -> ClosureRepresentation<'a>
     where
+        I: Interner<'a, Layout<'a>>,
         F: Fn(Symbol, &[Layout]) -> bool,
     {
+        let repr = interner.get(self.representation);
+
         if self.has_unwrapped_capture_repr() {
             // Only one function, that captures one identifier.
-            return ClosureRepresentation::UnwrappedCapture(*self.representation);
+            return ClosureRepresentation::UnwrappedCapture(*repr);
         }
 
-        match self.representation {
+        match repr {
             Layout::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
                 // a closure representation that is itself union must be a of the shape `Closure1 ... | Closure2 ...`
@@ -1551,14 +1560,19 @@ impl<'a> LambdaSet<'a> {
         self.set.len() > 1 && self.set.iter().all(|(_, captures)| captures.is_empty())
     }
 
-    pub fn call_by_name_options(&self) -> ClosureCallOptions<'a> {
+    pub fn call_by_name_options<I>(&self, interner: &I) -> ClosureCallOptions<'a>
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
+        let repr = interner.get(self.representation);
+
         if self.has_unwrapped_capture_repr() {
-            return ClosureCallOptions::UnwrappedCapture(*self.representation);
+            return ClosureCallOptions::UnwrappedCapture(*repr);
         }
 
-        match self.representation {
+        match repr {
             Layout::Union(union_layout) => {
-                if self.representation == &Layout::VOID {
+                if repr == &Layout::VOID {
                     debug_assert!(self.set.is_empty());
                     return ClosureCallOptions::Void;
                 }
@@ -1586,12 +1600,16 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_argument_list(
+    pub fn extend_argument_list<I>(
         &self,
         arena: &'a Bump,
+        interner: &I,
         argument_layouts: &'a [Layout<'a>],
-    ) -> &'a [Layout<'a>] {
-        match self.call_by_name_options() {
+    ) -> &'a [Layout<'a>]
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
+        match self.call_by_name_options(interner) {
             ClosureCallOptions::Void => argument_layouts,
             ClosureCallOptions::Struct {
                 field_layouts: &[], ..
@@ -1741,7 +1759,7 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-                let representation = env.arena.alloc(representation);
+                let representation = env.cache.interner.insert(env.arena.alloc(representation));
 
                 Cacheable(
                     Ok(LambdaSet {
@@ -1756,7 +1774,7 @@ impl<'a> LambdaSet<'a> {
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 cacheable(Ok(LambdaSet {
                     set: &[],
-                    representation: env.arena.alloc(Layout::UNIT),
+                    representation: env.cache.interner.insert(env.arena.alloc(Layout::UNIT)),
                 }))
             }
         }
@@ -1785,26 +1803,32 @@ impl<'a> LambdaSet<'a> {
     where
         I: Interner<'a, Layout<'a>>,
     {
-        self.representation.stack_size(interner, target_info)
+        interner
+            .get(self.representation)
+            .stack_size(interner, target_info)
     }
     pub fn contains_refcounted<I>(&self, interner: &I) -> bool
     where
         I: Interner<'a, Layout<'a>>,
     {
-        self.representation.contains_refcounted(interner)
+        interner
+            .get(self.representation)
+            .contains_refcounted(interner)
     }
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
         I: Interner<'a, Layout<'a>>,
     {
-        self.representation.safe_to_memcpy(interner)
+        interner.get(self.representation).safe_to_memcpy(interner)
     }
 
     pub fn alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
         I: Interner<'a, Layout<'a>>,
     {
-        self.representation.alignment_bytes(interner, target_info)
+        interner
+            .get(self.representation)
+            .alignment_bytes(interner, target_info)
     }
 }
 
@@ -4275,7 +4299,7 @@ mod test {
 
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
-            representation: &Layout::UNIT,
+            representation: interner.insert(&Layout::UNIT),
         };
 
         let a = &[Layout::UNIT] as &[_];
