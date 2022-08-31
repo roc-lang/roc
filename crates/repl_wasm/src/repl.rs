@@ -235,6 +235,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
         wasm32_result::insert_wrapper_for_layout(
             arena,
+            &layout_interner,
             &mut module,
             WRAPPER_NAME,
             main_fn_index,

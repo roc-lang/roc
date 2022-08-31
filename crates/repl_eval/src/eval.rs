@@ -240,11 +240,11 @@ fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
 fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
     env: &Env<'a, 'env>,
     mem: &M,
-    union_layout: UnionLayout,
+    union_layout: UnionLayout<'a>,
     data_addr: usize,
 ) -> i64 {
     let offset = union_layout
-        .data_size_without_tag_id(env.target_info)
+        .data_size_without_tag_id(&env.layout_cache.interner, env.target_info)
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
@@ -264,7 +264,7 @@ fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
 fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
     env: &Env<'a, '_>,
     mem: &M,
-    union_layout: UnionLayout,
+    union_layout: UnionLayout<'a>,
     rec_addr: usize,
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
@@ -364,7 +364,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             ))
         }
         Layout::Struct { field_layouts, .. } => {
-            let target_info = env.target_info;
+            let fields = [Layout::u64(), *layout];
+            let layout = Layout::struct_no_name_order(env.arena.alloc(fields));
+
+            let result_stack_size = layout.stack_size(&env.layout_cache.interner, env.target_info);
+
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
                 Content::Structure(FlatType::Record(fields, _)) => {
                     Ok(struct_to_ast(env, mem, addr, *fields))
@@ -410,11 +414,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
             };
 
-            let fields = [Layout::u64(), *layout];
-            let layout = Layout::struct_no_name_order(&fields);
-
-            let result_stack_size = layout.stack_size(target_info);
-
             app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
@@ -422,7 +421,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
-            let size = layout.stack_size(env.target_info);
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
             Ok(app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
@@ -442,7 +441,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
-            let size = layout.stack_size(env.target_info);
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
             Ok(app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
@@ -463,7 +462,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
         Layout::Boxed(_) => {
-            let size = layout.stack_size(env.target_info);
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
             Ok(app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
@@ -866,7 +865,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
-    let elem_size = elem_layout.stack_size(env.target_info) as usize;
+    let elem_size = elem_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
@@ -948,7 +947,7 @@ where
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_addr += layout.stack_size(env.target_info) as usize;
+        field_addr += layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
     }
 
     output
@@ -1041,7 +1040,8 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
             output.push(loc_field);
 
             // Advance the field pointer to the next field.
-            field_addr += field_layout.stack_size(env.target_info) as usize;
+            field_addr +=
+                field_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
         }
 
         let output = output.into_bump_slice();

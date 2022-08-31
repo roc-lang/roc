@@ -2,8 +2,8 @@
 
 use crate::layout::{
     self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
-    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, TagIdIntType,
-    UnionLayout, WrappedVariant,
+    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, STLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -22,6 +22,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
+use roc_intern::Interner;
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -338,18 +339,26 @@ pub enum Parens {
 }
 
 impl<'a> Proc<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A, I>(
+        &'b self,
+        alloc: &'b D,
+        interner: &'b I,
+        _parens: Parens,
+    ) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
+        I: Interner<'a, Layout<'a>>,
     {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
             let arg_doc = symbol_to_doc(alloc, *symbol);
             if pretty_print_ir_symbols() {
-                arg_doc
-                    .append(alloc.reflow(": "))
-                    .append(layout.to_doc(alloc, Parens::NotNeeded))
+                arg_doc.append(alloc.reflow(": ")).append(layout.to_doc(
+                    alloc,
+                    interner,
+                    Parens::NotNeeded,
+                ))
             } else {
                 arg_doc
             }
@@ -360,7 +369,7 @@ impl<'a> Proc<'a> {
                 .text("procedure : ")
                 .append(symbol_to_doc(alloc, self.name.name()))
                 .append(" ")
-                .append(self.ret_layout.to_doc(alloc, Parens::NotNeeded))
+                .append(self.ret_layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(alloc.hardline())
                 .append(alloc.text("procedure = "))
                 .append(symbol_to_doc(alloc, self.name.name()))
@@ -368,7 +377,7 @@ impl<'a> Proc<'a> {
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc).indent(4))
+                .append(self.body.to_doc(alloc, interner).indent(4))
         } else {
             alloc
                 .text("procedure ")
@@ -377,14 +386,17 @@ impl<'a> Proc<'a> {
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc).indent(4))
+                .append(self.body.to_doc(alloc, interner).indent(4))
         }
     }
 
-    pub fn to_pretty(&self, width: usize) -> String {
+    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator, Parens::NotNeeded)
+        self.to_doc::<_, (), _>(&allocator, interner, Parens::NotNeeded)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -394,6 +406,7 @@ impl<'a> Proc<'a> {
 
     pub fn insert_refcount_operations<'i>(
         arena: &'a Bump,
+        layout_interner: &'i STLayoutInterner<'a>,
         home: ModuleId,
         ident_ids: &'i mut IdentIds,
         update_mode_ids: &'i mut UpdateModeIds,
@@ -403,6 +416,7 @@ impl<'a> Proc<'a> {
 
         crate::inc_dec::visit_procs(
             arena,
+            layout_interner,
             home,
             ident_ids,
             update_mode_ids,
@@ -2081,11 +2095,12 @@ impl<'a> Stmt<'a> {
         from_can(env, var, can_expr, procs, layout_cache)
     }
 
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A, I>(&'b self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
+        I: Interner<'a, Layout<'a>>,
     {
         use Stmt::*;
 
@@ -2094,17 +2109,17 @@ impl<'a> Stmt<'a> {
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(" : ")
-                .append(layout.to_doc(alloc, Parens::NotNeeded))
+                .append(layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
+                .append(cont.to_doc(alloc, interner)),
 
             Refcounting(modify, cont) => modify
                 .to_doc(alloc)
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc)),
+                .append(cont.to_doc(alloc, interner)),
 
             Expect {
                 condition,
@@ -2115,7 +2130,7 @@ impl<'a> Stmt<'a> {
                 .append(symbol_to_doc(alloc, *condition))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc)),
+                .append(remainder.to_doc(alloc, interner)),
 
             ExpectFx {
                 condition,
@@ -2126,7 +2141,7 @@ impl<'a> Stmt<'a> {
                 .append(symbol_to_doc(alloc, *condition))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc)),
+                .append(remainder.to_doc(alloc, interner)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -2148,19 +2163,19 @@ impl<'a> Stmt<'a> {
                             .append(" then")
                             .append(info.to_doc(alloc))
                             .append(alloc.hardline())
-                            .append(pass.to_doc(alloc).indent(4))
+                            .append(pass.to_doc(alloc, interner).indent(4))
                             .append(alloc.hardline())
                             .append(alloc.text("else"))
                             .append(default_branch.0.to_doc(alloc))
                             .append(alloc.hardline())
-                            .append(fail.to_doc(alloc).indent(4))
+                            .append(fail.to_doc(alloc, interner).indent(4))
                     }
 
                     _ => {
                         let default_doc = alloc
                             .text("default:")
                             .append(alloc.hardline())
-                            .append(default_branch.1.to_doc(alloc).indent(4))
+                            .append(default_branch.1.to_doc(alloc, interner).indent(4))
                             .indent(4);
 
                         let branches_docs = branches
@@ -2169,7 +2184,7 @@ impl<'a> Stmt<'a> {
                                 alloc
                                     .text(format!("case {}:", tag))
                                     .append(alloc.hardline())
-                                    .append(expr.to_doc(alloc).indent(4))
+                                    .append(expr.to_doc(alloc, interner).indent(4))
                                     .indent(4)
                             })
                             .chain(std::iter::once(default_doc));
@@ -2206,9 +2221,9 @@ impl<'a> Stmt<'a> {
                             .append(" ".repeat(parameters.len().min(1)))
                             .append(alloc.intersperse(it, alloc.space()))
                             .append(":"),
-                        continuation.to_doc(alloc).indent(4),
+                        continuation.to_doc(alloc, interner).indent(4),
                         alloc.text("in"),
-                        remainder.to_doc(alloc),
+                        remainder.to_doc(alloc, interner),
                     ],
                     alloc.hardline(),
                 )
@@ -2226,10 +2241,13 @@ impl<'a> Stmt<'a> {
         }
     }
 
-    pub fn to_pretty(&self, width: usize) -> String {
+    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator)
+        self.to_doc::<_, (), _>(&allocator, interner)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -3311,8 +3329,10 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 = layout1.alignment_bytes(ptr_bytes);
-                                let size2 = layout2.alignment_bytes(ptr_bytes);
+                                let size1 =
+                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 =
+                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
@@ -3351,8 +3371,10 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 = layout1.alignment_bytes(ptr_bytes);
-                                let size2 = layout2.alignment_bytes(ptr_bytes);
+                                let size1 =
+                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 =
+                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
@@ -4595,6 +4617,7 @@ pub fn with_hole<'a>(
                                 find_lambda_name(env, layout_cache, lambda_set, name, &[]);
                             construct_closure_data(
                                 env,
+                                layout_cache,
                                 lambda_set,
                                 lambda_name,
                                 &[],
@@ -4647,6 +4670,7 @@ pub fn with_hole<'a>(
                                 find_lambda_name(env, layout_cache, lambda_set, name, &[]);
                             construct_closure_data(
                                 env,
+                                layout_cache,
                                 lambda_set,
                                 lambda_name,
                                 &[],
@@ -4891,6 +4915,7 @@ pub fn with_hole<'a>(
 
                     construct_closure_data(
                         env,
+                        layout_cache,
                         lambda_set,
                         lambda_name,
                         symbols.iter().copied(),
@@ -5438,12 +5463,17 @@ where
                 .expect("layout problem for capture")
         })
         .collect_in::<Vec<_>>(env.arena);
-    lambda_set.find_lambda_name(function_name, &this_function_captures_layouts)
+    lambda_set.find_lambda_name(
+        &layout_cache.interner,
+        function_name,
+        &this_function_captures_layouts,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a, I>(
     env: &mut Env<'a, '_>,
+    layout_cache: &LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     name: LambdaName<'a>,
     symbols: I,
@@ -5474,8 +5504,8 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(ptr_bytes);
-                let size2 = layout2.alignment_bytes(ptr_bytes);
+                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
@@ -5504,8 +5534,8 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(ptr_bytes);
-                let size2 = layout2.alignment_bytes(ptr_bytes);
+                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
@@ -5517,7 +5547,7 @@ where
 
             debug_assert_eq!(
                 Layout::struct_no_name_order(field_layouts),
-                lambda_set.runtime_representation()
+                lambda_set.runtime_representation(&layout_cache.interner)
             );
 
             let expr = Expr::Struct(symbols);
@@ -5885,7 +5915,15 @@ fn tag_union_to_function<'a>(
                     let lambda_name =
                         find_lambda_name(env, layout_cache, lambda_set, proc_symbol, &[]);
                     debug_assert!(lambda_name.no_captures());
-                    construct_closure_data(env, lambda_set, lambda_name, &[], assigned, hole)
+                    construct_closure_data(
+                        env,
+                        layout_cache,
+                        lambda_set,
+                        lambda_name,
+                        &[],
+                        assigned,
+                        hole,
+                    )
                 }
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
@@ -5932,7 +5970,7 @@ fn sorted_field_symbols<'a>(
             }
         };
 
-        let alignment = layout.alignment_bytes(env.target_info);
+        let alignment = layout.alignment_bytes(&layout_cache.interner, env.target_info);
 
         let symbol = possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg.value, var);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
@@ -7616,6 +7654,7 @@ fn specialize_symbol<'a>(
 
                         construct_closure_data(
                             env,
+                            layout_cache,
                             lambda_set,
                             lambda_name,
                             symbols.iter().copied(),
@@ -7665,6 +7704,7 @@ fn specialize_symbol<'a>(
 
                         construct_closure_data(
                             env,
+                            layout_cache,
                             lambda_set,
                             lambda_name,
                             &[],
@@ -8065,7 +8105,15 @@ fn call_by_name_help<'a>(
             let captured = &[];
             debug_assert!(proc_name.no_captures());
 
-            construct_closure_data(env, lambda_set, proc_name, captured, assigned, hole)
+            construct_closure_data(
+                env,
+                layout_cache,
+                lambda_set,
+                proc_name,
+                captured,
+                assigned,
+                hole,
+            )
         } else {
             debug_assert_eq!(
                 argument_layouts.len(),
@@ -8450,6 +8498,7 @@ fn call_specialized_proc<'a>(
 
                 let result = construct_closure_data(
                     env,
+                    layout_cache,
                     lambda_set,
                     proc_name,
                     symbols.iter().copied(),
@@ -8722,12 +8771,12 @@ fn from_can_pattern_help<'a>(
                     arguments.sort_by(|arg1, arg2| {
                         let size1 = layout_cache
                             .from_var(env.arena, arg1.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.target_info))
+                            .map(|x| x.alignment_bytes(&layout_cache.interner, env.target_info))
                             .unwrap_or(0);
 
                         let size2 = layout_cache
                             .from_var(env.arena, arg2.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.target_info))
+                            .map(|x| x.alignment_bytes(&layout_cache.interner, env.target_info))
                             .unwrap_or(0);
 
                         size2.cmp(&size1)
@@ -8766,8 +8815,10 @@ fn from_can_pattern_help<'a>(
                             let layout2 =
                                 layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
 
-                            let size1 = layout1.alignment_bytes(env.target_info);
-                            let size2 = layout2.alignment_bytes(env.target_info);
+                            let size1 =
+                                layout1.alignment_bytes(&layout_cache.interner, env.target_info);
+                            let size2 =
+                                layout2.alignment_bytes(&layout_cache.interner, env.target_info);
 
                             size2.cmp(&size1)
                         });

@@ -132,13 +132,18 @@ pub fn build_app_module<'a>(
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+        CodeGenHelp::new(
+            env.arena,
+            env.layout_interner,
+            TargetInfo::default_wasm32(),
+            env.module_id,
+        ),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:?}", proc);
         }
     }
@@ -156,7 +161,7 @@ pub fn build_app_module<'a>(
     if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:#?}", proc);
         }
     }

@@ -548,11 +548,13 @@ fn gen_from_mono_module_dev_assembly(
         procedures,
         mut interns,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
     let env = roc_gen_dev::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,

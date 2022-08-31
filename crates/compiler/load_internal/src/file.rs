@@ -34,7 +34,9 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{
+    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -850,6 +852,9 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
+        /// The layout interner after all passes in mono are done.
+        /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
+        layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
     },
 
@@ -1610,12 +1615,14 @@ fn state_thread_step<'a>(
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
+                    layout_interner,
                     exposed_to_host,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+                    let monomorphized =
+                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -1991,12 +1998,12 @@ fn start_tasks<'a>(
 }
 
 macro_rules! debug_print_ir {
-    ($state:expr, $flag:path) => {
+    ($state:expr, $interner:expr, $flag:path) => {
         dbg_do!($flag, {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty(200))
+                .map(|proc| proc.to_pretty($interner, 200))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
@@ -2690,9 +2697,18 @@ fn update<'a>(
                         }
                     }
 
+                    let layout_interner = {
+                        let mut taken = GlobalInterner::with_capacity(0);
+                        std::mem::swap(&mut state.layout_interner, &mut taken);
+                        taken
+                    };
+                    let layout_interner = layout_interner
+                        .unwrap()
+                        .expect("outstanding references to global layout interener, but we just drained all layout caches");
+
                     log!("specializations complete from {:?}", module_id);
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -2704,17 +2720,18 @@ fn update<'a>(
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     Proc::insert_refcount_operations(
                         arena,
+                        &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
@@ -2732,7 +2749,7 @@ fn update<'a>(
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
-                            // TODO thread through mono problems
+                            layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2855,11 +2872,12 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
     );
 }
 
-fn finish_specialization(
-    state: State,
+fn finish_specialization<'a>(
+    state: State<'a>,
     subs: Subs,
+    layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
-) -> Result<MonomorphizedModule, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
             "total Type clones: {} ",
@@ -2895,7 +2913,6 @@ fn finish_specialization(
         platform_path,
         platform_data,
         exec_mode,
-        layout_interner,
         ..
     } = state;
 
@@ -2906,9 +2923,6 @@ fn finish_specialization(
         sources,
         ..
     } = module_cache;
-
-    let layout_interner = GlobalInterner::unwrap(layout_interner)
-        .expect("Outstanding references to the global layout interner");
 
     let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
         .into_iter()

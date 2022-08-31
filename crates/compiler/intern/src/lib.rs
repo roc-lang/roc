@@ -182,6 +182,14 @@ impl<'a, K: Hash + Eq> Interner<'a, K> for ThreadLocalInterner<'a, K> {
 }
 
 impl<'a, K> SingleThreadedInterner<'a, K> {
+    /// Creates a new single threaded interner with the given capacity.
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            map: BumpMap::with_capacity_and_hasher(cap, default_hasher()),
+            vec: Vec::with_capacity(cap),
+        }
+    }
+
     /// Promotes the [SingleThreadedInterner] back to a [GlobalInterner].
     ///
     /// You should *only* use this if you need to go from a single-threaded to a concurrent context,
