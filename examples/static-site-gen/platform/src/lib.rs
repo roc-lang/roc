@@ -67,13 +67,14 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| format!("{}: {}", input_dirname, e))?;
 
-    let output_dir = PathBuf::from(output_dirname)
-        .canonicalize()
-        .map_err(|e| format!("{}: {}", output_dirname, e))?;
-
-    if !output_dir.exists() {
-        fs::create_dir(&output_dir).unwrap();
-    }
+    let output_dir = {
+        let dir = PathBuf::from(output_dirname);
+        if !dir.exists() {
+            fs::create_dir(&dir).unwrap();
+        }
+        dir.canonicalize()
+            .map_err(|e| format!("{}: {}", output_dirname, e))?
+    };
 
     let mut input_files: Vec<PathBuf> = vec![];
     find_files(&input_dir, &mut input_files)
