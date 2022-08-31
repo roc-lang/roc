@@ -1,5 +1,5 @@
 app "rocLovesZig"
-    packages { pf: "main.roc" }
+    packages { pf: "zig-platform/main.roc" }
     imports []
     provides [main] to pf
 

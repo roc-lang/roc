@@ -434,7 +434,7 @@ mod cli_run {
             expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
-        platformSwitchingZig:"platform-switching/zig-platform" => Example {
+        platformSwitchingZig:"platform-switching" => Example {
             filename: "rocLovesZig.roc",
             executable_filename: "rocLovesZig",
             stdin: &[],
