@@ -622,8 +622,8 @@ macro_rules! yoo {
             #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
 
-            let given_u8 = given.iter().map(|elt| format!("{:b}", (*elt))).collect::<Vec<String>>();
-            let expected_u8 = expected.iter().map(|elt| format!("{:b}", (*elt))).collect::<Vec<String>>();
+            let given_u8 = given.iter().map(|elt| format!("{:?}", std::mem::transmute::<bool, u8>(*elt))).collect::<Vec<String>>();
+            let expected_u8 = expected.iter().map(|elt| format!("{:?}", std::mem::transmute::<bool, u8>(*elt))).collect::<Vec<String>>();
 
             assert_eq!(given_u8, expected_u8, "LLVM test failed");
         };
