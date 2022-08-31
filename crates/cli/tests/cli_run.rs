@@ -402,7 +402,7 @@ mod cli_run {
         // We exclude the C platforming switching example
         // because the main platform switching example runs the c platform.
         // If we don't a race condition leads to test flakiness.
-        // platformSwitchingC:"platform-switching/c-platform" => Example {
+        // platformSwitchingC:"platform-switching" => Example {
         //     filename: "rocLovesC.roc",
         //     executable_filename: "rocLovesC",
         //     stdin: &[],

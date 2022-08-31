@@ -38,5 +38,5 @@
 
     ./roc examples/platform-switching/zig-platform/rocLovesZig.roc
 
-    ./roc examples/platform-switching/c-platform/rocLovesC.roc
+    ./roc examples/platform-switching/rocLovesC.roc
     ```

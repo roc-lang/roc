@@ -13,5 +13,5 @@
     cargo run examples/platform-switching/zig-platform/rocLovesZig.roc
 
     # This requires installing the `clang` C compiler, too.
-    cargo run examples/platform-switching/c-platform/rocLovesC.roc
+    cargo run examples/platform-switching/rocLovesC.roc
     ```
