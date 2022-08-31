@@ -418,7 +418,7 @@ mod cli_run {
             expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
-        platformSwitchingSwift:"platform-switching/swift-platform" => Example {
+        platformSwitchingSwift:"platform-switching" => Example {
             filename: "rocLovesSwift.roc",
             executable_filename: "rocLovesSwift",
             stdin: &[],
