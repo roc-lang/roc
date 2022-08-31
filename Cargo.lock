@@ -3511,6 +3511,7 @@ version = "0.0.1"
 dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
+ "fnv",
  "hashbrown 0.12.3",
  "im",
  "im-rc",
@@ -3853,6 +3854,7 @@ dependencies = [
  "roc_solve_problem",
  "roc_target",
  "roc_test_utils",
+ "roc_tracing",
  "roc_types",
  "roc_unify",
  "ven_pretty",

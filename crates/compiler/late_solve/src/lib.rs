@@ -16,7 +16,8 @@ use roc_solve::solve::Pools;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
-use roc_unify::unify::{unify as unify_unify, Env, Mode, Unified};
+use roc_unify::unify::MetaCollector;
+use roc_unify::unify::{Env, Mode, Unified};
 
 pub use roc_solve::ability::Resolved;
 pub use roc_types::subs::instantiate_rigids;
@@ -313,6 +314,28 @@ impl Phase for LatePhase<'_> {
     }
 }
 
+#[derive(Debug, Default)]
+struct ChangedVariableCollector {
+    changed: Vec<Variable>,
+}
+
+impl MetaCollector for ChangedVariableCollector {
+    const UNIFYING_SPECIALIZATION: bool = false;
+
+    #[inline(always)]
+    fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}
+
+    #[inline(always)]
+    fn record_changed_variable(&mut self, subs: &Subs, var: Variable) {
+        self.changed.push(subs.get_root_key_without_compacting(var))
+    }
+
+    #[inline(always)]
+    fn union(&mut self, other: Self) {
+        self.changed.extend(other.changed)
+    }
+}
+
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
 #[allow(clippy::too_many_arguments)]
@@ -325,20 +348,25 @@ pub fn unify(
     exposed_by_module: &ExposedByModule,
     left: Variable,
     right: Variable,
-) -> Result<(), UnificationFailed> {
+) -> Result<Vec<Variable>, UnificationFailed> {
     debug_assert_ne!(
         home,
         ModuleId::DERIVED_SYNTH,
         "derived module can only unify its subs in its own context!"
     );
-    let unified = unify_unify(&mut Env::new(subs), left, right, Mode::EQ);
+    let unified = roc_unify::unify::unify_with_collector::<ChangedVariableCollector>(
+        &mut Env::new(subs),
+        left,
+        right,
+        Mode::EQ,
+    );
 
     match unified {
         Unified::Success {
             vars: _,
             must_implement_ability: _,
             lambda_sets_to_specialize,
-            extra_metadata: _,
+            extra_metadata,
         } => {
             let mut pools = Pools::default();
 
@@ -366,7 +394,7 @@ pub fn unify(
             // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a
             // solving context where pools are relevant.
 
-            Ok(())
+            Ok(extra_metadata.changed)
         }
         Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
     }

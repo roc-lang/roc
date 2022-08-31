@@ -10,7 +10,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
+    self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant,
+    WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -196,8 +197,12 @@ fn get_tags_vars_and_variant<'a>(
 
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
-    let union_variant =
-        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.target_info);
+    let union_variant = {
+        let mut cache = LayoutCache::new(env.target_info);
+        let mut layout_env =
+            layout::Env::from_components(&mut cache, env.subs, env.arena, env.target_info);
+        union_sorted_tags_pub(&mut layout_env, tags_vec, opt_rec_var)
+    };
 
     (vars_of_tag, union_variant)
 }
@@ -1195,13 +1200,16 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
-                    let union_variant = union_sorted_tags_help(
-                        env.arena,
-                        tags_vec,
-                        None,
-                        env.subs,
-                        env.target_info,
-                    );
+                    let union_variant = {
+                        let mut cache = LayoutCache::new(env.target_info);
+                        let mut layout_env = layout::Env::from_components(
+                            &mut cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+                        union_sorted_tags_pub(&mut layout_env, tags_vec, None)
+                    };
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {
