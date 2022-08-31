@@ -23,6 +23,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -721,6 +722,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -955,6 +957,8 @@ struct State<'a> {
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
+
+    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
 }
 
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
@@ -1007,6 +1011,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
+            layout_interner: GlobalInterner::with_capacity(128),
         }
     }
 }
@@ -2891,6 +2896,7 @@ fn finish_specialization(
         platform_path,
         platform_data,
         exec_mode,
+        layout_interner,
         ..
     } = state;
 
@@ -2901,6 +2907,9 @@ fn finish_specialization(
         sources,
         ..
     } = module_cache;
+
+    let layout_interner = GlobalInterner::unwrap(layout_interner)
+        .expect("Outstanding references to the global layout interner");
 
     let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
         .into_iter()
@@ -2978,6 +2987,7 @@ fn finish_specialization(
         module_id: state.root_id,
         subs,
         interns,
+        layout_interner,
         procedures,
         entry_point,
         sources,

@@ -23,6 +23,7 @@ roc_solve = { path = "../solve" }
 roc_solve_problem = { path = "../solve_problem" }
 roc_late_solve = { path = "../late_solve" }
 roc_mono = { path = "../mono" }
+roc_intern = { path = "../intern" }
 roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 roc_reporting = { path = "../../reporting" }
