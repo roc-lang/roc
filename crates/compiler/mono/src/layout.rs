@@ -3211,7 +3211,7 @@ pub fn union_sorted_tags<'a>(
     let result = match roc_types::pretty_print::chase_ext_tag_union(env.subs, var, &mut tags_vec) {
         ChasedExt::Empty => {
             let opt_rec_var = get_recursion_var(env.subs, var);
-            let Cacheable(result, _)= union_sorted_tags_help(env, tags_vec, opt_rec_var);
+            let Cacheable(result, _) = union_sorted_tags_help(env, tags_vec, opt_rec_var);
             result
         }
         ChasedExt::NonEmpty { content, .. } => {
@@ -3224,11 +3224,13 @@ pub fn union_sorted_tags<'a>(
                     //   x
                     // In such cases it's fine to drop the variable. We may be proven wrong in the future...
                     let opt_rec_var = get_recursion_var(env.subs, var);
-                    union_sorted_tags_help(env, tags_vec, opt_rec_var)
+                    let Cacheable(result, _) = union_sorted_tags_help(env, tags_vec, opt_rec_var);
+                    result
                 }
                 RecursionVar { .. } => {
                     let opt_rec_var = get_recursion_var(env.subs, var);
-                    union_sorted_tags_help(env, tags_vec, opt_rec_var)
+                    let Cacheable(result, _) = union_sorted_tags_help(env, tags_vec, opt_rec_var);
+                    result
                 }
 
                 Error => return Err(LayoutProblem::Erroneous),
