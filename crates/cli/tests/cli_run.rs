@@ -426,7 +426,7 @@ mod cli_run {
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
-        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
+        platformSwitchingWebAssembly:"platform-switching" => Example {
             filename: "rocLovesWebAssembly.roc",
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
