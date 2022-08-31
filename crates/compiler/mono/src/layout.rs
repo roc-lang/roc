@@ -4288,7 +4288,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let interner = SingleThreadedInterner::with_capacity(4);
+        let mut interner = SingleThreadedInterner::with_capacity(4);
 
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
