@@ -5232,6 +5232,7 @@ pub fn with_hole<'a>(
                         RawFunctionLayout::Function(_, lambda_set, _) =>  {
                             lowlevel_match_on_lambda_set(
                                 env,
+                                layout_cache,
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
@@ -6025,7 +6026,7 @@ fn register_capturing_closure<'a>(
 
                 match lambda_set_layout {
                     Ok(lambda_set) => {
-                        if lambda_set.is_represented().is_none() {
+                        if lambda_set.is_represented(&layout_cache.interner).is_none() {
                             CapturedSymbols::None
                         } else {
                             let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
@@ -9349,6 +9350,7 @@ type ToLowLevelCallArguments<'a> = (
 #[allow(clippy::too_many_arguments)]
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
+    layout_cache: &LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     op: LowLevel,
     closure_data_symbol: Symbol,
@@ -9371,7 +9373,7 @@ where
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
-                lambda_set.is_represented(),
+                lambda_set.is_represented(&layout_cache.interner),
                 to_lowlevel_call,
                 return_layout,
                 assigned,
@@ -9398,7 +9400,7 @@ where
                 let call = to_lowlevel_call((
                     lambda_name,
                     closure_data_symbol,
-                    lambda_set.is_represented(),
+                    lambda_set.is_represented(&layout_cache.interner),
                     call_spec_id,
                     update_mode,
                 ));
@@ -9427,7 +9429,7 @@ where
             let call = to_lowlevel_call((
                 lambda_name,
                 closure_data_symbol,
-                lambda_set.is_represented(),
+                lambda_set.is_represented(&layout_cache.interner),
                 call_spec_id,
                 update_mode,
             ));
@@ -9444,7 +9446,7 @@ where
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Bool),
                     closure_data_symbol,
-                    lambda_set.is_represented(),
+                    lambda_set.is_represented(&layout_cache.interner),
                     to_lowlevel_call,
                     return_layout,
                     assigned,
@@ -9460,7 +9462,7 @@ where
                     closure_tag_id_symbol,
                     Layout::Builtin(Builtin::Int(IntWidth::U8)),
                     closure_data_symbol,
-                    lambda_set.is_represented(),
+                    lambda_set.is_represented(&layout_cache.interner),
                     to_lowlevel_call,
                     return_layout,
                     assigned,

@@ -213,6 +213,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
             arena,
+            layout_interner: &layout_interner,
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host

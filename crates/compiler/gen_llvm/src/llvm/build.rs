@@ -57,7 +57,7 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
-    TagIdIntType, UnionLayout,
+    STLayoutInterner, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -203,6 +203,7 @@ impl LlvmBackendMode {
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
+    pub layout_interner: &'env STLayoutInterner<'a>,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub dibuilder: &'env DebugInfoBuilder<'ctx>,

@@ -268,7 +268,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match (
-        closure_data_layout.is_represented().is_some(),
+        closure_data_layout
+            .is_represented(env.layout_interner)
+            .is_some(),
         closure_data_layout.runtime_representation(),
     ) {
         (false, _) => {

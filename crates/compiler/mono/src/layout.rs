@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::ThreadLocalInterner;
+use roc_intern::{Interner, SingleThreadedInterner, ThreadLocalInterner};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -97,6 +97,7 @@ macro_rules! inc_stat {
 }
 
 pub type LayoutInterner<'a> = ThreadLocalInterner<'a, Layout<'a>>;
+pub type STLayoutInterner<'a> = SingleThreadedInterner<'a, Layout<'a>>;
 
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
@@ -105,8 +106,7 @@ pub struct LayoutCache<'a> {
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
 
-    #[allow(unused)] // TODO remove me
-    interner: LayoutInterner<'a>,
+    pub(crate) interner: LayoutInterner<'a>,
 
     /// Statistics on the usage of the layout cache.
     #[cfg(debug_assertions)]
@@ -1247,7 +1247,10 @@ impl<'a> LambdaSet<'a> {
         self.set.iter().any(|(s, _)| *s == symbol)
     }
 
-    pub fn is_represented(&self) -> Option<Layout<'a>> {
+    pub fn is_represented<I>(&self, _interner: &I) -> Option<Layout<'a>>
+    where
+        I: Interner<'a, Layout<'a>>,
+    {
         if self.has_unwrapped_capture_repr() {
             Some(*self.representation)
         } else if self.has_enum_dispatch_repr() {

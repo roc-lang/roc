@@ -2136,7 +2136,10 @@ pub fn call_higher_order_lowlevel<'a>(
     let (closure_data_layout, closure_data_exists) =
         match backend.storage.symbol_layouts[captured_environment] {
             Layout::LambdaSet(lambda_set) => {
-                if lambda_set.is_represented().is_some() {
+                if lambda_set
+                    .is_represented(backend.env.layout_interner)
+                    .is_some()
+                {
                     (lambda_set.runtime_representation(), true)
                 } else {
                     // Closure data is a lambda set, which *itself* has no closure data!
