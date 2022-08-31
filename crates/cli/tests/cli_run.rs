@@ -410,7 +410,7 @@ mod cli_run {
         //     expected_ending:"Roc <3 C!\n",
         //     use_valgrind: true,
         // },
-        platformSwitchingRust:"platform-switching/rust-platform" => Example {
+        platformSwitchingRust:"platform-switching" => Example {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
             stdin: &[],
