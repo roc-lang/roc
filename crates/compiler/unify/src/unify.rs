@@ -298,11 +298,24 @@ impl<M: MetaCollector> Outcome<M> {
 
 pub struct Env<'a> {
     pub subs: &'a mut Subs,
+    compute_outcome_only: bool,
 }
 
 impl<'a> Env<'a> {
     pub fn new(subs: &'a mut Subs) -> Self {
-        Self { subs }
+        Self {
+            subs,
+            compute_outcome_only: false,
+        }
+    }
+
+    // Computes a closure in outcome-only mode. Unifications run in outcome-only mode will check
+    // for unifiability, but will not modify type variables or merge them.
+    pub fn with_outcome_only<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.compute_outcome_only = true;
+        let result = f(self);
+        self.compute_outcome_only = false;
+        result
     }
 }
 
@@ -1202,7 +1215,6 @@ fn separate_union_lambdas<M: MetaCollector>(
                             continue 'try_next_right;
                         }
 
-                        let snapshot = env.subs.snapshot();
                         for (var1, var2) in (left_slice.into_iter()).zip(right_slice.into_iter()) {
                             let (var1, var2) = (env.subs[var1], env.subs[var2]);
 
@@ -1216,13 +1228,24 @@ fn separate_union_lambdas<M: MetaCollector>(
                             maybe_mark_union_recursive(env, var1);
                             maybe_mark_union_recursive(env, var2);
 
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
+                            // Check whether the two type variables in the closure set are
+                            // unifiable. If they are, we can unify them and continue on assuming
+                            // that these lambdas are in fact the same.
+                            //
+                            // If they are not unifiable, that means the two lambdas must be
+                            // different (since they have different capture sets), and so we don't
+                            // want to merge the variables.
+                            let variables_are_unifiable = env.with_outcome_only(|env| {
+                                unify_pool::<NoCollector>(env, pool, var1, var2, mode)
+                                    .mismatches
+                                    .is_empty()
+                            });
 
-                            if !outcome.mismatches.is_empty() {
-                                env.subs.rollback_to(snapshot);
+                            if !variables_are_unifiable {
                                 continue 'try_next_right;
                             }
 
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
                             whole_outcome.union(outcome);
                         }
 
@@ -2959,15 +2982,17 @@ fn unify_recursion<M: MetaCollector>(
 }
 
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
-    let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
-    let desc = Descriptor {
-        content,
-        rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
+    if !env.compute_outcome_only {
+        let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
+        let desc = Descriptor {
+            content,
+            rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
 
-    env.subs.union(ctx.first, ctx.second, desc);
+        env.subs.union(ctx.first, ctx.second, desc);
+    }
 
     Outcome::default()
 }
@@ -3063,7 +3088,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
             env.subs.get(ctx.first)
         };
 
-        env.subs.union(ctx.first, ctx.second, desc);
+        outcome.union(merge(env, ctx, desc.content));
     }
 
     outcome
