@@ -3776,6 +3776,14 @@ name = "roc_ident"
 version = "0.0.1"
 
 [[package]]
+name = "roc_intern"
+version = "0.0.1"
+dependencies = [
+ "parking_lot 0.12.1",
+ "roc_collections",
+]
+
+[[package]]
 name = "roc_late_solve"
 version = "0.0.1"
 dependencies = [
