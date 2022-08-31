@@ -1,5 +1,6 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
+use crate::helpers::llvm::assert_llvm_evals_to_debug;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
@@ -58,7 +59,7 @@ fn bool_list_literal() {
     // use both True and False; only using one of them causes the list to in practice be
     // of type `List [True]` or `List [False]`, those are tag unions with one constructor
     // and not fields, and don't have a runtime representation.
-    assert_evals_to!(
+    /*assert_evals_to!(
         indoc!(
             r#"
                false : Bool
@@ -88,9 +89,9 @@ fn bool_list_literal() {
         ),
         RocList::from_slice(&[false; 1]),
         RocList<bool>
-    );
-
-    assert_evals_to!(
+    );*/
+    dbg!("test");
+    assert_llvm_evals_to_debug!(
         indoc!(
             r#"
                true : Bool
@@ -103,7 +104,7 @@ fn bool_list_literal() {
         RocList<bool>
     );
 
-    assert_evals_to!(
+    /*assert_evals_to!(
         indoc!(
             r#"
                true : Bool
@@ -127,7 +128,7 @@ fn bool_list_literal() {
         ),
         RocList::from_slice(&[[true, true, true, true, true, true, true, true]; 23]),
         RocList<[bool; 8]>
-    );
+    );*/
 }
 
 #[test]
