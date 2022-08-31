@@ -510,7 +510,7 @@ fn start_phase<'a>(
                             IdentIds::default(),
                             Subs::default(),
                             ProcsBase::default(),
-                            LayoutCache::new(state.target_info),
+                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
                             ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
@@ -2486,10 +2486,9 @@ fn update<'a>(
                 if state.goal_phase() > Phase::SolveTypes
                     || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
                 {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                    let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info)
+                    });
 
                     let typechecked = TypeCheckedModule {
                         module_id,

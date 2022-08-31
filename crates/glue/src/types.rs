@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, UnionLayout,
+    LayoutCache, LayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -608,7 +608,8 @@ impl<'a> Env<'a> {
     pub fn new(
         arena: &'a Bump,
         subs: &'a Subs,
-        interns: &'a mut Interns,
+        interns: &'a Interns,
+        layout_interner: LayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -619,7 +620,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
-            layout_cache: LayoutCache::new(target),
+            layout_cache: LayoutCache::new(layout_interner, target),
             target,
         }
     }

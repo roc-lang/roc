@@ -181,6 +181,20 @@ impl<'a, K: Hash + Eq> Interner<'a, K> for ThreadLocalInterner<'a, K> {
     }
 }
 
+impl<'a, K> SingleThreadedInterner<'a, K> {
+    /// Promotes the [SingleThreadedInterner] back to a [GlobalInterner].
+    ///
+    /// You should *only* use this if you need to go from a single-threaded to a concurrent context,
+    /// or in a case where you explicitly need access to [ThreadLocalInterner]s.
+    pub fn into_global(self) -> Arc<GlobalInterner<'a, K>> {
+        let SingleThreadedInterner { map, vec } = self;
+        Arc::new(GlobalInterner {
+            map: Mutex::new(map),
+            vec: RwLock::new(vec),
+        })
+    }
+}
+
 impl<'a, K: Hash + Eq> Interner<'a, K> for SingleThreadedInterner<'a, K> {
     fn insert(&mut self, value: &'a K) -> Interned<K> {
         let hash = hash(value);

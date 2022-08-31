@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 roc_std = { path = "../roc_std"}
 roc_can = { path = "../compiler/can" }
+roc_intern = { path = "../compiler/intern" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }

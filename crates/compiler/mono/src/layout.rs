@@ -4,6 +4,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
+use roc_intern::ThreadLocalInterner;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -95,12 +96,17 @@ macro_rules! inc_stat {
     };
 }
 
+pub type LayoutInterner<'a> = ThreadLocalInterner<'a, Layout<'a>>;
+
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
     pub target_info: TargetInfo,
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
+
+    #[allow(unused)] // TODO remove me
+    interner: LayoutInterner<'a>,
 
     /// Statistics on the usage of the layout cache.
     #[cfg(debug_assertions)]
@@ -110,7 +116,7 @@ pub struct LayoutCache<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
-    pub fn new(target_info: TargetInfo) -> Self {
+    pub fn new(interner: LayoutInterner<'a>, target_info: TargetInfo) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
         cache.push(CacheLayer::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
@@ -119,6 +125,8 @@ impl<'a> LayoutCache<'a> {
             target_info,
             cache,
             raw_function_cache: raw_cache,
+
+            interner,
 
             #[cfg(debug_assertions)]
             stats: CacheStatistics::default(),

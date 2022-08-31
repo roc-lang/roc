@@ -1,6 +1,7 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
+use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -77,7 +78,7 @@ pub fn load_types(
         mut type_problems,
         mut declarations_by_id,
         mut solved,
-        mut interns,
+        interns,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -136,17 +137,24 @@ pub fn load_types(
         }
     });
 
-    let types_and_targets = Architecture::iter()
-        .map(|arch| {
-            let target_info = TargetInfo {
-                architecture: arch,
-                operating_system: OperatingSystem::Unix,
-            };
-            let mut env = Env::new(arena, subs, &mut interns, target_info);
+    let layout_interner = GlobalInterner::with_capacity(128);
 
-            (env.vars_to_types(variables.clone()), target_info)
-        })
-        .collect();
+    let architectures = Architecture::iter();
+    let mut types_and_targets = Vec::with_capacity(architectures.len());
+    for arch in architectures {
+        let target_info = TargetInfo {
+            architecture: arch,
+            operating_system: OperatingSystem::Unix,
+        };
+
+        let types = {
+            let mut env = Env::new(arena, subs, &interns, layout_interner.fork(), target_info);
+
+            env.vars_to_types(variables.clone())
+        };
+
+        types_and_targets.push((types, target_info));
+    }
 
     Ok(types_and_targets)
 }
