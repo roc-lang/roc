@@ -62,6 +62,20 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn roc_memcpy(
+    dest: *mut c_void,
+    src: *const c_void,
+    bytes: usize,
+) -> *mut c_void {
+    libc::memcpy(dest, src, bytes)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
+    libc::memset(dst, c, n)
+}
+
 fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let input_dir = PathBuf::from(input_dirname)
         .canonicalize()

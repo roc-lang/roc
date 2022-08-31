@@ -299,10 +299,6 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
-                        "static-site" => {
-                            run_roc_on(&file_name, [LINKER_FLAG, "legacy"], &[], &app_args);
-                            return;
-                        }
                         _ => {}
                     }
 
