@@ -207,6 +207,7 @@ fn verify_procedures<'a>(
 #[cfg(not(debug_assertions))]
 fn verify_procedures(
     _expected: &str,
+    _interner: STLayoutInterner<'_>,
     _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     _main_fn_symbol: Symbol,
 ) {

@@ -1002,6 +1002,7 @@ fn list_clone(
     with_new_heap_cell(builder, block, bag)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lowlevel_spec(
     builder: &mut FuncDefBuilder,
     interner: &STLayoutInterner,
