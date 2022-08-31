@@ -6,6 +6,7 @@ license = "UPL-1.0"
 edition = "2021"
 
 [dependencies]
+fnv = "1.0.7"
 im    = "15.0.0"
 im-rc = "15.0.0"
 wyhash = "0.5.0"

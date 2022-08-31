@@ -2,7 +2,7 @@ use crate::ir::Parens;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_collections::all::{default_hasher, MutMap};
+use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
@@ -65,7 +65,7 @@ impl CacheMeta {
 /// Snapshots are implemented by operating on new layers, and rollbacks by dropping the latest
 /// layer.
 #[derive(Debug)]
-struct CacheLayer<Result>(MutMap<Variable, (Result, CacheMeta)>);
+struct CacheLayer<Result>(FnvMap<Variable, (Result, CacheMeta)>);
 
 impl<Result> Default for CacheLayer<Result> {
     fn default() -> Self {
