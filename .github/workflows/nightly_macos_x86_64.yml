@@ -36,7 +36,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --locked --no-fail-fast
+          args: --release --locked -p test_gen bool_list_literal -- --nocapture
           
       - name: write version to file
         run: ./ci/write_version.sh

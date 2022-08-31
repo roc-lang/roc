@@ -1,6 +1,6 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
-use crate::helpers::llvm::assert_llvm_evals_to_debug;
+use crate::helpers::llvm::do_yoo;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
@@ -90,8 +90,8 @@ fn bool_list_literal() {
         RocList::from_slice(&[false; 1]),
         RocList<bool>
     );*/
-    dbg!("test");
-    assert_llvm_evals_to_debug!(
+    dbg!("testyoo");
+    do_yoo!(
         indoc!(
             r#"
                true : Bool
@@ -100,7 +100,7 @@ fn bool_list_literal() {
                List.repeat true 23
                "#
         ),
-        RocList::from_slice(&[true; 23]),
+        RocList::from_slice(&[true; 22]),
         RocList<bool>
     );
 

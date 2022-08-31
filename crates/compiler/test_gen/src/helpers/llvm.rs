@@ -597,7 +597,7 @@ macro_rules! assert_llvm_evals_to {
 }
 
 #[allow(unused_macros)]
-macro_rules! assert_llvm_evals_to_debug {
+macro_rules! yoo {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
@@ -622,7 +622,10 @@ macro_rules! assert_llvm_evals_to_debug {
             #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
 
-            assert_eq!(&given as &[u8], &expected as &[u8], "LLVM test failed");
+            let given_u8 = given.iter().map(|elt| format!("{:b}", (*elt))).collect::<Vec<String>>();
+            let expected_u8 = expected.iter().map(|elt| format!("{:b}", (*elt))).collect::<Vec<String>>();
+
+            assert_eq!(given_u8, expected_u8, "LLVM test failed");
         };
 
         let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
@@ -685,6 +688,37 @@ macro_rules! assert_evals_to {
 }
 
 #[allow(unused_macros)]
+macro_rules! do_yoo {
+    ($src:expr, $expected:expr, $ty:ty) => {{
+        do_yoo!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
+    }};
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
+        // same as above, except with an additional transformation argument.
+        assert_evals_to!($src, $expected, $ty, $transform, false);
+    }};
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
+        // same as above, except with ignore_problems.
+        #[cfg(feature = "gen-llvm-wasm")]
+        $crate::helpers::llvm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
+
+        #[cfg(not(feature = "gen-llvm-wasm"))]
+        $crate::helpers::llvm::yoo!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
+    }};
+}
+
+#[allow(unused_macros)]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "gen-llvm-wasm")]
@@ -715,9 +749,11 @@ pub fn identity<T>(value: T) -> T {
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
+pub(crate) use do_yoo;
+#[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
-pub(crate) use assert_llvm_evals_to_debug;
+pub(crate) use yoo;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
 #[allow(unused_imports)]
