@@ -1700,7 +1700,7 @@ fn to_scalar_4_byte() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_first() {
+fn str_split_first_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1710,6 +1710,48 @@ fn str_split_first() {
         // the result is a { before, after } record, and because of
         // alphabetic ordering the fields here are flipped
         RocResult::ok((RocStr::from("bar/baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("bar//baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
         RocResult<(RocStr, RocStr), ()>
     );
 }
