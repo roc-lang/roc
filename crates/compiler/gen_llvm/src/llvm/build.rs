@@ -3726,6 +3726,10 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
+        (RocReturn::ByPointer, CCReturn::ByPointer) => {
+            // Both return by pointer but Roc puts it at the end and C puts it at the beginning
+            (&params[1..], &param_types[..param_types.len() - 1])
+        }
         _ => (&params[..], &param_types[..]),
     };
 
@@ -3807,8 +3811,20 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         },
         CCReturn::ByPointer => {
             let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
-
-            env.builder.build_store(out_ptr, value);
+            match roc_return {
+                RocReturn::Return => {
+                    env.builder.build_store(out_ptr, value);
+                }
+                RocReturn::ByPointer => {
+                    // TODO: ideally, in this case, we should pass the C return pointer directly
+                    // into the call_roc_function rather than forcing an extra alloca, load, and
+                    // store!
+                    let value = env
+                        .builder
+                        .build_load(value.into_pointer_value(), "load_roc_result");
+                    env.builder.build_store(out_ptr, value);
+                }
+            }
             env.builder.build_return(None);
         }
         CCReturn::Void => {

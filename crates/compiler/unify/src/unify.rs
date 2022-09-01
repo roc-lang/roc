@@ -159,6 +159,8 @@ pub trait MetaCollector: Default + std::fmt::Debug {
 
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable);
 
+    fn record_changed_variable(&mut self, subs: &Subs, var: Variable);
+
     fn union(&mut self, other: Self);
 }
 
@@ -167,8 +169,13 @@ pub struct NoCollector;
 impl MetaCollector for NoCollector {
     const UNIFYING_SPECIALIZATION: bool = false;
 
+    #[inline(always)]
     fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}
 
+    #[inline(always)]
+    fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, _other: Self) {}
 }
 
@@ -178,10 +185,15 @@ pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
 impl MetaCollector for SpecializationLsetCollector {
     const UNIFYING_SPECIALIZATION: bool = true;
 
+    #[inline(always)]
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
         self.0.insert((member, region), var);
     }
 
+    #[inline(always)]
+    fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, other: Self) {
         for (k, v) in other.0.into_iter() {
             let _old = self.0.insert(k, v);
@@ -332,6 +344,16 @@ pub fn unify_introduced_ability_specialization(
     mode: Mode,
 ) -> Unified<SpecializationLsetCollector> {
     unify_help(env, ability_member_signature, specialization_var, mode)
+}
+
+#[inline(always)]
+pub fn unify_with_collector<M: MetaCollector>(
+    env: &mut Env,
+    var1: Variable,
+    var2: Variable,
+    mode: Mode,
+) -> Unified<M> {
+    unify_help(env, var1, var2, mode)
 }
 
 #[inline(always)]
@@ -2982,6 +3004,8 @@ fn unify_recursion<M: MetaCollector>(
 }
 
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
+    let mut outcome: Outcome<M> = Outcome::default();
+
     if !env.compute_outcome_only {
         let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
         let desc = Descriptor {
@@ -2991,10 +3015,17 @@ pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -
             copy: OptVariable::NONE,
         };
 
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.first);
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.second);
+
         env.subs.union(ctx.first, ctx.second, desc);
     }
 
-    Outcome::default()
+    outcome
 }
 
 fn register(env: &mut Env, desc: Descriptor, pool: &mut Pool) -> Variable {

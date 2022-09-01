@@ -36,6 +36,8 @@ pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
 pub type BumpMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
 pub type BumpSet<K> = hashbrown::HashSet<K, BuildHasher>;
 
+pub type FnvMap<K, V> = fnv::FnvHashMap<K, V>;
+
 pub trait BumpMapDefault<'a> {
     fn new_in(arena: &'a bumpalo::Bump) -> Self;
 

@@ -2669,7 +2669,7 @@ fn update<'a>(
                             ident_ids,
                             subs,
                             module_timing,
-                            layout_cache: _,
+                            layout_cache: _layout_cache,
                             procs_base: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
@@ -2679,6 +2679,11 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+
+                        #[cfg(debug_assertions)]
+                        {
+                            log_layout_stats(module_id, &_layout_cache);
+                        }
                     }
 
                     log!("specializations complete from {:?}", module_id);
@@ -2821,6 +2826,29 @@ fn update<'a>(
             unreachable!();
         }
     }
+}
+
+#[cfg(debug_assertions)]
+fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
+    let (cache_stats, raw_function_cache_stats) = layout_cache.statistics();
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = cache_stats.insertions,
+        hits = cache_stats.hits,
+        misses = cache_stats.misses,
+        non_insertable = cache_stats.non_insertable,
+        non_reusable = cache_stats.non_reusable,
+        "cache stats"
+    );
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = raw_function_cache_stats.insertions,
+        hits = raw_function_cache_stats.hits,
+        misses = raw_function_cache_stats.misses,
+        non_insertable = raw_function_cache_stats.non_insertable,
+        non_reusable = raw_function_cache_stats.non_reusable,
+        "raw function cache stats"
+    );
 }
 
 fn finish_specialization(
