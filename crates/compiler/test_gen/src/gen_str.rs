@@ -1758,7 +1758,7 @@ fn str_split_first_not_found() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_last() {
+fn str_split_last_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1766,6 +1766,48 @@ fn str_split_last() {
             "#
         ),
         RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("baz"), RocStr::from("foo//bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
         RocResult<(RocStr, RocStr), ()>
     );
 }
