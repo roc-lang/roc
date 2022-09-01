@@ -91,11 +91,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
             &module_pairs
                 .clone()
                 .map(|(module, _)| {
-                    let href = {
-                        let mut href_buf = base_url();
-                        href_buf.push_str(module.name.as_str());
-                        href_buf
-                    };
+                    let href = sidebar_link_url(module);
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -135,6 +131,13 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+fn sidebar_link_url(module: &ModuleDocumentation) -> String {
+    let mut href_buf = base_url();
+    href_buf.push_str(module.name.as_str());
+
+    href_buf
 }
 
 // converts plain-text code to highlighted html
@@ -376,21 +379,14 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
     let mut buf = String::new();
 
     for (module, exposed_values) in modules {
+        let href = sidebar_link_url(module);
         let mut sidebar_entry_content = String::new();
-
-        let name = module.name.as_str();
-
-        let href = {
-            let mut href_buf = base_url();
-            href_buf.push_str(name);
-            href_buf
-        };
 
         sidebar_entry_content.push_str(
             html_to_string(
                 "a",
-                vec![("class", "sidebar-module-link"), ("href", href.as_str())],
-                name,
+                vec![("class", "sidebar-module-link"), ("href", &href)],
+                module.name.as_str(),
             )
             .as_str(),
         );
