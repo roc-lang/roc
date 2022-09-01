@@ -304,7 +304,7 @@ firstMatch = \haystack, needle ->
 
 firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
 firstMatchHelp = \haystack, needle, index, lastPossible ->
-    if index < lastPossible then
+    if index <= lastPossible then
         if matchesAt haystack index needle then
             Some index
         else
