@@ -351,6 +351,9 @@ expect Str.splitLast "foo" "o" == Ok { before: "fo", after: "" }
 # splitLast with multi-byte needle
 expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
 
+# splitLast when needle is haystack
+expect Str.splitLast "foo" "foo" == Ok { before: "", after: "" }
+
 lastMatch : Str, Str -> [Some Nat, None]
 lastMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
