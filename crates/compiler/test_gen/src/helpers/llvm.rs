@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use std::path::PathBuf;
 
 use inkwell::module::Module;
@@ -5,8 +6,8 @@ use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -540,13 +541,28 @@ macro_rules! assert_wasm_evals_to {
     };
 }
 
+#[allow(dead_code)]
+pub fn try_run_lib_function<T>(main_fn_name: &str, lib: &libloading::Library) -> Result<T, String> {
+    unsafe {
+        let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
+            .get(main_fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+            .expect("errored");
+
+        let mut main_result = MaybeUninit::uninit();
+        main(main_result.as_mut_ptr());
+
+        main_result.assume_init().into()
+    }
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
-        use roc_gen_llvm::try_run_jit_function;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -561,21 +577,19 @@ macro_rules! assert_llvm_evals_to {
         let (main_fn_name, errors, lib) =
             $crate::helpers::llvm::helper(&arena, config, $src, &context);
 
-        let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-            assert_eq!(&given, &expected, "LLVM test failed");
-        };
-
-        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
+        let result = $crate::helpers::llvm::try_run_lib_function::<$ty>(main_fn_name, &lib);
 
         match result {
             Ok(raw) => {
                 // only if there are no exceptions thrown, check for errors
                 assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
 
-                transform(raw)
+                #[allow(clippy::redundant_closure_call)]
+                let given = $transform(raw);
+                assert_eq!(&given, &$expected, "LLVM test failed");
+
+                // artificially extend the lifetime of `lib`
+                drop(lib);
             }
             Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
         }
