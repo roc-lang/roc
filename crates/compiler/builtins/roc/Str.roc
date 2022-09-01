@@ -294,6 +294,18 @@ splitFirst = \haystack, needle ->
         None ->
             Err NotFound
 
+# splitFirst when needle isn't in haystack
+expect splitFirst "foo" "z" == Err NotFound
+
+# splitFirst when haystack ends with needle repeated
+expect splitFirst "foo" "o" == Ok { before: "f", after: "o" }
+
+# splitFirst with multi-byte needle
+expect splitFirst "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+
+# splitFirst when needle is haystack
+expect splitFirst "foo" "foo" == Ok { before: "", after: "" }
+
 firstMatch : Str, Str -> [Some Nat, None]
 firstMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
