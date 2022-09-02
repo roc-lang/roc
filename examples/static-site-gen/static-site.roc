@@ -3,16 +3,12 @@ app "static-site"
     imports [pf.Html.{ html, head, body, div, text }]
     provides [transformFileContent] to pf
 
-transformFileContent : List U8 -> Result (List U8) Str
+transformFileContent : Str -> Result Str Str
 transformFileContent = \content ->
-    when Str.fromUtf8 content is
-        Err _ -> Err "Invalid UTF-8"
-        Ok contentStr ->
-            contentStr
-            |> view
-            |> Html.render
-            |> Str.toUtf8
-            |> Ok
+    content
+    |> view
+    |> Html.render
+    |> Ok
 
 view : Str -> Html.Node
 view = \content ->

@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocResult, RocStr};
 use std::env;
 use std::ffi::CStr;
 use std::fs;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
-    fn roc_transformFileContentForHost(content: RocList<u8>) -> RocResult<RocList<u8>, RocStr>;
+    fn roc_transformFileContentForHost(content: RocStr) -> RocResult<RocStr, RocStr>;
 }
 
 #[no_mangle]
@@ -117,20 +117,18 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-    let rust_content = match fs::read(input_file) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return Err(format!(
-                "Error reading {}: {}",
-                input_file.to_str().unwrap_or("an input file"),
-                e
-            ));
-        }
-    };
-    let roc_content = RocList::from_iter(rust_content);
+    let rust_content = fs::read_to_string(input_file).map_err(|e| {
+        format!(
+            "Error reading {}: {}",
+            input_file.to_str().unwrap_or("an input file"),
+            e
+        )
+    })?;
+
+    let roc_content = RocStr::from(rust_content.as_str());
     let roc_result = unsafe { roc_transformFileContentForHost(roc_content) };
     match Result::from(roc_result) {
-        Ok(roc_output_bytes) => {
+        Ok(roc_output_str) => {
             let input_relpath = input_file
                 .strip_prefix(input_dir)
                 .map_err(|e| e.to_string())?
@@ -140,8 +138,8 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
             output_relpath.set_extension("html");
 
             let output_file = output_dir.join(&output_relpath);
-            let rust_output_bytes = Vec::from_iter(roc_output_bytes.into_iter());
-            fs::write(&output_file, &rust_output_bytes).map_err(|e| format!("{}", e))?;
+            let rust_output_str: &str = &roc_output_str;
+            fs::write(&output_file, rust_output_str).map_err(|e| format!("{}", e))?;
 
             println!(
                 "{} -> {}",

@@ -1,9 +1,9 @@
 platform "static-site-gen"
-    requires {} { transformFileContent : List U8 -> Result (List U8) Str }
+    requires {} { transformFileContent : Str -> Result Str Str }
     exposes []
     packages {}
     imports []
     provides [transformFileContentForHost]
 
-transformFileContentForHost : List U8 -> Result (List U8) Str
+transformFileContentForHost : Str -> Result Str Str
 transformFileContentForHost = \list -> transformFileContent list
