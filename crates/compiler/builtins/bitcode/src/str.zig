@@ -215,9 +215,12 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
         return @bitCast(isize, self.str_capacity) < 0;
+    }
+
+    test "isSmallStr: returns true for empty string" {
+        try expect(isSmallStr(RocStr.empty()));
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
