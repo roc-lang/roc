@@ -100,8 +100,9 @@ fn bool_list_literal() {
                List.repeat true 23
                "#
         ),
-        RocList::from_slice(&[true; 22]),
-        RocList<bool>
+        RocList::from_slice(&[1u8; 23]),
+        RocList<bool>,
+        |l: RocList<bool>| unsafe { std::mem::transmute::<RocList<bool>, RocList<u8>>(l) }
     );
 
     /*assert_evals_to!(
