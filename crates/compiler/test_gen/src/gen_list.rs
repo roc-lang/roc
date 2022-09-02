@@ -90,7 +90,7 @@ fn bool_list_literal() {
         RocList<bool>
     );
 
-    assert_evals_too!(
+    assert_evals_to!(
         indoc!(
             r#"
                true : Bool
