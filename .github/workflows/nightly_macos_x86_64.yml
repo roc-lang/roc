@@ -36,18 +36,30 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --locked -p test_gen bool_list_literal -- --nocapture
+          args: --release --locked -- --skip opaque_wrap_function --skip bool_list_literal
+          
+      - name: get commit SHA
+        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        
+      - name: get date
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+        
+      - name: build file name
+        env:
+            DATE: ${{ env.DATE }}
+            SHA: ${{ env.SHA }}
+        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
           
       - name: write version to file
         run: ./ci/write_version.sh
         
       - name: package release
-        run: ./ci/package_release.sh roc_nightly-macos_x86_64-date-commit.tar.gz
+        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
         
       - name: Upload artifact. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
-           name: roc_nightly-macos_x86_64-date-commit.tar.gz 
-           path: roc_nightly-macos_x86_64-date-commit.tar.gz
+           name: ${{ env.RELEASE_TAR_FILENAME }}
+           path: ${{ env.RELEASE_TAR_FILENAME }}
            retention-days: 4
 
