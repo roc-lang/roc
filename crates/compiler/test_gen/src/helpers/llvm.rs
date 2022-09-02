@@ -597,66 +597,6 @@ macro_rules! assert_llvm_evals_to {
 }
 
 #[allow(unused_macros)]
-macro_rules! yoo {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        use bumpalo::Bump;
-        use inkwell::context::Context;
-        use roc_gen_llvm::llvm::build::LlvmBackendMode;
-        use roc_gen_llvm::try_run_jit_function;
-
-        let arena = Bump::new();
-        let context = Context::create();
-
-        let config = $crate::helpers::llvm::HelperConfig {
-            mode: LlvmBackendMode::GenTest,
-            add_debug_info: false,
-            ignore_problems: $ignore_problems,
-            opt_level: $crate::helpers::llvm::OPT_LEVEL,
-        };
-
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, config, $src, &context);
-
-        let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-
-            let given_u8 = given.iter().map(|elt| format!("{:?}", std::mem::transmute::<bool, u8>(*elt))).collect::<Vec<String>>();
-            let expected_u8 = expected.iter().map(|elt| format!("{:?}", std::mem::transmute::<bool, u8>(*elt))).collect::<Vec<String>>();
-
-            assert_eq!(given_u8, expected_u8, "LLVM test failed");
-        };
-
-        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
-
-        match result {
-            Ok(raw) => {
-                // only if there are no exceptions thrown, check for errors
-                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
-
-                transform(raw)
-            }
-            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
-        }
-    };
-
-    ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            false
-        );
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-    };
-}
-
-#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
@@ -678,37 +618,6 @@ macro_rules! assert_evals_to {
 
         #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $transform,
-            $ignore_problems
-        );
-    }};
-}
-
-#[allow(unused_macros)]
-macro_rules! do_yoo {
-    ($src:expr, $expected:expr, $ty:ty) => {{
-        do_yoo!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
-    }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
-        // same as above, except with an additional transformation argument.
-        assert_evals_to!($src, $expected, $ty, $transform, false);
-    }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
-        // same as above, except with ignore_problems.
-        #[cfg(feature = "gen-llvm-wasm")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $transform,
-            $ignore_problems
-        );
-
-        #[cfg(not(feature = "gen-llvm-wasm"))]
-        $crate::helpers::llvm::yoo!(
             $src,
             $expected,
             $ty,
@@ -748,8 +657,6 @@ pub fn identity<T>(value: T) -> T {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use do_yoo;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
