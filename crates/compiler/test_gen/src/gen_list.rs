@@ -99,7 +99,7 @@ fn bool_list_literal() {
                List.repeat true 23
                "#
         ),
-        RocList::from_slice(&[1u8; 23]),
+        RocList::from_slice(&[true; 23]),
         RocList<bool>
     );
 
