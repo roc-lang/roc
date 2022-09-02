@@ -17,6 +17,7 @@ members = [
     "crates/compiler/late_solve",
     "crates/compiler/fmt",
     "crates/compiler/derive_key",
+    "crates/compiler/intern",
     "crates/compiler/mono",
     "crates/compiler/alias_analysis",
     "crates/compiler/test_mono",

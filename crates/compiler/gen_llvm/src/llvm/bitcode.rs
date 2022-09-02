@@ -247,7 +247,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument = if layout.is_passed_by_reference(env.target_info) {
+        let argument = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
             env.builder
                 .build_pointer_cast(
                     argument_ptr.into_pointer_value(),
@@ -268,8 +268,10 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match (
-        closure_data_layout.is_represented().is_some(),
-        closure_data_layout.runtime_representation(),
+        closure_data_layout
+            .is_represented(env.layout_interner)
+            .is_some(),
+        closure_data_layout.runtime_representation(env.layout_interner),
     ) {
         (false, _) => {
             // the function doesn't expect a closure argument, nothing to add
@@ -402,7 +404,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-            let value = if layout.is_passed_by_reference(env.target_info) {
+            let value = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 env.builder
                     .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
                     .into()
@@ -590,29 +592,30 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let default = [value1.into(), value2.into()];
 
-            let arguments_cast = match closure_data_layout.runtime_representation() {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => {
-                    // nothing to add
-                    &default
-                }
-                other => {
-                    let closure_type =
-                        basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+            let arguments_cast =
+                match closure_data_layout.runtime_representation(env.layout_interner) {
+                    Layout::Struct {
+                        field_layouts: &[], ..
+                    } => {
+                        // nothing to add
+                        &default
+                    }
+                    other => {
+                        let closure_type =
+                            basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
 
-                    let closure_cast = env
-                        .builder
-                        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                        .into_pointer_value();
+                        let closure_cast = env
+                            .builder
+                            .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                            .into_pointer_value();
 
-                    let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+                        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-                    env.arena
-                        .alloc([value1.into(), value2.into(), closure_data.into()])
-                        as &[_]
-                }
-            };
+                        env.arena
+                            .alloc([value1.into(), value2.into(), closure_data.into()])
+                            as &[_]
+                    }
+                };
 
             let call = env.builder.build_call(
                 roc_function,

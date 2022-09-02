@@ -137,9 +137,10 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 
         let (value, layout) = load_symbol_and_layout(scope, lookup);
 
-        let stack_size = env
-            .ptr_int()
-            .const_int(layout.stack_size(env.target_info) as u64, false);
+        let stack_size = env.ptr_int().const_int(
+            layout.stack_size(env.layout_interner, env.target_info) as u64,
+            false,
+        );
 
         let mut extra_offset = env.builder.build_int_add(offset, stack_size, "offset");
 
@@ -221,7 +222,7 @@ fn build_clone<'a, 'ctx, 'env>(
         Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
         Layout::Union(union_layout) => {
-            if layout.safe_to_memcpy() {
+            if layout.safe_to_memcpy(env.layout_interner) {
                 let ptr = unsafe {
                     env.builder
                         .build_in_bounds_gep(ptr, &[cursors.offset], "at_current_offset")
@@ -255,9 +256,10 @@ fn build_clone<'a, 'ctx, 'env>(
             let source = value.into_pointer_value();
             let value = load_roc_value(env, *inner_layout, source, "inner");
 
-            let inner_width = env
-                .ptr_int()
-                .const_int(inner_layout.stack_size(env.target_info) as u64, false);
+            let inner_width = env.ptr_int().const_int(
+                inner_layout.stack_size(env.layout_interner, env.target_info) as u64,
+                false,
+            );
 
             let new_extra = env
                 .builder
@@ -318,7 +320,7 @@ fn build_clone_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let layout = Layout::struct_no_name_order(field_layouts);
 
-    if layout.safe_to_memcpy() {
+    if layout.safe_to_memcpy(env.layout_interner) {
         build_copy(env, ptr, cursors.offset, value)
     } else {
         let mut cursors = cursors;
@@ -343,9 +345,10 @@ fn build_clone_struct<'a, 'ctx, 'env>(
                 when_recursive,
             );
 
-            let field_width = env
-                .ptr_int()
-                .const_int(field_layout.stack_size(env.target_info) as u64, false);
+            let field_width = env.ptr_int().const_int(
+                field_layout.stack_size(env.layout_interner, env.target_info) as u64,
+                false,
+            );
 
             cursors.extra_offset = new_extra;
             cursors.offset = env
@@ -576,7 +579,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
                 let data = env.builder.build_load(data_ptr, "load_data");
 
-                let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+                let (width, _) =
+                    union_layout.data_size_and_alignment(env.layout_interner, env.target_info);
 
                 let cursors = Cursors {
                     offset: extra_offset,
@@ -618,7 +622,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
             let layout = Layout::struct_no_name_order(fields);
             let basic_type = basic_type_from_layout(env, &layout);
 
-            let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+            let (width, _) =
+                union_layout.data_size_and_alignment(env.layout_interner, env.target_info);
 
             let cursors = Cursors {
                 offset: extra_offset,
@@ -686,7 +691,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     let layout = Layout::struct_no_name_order(fields);
                     let basic_type = basic_type_from_layout(env, &layout);
 
-                    let (width, _) = union_layout.data_size_and_alignment(env.target_info);
+                    let (width, _) =
+                        union_layout.data_size_and_alignment(env.layout_interner, env.target_info);
 
                     let cursors = Cursors {
                         offset: extra_offset,
@@ -776,8 +782,10 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     offset: extra_offset,
                     extra_offset: env.builder.build_int_add(
                         extra_offset,
-                        env.ptr_int()
-                            .const_int(layout.stack_size(env.target_info) as _, false),
+                        env.ptr_int().const_int(
+                            layout.stack_size(env.layout_interner, env.target_info) as _,
+                            false,
+                        ),
                         "new_offset",
                     ),
                 };
@@ -907,12 +915,13 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
             offset = build_copy(env, ptr, offset, len.into());
             offset = build_copy(env, ptr, offset, len.into());
 
-            let (element_width, _element_align) = elem.stack_size_and_alignment(env.target_info);
+            let (element_width, _element_align) =
+                elem.stack_size_and_alignment(env.layout_interner, env.target_info);
             let element_width = env.ptr_int().const_int(element_width as _, false);
 
             let elements_width = bd.build_int_mul(element_width, len, "elements_width");
 
-            if elem.safe_to_memcpy() {
+            if elem.safe_to_memcpy(env.layout_interner) {
                 // NOTE we are not actually sure the dest is properly aligned
                 let dest = pointer_at_offset(bd, ptr, offset);
                 let src = bd.build_pointer_cast(
@@ -936,9 +945,10 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 // if the element has any pointers, we clone them to this offset
                 let rest_offset = bd.build_alloca(env.ptr_int(), "rest_offset");
 
-                let element_stack_size = env
-                    .ptr_int()
-                    .const_int(elem.stack_size(env.target_info) as u64, false);
+                let element_stack_size = env.ptr_int().const_int(
+                    elem.stack_size(env.layout_interner, env.target_info) as u64,
+                    false,
+                );
                 let rest_start_offset = bd.build_int_add(
                     cursors.extra_offset,
                     bd.build_int_mul(len, element_stack_size, "elements_width"),

@@ -14,7 +14,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, Layout, LayoutId, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 mod generic64;
 mod object_builder;
@@ -23,6 +25,7 @@ mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,

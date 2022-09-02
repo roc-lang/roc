@@ -380,7 +380,12 @@ pub fn new_backend_64bit<
         target_info,
         env,
         interns,
-        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
+        helper_proc_gen: CodeGenHelp::new(
+            env.arena,
+            env.layout_interner,
+            target_info,
+            env.module_id,
+        ),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
@@ -806,7 +811,7 @@ impl<
 
         let buf = &mut self.buf;
 
-        let struct_size = return_layout.stack_size(self.target_info);
+        let struct_size = return_layout.stack_size(self.env.layout_interner, self.target_info);
 
         let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
 
@@ -1143,7 +1148,8 @@ impl<
         let index_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, index);
-        let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
+        let ret_stack_size =
+            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
         // TODO: This can be optimized with smarter instructions.
         // Also can probably be moved into storage manager at least partly.
         self.storage_manager.with_tmp_general_reg(
@@ -1185,7 +1191,8 @@ impl<
         let elem_layout = arg_layouts[2];
 
         let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
-        let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
+        let list_alignment = list_layout
+            .alignment_bytes(self.env.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP,
             u32_layout,
@@ -1204,7 +1211,8 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load the elements size.
-        let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
+        let elem_stack_size =
+            elem_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP3,
             u64_layout,
@@ -1214,7 +1222,7 @@ impl<
         // Setup the return location.
         let base_offset = self.storage_manager.claim_stack_area(
             dst,
-            ret_layout.stack_size(self.storage_manager.target_info()),
+            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info()),
         );
 
         let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
@@ -1231,13 +1239,19 @@ impl<
 
         let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
             (
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset
+                    + ret_fields[0]
+                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        as i32,
                 base_offset,
             )
         } else {
             (
                 base_offset,
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset
+                    + ret_fields[0]
+                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        as i32,
             )
         };
 
@@ -1318,10 +1332,15 @@ impl<
         // This requires at least 8 for the refcount alignment.
         let allocation_alignment = std::cmp::max(
             8,
-            elem_layout.allocation_alignment_bytes(self.storage_manager.target_info()) as u64,
+            elem_layout.allocation_alignment_bytes(
+                self.env.layout_interner,
+                self.storage_manager.target_info(),
+            ) as u64,
         );
 
-        let elem_size = elem_layout.stack_size(self.storage_manager.target_info()) as u64;
+        let elem_size = elem_layout
+            .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+            as u64;
         let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
         let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
         self.load_literal(

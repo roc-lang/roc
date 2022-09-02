@@ -5,7 +5,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, UnionLayout};
+use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, STLayoutInterner, UnionLayout};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -34,7 +34,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             field_layouts: sorted_fields,
             ..
         } => basic_type_from_record(env, sorted_fields),
-        LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
+        LambdaSet(lambda_set) => {
+            basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
+        }
         Boxed(inner_layout) => {
             let inner_type = basic_type_from_layout(env, inner_layout);
 
@@ -60,7 +62,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
     match union_layout {
         NonRecursive(tags) => {
             //
-            RocUnion::tagged_from_slices(env.context, tags, env.target_info)
+            RocUnion::tagged_from_slices(env.layout_interner, env.context, tags, env.target_info)
                 .struct_type()
                 .into()
         }
@@ -69,29 +71,45 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
             other_tags: tags, ..
         } => {
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                RocUnion::tagged_from_slices(env.context, tags, env.target_info)
-                    .struct_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .into()
+                RocUnion::tagged_from_slices(
+                    env.layout_interner,
+                    env.context,
+                    tags,
+                    env.target_info,
+                )
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
             } else {
-                RocUnion::untagged_from_slices(env.context, tags, env.target_info)
-                    .struct_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .into()
+                RocUnion::untagged_from_slices(
+                    env.layout_interner,
+                    env.context,
+                    tags,
+                    env.target_info,
+                )
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
             }
         }
-        NullableUnwrapped { other_fields, .. } => {
-            RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info)
-                .struct_type()
-                .ptr_type(AddressSpace::Generic)
-                .into()
-        }
-        NonNullableUnwrapped(fields) => {
-            RocUnion::untagged_from_slices(env.context, &[fields], env.target_info)
-                .struct_type()
-                .ptr_type(AddressSpace::Generic)
-                .into()
-        }
+        NullableUnwrapped { other_fields, .. } => RocUnion::untagged_from_slices(
+            env.layout_interner,
+            env.context,
+            &[other_fields],
+            env.target_info,
+        )
+        .struct_type()
+        .ptr_type(AddressSpace::Generic)
+        .into(),
+        NonNullableUnwrapped(fields) => RocUnion::untagged_from_slices(
+            env.layout_interner,
+            env.context,
+            &[fields],
+            env.target_info,
+        )
+        .struct_type()
+        .ptr_type(AddressSpace::Generic)
+        .into(),
     }
 }
 
@@ -132,13 +150,13 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
 
     match layout {
         LambdaSet(lambda_set) => {
-            argument_type_from_layout(env, &lambda_set.runtime_representation())
+            argument_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
         }
         Union(union_layout) => argument_type_from_union_layout(env, union_layout),
         Builtin(_) => {
             let base = basic_type_from_layout(env, layout);
 
-            if layout.is_passed_by_reference(env.target_info) {
+            if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 base.ptr_type(AddressSpace::Generic).into()
             } else {
                 base
@@ -275,6 +293,7 @@ impl<'ctx> RocUnion<'ctx> {
     }
 
     pub fn tagged_from_slices(
+        interner: &STLayoutInterner,
         context: &'ctx Context,
         layouts: &[&[Layout<'_>]],
         target_info: TargetInfo,
@@ -285,18 +304,19 @@ impl<'ctx> RocUnion<'ctx> {
         };
 
         let (data_width, data_align) =
-            Layout::stack_size_and_alignment_slices(layouts, target_info);
+            Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, Some(tag_type))
     }
 
     pub fn untagged_from_slices(
+        interner: &STLayoutInterner,
         context: &'ctx Context,
         layouts: &[&[Layout<'_>]],
         target_info: TargetInfo,
     ) -> Self {
         let (data_width, data_align) =
-            Layout::stack_size_and_alignment_slices(layouts, target_info);
+            Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, None)
     }
