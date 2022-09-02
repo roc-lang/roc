@@ -259,6 +259,16 @@ fn collect_roc_undefined_symbols<'file, 'data>(
     .collect()
 }
 
+/// Find locations in the code host where an application function is called
+///
+/// The host code (because it was linked with the dummy dynamic library) considers application
+/// functions to be dynamic symbols. Calls to such symbols have a level of indirection: they point
+/// to a table, that the linker will fill with the actual addresses of these functions.
+///
+/// The indirection in every application function call has a cost. Here we collect the actual call
+/// sites, so we can update them with a direct call to the application function later. It's OK if
+/// we miss some because there is the fallback of the indirect call, but we want to do as good a
+/// job as possible
 struct Surgeries<'a> {
     surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
     app_func_addresses: MutMap<u64, &'a str>,
