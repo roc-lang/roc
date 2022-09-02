@@ -1790,20 +1790,85 @@ fn offset_if_uncompressed(range: CompressedFileRange) -> Option<usize> {
 }
 
 fn get_section_offset(exec_obj: &object::File, section_name: &str) -> usize {
-    exec_obj
-        .section_by_name(section_name)
-        .unwrap_or_else(|| {
-            internal_error!("There must be a {} section in the executable", section_name)
-        })
-        .compressed_file_range()
-        .ok()
-        .and_then(offset_if_uncompressed)
-        .unwrap_or_else(|| {
-            internal_error!(
-                "Surgical linking does not work with compressed {} section",
-                section_name
-            )
-        })
+    let compressed = || {
+        internal_error!("Surgical linking does not work with compressed {section_name} section");
+    };
+
+    match exec_obj.section_by_name(section_name) {
+        None => internal_error!("There must be a {section_name} section in the executable"),
+        Some(section) => match section.compressed_file_range() {
+            Err(_) => compressed(),
+            Ok(range) => {
+                if let CompressionFormat::None = range.format {
+                    range.offset as usize
+                } else {
+                    compressed()
+                }
+            }
+        },
+    }
+}
+
+struct DynamicSectionData {
+    dynamic_section_offset: u64,
+    dynamic_lib_count: usize,
+    shared_lib_index: usize,
+}
+
+impl DynamicSectionData {
+    fn parse(exec_obj: &object::File, shared_lib: &Path, exec_data: &[u8], verbose: bool) -> Self {
+        let dyn_offset = get_section_offset(exec_obj, ".dynamic");
+
+        let dynstr_data = exec_obj
+            .section_by_name(".dynstr")
+            .unwrap_or_else(|| internal_error!("There must be a dynstr section in the executable"))
+            .uncompressed_data()
+            .unwrap_or_else(|err| internal_error!("Failed to load dynstr section: {err}"));
+
+        let shared_lib_filename = shared_lib.file_name();
+
+        let mut dyn_lib_index = 0;
+        let mut shared_lib_index = None;
+
+        let it = exec_data[dyn_offset..]
+            .chunks_exact(16)
+            .map(|c| (&c[..8], &c[8..]));
+
+        for (dyn_tag_bytes, offset_bytes) in it {
+            let dyn_tag = u64::from_le_bytes(dyn_tag_bytes.try_into().unwrap());
+
+            match dyn_tag {
+                0 => break,
+                1 => {
+                    // See if it's name is our shared lib filename
+                    let dynstr_offset = u64::from_le_bytes(offset_bytes.try_into().unwrap());
+
+                    let c_buf = dynstr_data[dynstr_offset as usize..].as_ptr() as *const c_char;
+                    let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
+
+                    if Path::new(c_str).file_name() == shared_lib_filename {
+                        shared_lib_index = Some(dyn_lib_index);
+                    }
+                }
+                _ => { /* ignored */ }
+            }
+
+            dyn_lib_index += 1;
+        }
+
+        let shared_lib_index = shared_lib_index
+            .unwrap_or_else(|| panic!("Shared lib not found as a dependency of the executable"));
+
+        if verbose {
+            println!("Found shared lib in dynamic table at index: {shared_lib_index}");
+        }
+
+        Self {
+            dynamic_section_offset: dyn_offset as u64,
+            dynamic_lib_count: dyn_lib_index as usize,
+            shared_lib_index,
+        }
+    }
 }
 
 fn scan_elf_dynamic_deps(
@@ -1814,55 +1879,9 @@ fn scan_elf_dynamic_deps(
     exec_data: &[u8],
     verbose: bool,
 ) -> ElfDynamicDeps {
-    let dyn_offset = get_section_offset(exec_obj, ".dynamic");
+    let dynamic_section = DynamicSectionData::parse(exec_obj, shared_lib, exec_data, verbose);
 
-    md.dynamic_section_offset = dyn_offset as u64;
-
-    let dynstr_data = exec_obj
-        .section_by_name(".dynstr")
-        .unwrap_or_else(|| internal_error!("There must be a dynstr section in the executable"))
-        .uncompressed_data()
-        .unwrap_or_else(|err| internal_error!("Failed to load dynstr section: {}", err));
-
-    let shared_lib_filename = shared_lib.file_name();
-
-    let mut dyn_lib_index = 0;
-    let mut shared_lib_index = None;
-    loop {
-        let start = dyn_offset + dyn_lib_index * 16;
-        let dyn_tag = u64::from_le_bytes(exec_data[start..][..8].try_into().unwrap());
-
-        match dyn_tag {
-            0 => break,
-            1 => {
-                // See if it's name is our shared lib filename
-                let offset_bytes = &exec_data[start + 8..][..8];
-                let dynstr_offset = u64::from_le_bytes(offset_bytes.try_into().unwrap());
-
-                let c_buf = dynstr_data[dynstr_offset as usize..].as_ptr() as *const c_char;
-                let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-
-                if Path::new(c_str).file_name() == shared_lib_filename {
-                    shared_lib_index = Some(dyn_lib_index);
-                    if verbose {
-                        println!(
-                            "Found shared lib in dynamic table at index: {}",
-                            dyn_lib_index
-                        );
-                    }
-                }
-            }
-            _ => { /* ignored */ }
-        }
-
-        dyn_lib_index += 1;
-    }
-    let dynamic_lib_count = dyn_lib_index as usize;
-
-    if shared_lib_index.is_none() {
-        panic!("Shared lib not found as a dependency of the executable");
-    }
-    let shared_lib_index = shared_lib_index.unwrap();
+    md.dynamic_section_offset = dynamic_section.dynamic_section_offset;
 
     let symtab_sec = exec_obj
         .section_by_name(".symtab")
@@ -1924,8 +1943,8 @@ fn scan_elf_dynamic_deps(
     ElfDynamicDeps {
         got_app_syms,
         got_sections,
-        dynamic_lib_count,
-        shared_lib_index,
+        dynamic_lib_count: dynamic_section.dynamic_lib_count,
+        shared_lib_index: dynamic_section.shared_lib_index,
     }
 }
 
