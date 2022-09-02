@@ -660,8 +660,6 @@ pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
-pub(crate) use yoo;
-#[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
 #[allow(unused_imports)]
 pub(crate) use expect_runtime_error_panic;

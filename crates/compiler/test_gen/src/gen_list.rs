@@ -89,7 +89,7 @@ fn bool_list_literal() {
         RocList::from_slice(&[false; 1]),
         RocList<bool>
     );
-    
+
     assert_evals_too!(
         indoc!(
             r#"
