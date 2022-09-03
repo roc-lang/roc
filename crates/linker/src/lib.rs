@@ -2544,13 +2544,6 @@ pub fn surgery_elf(
 
     // First decide on sections locations and then recode every exact symbol locations.
 
-    // Copy sections and resolve their symbols/relocations.
-    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
-    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
-    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
-    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
-    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
-
     // TODO: In the future Roc may use a data section to store memoized toplevel thunks
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
@@ -2571,6 +2564,13 @@ pub fn surgery_elf(
     if text_sections.is_empty() {
         internal_error!("No text sections found. This application has no code.");
     }
+
+    // Copy sections and resolve their symbols/relocations.
+    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
+    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
+    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
+    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
+    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
 
     // Calculate addresses and load symbols.
     // Note, it is important the bss sections come after the rodata sections.
@@ -2914,9 +2914,7 @@ pub fn surgery_elf(
                 LittleEndian,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
-                    None => {
-                        internal_error!("Size missing for: {}", func_name);
-                    }
+                    None => internal_error!("Size missing for: {func_name}"),
                 },
             );
         }
