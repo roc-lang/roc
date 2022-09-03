@@ -2117,13 +2117,17 @@ impl<
                 let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
 
                 // to get sign extension "for free", we move our bits to the left
-                let shift_left_amount = 64 - (int_width.stack_size() as i64 * 8);
+                // so the integers sign bit is stored in the register's sign bit.
+                // Then we arithmetic shift right, getting the correct sign extension behavior,
+                // then shift logical right to get the bits back into the position they should
+                // be for our particular integer width
+                let sign_extend_shift_amount = 64 - (int_width.stack_size() as i64 * 8);
 
-                if shift_left_amount > 0 {
+                if sign_extend_shift_amount > 0 {
                     self.storage_manager.with_tmp_general_reg(
                         buf,
                         |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, shift_left_amount);
+                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
                             ASM::shl_reg64_reg64_reg64(
                                 buf,
                                 storage_manager,
@@ -2143,12 +2147,12 @@ impl<
                     src2_reg,
                 );
 
-                if shift_left_amount > 0 {
+                if sign_extend_shift_amount > 0 {
                     // shift back if needed
                     self.storage_manager.with_tmp_general_reg(
                         &mut self.buf,
                         |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, shift_left_amount);
+                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
                             ASM::shr_reg64_reg64_reg64(
                                 buf,
                                 storage_manager,
