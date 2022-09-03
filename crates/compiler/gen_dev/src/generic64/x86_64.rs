@@ -1652,7 +1652,7 @@ fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     binop_reg64_reg64(0x33, buf, src, dst);
 }
 
-/// `SHL r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+/// `SHL r/m64, CL` -> Multiply r/m64 by 2, CL times.
 #[inline(always)]
 fn shl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_rm_extension(dst, REX_W);
@@ -1662,7 +1662,7 @@ fn shl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     buf.extend(&[rex, 0xD3, 0xC0 | (4 << 3) | dst_mod]);
 }
 
-/// `SHR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+/// `SHR r/m64, CL` -> Unsigned divide r/m64 by 2, CL times.
 #[inline(always)]
 fn shr_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_rm_extension(dst, REX_W);
@@ -1672,7 +1672,7 @@ fn shr_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     buf.extend(&[rex, 0xD3, 0xC0 | (5 << 3) | dst_mod]);
 }
 
-/// `SAR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+/// `SAR r/m64, CL` -> Signed divide r/m64 by 2, CL times.
 #[inline(always)]
 fn sar_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_rm_extension(dst, REX_W);
