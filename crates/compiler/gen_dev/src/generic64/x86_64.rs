@@ -1408,6 +1408,54 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
         seto_reg64(buf, dst);
     }
+
+    fn and_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        if dst == src1 {
+            and_reg64_reg64(buf, dst, src2);
+        } else if dst == src2 {
+            and_reg64_reg64(buf, dst, src1);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            and_reg64_reg64(buf, dst, src2);
+        }
+    }
+
+    fn or_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        if dst == src1 {
+            or_reg64_reg64(buf, dst, src2);
+        } else if dst == src2 {
+            or_reg64_reg64(buf, dst, src1);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            or_reg64_reg64(buf, dst, src2);
+        }
+    }
+
+    fn xor_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        if dst == src1 {
+            xor_reg64_reg64(buf, dst, src2);
+        } else if dst == src2 {
+            xor_reg64_reg64(buf, dst, src1);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            xor_reg64_reg64(buf, dst, src2);
+        }
+    }
 }
 
 impl X86_64Assembler {
@@ -1509,6 +1557,27 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x01, buf, dst, src);
+}
+
+/// `AND r/m64,r64` -> Bitwise logical and r64 to r/m64.
+#[inline(always)]
+fn and_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x23, buf, src, dst);
+}
+
+/// `OR r/m64,r64` -> Bitwise logical or r64 to r/m64.
+#[inline(always)]
+fn or_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x0B, buf, src, dst);
+}
+
+/// `XOR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x33, buf, src, dst);
 }
 
 /// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
@@ -2187,13 +2256,6 @@ fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     } else {
         buf.push(0x50 | reg_mod);
     }
-}
-
-/// `XOR r/m64,r64` -> Xor r64 to r/m64.
-#[inline(always)]
-#[allow(dead_code)]
-fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x31, buf, dst, src);
 }
 
 // When writing tests, it is a good idea to test both a number and unnumbered register.
