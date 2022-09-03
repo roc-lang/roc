@@ -10,7 +10,8 @@ app "static-site"
             meta,
             title,
             link,
-        }, # script, p, ul, li, lang,  },
+            script,
+        },
         pf.Html.Attributes.{
             httpEquiv,
             content,
@@ -20,6 +21,8 @@ app "static-site"
             lang,
             media,
             type,
+            src,
+            lang,
         },
     ]
     provides [transformFileContent] to pf
@@ -32,7 +35,7 @@ transformFileContent = \markdownHtmlText ->
 
 view : Str -> Html.Node
 view = \markdownHtmlText ->
-    html [] [
+    html [lang "en"] [
         head [] [
             meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
             title [] [text "Daring Fireball: Markdown"],
@@ -44,6 +47,8 @@ view = \markdownHtmlText ->
             link [rel "stylesheet", type "text/css", media "print", href "/css/fireball_print.css?v01"] [],
             link [rel "alternate", type "application/atom+xml", href "/feeds/main"] [],
             link [rel "alternate", type "application/json", href "/feeds/json"] [],
+            # script [src "/js/js-global/FancyZoom.js"] [],
+            # script [src "/js/js-global/FancyZoomHTML.js"] [],
         ],
         body [] [
             div [] [
