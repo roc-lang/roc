@@ -13,6 +13,7 @@ use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -670,19 +671,10 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &mut bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
                 }
             }
         }
