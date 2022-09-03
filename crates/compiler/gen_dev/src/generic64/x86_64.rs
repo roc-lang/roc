@@ -916,6 +916,22 @@ fn x86_64_generic_cleanup_stack<'a>(
     X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
 }
 
+type Reg64 = X86_64GeneralReg;
+
+fn binop_move_src_to_dst_reg64<F>(buf: &mut Vec<'_, u8>, f: F, dst: Reg64, src1: Reg64, src2: Reg64)
+where
+    F: FnOnce(&mut Vec<'_, u8>, X86_64GeneralReg, X86_64GeneralReg),
+{
+    if dst == src1 {
+        f(buf, dst, src2);
+    } else if dst == src2 {
+        f(buf, dst, src1);
+    } else {
+        mov_reg64_reg64(buf, dst, src1);
+        f(buf, dst, src2);
+    }
+}
+
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
@@ -954,22 +970,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, src1);
         add_reg64_imm32(buf, dst, imm32);
     }
+
     #[inline(always)]
-    fn add_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            add_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            add_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            add_reg64_reg64(buf, dst, src2);
-        }
+    fn add_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, add_reg64_reg64, dst, src1, src2)
     }
+
     #[inline(always)]
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -1409,52 +1415,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         seto_reg64(buf, dst);
     }
 
-    fn and_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            and_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            and_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            and_reg64_reg64(buf, dst, src2);
-        }
+    fn and_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, and_reg64_reg64, dst, src1, src2)
     }
 
-    fn or_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            or_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            or_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            or_reg64_reg64(buf, dst, src2);
-        }
+    fn or_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, or_reg64_reg64, dst, src1, src2)
     }
 
-    fn xor_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            xor_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            xor_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            xor_reg64_reg64(buf, dst, src2);
-        }
+    fn xor_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, xor_reg64_reg64, dst, src1, src2)
     }
 }
 
@@ -2404,10 +2374,30 @@ mod tests {
     }
 
     #[test]
+    fn test_and_reg64_reg64() {
+        disassembler_test!(
+            and_reg64_reg64,
+            |reg1, reg2| format!("and {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_or_reg64_reg64() {
+        disassembler_test!(
+            or_reg64_reg64,
+            |reg1, reg2| format!("or {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_xor_reg64_reg64() {
         disassembler_test!(
             xor_reg64_reg64,
-            |reg1, reg2| format!("xor {}, {}", reg1, reg2),
+            |reg1, reg2| format!("xor {reg1}, {reg2}"),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
