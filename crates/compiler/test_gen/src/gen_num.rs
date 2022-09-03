@@ -2089,7 +2089,7 @@ fn float_mul_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn shift_left_by() {
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 0", 0b0000_0001, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 1", 0b0000_0010, i64);
@@ -2098,18 +2098,12 @@ fn shift_left_by() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn shift_right_by() {
     // Sign Extended Right Shift
 
     let is_llvm_release_mode = cfg!(feature = "gen-llvm") && !cfg!(debug_assertions);
 
-    // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
-    assert_evals_to!(
-        "Num.shiftRightBy (Num.toI8 0b1100_0000u8) 2",
-        0b1111_0000u8 as i8,
-        i8
-    );
     assert_evals_to!("Num.shiftRightBy 0b0100_0000i8 2", 0b0001_0000i8, i8);
     assert_evals_to!("Num.shiftRightBy 0b1110_0000u8 1", 0b1111_0000u8, u8);
     assert_evals_to!("Num.shiftRightBy 0b1100_0000u8 2", 0b1111_0000u8, u8);
@@ -2144,9 +2138,28 @@ fn shift_right_by() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn shift_right_zf_by() {
     // Logical Right Shift
+    assert_evals_to!("Num.shiftRightZfBy 0b1100_0000u8 2", 0b0011_0000u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b0000_0010u8 1", 0b0000_0001u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b0000_1100u8 2", 0b0000_0011u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 0b1000_0000u8 12", 0b0000_0000u8, u8);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn shift_right_cast_i8() {
+    // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
+
+    // arithmetic
+    assert_evals_to!(
+        "Num.shiftRightBy (Num.toI8 0b1100_0000u8) 2",
+        0b1111_0000u8 as i8,
+        i8
+    );
+
+    // logical
     assert_evals_to!(
         "Num.shiftRightZfBy (Num.toI8 0b1100_0000u8) 2",
         0b0011_0000i8,

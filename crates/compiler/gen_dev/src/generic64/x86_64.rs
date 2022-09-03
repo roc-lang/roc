@@ -1452,6 +1452,82 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn xor_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
         binop_move_src_to_dst_reg64(buf, xor_reg64_reg64, dst, src1, src2)
     }
+
+    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RCX));
+
+        mov_reg64_reg64(buf, dst, src1);
+        mov_reg64_reg64(buf, X86_64GeneralReg::RCX, src2);
+
+        shl_reg64_reg64(buf, dst)
+    }
+
+    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RCX));
+
+        mov_reg64_reg64(buf, dst, src1);
+        mov_reg64_reg64(buf, X86_64GeneralReg::RCX, src2);
+
+        shr_reg64_reg64(buf, dst)
+    }
+
+    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        shift_reg64_reg64_reg64(buf, storage_manager, sar_reg64_reg64, dst, src1, src2)
+    }
+}
+
+fn shift_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    buf: &mut Vec<'a, u8>,
+    storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+    shift_function: fn(buf: &mut Vec<'_, u8>, X86_64GeneralReg),
+    dst: X86_64GeneralReg,
+    src1: X86_64GeneralReg,
+    src2: X86_64GeneralReg,
+) where
+    ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+    CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+{
+    macro_rules! helper {
+        ($buf:expr, $dst:expr, $src1:expr, $src2:expr) => {{
+            mov_reg64_reg64($buf, $dst, $src1);
+            mov_reg64_reg64($buf, X86_64GeneralReg::RCX, $src2);
+
+            shift_function($buf, $dst)
+        }};
+    }
+
+    helper!(buf, dst, src1, src2)
 }
 
 impl X86_64Assembler {
@@ -1574,6 +1650,36 @@ fn or_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gener
 fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     // NOTE: src and dst are flipped by design
     binop_reg64_reg64(0x33, buf, src, dst);
+}
+
+/// `SHL r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn shl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = dst as u8 % 8;
+    buf.extend(&[rex, 0xD3, 0xC0 | (4 << 3) | dst_mod]);
+}
+
+/// `SHR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn shr_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = dst as u8 % 8;
+    buf.extend(&[rex, 0xD3, 0xC0 | (5 << 3) | dst_mod]);
+}
+
+/// `SAR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn sar_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = dst as u8 % 8;
+    buf.extend(&[rex, 0xD3, 0xC0 | (7 << 3) | dst_mod]);
 }
 
 /// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
@@ -2443,6 +2549,33 @@ mod tests {
             xor_reg64_reg64,
             |reg1, reg2| format!("xor {reg1}, {reg2}"),
             ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_shl_reg64_reg64() {
+        disassembler_test!(
+            shl_reg64_reg64,
+            |reg| format!("shl {reg}, cl"),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_shr_reg64_reg64() {
+        disassembler_test!(
+            shr_reg64_reg64,
+            |reg| format!("shr {reg}, cl"),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_sar_reg64_reg64() {
+        disassembler_test!(
+            sar_reg64_reg64,
+            |reg| format!("sar {reg}, cl"),
             ALL_GENERAL_REGS
         );
     }

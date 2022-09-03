@@ -553,6 +553,27 @@ trait Backend<'a> {
                     internal_error!("bitwise xor on a non-integer")
                 }
             }
+            LowLevel::NumShiftLeftBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_left(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift left on a non-integer")
+                }
+            }
+            LowLevel::NumShiftRightBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_right(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift right on a non-integer")
+                }
+            }
+            LowLevel::NumShiftRightZfBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_right_zero_fill(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift right zero-fill on a non-integer")
+                }
+            }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
                 debug_assert_eq!(
@@ -881,6 +902,33 @@ trait Backend<'a> {
 
     /// stores the `src1 ^ src2` into dst.
     fn build_int_bitwise_xor(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `Num.shiftLeftBy src1 src2` into dst.
+    fn build_int_shift_left(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `Num.shiftRightBy src1 src2` into dst.
+    fn build_int_shift_right(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `Num.shiftRightZfBy src1 src2` into dst.
+    fn build_int_shift_right_zero_fill(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
