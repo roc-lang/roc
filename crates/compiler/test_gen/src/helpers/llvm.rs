@@ -95,6 +95,7 @@ fn create_llvm_module<'a>(
         procedures,
         entry_point,
         interns,
+        layout_interner,
         ..
     } = loaded;
 
@@ -211,6 +212,7 @@ fn create_llvm_module<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,

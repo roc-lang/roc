@@ -18,7 +18,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
     UpdateModeId,
 };
-use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout};
+use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout, STLayoutInterner};
 use wasm3::{Environment, Module};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
@@ -141,7 +141,7 @@ struct BackendInputs<'a> {
 }
 
 impl<'a> BackendInputs<'a> {
-    fn new(arena: &'a Bump) -> Self {
+    fn new(arena: &'a Bump, layout_interner: &'a STLayoutInterner<'a>) -> Self {
         // Compile the host from an external source file
         let host_bytes = fs::read(LINKING_TEST_HOST_WASM).unwrap();
         let host_module: WasmModule = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap();
@@ -159,6 +159,7 @@ impl<'a> BackendInputs<'a> {
         exposed_to_host.insert(roc_main_sym);
         let env = Env {
             arena,
+            layout_interner,
             module_id,
             exposed_to_host,
             stack_bytes: Env::DEFAULT_STACK_BYTES,
@@ -226,13 +227,14 @@ fn get_native_result() -> i32 {
 #[test]
 fn test_linking_without_dce() {
     let arena = Bump::new();
+    let layout_interner = STLayoutInterner::with_capacity(4);
 
     let BackendInputs {
         env,
         mut interns,
         host_module,
         procedures,
-    } = BackendInputs::new(&arena);
+    } = BackendInputs::new(&arena, &layout_interner);
 
     let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|i| i.name));
     assert_eq!(
@@ -280,13 +282,14 @@ fn test_linking_without_dce() {
 #[test]
 fn test_linking_with_dce() {
     let arena = Bump::new();
+    let layout_interner = STLayoutInterner::with_capacity(4);
 
     let BackendInputs {
         env,
         mut interns,
         host_module,
         procedures,
-    } = BackendInputs::new(&arena);
+    } = BackendInputs::new(&arena, &layout_interner);
 
     let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|imp| imp.name));
     assert_eq!(

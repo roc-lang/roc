@@ -10,6 +10,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
+use roc_mono::layout::STLayoutInterner;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::{RocList, RocStr, U128};
 
@@ -18,14 +19,16 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
+    let interner = STLayoutInterner::with_capacity(4);
+
     let t = &[Layout::u8()] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
     let target_info = roc_target::TargetInfo::default_x86_64();
-    assert_eq!(layout.alignment_bytes(target_info), 1);
-    assert_eq!(layout.stack_size(target_info), 2);
+    assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
+    assert_eq!(layout.stack_size(&interner, target_info), 2);
 }
 
 #[test]

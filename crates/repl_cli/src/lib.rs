@@ -3,6 +3,8 @@ use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_intern::SingleThreadedInterner;
+use roc_mono::layout::Layout;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -132,9 +134,9 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
-    fn call_function<Return, F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         run_jit_function!(self.lib, main_fn_name, Return, |v| transform(&CliMemory, v))
@@ -145,10 +147,10 @@ impl<'a> ReplApp<'a> for CliApp {
         &mut self,
         main_fn_name: &str,
         ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, |v| transform(
@@ -204,9 +206,17 @@ impl ReplAppMemory for CliMemory {
 pub fn mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
-    loaded: MonomorphizedModule,
+    loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<(libloading::Library, &'a str, Subs), libloading::Error> {
+) -> Result<
+    (
+        libloading::Library,
+        &'a str,
+        Subs,
+        SingleThreadedInterner<'a, Layout<'a>>,
+    ),
+    libloading::Error,
+> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -214,6 +224,7 @@ pub fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
+        layout_interner,
         ..
     } = loaded;
 
@@ -232,6 +243,7 @@ pub fn mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -291,7 +303,8 @@ pub fn mono_module_to_dylib<'a>(
         );
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, main_fn_name, subs))
+    llvm_module_to_dylib(env.module, &target, opt_level)
+        .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }
 
 fn gen_and_eval_llvm<'a>(
@@ -336,7 +349,7 @@ fn gen_and_eval_llvm<'a>(
 
     let interns = loaded.interns.clone();
 
-    let (lib, main_fn_name, subs) =
+    let (lib, main_fn_name, subs, layout_interner) =
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
     let mut app = CliApp { lib };
@@ -349,6 +362,7 @@ fn gen_and_eval_llvm<'a>(
         &content,
         &subs,
         &interns,
+        layout_interner.into_global().fork(),
         target_info,
     );
 

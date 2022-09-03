@@ -396,7 +396,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
+    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -415,6 +415,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
         interns,
+        &layout_interner.into_global(),
         &lib,
         &mut expectations,
         expects,

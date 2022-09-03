@@ -321,6 +321,7 @@ struct ChangedVariableCollector {
 
 impl MetaCollector for ChangedVariableCollector {
     const UNIFYING_SPECIALIZATION: bool = false;
+    const IS_LATE: bool = true;
 
     #[inline(always)]
     fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}

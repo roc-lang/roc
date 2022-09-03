@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, UnionLayout,
+    LayoutCache, LayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -325,7 +325,13 @@ impl Types {
         }
     }
 
-    pub fn add_named(&mut self, name: String, typ: RocType, layout: Layout<'_>) -> TypeId {
+    pub fn add_named<'a>(
+        &mut self,
+        interner: &LayoutInterner<'a>,
+        name: String,
+        typ: RocType,
+        layout: Layout<'a>,
+    ) -> TypeId {
         if let Some(existing_type_id) = self.types_by_name.get(&name) {
             let existing_type = self.get_type(*existing_type_id);
 
@@ -339,7 +345,7 @@ impl Types {
                 );
             }
         } else {
-            let id = self.add_anonymous(typ, layout);
+            let id = self.add_anonymous(interner, typ, layout);
 
             self.types_by_name.insert(name, id);
 
@@ -347,15 +353,21 @@ impl Types {
         }
     }
 
-    pub fn add_anonymous(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
+    pub fn add_anonymous<'a>(
+        &mut self,
+        interner: &LayoutInterner<'a>,
+        typ: RocType,
+        layout: Layout<'a>,
+    ) -> TypeId {
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
 
         self.types.push(typ);
         self.sizes
-            .push(layout.stack_size_without_alignment(self.target));
-        self.aligns.push(layout.alignment_bytes(self.target));
+            .push(layout.stack_size_without_alignment(interner, self.target));
+        self.aligns
+            .push(layout.alignment_bytes(interner, self.target));
 
         id
     }
@@ -608,7 +620,8 @@ impl<'a> Env<'a> {
     pub fn new(
         arena: &'a Bump,
         subs: &'a Subs,
-        interns: &'a mut Interns,
+        interns: &'a Interns,
+        layout_interner: LayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -619,7 +632,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
-            layout_cache: LayoutCache::new(target),
+            layout_cache: LayoutCache::new(layout_interner, target),
             target,
         }
     }
@@ -773,6 +786,7 @@ fn add_type_help<'a>(
 
             let name = format!("TODO_roc_function_{:?}", closure_var);
             let fn_type_id = types.add_named(
+                &env.layout_cache.interner,
                 name.clone(),
                 RocType::Function {
                     name,
@@ -794,9 +808,11 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) => types.add_anonymous(RocType::Unit, layout),
+        Content::Structure(FlatType::EmptyRecord) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+        }
         Content::Structure(FlatType::EmptyTagUnion) => {
-            types.add_anonymous(RocType::EmptyTagUnion, layout)
+            types.add_anonymous(&env.layout_cache.interner, RocType::EmptyTagUnion, layout)
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
@@ -819,7 +835,7 @@ fn add_type_help<'a>(
                             }
                         }
 
-                        types.add_anonymous(RocType::Bool, layout)
+                        types.add_anonymous(&env.layout_cache.interner, RocType::Bool, layout)
                     }
                     Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
                         match union_layout {
@@ -840,8 +856,11 @@ fn add_type_help<'a>(
                                     env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
                                 let err_id = add_type_help(env, err_layout, err_var, None, types);
 
-                                let type_id =
-                                    types.add_anonymous(RocType::RocResult(ok_id, err_id), layout);
+                                let type_id = types.add_anonymous(
+                                    &env.layout_cache.interner,
+                                    RocType::RocResult(ok_id, err_id),
+                                    layout,
+                                );
 
                                 types.depends(type_id, ok_id);
                                 types.depends(type_id, err_id);
@@ -869,7 +888,11 @@ fn add_type_help<'a>(
         Content::RangedNumber(_) => todo!(),
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
-            let type_id = types.add_anonymous(RocType::RecursivePointer(TypeId::PENDING), layout);
+            let type_id = types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::RecursivePointer(TypeId::PENDING),
+                layout,
+            );
 
             // These should be different Variables, but the same layout!
             debug_assert_eq!(
@@ -895,7 +918,7 @@ fn add_builtin_type<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-    layout: Layout<'_>,
+    layout: Layout<'a>,
 ) -> TypeId {
     use Content::*;
     use FlatType::*;
@@ -904,31 +927,87 @@ fn add_builtin_type<'a>(
 
     match (builtin, builtin_type) {
         (Builtin::Int(width), _) => match width {
-            U8 => types.add_anonymous(RocType::Num(RocNum::U8), layout),
-            U16 => types.add_anonymous(RocType::Num(RocNum::U16), layout),
-            U32 => types.add_anonymous(RocType::Num(RocNum::U32), layout),
-            U64 => types.add_anonymous(RocType::Num(RocNum::U64), layout),
-            U128 => types.add_anonymous(RocType::Num(RocNum::U128), layout),
-            I8 => types.add_anonymous(RocType::Num(RocNum::I8), layout),
-            I16 => types.add_anonymous(RocType::Num(RocNum::I16), layout),
-            I32 => types.add_anonymous(RocType::Num(RocNum::I32), layout),
-            I64 => types.add_anonymous(RocType::Num(RocNum::I64), layout),
-            I128 => types.add_anonymous(RocType::Num(RocNum::I128), layout),
+            U8 => types.add_anonymous(&env.layout_cache.interner, RocType::Num(RocNum::U8), layout),
+            U16 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::U16),
+                layout,
+            ),
+            U32 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::U32),
+                layout,
+            ),
+            U64 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::U64),
+                layout,
+            ),
+            U128 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::U128),
+                layout,
+            ),
+            I8 => types.add_anonymous(&env.layout_cache.interner, RocType::Num(RocNum::I8), layout),
+            I16 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::I16),
+                layout,
+            ),
+            I32 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::I32),
+                layout,
+            ),
+            I64 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::I64),
+                layout,
+            ),
+            I128 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::I128),
+                layout,
+            ),
         },
         (Builtin::Float(width), _) => match width {
-            F32 => types.add_anonymous(RocType::Num(RocNum::F32), layout),
-            F64 => types.add_anonymous(RocType::Num(RocNum::F64), layout),
-            F128 => types.add_anonymous(RocType::Num(RocNum::F128), layout),
+            F32 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::F32),
+                layout,
+            ),
+            F64 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::F64),
+                layout,
+            ),
+            F128 => types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::Num(RocNum::F128),
+                layout,
+            ),
         },
-        (Builtin::Decimal, _) => types.add_anonymous(RocType::Num(RocNum::Dec), layout),
-        (Builtin::Bool, _) => types.add_anonymous(RocType::Bool, layout),
-        (Builtin::Str, _) => types.add_anonymous(RocType::RocStr, layout),
+        (Builtin::Decimal, _) => types.add_anonymous(
+            &env.layout_cache.interner,
+            RocType::Num(RocNum::Dec),
+            layout,
+        ),
+        (Builtin::Bool, _) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::Bool, layout)
+        }
+        (Builtin::Str, _) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::RocStr, layout)
+        }
         (Builtin::List(elem_layout), Structure(Apply(Symbol::LIST_LIST, args))) => {
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
             let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
-            let list_id = types.add_anonymous(RocType::RocList(elem_id), layout);
+            let list_id = types.add_anonymous(
+                &env.layout_cache.interner,
+                RocType::RocList(elem_id),
+                layout,
+            );
 
             types.depends(list_id, elem_id);
 
@@ -970,7 +1049,7 @@ fn add_builtin_type<'a>(
 
                     let key_id = add_type_help(env, field_layouts[0], key_var, opt_name, types);
                     let val_id = add_type_help(env, field_layouts[1], val_var, opt_name, types);
-                    let dict_id = types.add_anonymous(RocType::RocDict(key_id, val_id), layout);
+                    let dict_id = types.add_anonymous(&env.layout_cache.interner,RocType::RocDict(key_id, val_id), layout);
 
                     types.depends(dict_id, key_id);
                     types.depends(dict_id, val_id);
@@ -1006,7 +1085,7 @@ fn add_builtin_type<'a>(
                     debug_assert_eq!(field_layouts.len(), 2);
 
                     let elem_id = add_type_help(env, field_layouts[0], elem_var, opt_name, types);
-                    let set_id = types.add_anonymous(RocType::RocSet(elem_id), layout);
+                    let set_id = types.add_anonymous(&env.layout_cache.interner,RocType::RocSet(elem_id), layout);
 
                     types.depends(set_id, elem_id);
 
@@ -1028,12 +1107,12 @@ fn add_builtin_type<'a>(
     }
 }
 
-fn add_struct<I, L, F>(
-    env: &mut Env<'_>,
+fn add_struct<'a, I, L, F>(
+    env: &mut Env<'a>,
     name: String,
     fields: I,
     types: &mut Types,
-    layout: Layout<'_>,
+    layout: Layout<'a>,
     to_type: F,
 ) -> TypeId
 where
@@ -1058,6 +1137,7 @@ where
 
     sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
         cmp_fields(
+            &env.layout_cache.interner,
             label1,
             layout1,
             label2,
@@ -1075,7 +1155,12 @@ where
         })
         .collect::<Vec<(L, TypeId)>>();
 
-    types.add_named(name.clone(), to_type(name, fields), layout)
+    types.add_named(
+        &env.layout_cache.interner,
+        name.clone(),
+        to_type(name, fields),
+        layout,
+    )
 }
 
 fn add_tag_union<'a>(
@@ -1107,7 +1192,9 @@ fn add_tag_union<'a>(
                     let discriminant_size = Discriminant::from_number_of_tags(tags.len())
                         .stack_size()
                         .max(1);
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+                    let discriminant_offset = union_layout
+                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .unwrap();
 
                     RocTagUnion::NonRecursive {
                         name: name.clone(),
@@ -1123,7 +1210,9 @@ fn add_tag_union<'a>(
                         union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     let discriminant_size =
                         Discriminant::from_number_of_tags(tags.len()).stack_size();
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+                    let discriminant_offset = union_layout
+                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .unwrap();
 
                     RocTagUnion::Recursive {
                         name: name.clone(),
@@ -1162,7 +1251,9 @@ fn add_tag_union<'a>(
                         union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
                     let discriminant_size =
                         Discriminant::from_number_of_tags(other_tags.len()).stack_size();
-                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
+                    let discriminant_offset = union_layout
+                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .unwrap();
 
                     // nullable_id refers to the index of the tag that is represented at runtime as NULL.
                     // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
@@ -1268,7 +1359,7 @@ fn add_tag_union<'a>(
     };
 
     let typ = RocType::TagUnion(tag_union_type);
-    let type_id = types.add_named(name, typ, layout);
+    let type_id = types.add_named(&env.layout_cache.interner, name, typ, layout);
 
     if let Some(rec_var) = rec_root {
         env.known_recursive_types.insert(rec_var, type_id);
@@ -1294,13 +1385,13 @@ fn add_int_enumeration(
     }
 }
 
-fn union_tags_to_types(
+fn union_tags_to_types<'a>(
     name: &str,
     union_tags: &UnionLabels<TagName>,
     subs: &Subs,
-    env: &mut Env,
+    env: &mut Env<'a>,
     types: &mut Types,
-    layout: Layout,
+    layout: Layout<'a>,
     is_recursive: bool,
 ) -> Vec<(String, Option<TypeId>)> {
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
@@ -1347,12 +1438,12 @@ fn single_tag_payload_fields<'a>(
     (tag_name, payload_fields)
 }
 
-fn tags_to_types(
+fn tags_to_types<'a>(
     name: &str,
     tags: Vec<(String, Vec<Variable>)>,
-    env: &mut Env,
+    env: &mut Env<'a>,
     types: &mut Types,
-    layout: Layout,
+    layout: Layout<'a>,
     is_recursive: bool,
 ) -> Vec<(String, Option<TypeId>)> {
     tags.into_iter()

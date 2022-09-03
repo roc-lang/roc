@@ -86,7 +86,7 @@ pub struct StorageManager<
 > {
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
-    env: &'a Env<'a>,
+    pub(crate) env: &'a Env<'a>,
     target_info: TargetInfo,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
@@ -541,12 +541,12 @@ impl<
                 let (base_offset, size) = (*base_offset, *size);
                 let mut data_offset = base_offset;
                 for layout in field_layouts.iter().take(index as usize) {
-                    let field_size = layout.stack_size(self.target_info);
+                    let field_size = layout.stack_size(self.env.layout_interner, self.target_info);
                     data_offset += field_size as i32;
                 }
                 debug_assert!(data_offset < base_offset + size as i32);
                 let layout = field_layouts[index as usize];
-                let size = layout.stack_size(self.target_info);
+                let size = layout.stack_size(self.env.layout_interner, self.target_info);
                 self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
@@ -591,8 +591,8 @@ impl<
             UnionLayout::NonRecursive(_) => {
                 let (union_offset, _) = self.stack_offset_and_size(structure);
 
-                let (data_size, data_alignment) =
-                    union_layout.data_size_and_alignment(self.target_info);
+                let (data_size, data_alignment) = union_layout
+                    .data_size_and_alignment(self.env.layout_interner, self.target_info);
                 let id_offset = data_size - data_alignment;
                 let discriminant = union_layout.discriminant();
 
@@ -635,7 +635,7 @@ impl<
         layout: &Layout<'a>,
         fields: &'a [Symbol],
     ) {
-        let struct_size = layout.stack_size(self.target_info);
+        let struct_size = layout.stack_size(self.env.layout_interner, self.target_info);
         if struct_size == 0 {
             self.symbol_storage_map.insert(*sym, NoData);
             return;
@@ -646,7 +646,8 @@ impl<
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
-                let field_size = field_layout.stack_size(self.target_info);
+                let field_size =
+                    field_layout.stack_size(self.env.layout_interner, self.target_info);
                 current_offset += field_size as i32;
             }
         } else {
@@ -667,8 +668,8 @@ impl<
     ) {
         match union_layout {
             UnionLayout::NonRecursive(field_layouts) => {
-                let (data_size, data_alignment) =
-                    union_layout.data_size_and_alignment(self.target_info);
+                let (data_size, data_alignment) = union_layout
+                    .data_size_and_alignment(self.env.layout_interner, self.target_info);
                 let id_offset = data_size - data_alignment;
                 if data_alignment < 8 || data_alignment % 8 != 0 {
                     todo!("small/unaligned tagging");
@@ -679,7 +680,8 @@ impl<
                     fields.iter().zip(field_layouts[tag_id as usize].iter())
                 {
                     self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
-                    let field_size = field_layout.stack_size(self.target_info);
+                    let field_size =
+                        field_layout.stack_size(self.env.layout_interner, self.target_info);
                     current_offset += field_size as i32;
                 }
                 self.with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
@@ -733,16 +735,19 @@ impl<
                 let reg = self.load_to_float_reg(buf, sym);
                 ASM::mov_base32_freg64(buf, to_offset, reg);
             }
-            _ if layout.stack_size(self.target_info) == 0 => {}
+            _ if layout.stack_size(self.env.layout_interner, self.target_info) == 0 => {}
             // TODO: Verify this is always true.
             // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.
             // It is just temporarily storing the value due to needing to free registers.
             // Later, it will be reloaded and stored in refcounted as needed.
-            _ if layout.stack_size(self.target_info) > 8 => {
+            _ if layout.stack_size(self.env.layout_interner, self.target_info) > 8 => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
                 debug_assert!(from_offset % 8 == 0);
                 debug_assert!(size % 8 == 0);
-                debug_assert_eq!(size, layout.stack_size(self.target_info));
+                debug_assert_eq!(
+                    size,
+                    layout.stack_size(self.env.layout_interner, self.target_info)
+                );
                 self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
                     for i in (0..size as i32).step_by(8) {
                         ASM::mov_reg64_base32(buf, reg, from_offset + i);
@@ -1016,7 +1021,7 @@ impl<
                         .insert(*symbol, Rc::new((base_offset, 8)));
                 }
                 _ => {
-                    let stack_size = layout.stack_size(self.target_info);
+                    let stack_size = layout.stack_size(self.env.layout_interner, self.target_info);
                     if stack_size == 0 {
                         self.symbol_storage_map.insert(*symbol, NoData);
                     } else {

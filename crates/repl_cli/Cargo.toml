@@ -27,6 +27,7 @@ roc_build = {path = "../compiler/build"}
 roc_builtins = {path = "../compiler/builtins"}
 roc_collections = {path = "../compiler/collections"}
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
+roc_intern = {path = "../compiler/intern"}
 roc_load = {path = "../compiler/load"}
 roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
