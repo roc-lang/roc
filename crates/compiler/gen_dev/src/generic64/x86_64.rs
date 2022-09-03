@@ -1259,31 +1259,20 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("sign extending 4 byte values");
-        } else if size == 2 {
-            todo!("sign extending 2 byte values");
-        } else if size == 1 {
-            todo!("sign extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for sign extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 | 1 => todo!("sign extending {size} byte values"),
+            _ => internal_error!("Invalid size for sign extension: {size}"),
         }
     }
     #[inline(always)]
     fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("zero extending 4 byte values");
-        } else if size == 2 {
-            todo!("zero extending 2 byte values");
-        } else if size == 1 {
-            movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset);
-        } else {
-            internal_error!("Invalid size for zero extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 => todo!("zero extending {size} byte values"),
+            1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            _ => internal_error!("Invalid size for zero extension: {size}"),
         }
     }
 
