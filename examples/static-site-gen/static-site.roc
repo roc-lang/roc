@@ -3,7 +3,7 @@ app "static-site"
     imports [
         pf.Html.{
              html,
-              head, body, div, text, meta, title}, # link, script, p, ul, li, lang,  },
+              head, body, div, text, meta, title, link}, # script, p, ul, li, lang,  },
         pf.Html.Attributes.{httpEquiv, content, href, rel, color, lang}
     ]
     provides [transformFileContent] to pf
@@ -21,7 +21,7 @@ view = \markdownHtmlText ->
         head [] [
             meta [httpEquiv "content-type" , content "text/html; charset=utf-8" ] [],
             title [] [text "Daring Fireball: Markdown"],
-            link [rel "apple-touch-icon-precomposed" ,href="/graphics/apple-touch-icon.png"] [],
+            link [rel "apple-touch-icon-precomposed", href "/graphics/apple-touch-icon.png"] [],
             link [rel "shortcut icon" , href "/graphics/favicon.ico?v=005"] [],
             link [rel "mask-icon" , href "/graphics/dfstar.svg" , color "#4a525"] [],
             link [rel "stylesheet", type "text/css" media="screen" , href "/css/fireball_screen.css?v1.2022-08-01"] [],
