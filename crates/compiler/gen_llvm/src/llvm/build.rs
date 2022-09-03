@@ -6720,7 +6720,9 @@ impl<'ctx> FunctionSpec<'ctx> {
 pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
     let return_size = layout.stack_size(env.layout_interner, env.target_info);
     let pass_result_by_pointer = match env.target_info.operating_system {
-        roc_target::OperatingSystem::Windows => return_size >= env.target_info.ptr_width() as u32,
+        roc_target::OperatingSystem::Windows => {
+            return_size >= 2 * env.target_info.ptr_width() as u32
+        }
         roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
         roc_target::OperatingSystem::Wasi => unreachable!(),
     };
