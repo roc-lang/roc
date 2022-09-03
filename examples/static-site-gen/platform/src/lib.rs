@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
-    fn roc_transformFileContentForHost(content: RocStr) -> RocResult<RocStr, RocStr>;
+    fn roc_transformFileContentForHost(content: RocStr) -> RocStr;
 }
 
 #[no_mangle]
@@ -126,34 +126,26 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     })?;
 
     let roc_content = RocStr::from(rust_content.as_str());
-    let roc_result = unsafe { roc_transformFileContentForHost(roc_content) };
-    match Result::from(roc_result) {
-        Ok(roc_output_str) => {
-            let input_relpath = input_file
-                .strip_prefix(input_dir)
-                .map_err(|e| e.to_string())?
-                .to_path_buf();
+    let roc_output_str = unsafe { roc_transformFileContentForHost(roc_content) };
 
-            let mut output_relpath = input_relpath.clone();
-            output_relpath.set_extension("html");
+    let input_relpath = input_file
+        .strip_prefix(input_dir)
+        .map_err(|e| e.to_string())?
+        .to_path_buf();
 
-            let output_file = output_dir.join(&output_relpath);
-            let rust_output_str: &str = &roc_output_str;
-            fs::write(&output_file, rust_output_str).map_err(|e| format!("{}", e))?;
+    let mut output_relpath = input_relpath.clone();
+    output_relpath.set_extension("html");
 
-            println!(
-                "{} -> {}",
-                input_relpath.display(),
-                output_relpath.display()
-            );
-            Ok(())
-        }
-        Err(roc_error_str) => Err(format!(
-            "Error transforming {}: {}",
-            input_file.to_str().unwrap_or("an input file"),
-            roc_error_str.as_str()
-        )),
-    }
+    let output_file = output_dir.join(&output_relpath);
+    let rust_output_str: &str = &roc_output_str;
+    fs::write(&output_file, rust_output_str).map_err(|e| format!("{}", e))?;
+
+    println!(
+        "{} -> {}",
+        input_relpath.display(),
+        output_relpath.display()
+    );
+    Ok(())
 }
 
 fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> {
