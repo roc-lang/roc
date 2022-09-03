@@ -81,18 +81,22 @@ stringBody = \mimeType, str ->
 #     Part name (Str.toUtf8 str)
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
+    handleBytesResponse response
+    |> Result.try (\bytes -> Str.fromUtf8 bodyBytes)
+    |> Result.mapErr \BadUtf8 _ pos ->
+        position = Num.toStr pos
+
+        BadBody "Invalid UTF-8 at byte offset \(position)"
+
+handleBytesResponse : Response -> Result List U8 Error
+handleBytesResponse = \response ->
     when response is
         BadRequest err -> Err (BadRequest err)
         Timeout -> Err Timeout
         NetworkError -> Err NetworkError
         BadStatus metadata _ -> Err (BadStatus metadata.statusCode)
-        GoodStatus _ bodyBytes ->
-            Str.fromUtf8 bodyBytes
-            |> Result.mapErr
-                \BadUtf8 _ pos ->
-                    position = Num.toStr pos
+        GoodStatus _ bodyBytes -> Ok bodyBytes
 
-                    BadBody "Invalid UTF-8 at byte offset \(position)"
 
 errorToString : Error -> Str
 errorToString = \err ->
@@ -103,9 +107,68 @@ errorToString = \err ->
         BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)
         BadBody details -> Str.concat "Request failed. Invalid body. " details
 
-send : Request -> Task Str Error [Network [Http]*]*
-send = \req ->
-    # TODO: Fix our C ABI codegen so that we don't this Box.box heap allocation
+send :
+    {
+        method : Str,
+        url : Str,
+        decode :
+            {
+                status : U16,
+                headers : List [Header Str Str ],
+                body : [Body { contentType : Str, content : List U8 }, NoBody],
+            }
+            -> Result ok err,
+        headers ? List [Header Str Str],
+        body ? [Body { contentType : Str, content : List U8 }, NoBody],
+        timeout ? [TimeoutMilliseconds U64, NoTimeout],
+    }
+    -> Task ok (Error err) [Network [Http]*]*
+send = \{ method, url, decode, headers ? [], body ? NoBody, timeout ? NoTimeout } ->
+    req = { method, url, headers, body, timeout }
+    # TODO: Fix our C ABI codegen so that we don't need this Box.box heap allocation
     Effect.sendRequest (Box.box req)
-    |> Effect.map handleStringResponse
+    |> Effect.map decode
     |> InternalTask.fromEffect
+
+
+notify :
+    Str
+    -> {
+        method : Str,
+        url : Str,
+        decode :
+            {
+                status : U16,
+                headers : List [Header Str Str ],
+                body : [Body { contentType : Str, content : List U8 }, NoBody],
+            }
+            -> Result ok err,
+        headers ? List [Header Str Str],
+        body : [Body { contentType : Str, content : List U8 }, NoBody],
+        timeout ? [TimeoutMilliseconds U64, NoTimeout],
+    }
+notify = \str ->
+    decode = \response ->
+        handleBytesResponse response
+        |> Result.try \bytes ->
+            # Could do extra processing here and return an Err if the response
+            # was syntactically valid JSON but the data inside was wrong somehow.
+            Decode.decode bytes Json.fromUtf8
+
+    # probably an authentication token would go here.
+    headers = []
+
+    {
+        method: "POST",
+        url: str,
+        decode,
+        headers,
+        body: NoBody,
+        # don't specify timeout because it's not important to Bugsnag;
+        # defer to the platform's default!
+    }
+
+task : Task BugsnagResponse (Http.Error (BugsnagError *)) [Network [Http]*]*
+task =
+    notify "bugsnag info goes here"
+    |> send

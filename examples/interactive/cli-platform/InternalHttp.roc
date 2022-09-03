@@ -1,28 +1,16 @@
 interface InternalHttp
-    exposes [Request, Method, Header, TimeoutConfig, Part, Body, Response, Metadata, Error]
+    exposes [Request, RequestConfig, Method, Header, TimeoutConfig, Part, Body, Response, Metadata, Error, method]
     imports []
 
 Request : {
-    method : Method,
-    headers : List Header,
+    method : Str,
     url : Str,
-    body : Body,
-    timeout : TimeoutConfig,
+    headers : List [Header Str Str],
+    body : [Body { mimeType : Str, content : List U8 }, NoBody],
+    timeout : [TimeoutMilliseconds U64, NoTimeout],
 }
 
-Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
-
-Header : [Header Str Str]
-
-# Name is distinguished from the Timeout tag used in Response and Error
-TimeoutConfig : [TimeoutMilliseconds U64, NoTimeout]
-
 Part : [Part Str (List U8)]
-
-Body : [
-    Body [MimeType Str] (List U8),
-    EmptyBody,
-]
 
 Response : [
     BadRequest Str,
@@ -39,10 +27,11 @@ Metadata : {
     headers : List Header,
 }
 
-Error : [
+Error responseErr : [
     BadRequest Str,
     Timeout,
     NetworkError,
     BadStatus U16,
     BadBody Str,
-]
+    BadResponse responseErr,
+]responseErr
