@@ -33,8 +33,7 @@ jobs:
         run: |
           curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v13.0.0/LLVM-13.0.0-win64.7z
           7z x LLVM-13.0.0-win64.7z -oC:/LLVM-13.0.0-win64
-          
-      - run: dir C:/LLVM-13.0.0-win64
+          Add-Content $env:GITHUB_PATH "C:/LLVM-13.0.0-win64/bin"
 
-      - name: cargo build
-        run: cargo build --locked --release
+      - name: build tests
+        run: cargo test --no-run --locked --release
