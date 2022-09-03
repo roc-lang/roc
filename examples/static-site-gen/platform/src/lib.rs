@@ -1,8 +1,9 @@
 use core::ffi::c_void;
 use libc;
+use pulldown_cmark::{html, Parser};
 use roc_std::{RocResult, RocStr};
 use std::env;
-use std::ffi::CStr;
+use std::ffi::{CStr, OsStr};
 use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
@@ -117,7 +118,12 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-    let rust_content = fs::read_to_string(input_file).map_err(|e| {
+    match input_file.extension() {
+        Some(s) if s.eq("md".into()) => {}
+        _ => return Err("Only .md files are supported".into()),
+    };
+
+    let content_md = fs::read_to_string(input_file).map_err(|e| {
         format!(
             "Error reading {}: {}",
             input_file.to_str().unwrap_or("an input file"),
@@ -125,8 +131,12 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
         )
     })?;
 
-    let roc_content = RocStr::from(rust_content.as_str());
-    let roc_output_str = unsafe { roc_transformFileContentForHost(roc_content) };
+    let mut content_html = String::new();
+    let parser = Parser::new(&content_md);
+    html::push_html(&mut content_html, parser);
+
+    let roc_content_html = RocStr::from(content_html.as_str());
+    let roc_output_str = unsafe { roc_transformFileContentForHost(roc_content_html) };
 
     let input_relpath = input_file
         .strip_prefix(input_dir)
