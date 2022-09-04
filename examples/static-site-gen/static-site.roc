@@ -59,13 +59,13 @@ view = \markdownHtmlText ->
             meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
             Html.title [] [text "Daring Fireball: Markdown"],
             link [rel "apple-touch-icon-precomposed", href "/graphics/apple-touch-icon.png"] [],
-            link [rel "shortcut icon", href "/graphics/favicon.ico?v=005"] [],
+            link [rel "shortcut icon", href "/favicon.ico"] [],
             link [rel "mask-icon", href "/graphics/dfstar.svg", color "#4a525"] [],
-            link [rel "stylesheet", type "text/css", media "screen", href "/css/fireball_screen.css?v1.2022-08-01"] [],
+            link [rel "stylesheet", type "text/css", media "screen", href "/css/fireball_screen.css"] [],
             link [rel "stylesheet", type "text/css", media "screen", href "/css/ie_sucks.php"] [],
-            link [rel "stylesheet", type "text/css", media "print", href "/css/fireball_print.css?v01"] [],
-            link [rel "alternate", type "application/atom+xml", href "/feeds/main"] [],
-            link [rel "alternate", type "application/json", href "/feeds/json"] [],
+            link [rel "stylesheet", type "text/css", media "print", href "/css/fireball_print.css"] [],
+            # link [rel "alternate", type "application/atom+xml", href "/feeds/main"] [],
+            # link [rel "alternate", type "application/json", href "/feeds/json"] [],
             script [src "/js/js-global/FancyZoom.js"] [],
             script [src "/js/js-global/FancyZoomHTML.js"] [],
         ],
@@ -80,7 +80,7 @@ view = \markdownHtmlText ->
                         [
                             img
                                 [
-                                    src "/graphics/logos/",
+                                    src "/graphics/logo.png",
                                     alt "Daring Fireball",
                                     height "56",
                                 ]
@@ -98,18 +98,15 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/archive/",
+                                    href "https://daringfireball.net/archive/",
                                     title "Previous articles.",
                                 ]
                                 [text "Archive"],
                         ],
-                        li
-                            []
-                            [],
                         li [] [
                             a
                                 [
-                                    href "/thetalkshow/",
+                                    href "https://daringfireball.net/thetalkshow/",
                                     title "America’s favorite 3-star podcast.",
                                 ]
                                 [text "The Talk Show"],
@@ -125,7 +122,7 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/projects/",
+                                    href "https://daringfireball.net/projects/",
                                     title "Software projects, including SmartyPants and Markdown.",
                                 ]
                                 [text "Projects"],
@@ -133,7 +130,7 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/contact/",
+                                    href "https://daringfireball.net/contact/",
                                     title "How to send email or feedback regarding Daring Fireball.",
                                 ]
                                 [text "Contact"],
@@ -141,7 +138,7 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/colophon/",
+                                    href "https://daringfireball.net/colophon/",
                                     title "About this site and the tools used to produce it.",
                                 ]
                                 [text "Colophon"],
@@ -149,7 +146,7 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/feeds/",
+                                    href "https://daringfireball.net/feeds/",
                                 ]
                                 [text "RSS Feed"],
                         ],
@@ -163,7 +160,7 @@ view = \markdownHtmlText ->
                         li [] [
                             a
                                 [
-                                    href "/feeds/sponsors/",
+                                    href "https://daringfireball.net/feeds/sponsors/",
                                 ]
                                 [text "Sponsorship"],
                         ],
@@ -177,7 +174,7 @@ view = \markdownHtmlText ->
                                 img
                                     [
                                         alt "Status Hero",
-                                        src "/martini/images/statushero-c.png",
+                                        src "/graphics/statushero-c.png",
                                         height "90",
                                     ]
                                     [],
@@ -202,7 +199,8 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        class "selected",
+                                        class "selected", # TODO: pass filepath as well as contents
+                                        href "/",
                                         title "Markdown Project Page",
                                     ]
                                     [text "Main"],
@@ -210,7 +208,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/projects/markdown/basics",
+                                        href "/basics",
                                         title "Markdown Basics",
                                     ]
                                     [text "Basics"],
@@ -218,7 +216,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/projects/markdown/syntax",
+                                        href "/syntax",
                                         title "Markdown Syntax Documentation",
                                     ]
                                     [text "Syntax"],
@@ -226,7 +224,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/projects/markdown/license",
+                                        href "/license",
                                         title "Pricing and License Information",
                                     ]
                                     [text "License"],
@@ -234,15 +232,14 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/projects/markdown/dingus",
+                                        href "https://daringfireball.net/projects/markdown/dingus",
                                         title "Online Markdown Web Form",
                                     ]
                                     [text "Dingus"],
                             ],
                         ],
-                        # For now there is no escaping for `text` so we can cheekily insert the HTML from the Markdown file
+                        # For now `text` is not escaped so we can cheekily use it to insert HTML
                         text markdownHtmlText,
-
                     ],
                     div [id "Footer"] [
                         form
@@ -273,16 +270,12 @@ view = \markdownHtmlText ->
                         p [class "smallprint"] [
                             a
                                 [
-                                    href "/preferences/",
+                                    href "https://daringfireball.net/preferences/",
                                     title "Customize the font size and presentation options for this web site.",
                                 ]
                                 [text "Display Preferences"],
-                            br
-                                []
-                                [],
-                            br
-                                []
-                                [],
+                            br [] [],
+                            br [] [],
                             text "Copyright © 2002–2022 The Daring Fireball Company LLC.",
                         ],
                     ],

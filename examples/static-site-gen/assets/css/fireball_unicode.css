@@ -1,0 +1,14 @@
+﻿/* Must be saved with BOM */
+
+.article hr:after {
+	content: "···";
+	letter-spacing: 2em;
+}
+hr.ookiaks:after {
+	content: "··•··";
+	letter-spacing: 2em;
+	}
+hr.ookiaks-jr:after {
+	content: "····";
+	letter-spacing: 2em;
+	}

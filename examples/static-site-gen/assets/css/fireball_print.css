@@ -1,0 +1,167 @@
+/*
+	Daring Fireball Print CSS
+	Copyright (c) 2003 John Gruber; all rights reserved.
+	Mon 02 May 2005
+	
+	Gently inspired by the /print.css file at A List Apart: <http://alistapart.com/>
+*/
+
+body {
+	background: white;
+	color: black;
+	font-size: 12pt;
+	font-family: "Helvetica Neue", Helvetica, Verdana, sans-serif;
+}
+
+p {
+	margin: 0 0 15pt 0;
+	padding: 0px;
+}
+
+#Sidebar {
+	display: block;
+}
+
+#Sidebar ul {
+	display: none;
+}
+
+#SidebarPromo {
+	display: none;
+}
+
+#Main, #MainFullWidth {
+	width: auto;
+	color: black;
+}
+
+.article {
+	margin: 0 0 12pt 0;
+	padding: 0 50pt 4em 35pt;
+	font-size: 9pt;
+	line-height: 1.5em;
+	width: 40em;
+	border-color: #000;
+	border-width: 1pt;
+}
+.article h1 {
+	font-family: Georgia, serif;
+	font-size: 14pt;
+	text-align: left;
+	font-weight: bold;
+	margin: 0 0 .75em 0;
+}
+.article h1 a {
+	text-decoration: none;
+	border: 0;
+}
+.article h2 {
+	font-size: 1em;
+	text-align: left;
+	font-weight: normal;
+	margin: 36pt 0 18pt 0;
+	text-transform: uppercase;
+	letter-spacing: .2em;
+}
+.article h3 h4 h5 h6 {
+	font-size: .9em;
+	text-align: left;
+	font-weight: normal;
+	margin: 24pt 0 0 0;
+	text-transform: uppercase;
+	letter-spacing: .2em;
+}
+
+.article pre {
+	font-family: CourierX, Courier, "Courier New", monospace;
+	font-size: 10pt;
+	line-height: 13pt;
+	margin-left: 2em;
+}
+
+.article blockquote {
+	font-size: 85%;
+	line-height: 1.5em;
+}
+
+.article cite {
+	font-weight: normal;
+	font-style: italic;
+}
+
+.article img {
+	margin-top: 5pt;
+}
+
+a:link, a:visited {
+	color: #333;
+	background: transparent;
+	text-decoration: underline;
+}
+
+code {
+	font-family: CourierX, Courier, "Courier New", monospace;
+	font-size: 90%;
+}
+
+.dateline {
+	font-size: 85%;
+	color: #666;
+	font-weight: normal;
+	text-align: right;
+	width: 100%;
+	background-color: transparent;
+	border-width: 0;
+	margin: 1em 0 0 0;
+	text-transform: uppercase;
+	letter-spacing: .1em;
+}
+
+.smallprint {
+	margin-top: 5pt;
+	font-size: 60%;
+	line-height: 1.3em;
+	text-align: center;
+	background-color: transparent;
+}
+
+.timestamp {
+	font-size: 90%;
+	color: #333;
+	margin-top: 10pt;
+	margin-bottom: 15pt;
+}
+
+.lastline a {
+	text-decoration: none;
+}
+
+.referrerstable {
+	display: none;
+}
+
+.adsense {
+	display: none;
+}
+
+.question {
+	font-style: italic;
+}
+
+.question em {
+	font-style: normal;
+}
+
+.name {
+	position: relative;
+	left: -1.75em;
+	font-size: .9em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	font-style: normal;
+	margin-right: -1.5em; /* Compensate for extra space after positioning */
+}
+
+.interview p {
+	margin-left: 1.75em; /* Should be equivalent to value for .name left: */
+}

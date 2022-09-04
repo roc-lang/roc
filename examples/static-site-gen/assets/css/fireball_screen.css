@@ -1,0 +1,1289 @@
+@charset "utf-8";
+
+/*
+	Daring Fireball CSS
+	Copyright (c) 2022 John Gruber. All rights reserved.
+	If you copy without permission, I will mock you.
+	Layout v. 1.1 / Update 2022-09-02
+*/
+
+@import "/css/fireball_fontsize.php";
+@import "/css/fireball_unicode.css";
+
+html {
+	/* cf. http://www.hicksdesign.co.uk/journal/forcing-scrollbars-now-even-better */
+	height: 100%;
+	margin-bottom: 1px;
+	}
+
+blockquote {
+	font-size: 1em;
+	margin: 2em 2em 2em 1em;
+	padding: 0 .75em 0 1.25em;
+	border-left: 1px solid #777;
+	border-right: 0px solid #777;
+    outline: 0;
+    vertical-align: baseline;
+    background: transparent;
+	}
+
+/* 
+blockquote strong {
+	font-weight: bold;
+	font-size: 1em;
+	letter-spacing: normal;
+	text-transform: none;
+	}
+ */
+
+body {
+	-webkit-text-size-adjust: none;
+	margin-top: 0;
+	padding: 0;
+	font-family: Verdana, system-ui, Helvetica, sans-serif;
+	line-height: 1.8em;
+	color: #fff;
+	text-align: left;
+	min-width: 760px;
+	background-color: #4a525a; /* dark blue slate thing */
+	}
+
+a {
+	text-decoration: none;
+	}
+
+a:link {
+	text-decoration: none;
+	color: #ddd;
+	border-color: #888;
+	border-width: 0 0 1px 0;
+	border-style: none none solid none;
+	padding: 3px 0px 2px 0px;
+	background-color: inherit;
+	}
+
+a:visited {
+	color: #ddd;
+	border-color: #999;
+	border-width: 0 0 1px 0;
+	border-style: none none dotted none;
+	padding: 3px 0px 2px 0px;
+	background-color: inherit;
+	}
+
+a:hover {
+	color: white;
+	text-decoration: none;
+	background-color: #606870;
+	border-color: #606870;
+	}
+
+a em {
+	padding-bottom: 2px; /* Hack for WebKit; otherwise the underscore padding is 0 */
+	}
+
+
+sup {
+	line-height: 0px;
+	}
+sup a:link {
+	padding: 3px;
+	}
+sup a:visited {
+	padding: 3px;
+	}
+
+
+p {
+ 	margin: 0 0 1.6em 0;
+	padding: 0;
+	}
+
+h1 {
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Georgia, serif;
+	font-size: 1.55em; /* was 1.46em for Georgia */
+	line-height: 1.5em;
+	text-align: left;
+	font-weight: normal;
+	margin: 0em 0px 1.25em 0px;
+	}
+
+h2 {
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: 1.05em; /* 1 */
+	text-align: left;
+	font-weight: normal;
+	line-height: 1.8em;
+	letter-spacing: .2em;
+	margin: 4em 0 1em 0;
+	text-transform: uppercase;
+	}
+
+h1 + h2 {
+	margin-top: 2em;
+	}
+h2 + h3 {
+	margin-top: 1.5em;
+	}
+
+h3 {
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: .91em;
+	text-align: left;
+	font-weight: normal;
+	line-height: 1.8em;
+	letter-spacing: .2em;
+	margin-bottom: 1.4em;
+	margin-top: 3em;
+	text-transform: uppercase;
+	}
+
+
+p + h3 {
+	margin-top: 4em;
+	}
+pre + h3 {
+	margin-top: 4em;
+	}
+
+h6 + h2 {
+	margin-top: 2em;
+	}
+
+
+h4, h5, h6 {
+	font-family: Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: 1em;
+	text-align: left;
+	font-weight: bold;
+	line-height: 1.8em;
+	margin: 2em 0 0 0;
+	}
+
+strong {
+	font-weight: normal;
+	font-size: .91em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	}
+
+em em {
+	font-style: normal;
+	}
+
+strong strong {
+	font-weight: bold;
+	}
+
+cite {
+	font-weight: normal;
+	font-style: italic;
+	}
+
+img {
+	margin-top: 5px;
+	max-width: 100%;
+	}
+
+
+thead {
+	font-weight: bold;
+	}
+
+
+div>ul, div>ol {
+	padding-left: 1.25em;
+	margin: 0 0 2em 1em;
+	}
+
+
+pre {
+	font-family: ui-monospace, Menlo, Monaco, monospace;
+	line-height: 1.45em;
+	color: #eee;
+	background-color: inherit;
+	margin: 2em 0 2.5em 0;
+	padding: 5px 0 5px 10px;
+	border-width: 1px 0 1px 0;
+	border-color: #6b6b6b;
+	border-style: dashed;
+	}
+
+code {
+	font-family: ui-monospace, Menlo, Monaco, monospace;
+	font-size: 1em; /* 1.09em for Courier */
+	background-color: #5b636b;
+	padding: 1px 3px;
+	border-radius: 3px;
+	}
+
+
+ul {
+	list-style-type: square;
+	}
+
+ul ul {
+	list-style-type: square;
+	}
+ul ul ul {
+	list-style-type: square;
+	}
+
+hr {
+	margin: 2em 1em 4em 0;
+	text-align: center;
+	border-color: #777;
+	border-width: 0;
+	border-style: dotted;
+	}
+
+hr.ookiaks {
+	color: #bbb;
+	margin: 7em 0 11em 0;
+	padding-right: 2em;
+	height: 0;
+	border-width: 0;
+	background-color: inherit;
+	}
+hr.ookiaks-jr {
+	color: #bbb;
+	background-color: inherit;
+	margin: 1em 0 5em 0;
+	padding-right: 2em;
+	height: 0;
+	border-width: 0;
+	}
+
+/*
+	hr.ookiak:after rule that use content: to display bullets
+	is specified in a separate style sheet, saves as UTF-8 with
+	BOM. That way this main sheet can be saved without BOM.
+*/
+
+fieldset {
+	border: 1px dotted #777;
+	padding: 1em 1em .5em 1em;
+	margin: 0 0 2.5em 0;
+	}
+
+fieldset p {
+	margin-bottom: 0;
+	padding-bottom: 1em;
+	}
+
+legend {
+	color: #aaa;
+	background-color: inherit;
+	font-weight: normal;
+	font-size: .91em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	}
+
+dt {
+	font-family: Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: 1em;
+	text-align: left;
+	font-weight: normal;
+	margin: 0 0 .4em 0;
+	letter-spacing: normal;
+	text-transform: none;
+	}
+dd {
+	margin: auto auto 2.5em 2em;
+	}
+
+dd p {
+	margin: 0 0 1em 0;
+	}
+
+/* 
+::selection {
+	background-color: #73777C;
+	color: white;
+}
+ */
+
+input, select  {
+	font-size: 1em;
+	}
+input[type="text"], input[type="password"]   { background-color: #ddd; }
+
+/*
+input[type="submit"] { background-color: #ccc;  border-width: 1px; }
+*/
+
+select { background-color: #ddd; }
+
+audio {
+	height: 3em;
+	width:  100%;
+}
+
+@media only screen 
+and (min-device-width : 320px) 
+and (max-device-width : 568px) {
+	audio {
+		padding-top: 25px;
+		padding-bottom: 75px;
+	}
+	div > div.media-controls.inline.ios.audio.uses-ltr-user-interface-layout-direction > div {
+		top: 0px !important;
+	}
+}
+
+
+/**** IDs *************************************************************/
+
+#Box {
+	border: 0;
+	width: 720px;
+	height: auto;
+	margin: 0 auto 0 auto;
+	padding: 0;
+	text-align: left;
+	}
+
+
+#Banner {
+	width: 300px;
+	height: auto;
+	border: 0px dotted #606870;
+	padding: 0;
+	margin: 59px 12px 69px 41px;
+	text-align: left;
+	background-color: transparent;
+	line-height: 0px;
+	}
+
+#Banner img {
+	border-width: 0px;
+	}
+
+#Banner img:hover {
+/* 	border: 1px dotted #888; */
+/*	background-color: #575e66;*/
+	background-color: #555e66;
+	}
+
+#Banner a {
+	border-width: 0px;
+	}
+
+#Banner a:hover {
+	background-color: transparent;
+	}
+
+/*** Yogiisms ***/
+#BannerYogi {
+	float: right;
+	margin: -10px -20px 0 0;	/* Regular promos */
+	margin: 0;
+	text-align: right;
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif !important;
+}
+
+#BannerYogi img {
+	border-width: 0px;
+	}
+
+#BannerYogi img:hover {
+	background-color: #555e66;
+	padding-bottom: 20px;
+	}
+
+#BannerYogi a {
+	border-width: 0px;
+	}
+
+#BannerYogi a:hover {
+	background-color: #626a73 !important;
+	}
+
+
+/*** Banner promos: ***/
+
+#BannerPromo {
+	float: right;
+/*	margin: 0 -150px 0 0;		/* New margins for Amazon OS X upgrade promos */
+	margin: -35px -20px 0 0;	/* Regular promos */
+	text-align: right;
+	border: 0px;
+	width: 450px;
+
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	font-weight: normal;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+}
+#BannerPromo img {
+	border-color: #727272;
+	border-width: 0px;  /* was: 1px;   */
+	border-style: solid;
+	margin-left: 0px;
+	}
+#BannerPromo img:hover {
+	background-color: #555e66;
+	}
+#BannerPromo a
+{
+	color: transparent;
+	border-color: transparent;
+	padding-bottom: 0px;
+	border-width: 0px;
+}
+/* Doesn't seem to do anything, use class="no_underlines" instead...
+#BannerPromo a:hover {
+	color: red !important;
+	}
+ */
+#BannerPromo a em {
+	padding-bottom: 3px;
+	}
+#BannerPromo strong {
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	font-weight: normal;
+	}
+
+
+#Main {
+	padding: 0px;
+	border: 0px dotted gray;
+	position: relative; /* Makes text selection hug text column. */
+	margin-left: 222px;
+	margin-right: 0px;
+	margin-bottom: 0px;
+	margin-top: 0px;
+	width: 425px;
+	}
+
+#MainFullWidth {
+	/*
+		Like #Main, but used on pages without #Sidebar; e.g. the Referrers stats page
+	*/
+	padding: 0px;
+	position: relative;
+	border-color: white;
+	border-width: 0px 0px 0px 0px;
+	border-style: solid;
+	margin-left: 50px;
+	margin-right: 0px;
+	margin-bottom: 0px;
+	margin-top: 0px;
+	}
+
+
+#Sidebar {
+	position: absolute;
+	top: 191px;
+	margin: 0 0 0 -222px; /* IE/Win 6 Workaround Hack */
+/*
+	-- Used this instead of the above for Sidebar positioning from Oct 2003 - Feb 2006
+	-- but abandoned it because of the way IE/Win deals with wider-than-425px elements
+	-- with floating:
+	float: left;
+*/
+	width: 160px;
+	height: auto;
+	border: 0px dotted gray;
+	padding: 5px 0 0 0;
+	background-color: transparent;
+	color: #eee;
+	text-align: right;
+/*
+	font-size: .91em;
+*/
+	line-height: 1em;
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	}
+
+
+#Sidebar ul {
+	margin: 0 0 5em -4em;
+	}
+
+#Sidebar li {
+	list-style: none;
+	letter-spacing: 2px;
+	text-transform: uppercase;
+	margin: 0 0 1em 0;
+	padding: 0;
+	}
+
+#Sidebar p {
+	padding: 0;
+	letter-spacing: 2px;
+	margin: 0 0 5em -3em;
+	}
+
+#Sidebar h2 {
+	font-size: 1em;
+	font-weight: normal;
+	margin-bottom: .25em;
+	margin-top: 2em;
+	text-transform: uppercase;
+	letter-spacing: 2px;
+	}
+
+#Sidebar strong {
+	font-size: 1em;
+	font-weight: normal;
+	letter-spacing: 2px;
+	text-transform: uppercase;
+	}
+
+#Sidebar a {
+	color: #eee;
+	padding: 4px 1px 4px 1px;
+	text-decoration: none;
+	}
+#Sidebar a:link {
+	color: #eee;
+	border: 0;
+	}
+#Sidebar a:visited {
+	color: #eee;
+	border: 0;
+	}
+#Sidebar a:hover {
+	color: #fff;
+	}
+
+
+#Splinks {
+	line-height: 1.9em;
+	color: #ccc;
+	margin: 2em 2em 3.5em 0;
+	padding: 3px;
+	border-color: #777;
+	border-width: 1px 0 1px 0;
+	border-style: dotted;
+	}
+#Splinks p {
+	font-size: .91em;
+	text-transform: uppercase;
+	letter-spacing: 3px;
+	margin-bottom: 2px;
+	color: #aaa;
+	}
+#Splinks a {
+	color: #ccc;
+	border-color: #777;
+	padding-top: 2px;
+	padding-bottom: 2px;
+	}
+#Splinks a:hover {
+	border-color: #626a73;
+	color: white;
+	}
+#Splinks a:visited {
+	border-color: #888;
+	}
+#Splinks ul {
+	margin: 0 5px .5em 0;
+	padding: 4px 5px 4px 20px;
+	}
+
+
+/* The Deck */
+
+
+#SidebarMartini {
+	border: 0;
+	margin: 10em 0 0 2em;
+	padding: 0;
+	font-family: Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: 11px;
+	}
+
+#SidebarMartini a:hover {
+	background-color: transparent;
+	}
+
+#SidebarMartini img {
+	border: 0px solid transparent;
+	}
+
+#SidebarMartini img:hover {
+	outline: 2px solid #626a73;
+	}
+
+
+#SidebarMartini p {
+	margin: 8px 0 0 -26px;
+	width: 165px;
+	color: #ccc;
+	letter-spacing: normal;
+	line-height: 1.7em;
+	}
+
+#SidebarMartini p a {
+	padding-bottom: 2px;
+}
+
+#SidebarMartini p a:link {
+	color: #d5d5d5;
+	border-bottom: 1px solid #626a73;
+	}
+#SidebarMartini p a:visited {
+	color: #d5d5d5;
+	border-bottom: 1px solid #626a73;
+	}
+#SidebarMartini p a:hover {
+	background-color: #626a73;
+	color: #eee;
+	}
+
+
+
+#ViaTheDeck {
+	margin-top: 25px !important;
+	}
+#ViaTheDeck a {
+	padding: 5px 0 0 0 !important;
+	border: 0px !important;
+	}
+#ViaTheDeck a:hover {
+	padding: 0;
+	border: 0px !important;
+	background-color: #626a73 !important;
+	}
+#ViaTheDeck img:hover {
+	outline: 0 !important;
+	}
+	
+#ViaTheDeck span { display: none; } /* Hide spans by default on non-retina */
+
+
+/* 2X Retina image replacements */
+@media (-webkit-min-device-pixel-ratio:2) {
+	#ViaTheDeck img { display: none; }
+	#ViaTheDeck a {
+		padding: 0 0 3px 0 !important;
+		}
+	#ViaTheDeck span {
+		padding: 1px 1px 5px 1px;
+		display: inline;
+		font-family: "Gill Sans", Futura, Verdana, sans-serif;
+		font-size: 0.55em;
+		letter-spacing: .2em;
+		text-transform: uppercase;
+		font-weight: normal;
+		color: #d5d5d5;
+	}
+	#ViaTheDeck span:hover {
+		background-color: #626a73;
+	}
+}
+
+
+
+
+
+#SidebarPromo {
+	border: 0;
+	margin-top: 11em; /* Changed tp 3em from 7em 2005-12-27 in response to Safari dupe display bug */
+	padding: 0;
+	font-size: 1.05em;
+	line-height: 1.7em;
+	}
+#SidebarPromo a {
+	display: block;
+	width: 160px;
+	margin: 5px 0 0 0px;
+	text-align: right;
+	color: #ccc;
+	border-color: #777;
+	border-width: 1px 0 1px 0;
+	border-style: dotted;
+	background: transparent;
+	padding: 4px 4px 4px 0;
+}
+#SidebarPromo a:link  {
+	border-color: #777;
+	border-width: 1px 0 1px 0;
+	border-style: dotted;
+	background: transparent;
+	color: #ccc;
+	}
+#SidebarPromo a:visited {
+	border-color: #777;
+	border-width: 1px 0 1px 0;
+	border-style: dotted;
+	background: transparent;
+	color: #ccc;
+	}
+#SidebarPromo a:hover {
+	border-color: #777;
+	border-width: 1px  0  1px  0;
+	border-style: dotted;
+	color: #fff;
+	background: #535c66;
+	}
+#SidebarPromo strong {
+	/* Undo the regular DF strong: */
+	font-weight: normal;
+	font-size: 1em;
+	letter-spacing: normal;
+	text-transform: none;
+	
+	/* Use border-bottom underlining instead: */
+	border-color: #888;
+	border-width: 0 0 1px 0;
+	border-style: none none solid none;
+	padding: 0 0 1px 0;
+}
+
+#Footer {
+	margin-top: 14em;
+	padding-bottom: 1em;
+	text-align: left;
+	background-color: transparent;
+	}
+
+/* ProjectSubmenu: Cribbed from Waferbaby... */
+
+#ProjectSubmenu {
+	list-style: none outside;
+	padding: 0;
+	margin: 2em 0 1em 0;
+	height: 4em; /* Setting a height makes it act like a block */
+	border: 0px dotted #606870;
+	}
+
+#ProjectSubmenu li {
+	display: inline;
+	padding: 0;
+	margin: 0;
+	}
+
+
+#ProjectSubmenu li a,
+#ProjectSubmenu li a:link,
+#ProjectSubmenu li a:visited {
+	text-decoration: none;
+	text-align: center;
+	float: left;
+	display: block;
+	min-width: 45px;
+	padding: 1px 15px 2px 15px;
+	margin: 0;
+	margin-right: -1px;
+	background: transparent;
+	color: #ccc;
+	border-color: #606870;
+	border-width: 1px;
+	border-style: solid;
+	}
+
+#ProjectSubmenu li a.selected,
+#ProjectSubmenu li a.selected:hover {
+	color: #eee;
+	background: #606870;
+	}
+
+#ProjectSubmenu li a:hover {
+	background-color: #535c66;
+	}
+
+#ProjectSubmenu li a:active {
+	color: #eee;
+	background: #606870;
+	}
+
+#PreviousNext {
+	background-color: transparent;
+	padding: 0;
+	margin: 8em 0 0 0;
+	border: 0px dotted gray;
+	color: #aaa;
+	}
+#PreviousNext a:link {
+	color: #ddd;
+}
+#PreviousNext a:visited {
+	color: #ccc;
+}
+
+#prefs {
+	color: #bbb;
+	margin-bottom: 2em;
+	}
+#prefs p {
+	margin: 0;
+	line-height: 2em;
+	}
+
+
+/**** Classes *************************************************************/
+
+.article {
+	background-color: transparent;
+	padding: 0 0 0 0;
+	margin: 0;
+	border-width: 0;
+	border-style: dotted;
+	border-color: gray;
+	color: #eee;
+	}
+
+.article h1 a {
+	color: #eee;
+	text-decoration: none;
+	border: 0;
+	}
+
+.article h1 a:visited {
+	color: #eee;
+	}
+.article img {
+	border: 0px solid #ccc; /* 7 Jan 2011 */
+	}
+.noborder {
+	border: 0px !important;
+}
+
+.bumpleft125 {
+	position: relative; left: -125px; /* /2009/03/safari_4_public_beta */
+}
+
+.archive {
+	background-color: transparent;
+	margin: 0 0 12px 0;
+	padding: 0 0 11em 0;
+	line-height: 2.25em;
+	border-width: 0;
+	color: #eee;
+	}
+
+.archive small {
+	color: #aaa;
+}
+
+.archive p {
+	margin: 0 0 1em 0;
+	padding-left: 2em;
+	text-indent: -2em;
+	line-height: 1.8em;
+	}
+
+.archive a {
+	color: #eee;
+	font-weight: normal;
+	text-decoration: none;
+	border-style: none;
+	}
+
+.headline_list {
+	}
+
+.smallprint {
+	margin-top: 4em;
+	line-height: 1.8em;
+	text-align: left;
+	color: #aaa;
+	}
+.smallprint a:link {
+	color: #ddd;
+	}
+.smallprint a:visited {
+	color: #ddd;
+	}
+
+.timestamp {
+	font-size: 1em;
+	color: #aaa;
+	margin-top: 1em;
+	font-weight: normal;
+	}
+
+.timestamp a {
+	color: #aaa;
+	text-decoration: none;
+	border: 0;
+	}
+.timestamp a:visited { color: #aaa; }
+.timestamp a:hover { color: #fff; }
+
+
+/* Datelines go under article headers: */
+.dateline {
+	font-size: 1em;
+	color: #aaa;
+	margin-top: -.75em;
+	margin-bottom: 1.5em;
+	font-weight: normal;
+	}
+
+.dateline a {
+	color: #aaa;
+	text-decoration: none;
+	border: 0;
+	}
+.dateline a:visited { color: #aaa; }
+.dateline a:hover { color: #fff; }
+h2.dateline {
+	margin: 2em 0 0 0;
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Georgia, serif;
+	}
+dl + h2.dateline {
+	font-size: 0.9em;
+	margin: 8em 0 4em 0;
+	}
+
+
+.stats a {
+	text-decoration: none;
+	border: none;
+	color: #fff;
+	padding: 3px 2px;
+	}
+.stats a:visited {
+	color: #ddd;
+	}
+.stats a:hover {
+	color: #fff;
+	}
+.stats td {
+	white-space: nowrap;
+	padding: 0 5px 0 3px;
+	font-size: 91%;
+	line-height: 1.8em;
+	border-bottom: #666;
+	border-width: 0 0 1px 0;
+	border-style: none none solid none;
+	}
+
+.stats {
+	margin-bottom: 2em;
+	}
+
+.article table {
+	margin-left: 2em;
+	margin-bottom: 2.5em;
+	}
+.article td {
+	padding: 0 1.5em 0 0; /* Used to have 3px padding on left, don't know why. */
+	line-height: 1.6em;
+	border: 0 solid #666;
+	}
+.article th {
+	border-bottom: 0px solid #666;
+	padding: 0 1.5em 0 0;
+	font-weight: normal;
+	font-size: .91em;
+	letter-spacing: .2em;
+	line-height: 1em;
+	text-transform: uppercase;
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	}
+
+
+.extended {
+	font-style: italic;
+	margin-bottom: 1em;
+	}
+
+.question {
+	font-style: italic;
+	}
+
+.question em {
+	font-style: normal;
+	}
+
+.name {
+	font-family: "Gill Sans", Verdana, "Bitstream Vera Sans", sans-serif;
+	position: relative;
+	left: -1.75em;
+	font-size: 1em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	font-style: normal;
+	margin-right: -1.5em; /* Compensate for extra space after positioning */
+	}
+
+.interview p {
+	margin-left: 1.75em; /* Should be equivalent to value for .name left: */
+	}
+
+.interview strong {
+	font-family: "Gill Sans", Verdana, "Bitstream Vera Sans", sans-serif;
+	position: relative;
+	left: -1.75em;
+	font-size: 1em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	font-style: normal;
+	margin-right: -1.5em; /* Compensate for extra space after positioning */
+}	
+
+.interview blockquote p {
+	margin-left: 1.5em; /* Without this, the names (strong) are crossed by the blockquote line */
+	                    /* https://daringfireball.net/linked/2018/07/18/swisher-zuckerberg */
+}
+
+.blockquote-extra-spacing blockquote {
+	margin-top: 3em;
+	}
+
+.blackborder {
+	border-color: #000;
+	border-width: 1px;
+	border-style: solid;
+	}
+
+.plug {
+	margin-top: 120px;
+	}
+
+/**** Promos for the AdSense slot: ****/
+.promo img {
+	border-color: #727272;
+	border-width: 1px;
+	border-style: solid;
+	margin: -40px auto 100px auto;
+	}
+.promo img:hover {
+	border-color: #999;
+	}
+.promo a       { border: 0; background: transparent; }
+.promo a:link  { border: 0; }
+.promo a:hover { border: 0; }
+
+
+
+.caps {
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	font-size: .91em;
+	letter-spacing: .2em;
+	text-transform: uppercase;
+	font-weight: normal;
+}
+
+.photo img {
+	border: 4px solid #eee;
+	}
+
+.thumbnailphoto {
+	background-color: transparent;
+	}
+.thumbnailphoto a {
+	border-width: 0;
+	border-style: none;
+	background-color: transparent;
+	}
+.thumbnailphoto a:hover {
+	border-width: 0;
+	}
+.thumbnailphoto a:link {
+	border-width: 0;
+	}
+.thumbnailphoto a:visited {
+	border-width: 0;
+	}
+.thumbnailphoto img {
+	border: 2px solid #eee;
+	}
+.thumbnailphoto img:hover {
+	border: 2px solid #70787f;
+	}
+
+/**** Linked List ********/
+.article + .article {
+	margin-top: 10em;
+	}
+/*
+.article + .linkedlist {
+	border-top-width: 1px;
+	padding-top: 3em;
+	}
+*/
+.linkedlist {
+	color: #eee;
+	border-width: 0 0 0px 0;
+	border-style: solid;
+	border-color: #666;
+	padding-bottom: 0em;
+	}
+.linkedlist dt {
+	margin-bottom: 1em;
+	margin-top: 2em;
+	font-family: "Gill Sans MT", "Gill Sans", "Gill Sans Std", Verdana, "Bitstream Vera Sans", sans-serif;
+	letter-spacing: .15em;
+	text-transform: uppercase;
+	font-weight: normal;
+	font-size: 1.05em;
+	}
+.linkedlist dt a {
+	padding-top: 2px;
+	padding-bottom: 0px;
+	color: #ccc;
+	}
+.linkedlist dt a:link {
+	border-style: solid;
+	border-color: #72767A;
+	}
+.linkedlist dt a:visited {
+	border-style: dotted;
+	border-color: #72767A;
+	}
+.linkedlist dt a:hover {
+	color: white;
+	}
+.linkedlist dd {
+	margin: auto auto 5em 0em;
+	}
+.linkedlist p {
+	margin: 0 0 1.6em 0;
+	}
+.linkedlist ul {
+	margin: 0 0 1em .5em;
+	}
+.linkedlist ol {
+	margin: 0 0 1em .5em;
+	}
+.linkedlist blockquote {
+	margin: 0 1em 0 0.25em;
+	padding: 0 .75em 0 1em;
+	border-left: 1px solid #777;
+	border-right: 0px solid #777;
+	color: #ddd;
+	}
+.linkedlist blockquote a {
+	color: #ccc;
+	}
+.linkedlist blockquote ol {
+	margin-left: 10px;
+	}
+.linkedlist blockquote ul {
+	margin-left: 10px;
+	}
+
+.linkedlist + .smallprint {
+	margin-top: 150px;
+	}
+.linkedlist + .article {
+	margin-top: 100px;
+	}
+
+.articlelist dt {
+	font-weight: bold;
+	}
+
+.linkedlist a.permalink, a.permalink {
+	color: #bbb;
+	border: 0;
+	padding: 3px 3px 3px 5px; /* left side needs extra padding, don't know why */
+	margin-left: .5em;
+	font-family: "Hiragino Kaku Gothic Pro", "Osaka", "Zapf Dingbats";
+	}
+
+dt:hover a.permalink { color: #eee; }
+h2:hover a.permalink { color: #eee; padding: 3px; }
+h3:hover a.permalink { color: #eee; }
+
+.article a.permalink {
+	color: #bbb;  /* was 606870 -- too low in contrast */
+	}
+.article a.permalink:hover {
+	color: #eee;
+	}
+
+a.no_underlines {
+	border-width: 0;
+	}
+a.no_underlines:hover {
+	background: transparent;
+	}
+
+p.footnotes {
+	font-size: .91em;
+	text-indent: -1em;
+	padding-left: 1em;
+	}
+.footnotes hr {
+	margin-left: 0;
+	margin-bottom: 1.5em;
+	margin-top: 5em;
+	width: 8em;
+	border-style: solid;
+	border-width: 1px 0 0 0;
+	}
+.footnotes hr:after {
+	content: "";
+	}
+.footnotes p {
+	font-size: .91em;
+	}
+a.footnoteBackLink {
+	border: 0;
+	padding: 3px 4px 2px 4px;
+	vertical-align: -.2em;
+	font-size: 1.2em;
+	line-height: 0px;
+	color: #bbb;
+	}
+a.footnoteBackLink:hover {
+	color: #fff;
+	}
+
+.roundrect {
+	-moz-border-radius: 10px;
+	-webkit-border-radius: 10px;
+	}
+.highlightOnHover:hover {
+	background:#555e66;
+}
+
+/* Subtle Scrollbar by Neven Mrgan */
+.subtleScroll::-webkit-scrollbar-track {
+	background-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0,0,0,.02)), to(rgba(0,0,0,0)));
+    border: 1px solid rgba(255,255,255,.15);
+    -webkit-border-radius: 5px;
+}
+
+.subtleScroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+.subtleScroll::-webkit-scrollbar-track-piece:disabled {
+    display: none !important;
+}
+.subtleScroll::-webkit-scrollbar-thumb {
+	background-color: rgba(255,255,255,.4);
+	background-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0,0,0,0)), to(rgba(0,0,0,.2)));
+    border: 0px solid;
+    -webkit-border-radius: 5px;
+}
+.subtleScroll::-webkit-scrollbar-thumb:active {
+	background-color: rgba(255,255,255,.6);
+}
+
+
+
+/* Workaround for ImageZoom white boxes in non-Safari browsers
+	24 Apr 2020 - Commented out. No longer needed? Was interfering
+	with Safari on iOS 13 -- zoomed images were squished.
+ */
+/* 
+#ShadowBox img, #ZoomBox img { margin-top: 0px; }
+ */
+
+
+
+/**** Colors ***************************************************
+
+	Darker 30:			#3e454c;
+						#3f464c;
+	Slate BG:			#4a525a;
+	Adsense BG:			#535c66;
+	SmartyPants BG:		#606870;
+	Link:hover:			#626a73;
+
+	Link:bottom:		#999;
+	AdSense Border:		#727272;
+	Blockquote rule:	#777;
+	Stats Rule:			#666;
+
+****************************************************************/
