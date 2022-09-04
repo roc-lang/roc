@@ -43,7 +43,7 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn create_llvm_module<'a>(
+pub(crate) fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
     config: HelperConfig,
@@ -562,26 +562,35 @@ macro_rules! assert_llvm_evals_to {
             opt_level: $crate::helpers::llvm::OPT_LEVEL,
         };
 
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, config, $src, &context);
+        if false {
+            let (main_fn_name, errors, lib) =
+                $crate::helpers::llvm::helper(&arena, config, $src, &context);
 
-        let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-            assert_eq!(&given, &expected, "LLVM test failed");
-        };
+            let transform = |success| {
+                let expected = $expected;
+                #[allow(clippy::redundant_closure_call)]
+                let given = $transform(success);
+                assert_eq!(&given, &expected, "LLVM test failed");
+            };
 
-        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
+            let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
 
-        match result {
-            Ok(raw) => {
-                // only if there are no exceptions thrown, check for errors
-                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+            match result {
+                Ok(raw) => {
+                    // only if there are no exceptions thrown, check for errors
+                    assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
 
-                transform(raw)
+                    transform(raw)
+                }
+                Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
             }
-            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+        } else {
+            let mut target = target_lexicon::Triple::host();
+
+            target.operating_system = target_lexicon::OperatingSystem::Windows;
+
+            let (_main_fn_name, _delayed_errors, _module) =
+                $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
         }
     };
 
