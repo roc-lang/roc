@@ -154,6 +154,10 @@ fn generate_dynamic_lib(
         }
     }
 
+    // on windows (PE) binary search is used on the symbols,
+    // so they must be in alphabetical order
+    custom_names.sort_unstable();
+
     let bytes = crate::generate_dylib::generate(target, &custom_names)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
@@ -220,6 +224,37 @@ fn collect_roc_undefined_symbols<'file, 'data>(
     .collect()
 }
 
+fn section_address_and_offset<'a>(
+    object: &object::File<'a, &'a [u8]>,
+    section_name: &str,
+) -> (u64, u64) {
+    match object.section_by_name(section_name) {
+        Some(section) => {
+            let file_offset = match section.compressed_file_range() {
+                Ok(
+                    range @ CompressedFileRange {
+                        format: CompressionFormat::None,
+                        ..
+                    },
+                ) => range.offset,
+                _ => {
+                    internal_error!(
+                        "Surgical linking does not work with compressed {} section",
+                        section_name
+                    );
+                }
+            };
+            (section.address(), file_offset)
+        }
+        None => {
+            internal_error!(
+                "Failed to find {} section. Probably an malformed executable.",
+                section_name
+            );
+        }
+    }
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -271,25 +306,9 @@ pub fn preprocess(
             unreachable!()
         }
     };
-    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
-        Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range @ CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    internal_error!("Surgical linking does not work with compressed plt section");
-                }
-            };
-            (section.address(), file_offset)
-        }
-        None => {
-            internal_error!("Failed to find PLT section. Probably an malformed executable.");
-        }
-    };
+
+    let (plt_address, plt_offset) = section_address_and_offset(&exec_obj, plt_section_name);
+
     if verbose {
         println!("PLT Address: {:+x}", plt_address);
         println!("PLT File Offset: {:+x}", plt_offset);
@@ -2904,6 +2923,7 @@ mod tests {
     use super::*;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
+    const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
     #[test]
     fn collect_definitions() {
@@ -2953,6 +2973,29 @@ mod tests {
                 "roc__mainForHost_size"
             ],
             keys.as_slice()
+        )
+    }
+
+    #[test]
+    fn collect_undefined_symbols_pe() {
+        let object = object::File::parse(PE_DYNHOST).unwrap();
+
+        let imports: Vec<_> = object
+            .imports()
+            .unwrap()
+            .iter()
+            .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+            .map(|import| String::from_utf8_lossy(import.name()))
+            .collect();
+
+        assert_eq!(
+            [
+                "roc__mainForHost_1__Fx_caller",
+                "roc__mainForHost_1__Fx_result_size",
+                "roc__mainForHost_1_exposed_generic",
+                "roc__mainForHost_size"
+            ],
+            imports.as_slice(),
         )
     }
 }

@@ -121,11 +121,20 @@ pub fn build_zig_host_native(
         .env("HOME", env_home);
 
     if let Some(shared_lib_path) = shared_lib_path {
+        // with LLVM, the builtins are already part of the roc app,
+        // but with the dev backend, they are missing. To minimize work,
+        // we link them as part of the host executable
+        let builtins_obj = if target.contains("windows") {
+            bitcode::get_builtins_windows_obj_path()
+        } else {
+            bitcode::get_builtins_host_obj_path()
+        };
+
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            &builtins_obj,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -482,15 +491,29 @@ pub fn rebuild_host(
             host_input_path.with_file_name("host.bc")
         }
     } else {
-        host_input_path.with_file_name(if shared_lib_path.is_some() {
-            "dynhost"
+        let os = roc_target::OperatingSystem::from(target.operating_system);
+
+        if shared_lib_path.is_some() {
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "exe",
+                roc_target::OperatingSystem::Unix => "",
+                roc_target::OperatingSystem::Wasi => "",
+            };
+
+            host_input_path
+                .with_file_name("dynhost")
+                .with_extension(extension)
         } else {
-            match roc_target::OperatingSystem::from(target.operating_system) {
-                roc_target::OperatingSystem::Windows => "host.obj",
-                roc_target::OperatingSystem::Unix => "host.o",
-                roc_target::OperatingSystem::Wasi => "host.o",
-            }
-        })
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "obj",
+                roc_target::OperatingSystem::Unix => "o",
+                roc_target::OperatingSystem::Wasi => "o",
+            };
+
+            host_input_path
+                .with_file_name("host")
+                .with_extension(extension)
+        }
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
