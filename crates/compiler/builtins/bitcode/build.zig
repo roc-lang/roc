@@ -42,6 +42,7 @@ pub fn build(b: *Builder) void {
 
     // Generate Object Files
     generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
+    generateObjectFile(b, mode, windows64_target, main_path, "windows-x86_64-object", "builtins-windows-x86_64");
     generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32");
 
     removeInstallSteps(b);

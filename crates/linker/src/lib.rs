@@ -154,6 +154,10 @@ fn generate_dynamic_lib(
         }
     }
 
+    // on windows (PE) binary search is used on the symbols,
+    // so they must be in alphabetical order
+    custom_names.sort_unstable();
+
     let bytes = crate::generate_dylib::generate(target, &custom_names)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
