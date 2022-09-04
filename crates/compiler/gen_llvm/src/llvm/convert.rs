@@ -420,6 +420,10 @@ pub fn zig_str_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ct
     env.module.get_struct_type("str.RocStr").unwrap()
 }
 
+pub fn zig_dec_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
+    env.module.get_struct_type("dec.RocDec").unwrap()
+}
+
 pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::Generic);
 

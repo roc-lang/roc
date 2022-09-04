@@ -311,7 +311,9 @@ pub fn helper<'a>(
     src: &str,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
-    let target = target_lexicon::Triple::host();
+    let mut target = target_lexicon::Triple::host();
+
+    target.operating_system = target_lexicon::OperatingSystem::Windows;
 
     let (main_fn_name, delayed_errors, module) =
         create_llvm_module(arena, src, config, context, &target);

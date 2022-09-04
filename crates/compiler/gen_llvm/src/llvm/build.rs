@@ -65,7 +65,7 @@ use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-use super::convert::{zig_with_overflow_roc_dec, RocUnion};
+use super::convert::{zig_dec_type, zig_with_overflow_roc_dec, RocUnion};
 
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
@@ -7323,39 +7323,89 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn dec_split_into_words<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let left_bits_i128 = env
+        .builder
+        .build_right_shift(value, int_64, false, "left_bits_i128");
+
+    (
+        env.builder.build_int_cast(value, int_64_type, ""),
+        env.builder.build_int_cast(left_bits_i128, int_64_type, ""),
+    )
+}
+
+fn dec_alloca<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let dec_type = zig_dec_type(env);
+
+    let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
+
+    let instruction = alloca.as_instruction_value().unwrap();
+    instruction.set_alignment(16).unwrap();
+
+    let ptr = env.builder.build_pointer_cast(
+        alloca,
+        value.get_type().ptr_type(AddressSpace::Generic),
+        "cast_to_i128_ptr",
+    );
+
+    env.builder.build_store(ptr, value);
+
+    alloca
+}
+
 fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
     let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
+    match env.target_info.operating_system {
+        Windows => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    dec_alloca(env, lhs).into(),
+                    dec_alloca(env, rhs).into(),
+                ],
+                fn_name,
+            );
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            return_alloca.into(),
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
-        ],
-        fn_name,
-    );
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            );
+        }
+        Wasi => unimplemented!(),
+    }
 
     env.builder
         .build_load(return_alloca, "load_dec")
@@ -7371,23 +7421,16 @@ pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
-
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
+    let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+    let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
     call_bitcode_fn(
         env,
         &[
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
+            lhs_low.into(),
+            lhs_high.into(),
+            rhs_low.into(),
+            rhs_high.into(),
         ],
         fn_name,
     )
