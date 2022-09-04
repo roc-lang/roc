@@ -1,9 +1,9 @@
 use core::ffi::c_void;
 use libc;
 use pulldown_cmark::{html, Parser};
-use roc_std::{RocResult, RocStr};
+use roc_std::RocStr;
 use std::env;
-use std::ffi::{CStr, OsStr};
+use std::ffi::CStr;
 use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
@@ -97,20 +97,28 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 
     println!("Processing {} input files...", input_files.len());
 
-    let mut had_errors = false;
-
     // TODO: process the files asynchronously
+    let num_files = input_files.len();
+    let mut num_errors = 0;
+    let mut num_successes = 0;
     for input_file in input_files {
         match process_file(&input_dir, &output_dir, &input_file) {
-            Ok(()) => {}
+            Ok(()) => {
+                num_successes += 1;
+            }
             Err(e) => {
                 eprintln!("{}", e);
-                had_errors = true;
+                num_errors += 1;
             }
         }
     }
 
-    if had_errors {
+    println!(
+        "Processed {} files with {} successes and {} errors",
+        num_files, num_successes, num_errors
+    );
+
+    if num_errors > 0 {
         Err("Could not process all files".into())
     } else {
         Ok(())
@@ -130,8 +138,6 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     let mut output_relpath = input_relpath.clone();
     output_relpath.set_extension("html");
-
-    dbg!(&output_relpath);
 
     let content_md = fs::read_to_string(input_file).map_err(|e| {
         format!(
