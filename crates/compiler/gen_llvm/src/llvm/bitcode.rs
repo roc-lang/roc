@@ -247,22 +247,13 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-            env.builder
-                .build_pointer_cast(
-                    argument_ptr.into_pointer_value(),
-                    basic_type,
-                    "cast_ptr_to_tag_build_transform_caller_help",
-                )
-                .into()
-        } else {
-            let argument_cast = env
-                .builder
-                .build_bitcast(*argument_ptr, basic_type, "load_opaque_1")
-                .into_pointer_value();
+        let cast_ptr = env.builder.build_pointer_cast(
+            argument_ptr.into_pointer_value(),
+            basic_type,
+            "cast_ptr_to_tag_build_transform_caller_help",
+        );
 
-            env.builder.build_load(argument_cast, "load_opaque_2")
-        };
+        let argument = load_roc_value(env, *layout, cast_ptr, "zig_helper_load_opaque");
 
         arguments_cast.push(argument);
     }
@@ -281,10 +272,10 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
             let closure_cast = env
                 .builder
-                .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                .build_bitcast(closure_ptr, closure_type, "cast_opaque_closure")
                 .into_pointer_value();
 
-            let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+            let closure_data = load_roc_value(env, layout, closure_cast, "load_closure");
 
             arguments_cast.push(closure_data);
         }
