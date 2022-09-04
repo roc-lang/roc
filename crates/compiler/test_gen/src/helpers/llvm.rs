@@ -562,35 +562,26 @@ macro_rules! assert_llvm_evals_to {
             opt_level: $crate::helpers::llvm::OPT_LEVEL,
         };
 
-        if false {
-            let (main_fn_name, errors, lib) =
-                $crate::helpers::llvm::helper(&arena, config, $src, &context);
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, config, $src, &context);
 
-            let transform = |success| {
-                let expected = $expected;
-                #[allow(clippy::redundant_closure_call)]
-                let given = $transform(success);
-                assert_eq!(&given, &expected, "LLVM test failed");
-            };
+        let transform = |success| {
+            let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = $transform(success);
+            assert_eq!(&given, &expected, "LLVM test failed");
+        };
 
-            let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
+        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
 
-            match result {
-                Ok(raw) => {
-                    // only if there are no exceptions thrown, check for errors
-                    assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+        match result {
+            Ok(raw) => {
+                // only if there are no exceptions thrown, check for errors
+                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
 
-                    transform(raw)
-                }
-                Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+                transform(raw)
             }
-        } else {
-            let mut target = target_lexicon::Triple::host();
-
-            target.operating_system = target_lexicon::OperatingSystem::Windows;
-
-            let (_main_fn_name, _delayed_errors, _module) =
-                $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
+            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
         }
     };
 
@@ -608,6 +599,14 @@ macro_rules! assert_llvm_evals_to {
         $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
+
+// windows testing code
+//   let mut target = target_lexicon::Triple::host();
+//
+//   target.operating_system = target_lexicon::OperatingSystem::Windows;
+//
+//   let (_main_fn_name, _delayed_errors, _module) =
+//       $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
 
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
