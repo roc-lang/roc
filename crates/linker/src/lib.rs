@@ -90,7 +90,12 @@ pub fn build_and_preprocess_host(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
-    let dummy_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+    let is_windows = matches!(
+        target.operating_system,
+        target_lexicon::OperatingSystem::Windows
+    );
+
+    let dummy_lib = if is_windows {
         host_input_path.with_file_name("libapp.obj")
     } else {
         host_input_path.with_file_name("libapp.so")
@@ -98,9 +103,16 @@ pub fn build_and_preprocess_host(
 
     generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
-    let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
     // let prehost = host_input_path.with_file_name("preprocessedhost");
+
+    let dynhost = if is_windows {
+        host_input_path
+            .with_file_name("dynhost")
+            .with_extension("exe")
+    } else {
+        host_input_path.with_file_name("dynhost")
+    };
 
     preprocess(
         target,
