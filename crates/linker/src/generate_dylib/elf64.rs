@@ -1,19 +1,5 @@
 use object::{elf, Endianness};
 
-pub const fn round_up_to_alignment(width: usize, alignment: usize) -> usize {
-    match alignment {
-        0 => width,
-        1 => width,
-        _ => {
-            if width % alignment > 0 {
-                width + alignment - (width % alignment)
-            } else {
-                width
-            }
-        }
-    }
-}
-
 pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     let endian = Endianness::Little;
 
@@ -44,8 +30,6 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
         })
         .collect();
 
-    let dynamic_count = out_dynamic.len();
-
     writer.reserve_file_header();
 
     let dynsym_address = writer.reserved_len();
@@ -54,15 +38,16 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
     let dynstr_address = writer.reserved_len();
     writer.reserve_dynstr();
 
-    let dynamic_address = round_up_to_alignment(writer.reserved_len(), 8);
-    writer.reserve_dynamic(dynamic_count);
+    // aligned to the next multiple of 8
+    let dynamic_address = (writer.reserved_len() + 7) & !7;
+    writer.reserve_dynamic(out_dynamic.len());
 
     writer.reserve_strtab();
     writer.reserve_shstrtab();
 
     writer.reserve_section_headers();
 
-    // writing
+    // WRITING SECTION CONTENT
 
     writer
         .write_file_header(&object::write::elf::FileHeader {
