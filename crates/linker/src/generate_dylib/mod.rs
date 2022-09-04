@@ -3,12 +3,9 @@ use target_lexicon::Triple;
 mod elf64;
 mod pe;
 
-/// an empty shared library, that we build on top of
-const DUMMY_ELF64: &[u8] = include_bytes!("../../dummy-elf64-x86-64.so");
-
 pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(DUMMY_ELF64, custom_names),
+        target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(custom_names),
         target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
         target_lexicon::BinaryFormat::Coff => Ok(pe::synthetic_dll(custom_names)),
         other => unimplemented!("dylib creation for {:?}", other),
