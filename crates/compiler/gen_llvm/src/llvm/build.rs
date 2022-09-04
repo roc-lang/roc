@@ -5820,24 +5820,60 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
             debug_assert_eq!(args.len(), 2);
 
+            use roc_target::OperatingSystem::*;
+
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
 
-            let result = call_str_bitcode_fn(
-                env,
-                &[string],
-                &[index],
-                BitcodeReturns::Basic,
-                bitcode::STR_GET_SCALAR_UNSAFE,
-            );
+            match env.target_info.operating_system {
+                Windows => {
+                    // we have to go digging to find the return type
+                    let function = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap();
 
-            // on 32-bit platforms, zig bitpacks the struct
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes8 => result,
-                PtrWidth::Bytes4 => {
-                    let to = basic_type_from_layout(env, layout);
-                    complex_bitcast_check_size(env, result, to, "to_roc_record")
+                    let return_type = function.get_type().get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type()
+                        .into_struct_type();
+
+                    let result = env.builder.build_alloca(return_type, "result");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[result.into(), string, index],
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    let return_type = basic_type_from_layout(env, layout);
+                    let cast_result = env.builder.build_pointer_cast(
+                        result,
+                        return_type.ptr_type(AddressSpace::Generic),
+                        "cast",
+                    );
+
+                    env.builder.build_load(cast_result, "load_result")
                 }
+                Unix => {
+                    let result = call_str_bitcode_fn(
+                        env,
+                        &[string],
+                        &[index],
+                        BitcodeReturns::Basic,
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    // on 32-bit platforms, zig bitpacks the struct
+                    match env.target_info.ptr_width() {
+                        PtrWidth::Bytes8 => result,
+                        PtrWidth::Bytes4 => {
+                            let to = basic_type_from_layout(env, layout);
+                            complex_bitcast_check_size(env, result, to, "to_roc_record")
+                        }
+                    }
+                }
+                Wasi => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
