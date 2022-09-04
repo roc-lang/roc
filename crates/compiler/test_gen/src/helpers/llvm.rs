@@ -43,7 +43,7 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn create_llvm_module<'a>(
+fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
     config: HelperConfig,
@@ -311,9 +311,7 @@ pub fn helper<'a>(
     src: &str,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
-    let mut target = target_lexicon::Triple::host();
-
-    target.operating_system = target_lexicon::OperatingSystem::Windows;
+    let target = target_lexicon::Triple::host();
 
     let (main_fn_name, delayed_errors, module) =
         create_llvm_module(arena, src, config, context, &target);
