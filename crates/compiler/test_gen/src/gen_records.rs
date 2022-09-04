@@ -536,7 +536,7 @@ fn optional_field_let_no_use_default_nested() {
                     { x ? 10, y } = r
                     x + y
 
-                f { x: 4, y: 9 }
+                f { y: 9, x: 4 }
                 "#
         ),
         13,
