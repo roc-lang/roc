@@ -62,7 +62,7 @@ view = \markdownHtmlText ->
             link [rel "shortcut icon", href "/favicon.ico"] [],
             link [rel "mask-icon", href "/graphics/dfstar.svg", color "#4a525"] [],
             link [rel "stylesheet", type "text/css", media "screen", href "/css/fireball_screen.css"] [],
-            link [rel "stylesheet", type "text/css", media "screen", href "/css/ie_sucks.php"] [],
+            link [rel "stylesheet", type "text/css", media "screen", href "/css/ie_sucks.css"] [],
             link [rel "stylesheet", type "text/css", media "print", href "/css/fireball_print.css"] [],
             # link [rel "alternate", type "application/atom+xml", href "/feeds/main"] [],
             # link [rel "alternate", type "application/json", href "/feeds/json"] [],
@@ -208,7 +208,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/basics",
+                                        href "/basics.html",
                                         title "Markdown Basics",
                                     ]
                                     [text "Basics"],
@@ -216,7 +216,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/syntax",
+                                        href "/syntax.html",
                                         title "Markdown Syntax Documentation",
                                     ]
                                     [text "Syntax"],
@@ -224,7 +224,7 @@ view = \markdownHtmlText ->
                             li [] [
                                 a
                                     [
-                                        href "/license",
+                                        href "/license.html",
                                         title "Pricing and License Information",
                                     ]
                                     [text "License"],
