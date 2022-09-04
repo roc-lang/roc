@@ -46,14 +46,13 @@ app "static-site"
     ]
     provides [transformFileContent] to pf
 
-transformFileContent : Str -> Str
-transformFileContent = \markdownHtmlText ->
-    markdownHtmlText
-    |> view
+transformFileContent : Str, Str -> Str
+transformFileContent = \currentUrl, htmlContent ->
+    view currentUrl htmlContent
     |> Html.render
 
-view : Str -> Html.Node
-view = \markdownHtmlText ->
+view : Str, Str -> Html.Node
+view = \currentUrl, htmlContent ->
     html [lang "en"] [
         head [] [
             meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
@@ -192,54 +191,11 @@ view = \markdownHtmlText ->
                 ],
                 div [id "Main"] [
                     div [class "article"] [
-                        h1
-                            []
-                            [text "Markdown"],
-                        ul [id "ProjectSubmenu"] [
-                            li [] [
-                                a
-                                    [
-                                        class "selected", # TODO: pass filepath as well as contents
-                                        href "/",
-                                        title "Markdown Project Page",
-                                    ]
-                                    [text "Main"],
-                            ],
-                            li [] [
-                                a
-                                    [
-                                        href "/basics.html",
-                                        title "Markdown Basics",
-                                    ]
-                                    [text "Basics"],
-                            ],
-                            li [] [
-                                a
-                                    [
-                                        href "/syntax.html",
-                                        title "Markdown Syntax Documentation",
-                                    ]
-                                    [text "Syntax"],
-                            ],
-                            li [] [
-                                a
-                                    [
-                                        href "/license.html",
-                                        title "Pricing and License Information",
-                                    ]
-                                    [text "License"],
-                            ],
-                            li [] [
-                                a
-                                    [
-                                        href "https://daringfireball.net/projects/markdown/dingus",
-                                        title "Online Markdown Web Form",
-                                    ]
-                                    [text "Dingus"],
-                            ],
-                        ],
-                        # For now `text` is not escaped so we can cheekily use it to insert HTML
-                        text markdownHtmlText,
+                        viewPageHeading currentUrl,
+                        viewSubmenu currentUrl,
+                        # For now `text` is not escaped so we can use it to insert HTML
+                        # We'll probably want something more explicit in the long term
+                        text htmlContent,
                     ],
                     div [id "Footer"] [
                         form
@@ -283,3 +239,54 @@ view = \markdownHtmlText ->
             ],
         ],
     ]
+
+NavLink : { linkUrl : Str, linkTitle : Str, linkText : Str }
+
+navLinks : List NavLink
+navLinks = [
+    { linkUrl: "index.html", linkTitle: "Markdown Project Page", linkText: "Main" },
+    { linkUrl: "basics.html", linkTitle: "Markdown Basics", linkText: "Basics" },
+    { linkUrl: "syntax.html", linkTitle: "Markdown Syntax Documentation", linkText: "Syntax" },
+    { linkUrl: "license.html", linkTitle: "Pricing and License Information", linkText: "License" },
+]
+
+viewSubmenu : Str -> Html.Node
+viewSubmenu = \currentUrl ->
+    ul
+        [id "ProjectSubmenu"]
+        (
+            List.append
+                (List.map navLinks \n -> viewNavLink currentUrl n)
+                (
+                    li [] [
+                        a
+                            [
+                                href "https://daringfireball.net/projects/markdown/dingus",
+                                title "Online Markdown Web Form",
+                            ]
+                            [text "Dingus"],
+                    ]
+                )
+        )
+
+viewNavLink : Str, NavLink -> Html.Node
+viewNavLink = \currentUrl, { linkUrl, linkTitle, linkText } ->
+    styleAttrs =
+        if currentUrl == linkUrl then
+            [class "selected"]
+        else
+            []
+    attrs = List.concat styleAttrs [href linkUrl, title linkTitle]
+
+    li [] [
+        a attrs [text linkText],
+    ]
+
+viewPageHeading : Str -> Html.Node
+viewPageHeading = \currentUrl ->
+    headingText =
+        List.findFirst navLinks (\n -> n.linkUrl == currentUrl)
+        |> Result.map (\n -> n.linkUrl)
+        |> Result.withDefault "Markdown"
+
+    h1 [] [text headingText]
