@@ -157,7 +157,7 @@ fn generate_dynamic_lib(
     let bytes = crate::generate_dylib::generate(target, &custom_names)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
-    std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e))
+    std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{}", e));
 }
 
 fn is_roc_symbol(sym: &object::Symbol) -> bool {
