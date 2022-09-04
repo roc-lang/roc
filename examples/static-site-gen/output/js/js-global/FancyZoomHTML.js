@@ -102,7 +102,7 @@ function insertZoomHTML() {
 	inClosebox.appendChild(inImage2);
 	
 	// SHADOW
-	// Only draw the table-based shadow if the programatic webkitBoxShadow fails!
+	// Only draw the table-based shadow if the programmatic webkitBoxShadow fails!
 	// Also, don't draw it if we're IE -- it wouldn't look quite right anyway.
 	
 	if (! document.getElementById('ZoomImage').style.webkitBoxShadow && ! browserIsIE) {
@@ -121,7 +121,7 @@ function insertZoomHTML() {
 		inBody.insertBefore(inFixedBox, inZoombox.nextSibling);	
 	
 		// SHADOW
-		// Now, the shadow table. Skip if not compatible, or irrevelant with -box-shadow.
+		// Now, the shadow table. Skip if not compatible, or irrelevant with -box-shadow.
 		
 		// <div id="ShadowBox"><table border="0" width="100%" height="100%" cellpadding="0" cellspacing="0"> X
 		//   <tr height="25">
