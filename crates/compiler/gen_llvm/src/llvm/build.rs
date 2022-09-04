@@ -8,7 +8,6 @@ use crate::llvm::build_list::{
     list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::dec_to_str;
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
@@ -7362,6 +7361,40 @@ fn dec_alloca<'a, 'ctx, 'env>(
     alloca
 }
 
+fn dec_to_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
+    let dec = dec.into_int_value();
+
+    match env.target_info.operating_system {
+        Windows => {
+            //
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[dec_alloca(env, dec).into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Unix => {
+            let (low, high) = dec_split_into_words(env, dec);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[low.into(), high.into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
+}
+
 fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     fn_name: &str,
@@ -7418,22 +7451,37 @@ pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
-    let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
+    match env.target_info.operating_system {
+        Windows => {
+            // windows is much nicer for us here
+            call_bitcode_fn(
+                env,
+                &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
+                fn_name,
+            )
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    call_bitcode_fn(
-        env,
-        &[
-            lhs_low.into(),
-            lhs_high.into(),
-            rhs_low.into(),
-            rhs_high.into(),
-        ],
-        fn_name,
-    )
+            call_bitcode_fn(
+                env,
+                &[
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
 }
 
 fn build_dec_binop<'a, 'ctx, 'env>(
