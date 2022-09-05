@@ -15,11 +15,6 @@ jobs:
       - name: fetch releases data and save to file
         run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
 
-      - run: bash --version
-
-      - name: test get latest release
-        run: ./ci/get_latest_release_url.sh macos_x86_64
-
       - name: get the url of today`s release for macos apple silicon
         run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_x86_64)" >> $GITHUB_ENV
 
