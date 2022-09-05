@@ -2,7 +2,7 @@
 
 # assumes roc_releases.json is present
 
-LATEST_RELEASE_URL=`cat roc_releases.json | jq --arg today $(date +'%Y-%m-%d') '.[0] | .assets | map(.browser_download_url) | map(select(. | contains("silicon-\($today)"))) | .[0]'`
+LATEST_RELEASE_URL=`cat roc_releases.json | jq --arg arch $1 --arg today $(date +'%Y-%m-%d') '.[0] | .assets | map(.browser_download_url) | map(select(. | contains("\($arch)-\($today)"))) | .[0]'`
 
 if [[ "$LATEST_RELEASE_URL" == "null" ]]
 then
