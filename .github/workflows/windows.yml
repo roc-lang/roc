@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       
-      - run: $env:PATH
+      - run: $env:PATH  | Format-Table -Wrap -AutoSize
 
       - name: install visual studio build tools
         run: |
