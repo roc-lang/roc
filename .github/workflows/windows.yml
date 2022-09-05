@@ -19,6 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: install visual studio build tools
+        run: |
+          curl.exe -L -O https://aka.ms/vs/17/release/vs_BuildTools.exe
+          vs_BuildTools.exe
+
       - name: download and install zig
         run: |
           curl.exe --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
@@ -35,9 +40,6 @@ jobs:
           7z x LLVM-13.0.0-win64.7z -oC:/LLVM-13.0.0-win64
            @("C:/LLVM-13.0.0-win64/bin") +  (Get-Content $env:GITHUB_PATH) | Set-Content $env:GITHUB_PATH    
       #    ^^^ llvm bin path needs to be prepended and not appended to work 
-
-      - name: test llvm path
-        run: llvm-xray.exe --version
         
       - name: build tests
         run: cargo test --no-run --locked --release
