@@ -1,7 +1,7 @@
 app "static-site"
     packages { pf: "platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, div, text, a, ul, li, meta },
+        pf.Html.{ html, head, body, div, text, a, ul, li, link, meta },
         pf.Html.Attributes.{ httpEquiv, content, href, rel, lang, class, title },
     ]
     provides [transformFileContent] to pf
@@ -32,15 +32,18 @@ view = \currentNavLink, htmlContent ->
         head [] [
             meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
             Html.title [] [text currentNavLink.title],
+            link [rel "stylesheet", href "style.css"] [],
         ],
         body [] [
-            div [class "navbar"] [
-                viewNavbar currentNavLink,
-            ],
-            div [class "article"] [
-                # For now `text` is not escaped so we can use it to insert HTML
-                # We'll probably want something more explicit in the long term though!
-                text htmlContent,
+            div [class "main"] [
+                div [class "navbar"] [
+                    viewNavbar currentNavLink,
+                ],
+                div [class "article"] [
+                    # For now `text` is not escaped so we can use it to insert HTML
+                    # We'll probably want something more explicit in the long term though!
+                    text htmlContent,
+                ],
             ],
         ],
     ]
