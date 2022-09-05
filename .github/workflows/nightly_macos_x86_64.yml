@@ -1,6 +1,6 @@
-on: [pull_request]
-#  schedule:
-#    - cron:  '0 9 * * *' # 9=9am utc+0
+on:
+  schedule:
+    - cron:  '0 9 * * *' # 9=9am utc+0
 
 name: Nightly Release macOS x86_64
 
