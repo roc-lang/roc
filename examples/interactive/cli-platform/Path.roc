@@ -54,7 +54,7 @@ fromStr = \str ->
 ## is not valid Unicode (like a Roc [Str] is), but which is valid for a particular filesystem.
 ##
 ## Note that if the list contains any `0` bytes, sending this path to any file operations
-## (e.g. [File.read] or [WriteStream.openPath]) will fail.
+## (e.g. `File.read` or `WriteStream.openPath`) will fail.
 fromBytes : List U8 -> Path
 fromBytes = \bytes ->
     ArbitraryBytes bytes

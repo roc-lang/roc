@@ -95,6 +95,7 @@ fn create_llvm_module<'a>(
         procedures,
         entry_point,
         interns,
+        layout_interner,
         ..
     } = loaded;
 
@@ -211,6 +212,7 @@ fn create_llvm_module<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -595,6 +597,14 @@ macro_rules! assert_llvm_evals_to {
         $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
+
+// windows testing code
+//   let mut target = target_lexicon::Triple::host();
+//
+//   target.operating_system = target_lexicon::OperatingSystem::Windows;
+//
+//   let (_main_fn_name, _delayed_errors, _module) =
+//       $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
 
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {

@@ -1638,9 +1638,9 @@ dependencies = [
 
 [[package]]
 name = "glyph_brush"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69c65dd1f1fbb6209aa00f78636e436ad0a55b7d8e5de886d00720dcad9c6e2"
+checksum = "ac02497410cdb5062cc056a33f2e1e19ff69fbf26a4be9a02bf29d6e17ea105b"
 dependencies = [
  "glyph_brush_draw_cache",
  "glyph_brush_layout",
@@ -3511,6 +3511,7 @@ version = "0.0.1"
 dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
+ "fnv",
  "hashbrown 0.12.3",
  "im",
  "im-rc",
@@ -3684,6 +3685,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3726,6 +3728,7 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
+ "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_std",
@@ -3748,6 +3751,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3773,6 +3777,14 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.0.1"
+
+[[package]]
+name = "roc_intern"
+version = "0.0.1"
+dependencies = [
+ "parking_lot 0.12.1",
+ "roc_collections",
+]
 
 [[package]]
 name = "roc_late_solve"
@@ -3842,6 +3854,7 @@ dependencies = [
  "roc_derive",
  "roc_derive_key",
  "roc_error_macros",
+ "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_mono",
@@ -3853,6 +3866,7 @@ dependencies = [
  "roc_solve_problem",
  "roc_target",
  "roc_test_utils",
+ "roc_tracing",
  "roc_types",
  "roc_unify",
  "ven_pretty",
@@ -3886,6 +3900,7 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
+ "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_problem",
@@ -3945,6 +3960,7 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
+ "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3969,6 +3985,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_fmt",
+ "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3994,6 +4011,7 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
+ "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",

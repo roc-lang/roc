@@ -8,7 +8,6 @@ use crate::llvm::build_list::{
     list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::dec_to_str;
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
@@ -57,7 +56,7 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
-    TagIdIntType, UnionLayout,
+    STLayoutInterner, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -65,7 +64,7 @@ use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-use super::convert::{zig_with_overflow_roc_dec, RocUnion};
+use super::convert::{zig_dec_type, zig_with_overflow_roc_dec, RocUnion};
 
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
@@ -203,6 +202,7 @@ impl LlvmBackendMode {
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
+    pub layout_interner: &'env STLayoutInterner<'a>,
     pub context: &'ctx Context,
     pub builder: &'env Builder<'ctx>,
     pub dibuilder: &'env DebugInfoBuilder<'ctx>,
@@ -311,7 +311,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {
-        let alignment = element_layout.alignment_bytes(self.target_info);
+        let alignment = element_layout.alignment_bytes(self.layout_interner, self.target_info);
         let alignment_iv = self.alignment_const(alignment);
 
         alignment_iv.into()
@@ -880,7 +880,9 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
         let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
 
         // For consistency, we always return with a heap-allocated value
-        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
+        let (size, alignment) = top_level
+            .result
+            .stack_size_and_alignment(env.layout_interner, env.target_info);
         let number_of_bytes = env.ptr_int().const_int(size as _, false);
         let void_ptr = env.call_alloc(number_of_bytes, alignment);
 
@@ -1249,8 +1251,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let allocation = reserve_with_refcount_help(
                 env,
                 basic_type,
-                layout.stack_size(env.target_info),
-                layout.alignment_bytes(env.target_info),
+                layout.stack_size(env.layout_interner, env.target_info),
+                layout.alignment_bytes(env.layout_interner, env.target_info),
             );
 
             store_roc_value(env, *layout, allocation, value);
@@ -1328,7 +1330,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(scope, structure);
 
             let layout = if let Layout::LambdaSet(lambda_set) = layout {
-                lambda_set.runtime_representation()
+                lambda_set.runtime_representation(env.layout_interner)
             } else {
                 *layout
             };
@@ -1600,7 +1602,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
             env.context.i64_type().ptr_type(AddressSpace::Generic),
             "cast_recursive_pointer",
         )
-    } else if tag_field_layout.is_passed_by_reference(env.target_info) {
+    } else if tag_field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         debug_assert!(value.is_pointer_value());
 
         // NOTE: we rely on this being passed to `store_roc_value` so that
@@ -1661,7 +1663,7 @@ fn build_struct<'a, 'ctx, 'env>(
         if !field_layout.is_dropped_because_empty() {
             field_types.push(basic_type_from_layout(env, field_layout));
 
-            if field_layout.is_passed_by_reference(env.target_info) {
+            if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 let field_value = env
                     .builder
                     .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
@@ -1697,7 +1699,12 @@ fn build_tag<'a, 'ctx, 'env>(
 
             let data = build_struct(env, scope, arguments);
 
-            let roc_union = RocUnion::tagged_from_slices(env.context, tags, env.target_info);
+            let roc_union = RocUnion::tagged_from_slices(
+                env.layout_interner,
+                env.context,
+                tags,
+                env.target_info,
+            );
             let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
 
             let alloca = create_entry_block_alloca(
@@ -1788,8 +1795,12 @@ fn build_tag<'a, 'ctx, 'env>(
             nullable_id,
             other_fields,
         } => {
-            let roc_union =
-                RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info);
+            let roc_union = RocUnion::untagged_from_slices(
+                env.layout_interner,
+                env.context,
+                &[other_fields],
+                env.target_info,
+            );
 
             if tag_id == *nullable_id as _ {
                 let output_type = roc_union.struct_type().ptr_type(AddressSpace::Generic);
@@ -2104,8 +2115,8 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let stack_size = layout.stack_size(env.target_info);
-    let alignment_bytes = layout.alignment_bytes(env.target_info);
+    let stack_size = layout.stack_size(env.layout_interner, env.target_info);
+    let alignment_bytes = layout.alignment_bytes(env.layout_interner, env.target_info);
 
     let basic_type = basic_type_from_layout(env, layout);
 
@@ -2120,9 +2131,9 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
     let ptr_bytes = env.target_info;
 
     let roc_union = if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        RocUnion::tagged_from_slices(env.context, fields, env.target_info)
+        RocUnion::tagged_from_slices(env.layout_interner, env.context, fields, env.target_info)
     } else {
-        RocUnion::untagged_from_slices(env.context, fields, env.target_info)
+        RocUnion::untagged_from_slices(env.layout_interner, env.context, fields, env.target_info)
     };
 
     reserve_with_refcount_help(
@@ -2211,10 +2222,10 @@ fn list_literal<'a, 'ctx, 'env>(
     // if element_type.is_int_type() {
     if false {
         let element_type = element_type.into_int_type();
-        let element_width = element_layout.stack_size(env.target_info);
+        let element_width = element_layout.stack_size(env.layout_interner, env.target_info);
         let size = list_length * element_width as usize;
         let alignment = element_layout
-            .alignment_bytes(env.target_info)
+            .alignment_bytes(env.layout_interner, env.target_info)
             .max(env.target_info.ptr_width() as u32);
 
         let mut is_all_constant = true;
@@ -2351,7 +2362,7 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference(env.target_info) {
+    if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         store_roc_value(env, layout, alloca, source.into());
@@ -2368,7 +2379,7 @@ pub fn use_roc_value<'a, 'ctx, 'env>(
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference(env.target_info) {
+    if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         env.builder.build_store(alloca, source);
@@ -2399,15 +2410,16 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout.is_passed_by_reference(env.target_info) {
+    if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         debug_assert!(value.is_pointer_value());
 
-        let align_bytes = layout.alignment_bytes(env.target_info);
+        let align_bytes = layout.alignment_bytes(env.layout_interner, env.target_info);
 
         if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(layout.stack_size(env.target_info) as u64, false);
+            let size = env.ptr_int().const_int(
+                layout.stack_size(env.layout_interner, env.target_info) as u64,
+                false,
+            );
 
             env.builder
                 .build_memcpy(
@@ -2502,8 +2514,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
                     let destination = out_parameter.into_pointer_value();
-                    if layout.is_passed_by_reference(env.target_info) {
-                        let align_bytes = layout.alignment_bytes(env.target_info);
+                    if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
+                        let align_bytes =
+                            layout.alignment_bytes(env.layout_interner, env.target_info);
 
                         if align_bytes > 0 {
                             debug_assert!(
@@ -2534,7 +2547,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             // Hence, we explicitly memcpy source to destination, and rely on
                             // LLVM optimizing away any inefficiencies.
                             let target_info = env.target_info;
-                            let width = layout.stack_size(target_info);
+                            let width = layout.stack_size(env.layout_interner, target_info);
                             let size = env.ptr_int().const_int(width as _, false);
 
                             env.builder
@@ -2614,7 +2627,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 for param in parameters.iter() {
                     let basic_type = basic_type_from_layout(env, &param.layout);
 
-                    let phi_type = if param.layout.is_passed_by_reference(env.target_info) {
+                    let phi_type = if param
+                        .layout
+                        .is_passed_by_reference(env.layout_interner, env.target_info)
+                    {
                         basic_type.ptr_type(AddressSpace::Generic).into()
                     } else {
                         basic_type
@@ -2697,7 +2713,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
                     let layout = *layout;
 
-                    if layout.contains_refcounted() {
+                    if layout.contains_refcounted(env.layout_interner) {
                         increment_refcount_layout(
                             env,
                             parent,
@@ -2713,7 +2729,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 Dec(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-                    if layout.contains_refcounted() {
+                    if layout.contains_refcounted(env.layout_interner) {
                         decrement_refcount_layout(env, parent, layout_ids, value, layout);
                     }
 
@@ -2726,7 +2742,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         Layout::Builtin(Builtin::Str) => todo!(),
                         Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
-                            let alignment = element_layout.alignment_bytes(env.target_info);
+                            let alignment = element_layout
+                                .alignment_bytes(env.layout_interner, env.target_info);
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
@@ -3726,6 +3743,10 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
+        (RocReturn::ByPointer, CCReturn::ByPointer) => {
+            // Both return by pointer but Roc puts it at the end and C puts it at the beginning
+            (&params[1..], &param_types[..param_types.len() - 1])
+        }
         _ => (&params[..], &param_types[..]),
     };
 
@@ -3807,8 +3828,20 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         },
         CCReturn::ByPointer => {
             let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
-
-            env.builder.build_store(out_ptr, value);
+            match roc_return {
+                RocReturn::Return => {
+                    env.builder.build_store(out_ptr, value);
+                }
+                RocReturn::ByPointer => {
+                    // TODO: ideally, in this case, we should pass the C return pointer directly
+                    // into the call_roc_function rather than forcing an extra alloca, load, and
+                    // store!
+                    let value = env
+                        .builder
+                        .build_load(value.into_pointer_value(), "load_roc_result");
+                    env.builder.build_store(out_ptr, value);
+                }
+            }
             env.builder.build_return(None);
         }
         CCReturn::Void => {
@@ -4139,7 +4172,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
         .unwrap();
 
-    let v3 = if return_layout.is_passed_by_reference(env.target_info) {
+    let v3 = if return_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         let loaded = env.builder.build_load(
             return_value.into_pointer_value(),
             "load_call_result_passed_by_ptr",
@@ -4402,10 +4435,12 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_alias_analysis::spec_program(opt_level, opt_entry_point, it) {
-        Err(e) => panic!("Error in alias analysis: {}", e),
-        Ok(solutions) => solutions,
-    };
+    let solutions =
+        match roc_alias_analysis::spec_program(env.layout_interner, opt_level, opt_entry_point, it)
+        {
+            Err(e) => panic!("Error in alias analysis: {}", e),
+            Ok(solutions) => solutions,
+        };
 
     let solutions = env.arena.alloc(solutions);
 
@@ -4671,7 +4706,8 @@ fn build_closure_caller<'a, 'ctx, 'env>(
     }
 
     let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &lambda_set.runtime_representation());
+        let basic_type =
+            basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner));
 
         basic_type.ptr_type(AddressSpace::Generic)
     };
@@ -4718,10 +4754,12 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // NOTE this may be incorrect in the long run
     // here we load any argument that is a pointer
-    let closure_layout = lambda_set.runtime_representation();
+    let closure_layout = lambda_set.runtime_representation(env.layout_interner);
     let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
     for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
-        if param.is_pointer_value() && !layout.is_passed_by_reference(env.target_info) {
+        if param.is_pointer_value()
+            && !layout.is_passed_by_reference(env.layout_interner, env.target_info)
+        {
             *param = builder.build_load(param.into_pointer_value(), "load_param");
         }
     }
@@ -4739,13 +4777,14 @@ fn build_closure_caller<'a, 'ctx, 'env>(
     } else {
         let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        if return_layout.is_passed_by_reference(env.target_info) {
-            let align_bytes = return_layout.alignment_bytes(env.target_info);
+        if return_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
+            let align_bytes = return_layout.alignment_bytes(env.layout_interner, env.target_info);
 
             if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
+                let size = env.ptr_int().const_int(
+                    return_layout.stack_size(env.layout_interner, env.target_info) as u64,
+                    false,
+                );
 
                 env.builder
                     .build_memcpy(
@@ -4772,7 +4811,7 @@ fn build_closure_caller<'a, 'ctx, 'env>(
         env,
         def_name,
         alias_symbol,
-        lambda_set.runtime_representation(),
+        lambda_set.runtime_representation(env.layout_interner),
     );
 }
 
@@ -5042,7 +5081,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            if result_layout.is_passed_by_reference(env.target_info) {
+            if result_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 result_alloca.into()
             } else {
                 env.builder
@@ -5124,10 +5163,13 @@ fn roc_function_call<'a, 'ctx, 'env>(
             .as_global_value()
             .as_pointer_value();
 
-    let inc_closure_data =
-        build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
-            .as_global_value()
-            .as_pointer_value();
+    let inc_closure_data = build_inc_n_wrapper(
+        env,
+        layout_ids,
+        &lambda_set.runtime_representation(env.layout_interner),
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let closure_data_is_owned = env
         .context
@@ -5778,24 +5820,60 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
             debug_assert_eq!(args.len(), 2);
 
+            use roc_target::OperatingSystem::*;
+
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
 
-            let result = call_str_bitcode_fn(
-                env,
-                &[string],
-                &[index],
-                BitcodeReturns::Basic,
-                bitcode::STR_GET_SCALAR_UNSAFE,
-            );
+            match env.target_info.operating_system {
+                Windows => {
+                    // we have to go digging to find the return type
+                    let function = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap();
 
-            // on 32-bit platforms, zig bitpacks the struct
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes8 => result,
-                PtrWidth::Bytes4 => {
-                    let to = basic_type_from_layout(env, layout);
-                    complex_bitcast_check_size(env, result, to, "to_roc_record")
+                    let return_type = function.get_type().get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type()
+                        .into_struct_type();
+
+                    let result = env.builder.build_alloca(return_type, "result");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[result.into(), string, index],
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    let return_type = basic_type_from_layout(env, layout);
+                    let cast_result = env.builder.build_pointer_cast(
+                        result,
+                        return_type.ptr_type(AddressSpace::Generic),
+                        "cast",
+                    );
+
+                    env.builder.build_load(cast_result, "load_result")
                 }
+                Unix => {
+                    let result = call_str_bitcode_fn(
+                        env,
+                        &[string],
+                        &[index],
+                        BitcodeReturns::Basic,
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    // on 32-bit platforms, zig bitpacks the struct
+                    match env.target_info.ptr_width() {
+                        PtrWidth::Bytes8 => result,
+                        PtrWidth::Bytes4 => {
+                            let to = basic_type_from_layout(env, layout);
+                            complex_bitcast_check_size(env, result, to, "to_roc_record")
+                        }
+                    }
+                }
+                Wasi => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
@@ -6466,7 +6544,7 @@ fn to_cc_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout.runtime_representation() {
+    match layout.runtime_representation(env.layout_interner) {
         Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
         layout => {
             // TODO this is almost certainly incorrect for bigger structs
@@ -6508,7 +6586,11 @@ enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(target_info: TargetInfo, layout: Layout) -> bool {
+    fn roc_return_by_pointer(
+        interner: &STLayoutInterner,
+        target_info: TargetInfo,
+        layout: Layout,
+    ) -> bool {
         match layout {
             Layout::Builtin(builtin) => {
                 use Builtin::*;
@@ -6523,15 +6605,17 @@ impl RocReturn {
                 }
             }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => {
-                RocReturn::roc_return_by_pointer(target_info, lambda_set.runtime_representation())
-            }
+            Layout::LambdaSet(lambda_set) => RocReturn::roc_return_by_pointer(
+                interner,
+                target_info,
+                lambda_set.runtime_representation(interner),
+            ),
             _ => false,
         }
     }
 
     fn from_layout<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
-        if Self::roc_return_by_pointer(env.target_info, *layout) {
+        if Self::roc_return_by_pointer(env.layout_interner, env.target_info, *layout) {
             RocReturn::ByPointer
         } else {
             RocReturn::Return
@@ -6669,8 +6753,14 @@ impl<'ctx> FunctionSpec<'ctx> {
 
 /// According to the C ABI, how should we return a value with the given layout?
 pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
-    let return_size = layout.stack_size(env.target_info);
-    let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
+    let return_size = layout.stack_size(env.layout_interner, env.target_info);
+    let pass_result_by_pointer = match env.target_info.operating_system {
+        roc_target::OperatingSystem::Windows => {
+            return_size >= 2 * env.target_info.ptr_width() as u32
+        }
+        roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
+        roc_target::OperatingSystem::Wasi => unreachable!(),
+    };
 
     if return_size == 0 {
         CCReturn::Void
@@ -7268,39 +7358,123 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn dec_split_into_words<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let left_bits_i128 = env
+        .builder
+        .build_right_shift(value, int_64, false, "left_bits_i128");
+
+    (
+        env.builder.build_int_cast(value, int_64_type, ""),
+        env.builder.build_int_cast(left_bits_i128, int_64_type, ""),
+    )
+}
+
+fn dec_alloca<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let dec_type = zig_dec_type(env);
+
+    let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
+
+    let instruction = alloca.as_instruction_value().unwrap();
+    instruction.set_alignment(16).unwrap();
+
+    let ptr = env.builder.build_pointer_cast(
+        alloca,
+        value.get_type().ptr_type(AddressSpace::Generic),
+        "cast_to_i128_ptr",
+    );
+
+    env.builder.build_store(ptr, value);
+
+    alloca
+}
+
+fn dec_to_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
+    let dec = dec.into_int_value();
+
+    match env.target_info.operating_system {
+        Windows => {
+            //
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[dec_alloca(env, dec).into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Unix => {
+            let (low, high) = dec_split_into_words(env, dec);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[low.into(), high.into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
+}
+
 fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
     let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
+    match env.target_info.operating_system {
+        Windows => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    dec_alloca(env, lhs).into(),
+                    dec_alloca(env, rhs).into(),
+                ],
+                fn_name,
+            );
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            return_alloca.into(),
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
-        ],
-        fn_name,
-    );
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            );
+        }
+        Wasi => unimplemented!(),
+    }
 
     env.builder
         .build_load(return_alloca, "load_dec")
@@ -7313,29 +7487,37 @@ pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
+    match env.target_info.operating_system {
+        Windows => {
+            // windows is much nicer for us here
+            call_bitcode_fn(
+                env,
+                &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
+                fn_name,
+            )
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
-
-    call_bitcode_fn(
-        env,
-        &[
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
-        ],
-        fn_name,
-    )
+            call_bitcode_fn(
+                env,
+                &[
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
 }
 
 fn build_dec_binop<'a, 'ctx, 'env>(

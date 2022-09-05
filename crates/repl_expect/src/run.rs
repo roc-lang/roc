@@ -1,4 +1,4 @@
-use std::os::unix::process::parent_id;
+use std::{os::unix::process::parent_id, sync::Arc};
 
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
@@ -10,9 +10,10 @@ use roc_gen_llvm::{
     run_roc::RocCallResult,
     run_roc_dylib,
 };
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::OptLevel;
+use roc_mono::{ir::OptLevel, layout::Layout};
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
@@ -80,11 +81,12 @@ impl<'a> ExpectMemory<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_expects<W: std::io::Write>(
+pub fn run_expects<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -97,6 +99,7 @@ pub fn run_expects<W: std::io::Write>(
         render_target,
         arena,
         interns,
+        layout_interner,
         lib,
         expectations,
         expects,
@@ -105,11 +108,12 @@ pub fn run_expects<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_expects_with_memory<W: std::io::Write>(
+pub(crate) fn run_expects_with_memory<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -124,6 +128,7 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
             render_target,
             arena,
             interns,
+            layout_interner,
             lib,
             expectations,
             memory,
@@ -144,6 +149,7 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
             render_target,
             arena,
             interns,
+            layout_interner,
             lib,
             expectations,
             memory,
@@ -160,11 +166,12 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_expect_pure<W: std::io::Write>(
+fn run_expect_pure<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     shared_memory: &mut ExpectMemory,
@@ -201,6 +208,7 @@ fn run_expect_pure<W: std::io::Write>(
                     Some(expect),
                     expectations,
                     interns,
+                    layout_interner,
                     shared_memory_ptr,
                     offset,
                 )?;
@@ -216,11 +224,12 @@ fn run_expect_pure<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_expect_fx<W: std::io::Write>(
+fn run_expect_fx<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     parent_memory: &mut ExpectMemory,
@@ -299,6 +308,7 @@ fn run_expect_fx<W: std::io::Write>(
                             None,
                             expectations,
                             interns,
+                            layout_interner,
                             parent_memory.ptr,
                             ExpectSequence::START_OFFSET,
                         )?;
@@ -313,11 +323,12 @@ fn run_expect_fx<W: std::io::Write>(
     }
 }
 
-pub fn roc_dev_expect(
+pub fn roc_dev_expect<'a>(
     writer: &mut impl std::io::Write,
-    arena: &Bump,
+    arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &Interns,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     shared_ptr: *mut u8,
 ) -> std::io::Result<usize> {
     let frame = ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
@@ -343,6 +354,7 @@ pub fn roc_dev_expect(
         None,
         expectations,
         interns,
+        layout_interner,
         shared_ptr,
         ExpectSequence::START_OFFSET,
     )
@@ -356,6 +368,7 @@ fn render_expect_failure<'a>(
     expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     offset: usize,
 ) -> std::io::Result<usize> {
@@ -383,6 +396,7 @@ fn render_expect_failure<'a>(
         arena,
         subs,
         interns,
+        layout_interner,
         start,
         frame.start_offset,
         &variables,
@@ -473,7 +487,14 @@ pub fn expect_mono_module_to_dylib<'a>(
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, ExpectFunctions<'a>), libloading::Error> {
+) -> Result<
+    (
+        libloading::Library,
+        ExpectFunctions<'a>,
+        SingleThreadedInterner<'a, Layout<'a>>,
+    ),
+    libloading::Error,
+> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -481,6 +502,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         procedures,
         entry_point,
         interns,
+        layout_interner,
         ..
     } = loaded;
 
@@ -499,6 +521,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -590,5 +613,5 @@ pub fn expect_mono_module_to_dylib<'a>(
         );
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, layout_interner))
 }

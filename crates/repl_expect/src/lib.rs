@@ -1,9 +1,10 @@
 #[cfg(not(windows))]
 use {
+    roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{CapturesNiche, LayoutCache},
+        layout::{CapturesNiche, Layout, LayoutCache},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{
@@ -12,6 +13,7 @@ use {
     },
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},
+    std::sync::Arc,
 };
 
 #[cfg(not(windows))]
@@ -29,6 +31,7 @@ pub fn get_values<'a>(
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
@@ -53,7 +56,8 @@ pub fn get_values<'a>(
 
             let content = subs.get_content_without_compacting(variable);
 
-            let mut layout_cache = LayoutCache::new(target_info);
+            // TODO: pass layout_cache to jit_to_ast directly
+            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
             let proc_layout = ProcLayout {
@@ -70,6 +74,7 @@ pub fn get_values<'a>(
                 content,
                 subs,
                 interns,
+                layout_interner.fork(),
                 target_info,
             )?
         };
@@ -132,7 +137,7 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects) = expect_mono_module_to_dylib(
+        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
             arena,
             target.clone(),
             loaded,
@@ -160,6 +165,7 @@ mod test {
             RenderTarget::ColorTerminal,
             arena,
             interns,
+            &layout_interner.into_global(),
             &lib,
             &mut expectations,
             expects,

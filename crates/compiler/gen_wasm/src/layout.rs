@@ -1,5 +1,5 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Layout, UnionLayout};
+use roc_mono::layout::{Layout, STLayoutInterner, UnionLayout};
 
 use crate::wasm_module::ValueType;
 use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
@@ -41,12 +41,12 @@ pub enum WasmLayout {
 }
 
 impl WasmLayout {
-    pub fn new(layout: &Layout) -> Self {
+    pub fn new<'a>(interner: &STLayoutInterner<'a>, layout: &Layout<'a>) -> Self {
         use roc_mono::layout::Builtin::*;
         use UnionLayout::*;
         use ValueType::*;
 
-        let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
+        let (size, alignment_bytes) = layout.stack_size_and_alignment(interner, TARGET_INFO);
 
         match layout {
             Layout::Builtin(Int(int_width)) => {
@@ -85,7 +85,9 @@ impl WasmLayout {
                 format: StackMemoryFormat::Decimal,
             },
 
-            Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
+            Layout::LambdaSet(lambda_set) => {
+                WasmLayout::new(interner, &lambda_set.runtime_representation(interner))
+            }
 
             Layout::Builtin(Str | List(_))
             | Layout::Struct { .. }
