@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v2
+      
+      - run: $env:PATH
 
       - name: install visual studio build tools
         run: |
