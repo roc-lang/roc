@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v2
       
       - name: remove pre-installed llvm from path
-        run: Set-Content $env:GITHUB_PATH ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';'
+        run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
       
       - run: $env:PATH  | Format-Table -Wrap -AutoSize
 
