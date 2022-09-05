@@ -821,36 +821,8 @@ mod cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
-                // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
-                // Some platform-switching examples live in nested directories, and
-                // the rocLovesFoo.roc examples live directly under the platform-switching directory
-                if example_dir_name == "platform-switching" {
-                    // The subdirectory checks broke when we moved the rodLovesFoo.roc examples
-                    // Treating the platform-switching directory similarly to the benchmarks directory for now
-
-                    all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
-                    panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
-                });
-
-                    // for sub_dir in [
-                    //     // We exclude the C platforming switching example
-                    //     // because the main platform switching example runs the c platform.
-                    //     // If we don't a race condition leads to test flakiness.
-                    //     // "c-platform",
-                    //     "rust-platform",
-                    //     "swift-platform",
-                    //     "web-assembly-platform",
-                    //     "zig-platform",
-                    // ] {
-                    //     all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
-                    //         panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
-                    //     });
-                    // }
-                }
-
                 // We test benchmarks separately
-                // platform-switching examples are handled above
-                if example_dir_name != "benchmarks" && example_dir_name != "platform-switching" {
+                if example_dir_name != "benchmarks" {
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
