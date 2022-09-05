@@ -38,9 +38,9 @@
 
     ```sh
     # Note: If you installed Rust in this terminal session, you'll need to open a new one first!
-    ./roc examples/platform-switching/rust-platform/rocLovesRust.roc
+    ./roc examples/platform-switching/rocLovesRust.roc
 
-    ./roc examples/platform-switching/zig-platform/rocLovesZig.roc
+    ./roc examples/platform-switching/rocLovesZig.roc
 
-    ./roc examples/platform-switching/c-platform/rocLovesC.roc
+    ./roc examples/platform-switching/rocLovesC.roc
     ```

@@ -386,7 +386,7 @@ mod cli_run {
         // We exclude the C platforming switching example
         // because the main platform switching example runs the c platform.
         // If we don't a race condition leads to test flakiness.
-        // platformSwitchingC:"platform-switching/c-platform" => Example {
+        // platformSwitchingC:"platform-switching" => Example {
         //     filename: "rocLovesC.roc",
         //     executable_filename: "rocLovesC",
         //     stdin: &[],
@@ -394,7 +394,7 @@ mod cli_run {
         //     expected_ending:"Roc <3 C!\n",
         //     use_valgrind: true,
         // },
-        platformSwitchingRust:"platform-switching/rust-platform" => Example {
+        platformSwitchingRust:"platform-switching" => Example {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
             stdin: &[],
@@ -402,7 +402,7 @@ mod cli_run {
             expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
-        platformSwitchingSwift:"platform-switching/swift-platform" => Example {
+        platformSwitchingSwift:"platform-switching" => Example {
             filename: "rocLovesSwift.roc",
             executable_filename: "rocLovesSwift",
             stdin: &[],
@@ -410,7 +410,7 @@ mod cli_run {
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
-        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
+        platformSwitchingWebAssembly:"platform-switching" => Example {
             filename: "rocLovesWebAssembly.roc",
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
@@ -418,7 +418,7 @@ mod cli_run {
             expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
-        platformSwitchingZig:"platform-switching/zig-platform" => Example {
+        platformSwitchingZig:"platform-switching" => Example {
             filename: "rocLovesZig.roc",
             executable_filename: "rocLovesZig",
             stdin: &[],
@@ -820,25 +820,6 @@ mod cli_run {
 
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
-
-                // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
-                // Some platform-switching examples live in nested directories
-                if example_dir_name == "platform-switching" {
-                    for sub_dir in [
-                        // We exclude the C platforming switching example
-                        // because the main platform switching example runs the c platform.
-                        // If we don't a race condition leads to test flakiness.
-                        // "c-platform",
-                        "rust-platform",
-                        "swift-platform",
-                        "web-assembly-platform",
-                        "zig-platform",
-                    ] {
-                        all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
-                            panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
-                        });
-                    }
-                }
 
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
