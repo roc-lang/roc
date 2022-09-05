@@ -1,6 +1,6 @@
 on:
   schedule:
-    - cron:  '0 9 * * 1' # 9=9am utc+0, 1=monday
+    - cron:  '0 9 * * *' # 9=9am utc+0
 
 name: Nightly Release macOS x86_64
 
@@ -9,8 +9,8 @@ env:
   LLVM_SYS_130_PREFIX: /usr/local/opt/llvm
 
 jobs:
-  test-and-build:
-    name: Rust tests, build and package nightly release
+  test-build-upload:
+    name: build, test, package and upload nightly release
     runs-on: [macos-12]
     timeout-minutes: 90
     steps:
@@ -24,30 +24,42 @@ jobs:
         run: zig version
       - name: Install LLVM
         run: brew install llvm@13
+        
       # build has to be done before tests #2572
       - name: build release
         uses: actions-rs/cargo@v1
         with:
           command: build
           args: --release --locked
+          
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --locked # no --release yet until #3166 is fixed
+          args: --release --locked -- --skip opaque_wrap_function --skip bool_list_literal
+          
+      - name: get commit SHA
+        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        
+      - name: get date
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+        
+      - name: build file name
+        env:
+            DATE: ${{ env.DATE }}
+            SHA: ${{ env.SHA }}
+        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+          
       - name: write version to file
         run: ./ci/write_version.sh
+        
       - name: package release
-        run: ./ci/package_release.sh roc_darwin_x86_64.tar.gz
-      - name: Create pre-release with test_archive.tar.gz
-        uses: Anton-4/deploy-nightly@1609d8dfe211b078674801113ab7a2ec2938b2a9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
+        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
+        
+      - name: Upload artifact. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v3
         with:
-          upload_url: https://uploads.github.com/repos/roc-lang/roc/releases/51880579/assets{?name,label}
-          release_id: 51880579
-          asset_path: ./roc_darwin_x86_64.tar.gz
-          asset_name: roc_nightly-macos_x86_64-$$.tar.gz # $$ inserts 6 char commit hash and date (YYYY-MM-DD)
-          asset_content_type: application/gzip
-          max_releases: 3
+           name: ${{ env.RELEASE_TAR_FILENAME }}
+           path: ${{ env.RELEASE_TAR_FILENAME }}
+           retention-days: 4
 
