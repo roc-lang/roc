@@ -22,7 +22,8 @@ jobs:
       - name: install visual studio build tools
         run: |
           curl.exe -L -O https://aka.ms/vs/17/release/vs_BuildTools.exe
-          vs_BuildTools.exe
+          dir
+          ./vs_BuildTools.exe
 
       - name: download and install zig
         run: |
