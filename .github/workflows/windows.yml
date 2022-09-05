@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       
+      - name: remove pre-installed llvm from path
+        run: set PATH=%PATH:C:\Program Files\LLVM\bin;=%
+      
       - run: $env:PATH  | Format-Table -Wrap -AutoSize
 
       - name: install visual studio build tools
