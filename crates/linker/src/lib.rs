@@ -73,7 +73,7 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 operating_system: target_lexicon::OperatingSystem::Windows,
                 binary_format: target_lexicon::BinaryFormat::Coff,
                 ..
-            } => false,
+            } => true,
 
             _ => false,
         }
@@ -267,6 +267,67 @@ fn section_address_and_offset<'a>(
     }
 }
 
+fn preprocess_windows(
+    exec_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    shared_lib: &Path,
+    verbose: bool,
+    time: bool,
+) -> object::read::Result<()> {
+    let total_start = Instant::now();
+    let exec_parsing_start = total_start;
+    let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
+    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let exec_data = &*exec_mmap;
+    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+        Ok(obj) => obj,
+        Err(err) => {
+            internal_error!("Failed to parse executable file: {}", err);
+        }
+    };
+
+    let mut md = metadata::Metadata {
+        // TODO symbols like roc_alloc are not in the dynhost.exe (at least I cannot find them)
+        // roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
+        ..Default::default()
+    };
+
+    if verbose {
+        println!(
+            "Found roc symbol definitions: {:+x?}",
+            md.roc_symbol_vaddresses
+        );
+    }
+
+    let exec_parsing_duration = exec_parsing_start.elapsed();
+
+    let import_table = exec_obj.import_table()?.unwrap();
+
+    let mut it = import_table.descriptors()?;
+
+    use object::LittleEndian as LE;
+
+    while let Some(descriptor) = it.next()? {
+        let name = import_table.name(descriptor.name.get(LE))?;
+        dbg!(String::from_utf8_lossy(name));
+
+        if name == b"roc-cheaty-lib.dll" {
+            let first_thunk = import_table.thunks(descriptor.original_first_thunk.get(LE))?;
+
+            let address = first_thunk
+                .get::<object::pe::ImageNtHeaders64>(0)?
+                .0
+                .get(LE);
+
+            let (_, name) = import_table.hint_name(address as _)?;
+            dbg!(String::from_utf8_lossy(name));
+        }
+    }
+
+    Ok(())
+}
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 pub fn preprocess(
@@ -278,6 +339,18 @@ pub fn preprocess(
     verbose: bool,
     time: bool,
 ) {
+    if true {
+        preprocess_windows(
+            exec_filename,
+            metadata_filename,
+            out_filename,
+            shared_lib,
+            verbose,
+            time,
+        )
+        .unwrap();
+    }
+
     if verbose {
         println!("Targeting: {}", target);
     }
@@ -360,6 +433,8 @@ pub fn preprocess(
                     }
                 }
             }
+
+            dbg!(&md.plt_addresses);
         }
         target_lexicon::BinaryFormat::Macho => {
             use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
