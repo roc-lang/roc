@@ -58,36 +58,49 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
+    let module_pairs = package.modules.iter().flat_map(|loaded_module| {
+        loaded_module
+            .documentation
+            .iter()
+            .filter_map(move |(module_id, module)| {
+                // TODO it seems this `documentation` dictionary has entries for
+                // every module, but only the current module has any info in it.
+                // We disregard the others, but probably this shouldn't bother
+                // being a hash map in the first place if only one of its entries
+                // actually has interesting information in it?
+                if *module_id == loaded_module.module_id {
+                    let exposed_values = loaded_module
+                        .exposed_values
+                        .iter()
+                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
+                        .collect::<Vec<String>>();
+
+                    Some((module, exposed_values))
+                } else {
+                    None
+                }
+            })
+    });
+
     let template_html = include_str!("./static/index.html")
         .replace("<!-- search.js -->", "/search.js")
         .replace("<!-- styles.css -->", "/styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
-            "<!-- Module links -->",
-            render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-                loaded_module
-                    .documentation
-                    .iter()
-                    .filter_map(move |(module_id, module)| {
-                        // TODO it seems this `documentation` dictionary has entries for
-                        // every module, but only the current module has any info in it.
-                        // We disregard the others, but probably this shouldn't bother
-                        // being a hash map in the first place if only one of its entries
-                        // actually has interesting information in it?
-                        if *module_id == loaded_module.module_id {
-                            let exposed_values = loaded_module
-                                .exposed_values
-                                .iter()
-                                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
-                                .collect::<Vec<String>>();
+            "<!-- Prefetch links -->",
+            &module_pairs
+                .clone()
+                .map(|(module, _)| {
+                    let href = sidebar_link_url(module);
 
-                            Some((module, exposed_values))
-                        } else {
-                            None
-                        }
-                    })
-            }))
-            .as_str(),
+                    format!(r#"<link rel="prefetch" href="{href}"/>"#)
+                })
+                .collect::<Vec<String>>()
+                .join("\n    "),
+        )
+        .replace(
+            "<!-- Module links -->",
+            render_sidebar(module_pairs).as_str(),
         );
 
     // Write each package's module docs html file
@@ -118,6 +131,13 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+fn sidebar_link_url(module: &ModuleDocumentation) -> String {
+    let mut href_buf = base_url();
+    href_buf.push_str(module.name.as_str());
+
+    href_buf
 }
 
 // converts plain-text code to highlighted html
@@ -359,21 +379,14 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
     let mut buf = String::new();
 
     for (module, exposed_values) in modules {
+        let href = sidebar_link_url(module);
         let mut sidebar_entry_content = String::new();
-
-        let name = module.name.as_str();
-
-        let href = {
-            let mut href_buf = base_url();
-            href_buf.push_str(name);
-            href_buf
-        };
 
         sidebar_entry_content.push_str(
             html_to_string(
                 "a",
-                vec![("class", "sidebar-module-link"), ("href", href.as_str())],
-                name,
+                vec![("class", "sidebar-module-link"), ("href", &href)],
+                module.name.as_str(),
             )
             .as_str(),
         );

@@ -117,9 +117,9 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&mut self, _main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, _main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -147,10 +147,10 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         &mut self,
         _main_fn_name: &str,
         _ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -186,6 +186,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         mut interns,
         mut subs,
         exposed_to_host,
+        layout_interner,
         ..
     } = mono;
 
@@ -212,6 +213,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
             arena,
+            layout_interner: &layout_interner,
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
@@ -233,6 +235,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
         wasm32_result::insert_wrapper_for_layout(
             arena,
+            &layout_interner,
             &mut module,
             WRAPPER_NAME,
             main_fn_index,
@@ -264,6 +267,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         content,
         &subs,
         &interns,
+        layout_interner.into_global().fork(),
         target_info,
     );
 

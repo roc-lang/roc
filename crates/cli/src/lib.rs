@@ -67,51 +67,51 @@ const VERSION: &str = include_str!("../../../version.txt");
 pub fn build_app<'a>() -> Command<'a> {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
-        .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
-        .help("Limit the number of threads (and hence cores) used during compilation.")
+        .help("Limit the number of threads (and hence cores) used during compilation")
         .takes_value(true)
         .validator(|s| s.parse::<usize>())
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
         .long(FLAG_OPT_SIZE)
-        .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to have a small binary size\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_dev = Arg::new(FLAG_DEV)
         .long(FLAG_DEV)
-        .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
+        .help("Make compilation finish as soon as possible, at the expense of runtime performance")
         .required(false);
 
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
-        .help("Store LLVM debug information in the generated program.")
+        .help("Store LLVM debug information in the generated program")
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
         .long(FLAG_TIME)
-        .help("Prints detailed compilation time information.")
+        .help("Print detailed compilation time information")
         .required(false);
 
     let flag_linker = Arg::new(FLAG_LINKER)
         .long(FLAG_LINKER)
-        .help("Sets which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+        .help("Set which linker to use\n(The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.)")
         .possible_values(["surgical", "legacy"])
         .required(false);
 
     let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
         .long(FLAG_PRECOMPILED)
-        .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+        .help("Assume the host has been precompiled and skip recompiling the host\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
         .possible_values(["true", "false"])
         .required(false);
 
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
         .long(FLAG_WASM_STACK_SIZE_KB)
-        .help("Stack size in kilobytes for wasm32 target. Only applies when --dev also provided.")
+        .help("Stack size in kilobytes for wasm32 target\n(This only applies when --dev also provided.)")
         .takes_value(true)
         .validator(|s| s.parse::<u32>())
         .required(false);
@@ -123,7 +123,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .default_value(DEFAULT_ROC_FILENAME);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the app being run, e.g. `roc run -- arg1 arg2`")
+        .help("Arguments to pass into the app being run\ne.g. `roc run -- arg1 arg2`")
         .allow_invalid_utf8(true)
         .multiple_values(true)
         .takes_value(true)
@@ -132,7 +132,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
-        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
+        .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
@@ -155,13 +155,13 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
-                    .help("Build a C library instead of an executable.")
+                    .help("Build a C library instead of an executable")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
-                    .help("Does not link. Instead just outputs the `.o` file")
+                    .help("Do not link\n(Instead, just output the `.o` file.)")
                     .required(false),
             )
             .arg(
@@ -173,7 +173,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         )
         .subcommand(Command::new(CMD_TEST)
-            .about("Run all top-level `expect`s in a main module and any modules it imports.")
+            .about("Run all top-level `expect`s in a main module and any modules it imports")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -208,7 +208,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_DEV)
-            .about("`check` a .roc file, and then run it if there were no errors.")
+            .about("`check` a .roc file, and then run it if there were no errors")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -231,14 +231,14 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
-                    .help("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .help("Checks that specified files are formatted\n(If formatting is needed, return a non-zero exit code.)")
                     .required(false),
             )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
-            .about("Check the code for problems, but doesn’t build or run it")
+            .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
             .arg(
@@ -260,7 +260,7 @@ pub fn build_app<'a>() -> Command<'a> {
                 )
         )
         .subcommand(Command::new(CMD_GLUE)
-            .about("Generate glue code between a platform's Roc API and its host language.")
+            .about("Generate glue code between a platform's Roc API and its host language")
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the platform module")
@@ -269,7 +269,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
             .arg(
                 Arg::new(GLUE_FILE)
-                    .help("The filename for the generated glue code. Currently, this must be a .rs file because only Rust glue generation is supported so far.")
+                    .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
@@ -294,7 +294,7 @@ pub fn build_app<'a>() -> Command<'a> {
                     Arg::new(DIRECTORY_OR_FILES)
                         .multiple_values(true)
                         .required(false)
-                        .help("(optional) The directory or files to open on launch."),
+                        .help("(optional) The directory or files to open on launch"),
                 ),
         )
     } else {
@@ -396,7 +396,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
+    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -415,6 +415,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
         interns,
+        &layout_interner.into_global(),
         &lib,
         &mut expectations,
         expects,

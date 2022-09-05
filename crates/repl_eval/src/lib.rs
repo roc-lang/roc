@@ -13,12 +13,12 @@ pub trait ReplApp<'a> {
     /// The `transform` callback takes the app's memory and the returned value
     fn call_function<Return, F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a;
 
     fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
         Self::Memory: 'a,
     {
         self.call_function(main_fn_name, transform)
@@ -51,7 +51,7 @@ pub trait ReplApp<'a> {
         transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a;
 }
 

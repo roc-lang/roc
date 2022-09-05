@@ -14,6 +14,7 @@ roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
 roc_collections = {path = "../compiler/collections"}
 roc_fmt = {path = "../compiler/fmt"}
+roc_intern = {path = "../compiler/intern"}
 roc_load = {path = "../compiler/load"}
 roc_module = {path = "../compiler/module"}
 roc_mono = {path = "../compiler/mono"}

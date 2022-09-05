@@ -254,7 +254,7 @@ pub fn unsafeReallocate(
     const old_width = align_width + old_length * element_width;
     const new_width = align_width + new_length * element_width;
 
-    if (old_width == new_width) {
+    if (old_width >= new_width) {
         return source_ptr;
     }
 

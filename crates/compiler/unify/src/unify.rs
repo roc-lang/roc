@@ -156,8 +156,11 @@ pub trait MetaCollector: Default + std::fmt::Debug {
     /// be kept around, and the record `(member, 1) => specialization-lambda-set` will be
     /// associated via [`Self::record_specialization_lambda_set`].
     const UNIFYING_SPECIALIZATION: bool;
+    const IS_LATE: bool;
 
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable);
+
+    fn record_changed_variable(&mut self, subs: &Subs, var: Variable);
 
     fn union(&mut self, other: Self);
 }
@@ -166,9 +169,15 @@ pub trait MetaCollector: Default + std::fmt::Debug {
 pub struct NoCollector;
 impl MetaCollector for NoCollector {
     const UNIFYING_SPECIALIZATION: bool = false;
+    const IS_LATE: bool = false;
 
+    #[inline(always)]
     fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}
 
+    #[inline(always)]
+    fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, _other: Self) {}
 }
 
@@ -177,11 +186,17 @@ pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
 
 impl MetaCollector for SpecializationLsetCollector {
     const UNIFYING_SPECIALIZATION: bool = true;
+    const IS_LATE: bool = false;
 
+    #[inline(always)]
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
         self.0.insert((member, region), var);
     }
 
+    #[inline(always)]
+    fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, other: Self) {
         for (k, v) in other.0.into_iter() {
             let _old = self.0.insert(k, v);
@@ -298,11 +313,24 @@ impl<M: MetaCollector> Outcome<M> {
 
 pub struct Env<'a> {
     pub subs: &'a mut Subs,
+    compute_outcome_only: bool,
 }
 
 impl<'a> Env<'a> {
     pub fn new(subs: &'a mut Subs) -> Self {
-        Self { subs }
+        Self {
+            subs,
+            compute_outcome_only: false,
+        }
+    }
+
+    // Computes a closure in outcome-only mode. Unifications run in outcome-only mode will check
+    // for unifiability, but will not modify type variables or merge them.
+    pub fn with_outcome_only<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.compute_outcome_only = true;
+        let result = f(self);
+        self.compute_outcome_only = false;
+        result
     }
 }
 
@@ -319,6 +347,16 @@ pub fn unify_introduced_ability_specialization(
     mode: Mode,
 ) -> Unified<SpecializationLsetCollector> {
     unify_help(env, ability_member_signature, specialization_var, mode)
+}
+
+#[inline(always)]
+pub fn unify_with_collector<M: MetaCollector>(
+    env: &mut Env,
+    var1: Variable,
+    var2: Variable,
+    mode: Mode,
+) -> Unified<M> {
+    unify_help(env, var1, var2, mode)
 }
 
 #[inline(always)]
@@ -1202,27 +1240,46 @@ fn separate_union_lambdas<M: MetaCollector>(
                             continue 'try_next_right;
                         }
 
-                        let snapshot = env.subs.snapshot();
                         for (var1, var2) in (left_slice.into_iter()).zip(right_slice.into_iter()) {
                             let (var1, var2) = (env.subs[var1], env.subs[var2]);
 
-                            // Lambda sets are effectively tags under another name, and their usage can also result
-                            // in the arguments of a lambda name being recursive. It very well may happen that
-                            // during unification, a lambda set previously marked as not recursive becomes
-                            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/roc-lang/roc/pull/2307.
+                            if M::IS_LATE {
+                                // Lambda sets are effectively tags under another name, and their usage can also result
+                                // in the arguments of a lambda name being recursive. It very well may happen that
+                                // during unification, a lambda set previously marked as not recursive becomes
+                                // recursive. See the docs of [LambdaSet] for one example, or https://github.com/roc-lang/roc/pull/2307.
+                                //
+                                // Like with tag unions, if it is, we'll always pass through this branch. So, take
+                                // this opportunity to promote the lambda set to recursive if need be.
+                                //
+                                // THEORY: observe that this check only happens in late unification
+                                // (i.e. code generation, typically). We believe this to be correct
+                                // because while recursive lambda sets must be collapsed to the
+                                // code generator, we have not yet observed a case where they must
+                                // collapsed to the type checker of the surface syntax.
+                                // It is possible this assumption will be invalidated!
+                                maybe_mark_union_recursive(env, var1);
+                                maybe_mark_union_recursive(env, var2);
+                            }
+
+                            // Check whether the two type variables in the closure set are
+                            // unifiable. If they are, we can unify them and continue on assuming
+                            // that these lambdas are in fact the same.
                             //
-                            // Like with tag unions, if it has, we'll always pass through this branch. So, take
-                            // this opportunity to promote the lambda set to recursive if need be.
-                            maybe_mark_union_recursive(env, var1);
-                            maybe_mark_union_recursive(env, var2);
+                            // If they are not unifiable, that means the two lambdas must be
+                            // different (since they have different capture sets), and so we don't
+                            // want to merge the variables.
+                            let variables_are_unifiable = env.with_outcome_only(|env| {
+                                unify_pool::<NoCollector>(env, pool, var1, var2, mode)
+                                    .mismatches
+                                    .is_empty()
+                            });
 
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
-
-                            if !outcome.mismatches.is_empty() {
-                                env.subs.rollback_to(snapshot);
+                            if !variables_are_unifiable {
                                 continue 'try_next_right;
                             }
 
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
                             whole_outcome.union(outcome);
                         }
 
@@ -2959,17 +3016,28 @@ fn unify_recursion<M: MetaCollector>(
 }
 
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
-    let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
-    let desc = Descriptor {
-        content,
-        rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
+    let mut outcome: Outcome<M> = Outcome::default();
 
-    env.subs.union(ctx.first, ctx.second, desc);
+    if !env.compute_outcome_only {
+        let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
+        let desc = Descriptor {
+            content,
+            rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
 
-    Outcome::default()
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.first);
+        outcome
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.second);
+
+        env.subs.union(ctx.first, ctx.second, desc);
+    }
+
+    outcome
 }
 
 fn register(env: &mut Env, desc: Descriptor, pool: &mut Pool) -> Variable {
@@ -3063,7 +3131,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
             env.subs.get(ctx.first)
         };
 
-        env.subs.union(ctx.first, ctx.second, desc);
+        outcome.union(merge(env, ctx, desc.content));
     }
 
     outcome
