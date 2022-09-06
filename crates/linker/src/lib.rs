@@ -2542,8 +2542,7 @@ pub fn surgery_elf(
 
     // Backup section header table.
     let sh_size = sh_ent_size as usize * sh_num as usize;
-    let mut sh_tab = vec![];
-    sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
+    let sh_tab = exec_mmap[sh_offset as usize..][..sh_size].to_vec();
 
     let mut offset = sh_offset as usize;
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
@@ -2567,13 +2566,6 @@ pub fn surgery_elf(
 
     // First decide on sections locations and then recode every exact symbol locations.
 
-    // Copy sections and resolve their symbols/relocations.
-    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
-    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
-    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
-    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
-    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
-
     // TODO: In the future Roc may use a data section to store memoized toplevel thunks
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
@@ -2594,6 +2586,13 @@ pub fn surgery_elf(
     if text_sections.is_empty() {
         internal_error!("No text sections found. This application has no code.");
     }
+
+    // Copy sections and resolve their symbols/relocations.
+    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
+    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
+    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
+    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
+    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
 
     // Calculate addresses and load symbols.
     // Note, it is important the bss sections come after the rodata sections.
@@ -2659,20 +2658,16 @@ pub fn surgery_elf(
         .chain(bss_sections.iter())
         .chain(text_sections.iter())
     {
-        let data = match sec.data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!(
-                    "Failed to load data for section, {:+x?}: {}",
-                    sec.name().unwrap(),
-                    err
-                );
-            }
-        };
+        let data = sec.data().unwrap_or_else(|err| {
+            internal_error!(
+                "Failed to load data for section, {:+x?}: {err}",
+                sec.name().unwrap(),
+            )
+        });
         let (section_offset, section_virtual_offset) =
             section_offset_map.get(&sec.index()).unwrap();
         let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
-        exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(data);
+        exec_mmap[section_offset..][..data.len()].copy_from_slice(data);
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
@@ -2767,7 +2762,7 @@ pub fn surgery_elf(
 
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
-    exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
+    exec_mmap[offset..][..sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
 
     // Flush app only data to speed up write to disk.
@@ -2892,8 +2887,7 @@ pub fn surgery_elf(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 4]
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..4]
                         .copy_from_slice(&data);
                 }
                 8 => {
@@ -2902,8 +2896,7 @@ pub fn surgery_elf(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 8]
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -2943,9 +2936,7 @@ pub fn surgery_elf(
                 LittleEndian,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
-                    None => {
-                        internal_error!("Size missing for: {}", func_name);
-                    }
+                    None => internal_error!("Size missing for: {func_name}"),
                 },
             );
         }
