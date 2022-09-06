@@ -151,7 +151,7 @@ pub fn build_file<'a>(
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
     // Also, we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled platforms from there.
+    // a package repository, as we can then get prebuilt platforms from there.
 
     let exposed_values = loaded
         .exposed_to_host
@@ -191,8 +191,8 @@ pub fn build_file<'a>(
         exposed_closure_types,
     );
 
-    // TODO try to move as much of this linking as possible to the precompiled
-    // platform, to minimize the amount of platform-application linking required.
+    // TODO try to move as much of this linking as possible to the prebuilt platform,
+    // to minimize the amount of platform-application linking required.
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
@@ -330,7 +330,7 @@ pub fn build_file<'a>(
         }
     }
 
-    // Step 2: link the precompiled platform and compiled app
+    // Step 2: link the prebuilt platform and compiled app
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
