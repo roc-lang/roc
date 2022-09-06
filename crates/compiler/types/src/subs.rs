@@ -3999,8 +3999,8 @@ pub struct ExposedTypesStorageSubs {
 #[derive(Clone, Debug)]
 pub struct StorageSubs {
     subs: Subs,
-    /// Module -> variable they export -> variable we import
-    module_extended_from_subs_cache: FnvMap<ModuleId, FnvMap<Variable, Variable>>,
+    /// variable they export -> variable we import
+    module_extended_from_subs_cache: FnvMap<Variable, Variable>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4039,15 +4039,26 @@ impl StorageSubs {
     pub fn extend_with_variable(
         &mut self,
         source: &Subs,
-        source_module: ModuleId,
+        _source_module: ModuleId,
         variable: Variable,
     ) -> Variable {
-        let copy_table = self
-            .module_extended_from_subs_cache
-            .entry(source_module)
-            .or_default();
+        let copy_table = &mut self.module_extended_from_subs_cache;
+        // let copy_table = self
+        //     .module_extended_from_subs_cache
+        //     .entry(source_module)
+        //     .or_default();
 
         storage_copy_var_to(copy_table, source, &mut self.subs, variable)
+    }
+
+    pub fn invalidate(&mut self, changed_variables: &[Variable]) {
+        for var in changed_variables {
+            self.module_extended_from_subs_cache.remove(var);
+        }
+    }
+
+    pub fn invalidate_all(&mut self) {
+        self.module_extended_from_subs_cache.clear();
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {

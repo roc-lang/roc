@@ -587,6 +587,10 @@ impl<'a> ExternalSpecializations<'a> {
         }
     }
 
+    fn invalidate(&mut self, changed_variables: &[Variable]) {
+        self.storage_subs.invalidate(changed_variables)
+    }
+
     fn insert_external(
         &mut self,
         symbol_or_lambda: LambdaName<'a>,
@@ -1040,6 +1044,14 @@ impl<'a> Procs<'a> {
     fn symbol_needs_suspended_specialization(&self, specialization: Symbol) -> bool {
         self.specialization_stack.contains(&specialization)
     }
+
+    fn invalidate_externals(&mut self) {
+        use hashbrown::hash_map::Entry::{Occupied, Vacant};
+
+        for external_specializations in self.externals_we_need.values_mut() {
+            external_specializations.storage_subs.invalidate_all()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1457,6 +1469,7 @@ impl<'a, 'i> Env<'a, 'i> {
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(
         &mut self,
+        procs: &mut Procs,
         layout_cache: &mut LayoutCache,
         left: Variable,
         right: Variable,
@@ -1478,7 +1491,9 @@ impl<'a, 'i> Env<'a, 'i> {
             right,
         )?;
 
-        layout_cache.invalidate(changed_variables);
+        layout_cache.invalidate(changed_variables.iter().copied());
+        //invalidate_vars_cached_for_externals(procs, &changed_variables);
+        procs.invalidate_externals();
 
         Ok(())
     }
@@ -2494,7 +2509,7 @@ fn from_can_let<'a>(
                         // Make sure rigid variables in the annotation are converted to flex variables.
                         instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
-                        let _res = env.unify(layout_cache, var, def.expr_var);
+                        let _res = env.unify(procs, layout_cache, var, def.expr_var);
 
                         with_hole(
                             env,
@@ -2528,7 +2543,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res = env.unify(layout_cache, var, new_def_expr_var);
+                            let _res = env.unify(procs, layout_cache, var, new_def_expr_var);
 
                             stmt = with_hole(
                                 env,
@@ -2863,6 +2878,72 @@ fn specialize_suspended<'a>(
     }
 }
 
+pub fn specialize_all_my_appmod<'a>(
+    env: &mut Env<'a, '_>,
+    mut procs: Procs<'a>,
+    externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
+    specializations_for_host: HostSpecializations<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+) -> Procs<'a> {
+    let now = std::time::Instant::now();
+    // When calling from_can, pending_specializations should be unavailable.
+    // This must be a single pass, and we must not add any more entries to it!
+    let pending_specializations = std::mem::replace(
+        &mut procs.pending_specializations,
+        PendingSpecializations::Making(Suspended::new_in(env.arena)),
+    );
+    //dbg!(now.elapsed());
+
+    // Add all of our existing pending specializations.
+    match pending_specializations {
+        PendingSpecializations::Finding(suspended) => {
+            specialize_suspended(env, &mut procs, layout_cache, suspended)
+        }
+        PendingSpecializations::Making(suspended) => {
+            debug_assert!(
+                suspended.is_empty(),
+                "suspended specializations cannot ever start off non-empty when making"
+            );
+        }
+    }
+    //dbg!(now.elapsed());
+
+    // Specialize all the symbols everyone else needs.
+    for externals in externals_others_need {
+        //dbg!((env.home, externals.storage_subs.as_inner().len()));
+        specialize_external_specializations(env, &mut procs, layout_cache, externals);
+    }
+    //dbg!(now.elapsed());
+
+    // Specialize any symbols the host needs.
+    specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
+
+    // Now, we must go through and continuously complete any new suspended specializations that were
+    // discovered in specializing the other demanded symbols.
+    while !procs.pending_specializations.is_empty() {
+        let pending_specializations = std::mem::replace(
+            &mut procs.pending_specializations,
+            PendingSpecializations::Making(Suspended::new_in(env.arena)),
+        );
+        match pending_specializations {
+            PendingSpecializations::Making(suspended) => {
+                specialize_suspended(env, &mut procs, layout_cache, suspended);
+            }
+            PendingSpecializations::Finding(_) => {
+                internal_error!("should not have this variant after making specializations")
+            }
+        }
+    }
+
+    debug_assert!(
+        procs.symbol_specializations.is_empty(),
+        "{:?}",
+        &procs.symbol_specializations
+    );
+
+    procs
+}
+
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
@@ -2952,13 +3033,18 @@ fn specialize_external_specializations<'a>(
     layout_cache: &mut LayoutCache<'a>,
     externals_others_need: ExternalSpecializations<'a>,
 ) {
+    let now = std::time::Instant::now();
     let (store, it) = externals_others_need.decompose();
 
+    //dbg!(now.elapsed());
     let offset_variable = StorageSubs::merge_into(store, env.subs);
+    //dbg!(now.elapsed());
 
     for (symbol, solved_types) in it {
         for store_variable in solved_types {
+            let now = std::time::Instant::now();
             let imported_variable = offset_variable(store_variable);
+            //dbg!(now.elapsed());
 
             roc_tracing::debug!(proc_name = ?symbol, ?store_variable, ?imported_variable, "specializing needed external");
 
@@ -2967,9 +3053,11 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[]);
+            //dbg!(now.elapsed());
         }
     }
+    //dbg!(now.elapsed());
 }
 
 fn specialize_external_help<'a>(
@@ -3134,9 +3222,11 @@ fn specialize_proc_help<'a>(
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
-    let captured_symbols = partial_proc.captured_symbols;
 
-    let _unified = env.unify(layout_cache, partial_proc.annotation, fn_var);
+    let _unified = env.unify(procs, layout_cache, partial_proc.annotation, fn_var);
+
+    let partial_proc = procs.partial_procs.get_id(partial_proc_id);
+    let captured_symbols = partial_proc.captured_symbols;
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -3712,7 +3802,12 @@ fn specialize_variable<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    let now = std::time::Instant::now();
     let snapshot = snapshot_typestate(env.subs, layout_cache);
+    //procs.invalidate_externals();
+    if now.elapsed().as_millis() > 10 {
+        //dbg!(now.elapsed());
+    }
 
     // for debugging only
     let raw = layout_cache
@@ -3777,7 +3872,12 @@ fn specialize_variable<'a>(
         }
     };
 
+    let now = std::time::Instant::now();
     rollback_typestate(env.subs, layout_cache, snapshot);
+    procs.invalidate_externals();
+    if now.elapsed().as_millis() > 10 {
+        //dbg!(now.elapsed());
+    }
 
     result
 }
@@ -7848,6 +7948,12 @@ fn add_needed_external<'a>(
     roc_tracing::debug!(proc_name = ?name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "needed external");
 
     existing.insert_external(name, env.home, env.subs, fn_var);
+}
+
+fn invalidate_vars_cached_for_externals(procs: &mut Procs, changed_variables: &[Variable]) {
+    for external in procs.externals_we_need.values_mut() {
+        external.invalidate(changed_variables)
+    }
 }
 
 fn build_call<'a>(

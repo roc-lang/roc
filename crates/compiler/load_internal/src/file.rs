@@ -582,6 +582,13 @@ fn start_phase<'a>(
 
                 BuildTask::MakeSpecializations {
                     module_id,
+                    n: state
+                        .arc_modules
+                        .lock()
+                        .get_name(module_id)
+                        .unwrap()
+                        .as_inner()
+                        .to_string(),
                     ident_ids,
                     subs,
                     procs_base,
@@ -1143,6 +1150,7 @@ enum BuildTask<'a> {
     },
     MakeSpecializations {
         module_id: ModuleId,
+        n: String,
         ident_ids: IdentIds,
         subs: Subs,
         procs_base: ProcsBase<'a>,
@@ -4792,6 +4800,7 @@ fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
 #[allow(clippy::too_many_arguments)]
 fn make_specializations<'a>(
     arena: &'a Bump,
+    n: String,
     home: ModuleId,
     mut ident_ids: IdentIds,
     mut subs: Subs,
@@ -4834,13 +4843,24 @@ fn make_specializations<'a>(
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
     // this, but doing so will require a redesign of Procs.
-    procs = roc_mono::ir::specialize_all(
-        &mut mono_env,
-        procs,
-        specializations_we_must_make,
-        procs_base.host_specializations,
-        &mut layout_cache,
-    );
+    procs = if n.contains("Effect") {
+        //dbg!(&mono_env.subs.len(), home);
+        roc_mono::ir::specialize_all_my_appmod(
+            &mut mono_env,
+            procs,
+            specializations_we_must_make,
+            procs_base.host_specializations,
+            &mut layout_cache,
+        )
+    } else {
+        roc_mono::ir::specialize_all(
+            &mut mono_env,
+            procs,
+            specializations_we_must_make,
+            procs_base.host_specializations,
+            &mut layout_cache,
+        )
+    };
 
     let external_specializations_requested = procs.externals_we_need.clone();
     let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc(&mut mono_env);
@@ -5511,6 +5531,7 @@ fn run_task<'a>(
         )),
         MakeSpecializations {
             module_id,
+            n,
             ident_ids,
             subs,
             procs_base,
@@ -5522,6 +5543,7 @@ fn run_task<'a>(
             derived_module,
         } => Ok(make_specializations(
             arena,
+            n,
             module_id,
             ident_ids,
             subs,
