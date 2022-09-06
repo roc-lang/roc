@@ -3,22 +3,9 @@ use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
 use object::Endianness;
 
 use object::write::elf::Writer;
-use target_lexicon::Triple;
-
-// an empty shared library, that we build on top of
-const DUMMY_ELF64: &[u8] = include_bytes!("../dummy-elf64-x86-64.so");
 
 // index of the dynamic section
 const DYMAMIC_SECTION: usize = 4;
-
-pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
-    match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => create_dylib_elf64(DUMMY_ELF64, custom_names),
-        target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
-        target_lexicon::BinaryFormat::Coff => todo!("coff dylib creation"),
-        other => unimplemented!("dylib creation for {:?}", other),
-    }
-}
 
 #[derive(Debug)]
 struct Dynamic {
@@ -145,7 +132,10 @@ pub const fn round_up_to_alignment(width: usize, alignment: usize) -> usize {
     }
 }
 
-fn create_dylib_elf64(in_data: &[u8], custom_names: &[String]) -> object::read::Result<Vec<u8>> {
+pub fn create_dylib_elf64(
+    in_data: &[u8],
+    custom_names: &[String],
+) -> object::read::Result<Vec<u8>> {
     let in_elf: &elf::FileHeader64<Endianness> = elf::FileHeader64::parse(in_data)?;
     let endian = in_elf.endian()?;
     let in_segments = in_elf.program_headers(endian, in_data)?;
