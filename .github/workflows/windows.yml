@@ -21,8 +21,6 @@ jobs:
       
       - name: remove pre-installed llvm from path
         run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
-      
-      - run: $env:GITHUB_PATH  | Format-Table -Wrap -AutoSize
 
       - name: install visual studio build tools
         run: |
@@ -46,5 +44,7 @@ jobs:
            @("C:/LLVM-13.0.0-win64/bin") +  (Get-Content $env:GITHUB_PATH) | Set-Content $env:GITHUB_PATH    
       #    ^^^ llvm bin path needs to be prepended and not appended to work 
         
+      - run: lld-link.exe --version
+      
       - name: build tests
         run: cargo test --no-run --locked --release
