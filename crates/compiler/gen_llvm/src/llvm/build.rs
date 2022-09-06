@@ -8,7 +8,6 @@ use crate::llvm::build_list::{
     list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::dec_to_str;
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
@@ -65,7 +64,7 @@ use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-use super::convert::{zig_with_overflow_roc_dec, RocUnion};
+use super::convert::{zig_dec_type, zig_with_overflow_roc_dec, RocUnion};
 
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
@@ -5821,24 +5820,60 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
             debug_assert_eq!(args.len(), 2);
 
+            use roc_target::OperatingSystem::*;
+
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
 
-            let result = call_str_bitcode_fn(
-                env,
-                &[string],
-                &[index],
-                BitcodeReturns::Basic,
-                bitcode::STR_GET_SCALAR_UNSAFE,
-            );
+            match env.target_info.operating_system {
+                Windows => {
+                    // we have to go digging to find the return type
+                    let function = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap();
 
-            // on 32-bit platforms, zig bitpacks the struct
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes8 => result,
-                PtrWidth::Bytes4 => {
-                    let to = basic_type_from_layout(env, layout);
-                    complex_bitcast_check_size(env, result, to, "to_roc_record")
+                    let return_type = function.get_type().get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type()
+                        .into_struct_type();
+
+                    let result = env.builder.build_alloca(return_type, "result");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[result.into(), string, index],
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    let return_type = basic_type_from_layout(env, layout);
+                    let cast_result = env.builder.build_pointer_cast(
+                        result,
+                        return_type.ptr_type(AddressSpace::Generic),
+                        "cast",
+                    );
+
+                    env.builder.build_load(cast_result, "load_result")
                 }
+                Unix => {
+                    let result = call_str_bitcode_fn(
+                        env,
+                        &[string],
+                        &[index],
+                        BitcodeReturns::Basic,
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    // on 32-bit platforms, zig bitpacks the struct
+                    match env.target_info.ptr_width() {
+                        PtrWidth::Bytes8 => result,
+                        PtrWidth::Bytes4 => {
+                            let to = basic_type_from_layout(env, layout);
+                            complex_bitcast_check_size(env, result, to, "to_roc_record")
+                        }
+                    }
+                }
+                Wasi => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
@@ -7323,39 +7358,123 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn dec_split_into_words<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let left_bits_i128 = env
+        .builder
+        .build_right_shift(value, int_64, false, "left_bits_i128");
+
+    (
+        env.builder.build_int_cast(value, int_64_type, ""),
+        env.builder.build_int_cast(left_bits_i128, int_64_type, ""),
+    )
+}
+
+fn dec_alloca<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let dec_type = zig_dec_type(env);
+
+    let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
+
+    let instruction = alloca.as_instruction_value().unwrap();
+    instruction.set_alignment(16).unwrap();
+
+    let ptr = env.builder.build_pointer_cast(
+        alloca,
+        value.get_type().ptr_type(AddressSpace::Generic),
+        "cast_to_i128_ptr",
+    );
+
+    env.builder.build_store(ptr, value);
+
+    alloca
+}
+
+fn dec_to_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
+    let dec = dec.into_int_value();
+
+    match env.target_info.operating_system {
+        Windows => {
+            //
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[dec_alloca(env, dec).into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Unix => {
+            let (low, high) = dec_split_into_words(env, dec);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[low.into(), high.into()],
+                BitcodeReturns::Str,
+                bitcode::DEC_TO_STR,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
+}
+
 fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
     let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
+    match env.target_info.operating_system {
+        Windows => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    dec_alloca(env, lhs).into(),
+                    dec_alloca(env, rhs).into(),
+                ],
+                fn_name,
+            );
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            return_alloca.into(),
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
-        ],
-        fn_name,
-    );
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            );
+        }
+        Wasi => unimplemented!(),
+    }
 
     env.builder
         .build_load(return_alloca, "load_dec")
@@ -7368,29 +7487,37 @@ pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    let int_64 = env.context.i128_type().const_int(64, false);
-    let int_64_type = env.context.i64_type();
+    match env.target_info.operating_system {
+        Windows => {
+            // windows is much nicer for us here
+            call_bitcode_fn(
+                env,
+                &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
+                fn_name,
+            )
+        }
+        Unix => {
+            let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
+            let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
 
-    let lhs1 = env
-        .builder
-        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
-    let rhs1 = env
-        .builder
-        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
-
-    call_bitcode_fn(
-        env,
-        &[
-            env.builder.build_int_cast(lhs, int_64_type, "").into(),
-            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs, int_64_type, "").into(),
-            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
-        ],
-        fn_name,
-    )
+            call_bitcode_fn(
+                env,
+                &[
+                    lhs_low.into(),
+                    lhs_high.into(),
+                    rhs_low.into(),
+                    rhs_high.into(),
+                ],
+                fn_name,
+            )
+        }
+        Wasi => unimplemented!(),
+    }
 }
 
 fn build_dec_binop<'a, 'ctx, 'env>(

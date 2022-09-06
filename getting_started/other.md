@@ -7,11 +7,11 @@
 1. Run examples:
 
     ```sh
-    cargo run examples/platform-switching/rust-platform/rocLovesRust.roc
+    cargo run examples/platform-switching/rocLovesRust.roc
 
     # This requires installing the Zig compiler, too.
-    cargo run examples/platform-switching/zig-platform/rocLovesZig.roc
+    cargo run examples/platform-switching/rocLovesZig.roc
 
     # This requires installing the `clang` C compiler, too.
-    cargo run examples/platform-switching/c-platform/rocLovesC.roc
+    cargo run examples/platform-switching/rocLovesC.roc
     ```

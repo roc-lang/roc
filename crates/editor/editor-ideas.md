@@ -313,6 +313,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Plugin to translate linux commands like curl to Roc code
 * Plugin to view diff between two texts
 * Plugin to present codebase to new developer or walk co-worker through a problem. Records sequence of filenames and line numbers.
+* A Logbook plugin. I've found that writing down steps and thoughts when you're implementing or debugging something can be really useful for later.
+If we make an integrated terminal, we can automatically add executed commands to this logbook. This plugin could have a publish button so you can produce useful "blogs" for others with minimal effort.
 
 ### Inspiration
 
