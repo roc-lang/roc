@@ -22,6 +22,8 @@ use roc_unify::unify::{Env, Mode, Unified};
 pub use roc_solve::ability::Resolved;
 pub use roc_types::subs::instantiate_rigids;
 
+pub mod storage;
+
 #[derive(Debug)]
 pub struct UnificationFailed;
 

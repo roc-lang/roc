@@ -3997,31 +3997,8 @@ pub struct ExposedTypesStorageSubs {
 }
 
 #[derive(Clone, Debug)]
-struct VariableMapCache(Vec<FnvMap<Variable, Variable>>);
-
-impl VariableMapCache {
-    fn new() -> Self {
-        Self(vec![Default::default()])
-    }
-
-    fn get(&self, v: &Variable) -> Option<&Variable> {
-        self.0.iter().rev().find_map(|cache| cache.get(v))
-    }
-
-    fn insert(&mut self, key: Variable, value: Variable) -> Option<Variable> {
-        self.0.last_mut().unwrap().insert(key, value)
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct StorageSubs {
     subs: Subs,
-    /// Variable they expose -> variable we record into storage
-    variable_mapping_cache: VariableMapCache,
-}
-
-pub struct StorageSnapshot {
-    mapping_cache_len: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4037,12 +4014,26 @@ struct StorageSubsOffsets {
     problems: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct VariableMapCache(pub Vec<FnvMap<Variable, Variable>>);
+
+impl VariableMapCache {
+    pub fn new() -> Self {
+        Self(vec![Default::default()])
+    }
+
+    fn get(&self, v: &Variable) -> Option<&Variable> {
+        self.0.iter().rev().find_map(|cache| cache.get(v))
+    }
+
+    fn insert(&mut self, key: Variable, value: Variable) -> Option<Variable> {
+        self.0.last_mut().unwrap().insert(key, value)
+    }
+}
+
 impl StorageSubs {
     pub fn new(subs: Subs) -> Self {
-        Self {
-            subs,
-            variable_mapping_cache: VariableMapCache::new(),
-        }
+        Self { subs }
     }
 
     pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
@@ -4059,39 +4050,11 @@ impl StorageSubs {
 
     pub fn extend_with_variable(&mut self, source: &Subs, variable: Variable) -> Variable {
         storage_copy_var_to(
-            &mut self.variable_mapping_cache,
+            &mut VariableMapCache::new(),
             source,
             &mut self.subs,
             variable,
         )
-    }
-
-    pub fn invalidate_cache(&mut self, changed_variables: &[Variable]) {
-        for var in changed_variables {
-            for cache in self.variable_mapping_cache.0.iter_mut().rev() {
-                cache.remove(var);
-            }
-        }
-    }
-
-    pub fn invalidate_whole_cache(&mut self) {
-        debug_assert_eq!(self.variable_mapping_cache.0.len(), 1);
-        self.variable_mapping_cache.0.last_mut().unwrap().clear();
-    }
-
-    pub fn snapshot_cache(&mut self) -> StorageSnapshot {
-        self.variable_mapping_cache.0.push(Default::default());
-        StorageSnapshot {
-            mapping_cache_len: self.variable_mapping_cache.0.len(),
-        }
-    }
-
-    pub fn rollback_cache(&mut self, snapshot: StorageSnapshot) {
-        debug_assert_eq!(
-            self.variable_mapping_cache.0.len(),
-            snapshot.mapping_cache_len
-        );
-        self.variable_mapping_cache.0.pop();
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
@@ -4384,7 +4347,7 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     });
 }
 
-fn storage_copy_var_to(
+pub fn storage_copy_var_to(
     copy_table: &mut VariableMapCache,
     source: &Subs,
     target: &mut Subs,

@@ -23,6 +23,7 @@ use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
 use roc_intern::Interner;
+use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -32,8 +33,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSnapshot,
-    StorageSubs, Subs, Variable, VariableSubsSlice,
+    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
+    Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -557,14 +558,15 @@ impl<'a> HostSpecializations<'a> {
     }
 }
 
-/// Specializations of this module's symbols that other modules need
+/// Specializations of this module's symbols that other modules need.
+/// One struct represents one pair of modules, e.g. what module A wants of module B.
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     pub symbol_or_lambda: std::vec::Vec<LambdaName<'a>>,
-    storage_subs: StorageSubs,
+    storage: ExternalModuleStorage,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
 }
@@ -579,7 +581,7 @@ impl<'a> ExternalSpecializations<'a> {
     pub fn new() -> Self {
         Self {
             symbol_or_lambda: std::vec::Vec::new(),
-            storage_subs: StorageSubs::new(Subs::default()),
+            storage: ExternalModuleStorage::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
         }
     }
@@ -590,7 +592,7 @@ impl<'a> ExternalSpecializations<'a> {
         env_subs: &mut Subs,
         variable: Variable,
     ) {
-        let stored_variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let stored_variable = self.storage.extend_with_variable(env_subs, variable);
         roc_tracing::debug!(original = ?variable, stored = ?stored_variable, "stored needed external");
 
         match self
@@ -616,27 +618,27 @@ impl<'a> ExternalSpecializations<'a> {
         impl Iterator<Item = (LambdaName<'a>, std::vec::Vec<Variable>)>,
     ) {
         (
-            self.storage_subs,
+            self.storage.into_storage_subs(),
             self.symbol_or_lambda
                 .into_iter()
                 .zip(self.types_to_specialize.into_iter()),
         )
     }
 
-    fn snapshot_cache(&mut self) -> StorageSnapshot {
-        self.storage_subs.snapshot_cache()
+    fn snapshot_cache(&mut self) -> ExternalModuleStorageSnapshot {
+        self.storage.snapshot_cache()
     }
 
-    fn rollback_cache(&mut self, snapshot: StorageSnapshot) {
-        self.storage_subs.rollback_cache(snapshot)
+    fn rollback_cache(&mut self, snapshot: ExternalModuleStorageSnapshot) {
+        self.storage.rollback_cache(snapshot)
     }
 
     fn invalidate_cache(&mut self, changed_variables: &[Variable]) {
-        self.storage_subs.invalidate_cache(changed_variables)
+        self.storage.invalidate_cache(changed_variables)
     }
 
     fn invalidate_whole_cache(&mut self) {
-        self.storage_subs.invalidate_whole_cache()
+        self.storage.invalidate_whole_cache()
     }
 }
 
@@ -684,7 +686,7 @@ impl<'a> Suspended<'a> {
         self.symbol_or_lambdas.push(symbol_or_lambda);
         self.layouts.push(proc_layout);
 
-        let variable = self.store.extend_with_variable(subs, variable);
+        let variable = self.store.import_variable_from(subs, variable).variable;
 
         self.variables.push(variable);
     }
@@ -3114,7 +3116,7 @@ fn generate_runtime_error_function<'a>(
 struct TypeStateSnapshot {
     subs_snapshot: roc_types::subs::SubsSnapshot,
     layout_snapshot: crate::layout::CacheSnapshot,
-    external_storage_snapshot: VecMap<ModuleId, StorageSnapshot>,
+    external_storage_snapshot: VecMap<ModuleId, ExternalModuleStorageSnapshot>,
 }
 
 /// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and
