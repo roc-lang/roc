@@ -28,7 +28,7 @@ impl ExternalModuleStorage {
         storage_copy_var_to(
             &mut self.variable_mapping_cache,
             source,
-            &mut self.storage.as_inner_mut(),
+            self.storage.as_inner_mut(),
             variable,
         )
     }
