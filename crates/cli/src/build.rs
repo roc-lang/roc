@@ -192,7 +192,7 @@ pub fn build_file<'a>(
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
-    // platform, to minimize the amount of host-application linking required.
+    // platform, to minimize the amount of platform-application linking required.
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
