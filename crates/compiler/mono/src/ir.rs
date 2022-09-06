@@ -4874,7 +4874,10 @@ pub fn with_hole<'a>(
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
-                            if record_needs_specialization {
+                            // If the records needs specialization or it's a thunk, we need to
+                            // create the specialized definition or force the thunk, respectively.
+                            // Both cases are handled below.
+                            if record_needs_specialization || procs.is_module_thunk(structure) {
                                 stmt = specialize_symbol(
                                     env,
                                     procs,
