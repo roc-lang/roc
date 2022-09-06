@@ -916,6 +916,22 @@ fn x86_64_generic_cleanup_stack<'a>(
     X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
 }
 
+type Reg64 = X86_64GeneralReg;
+
+fn binop_move_src_to_dst_reg64<F>(buf: &mut Vec<'_, u8>, f: F, dst: Reg64, src1: Reg64, src2: Reg64)
+where
+    F: FnOnce(&mut Vec<'_, u8>, X86_64GeneralReg, X86_64GeneralReg),
+{
+    if dst == src1 {
+        f(buf, dst, src2);
+    } else if dst == src2 {
+        f(buf, dst, src1);
+    } else {
+        mov_reg64_reg64(buf, dst, src1);
+        f(buf, dst, src2);
+    }
+}
+
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
@@ -954,22 +970,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, src1);
         add_reg64_imm32(buf, dst, imm32);
     }
+
     #[inline(always)]
-    fn add_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            add_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            add_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            add_reg64_reg64(buf, dst, src2);
-        }
+    fn add_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, add_reg64_reg64, dst, src1, src2)
     }
+
     #[inline(always)]
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -1253,31 +1259,20 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("sign extending 4 byte values");
-        } else if size == 2 {
-            todo!("sign extending 2 byte values");
-        } else if size == 1 {
-            todo!("sign extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for sign extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 | 1 => todo!("sign extending {size} byte values"),
+            _ => internal_error!("Invalid size for sign extension: {size}"),
         }
     }
     #[inline(always)]
     fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("zero extending 4 byte values");
-        } else if size == 2 {
-            todo!("zero extending 2 byte values");
-        } else if size == 1 {
-            movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset);
-        } else {
-            internal_error!("Invalid size for zero extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 => todo!("zero extending {size} byte values"),
+            1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            _ => internal_error!("Invalid size for zero extension: {size}"),
         }
     }
 
@@ -1408,6 +1403,18 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
         seto_reg64(buf, dst);
     }
+
+    fn and_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, and_reg64_reg64, dst, src1, src2)
+    }
+
+    fn or_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, or_reg64_reg64, dst, src1, src2)
+    }
+
+    fn xor_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, xor_reg64_reg64, dst, src1, src2)
+    }
 }
 
 impl X86_64Assembler {
@@ -1509,6 +1516,27 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x01, buf, dst, src);
+}
+
+/// `AND r/m64,r64` -> Bitwise logical and r64 to r/m64.
+#[inline(always)]
+fn and_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x23, buf, src, dst);
+}
+
+/// `OR r/m64,r64` -> Bitwise logical or r64 to r/m64.
+#[inline(always)]
+fn or_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x0B, buf, src, dst);
+}
+
+/// `XOR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x33, buf, src, dst);
 }
 
 /// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
@@ -2189,13 +2217,6 @@ fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     }
 }
 
-/// `XOR r/m64,r64` -> Xor r64 to r/m64.
-#[inline(always)]
-#[allow(dead_code)]
-fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x31, buf, dst, src);
-}
-
 // When writing tests, it is a good idea to test both a number and unnumbered register.
 // This is because R8-R15 often have special instruction prefixes.
 #[cfg(test)]
@@ -2342,10 +2363,30 @@ mod tests {
     }
 
     #[test]
+    fn test_and_reg64_reg64() {
+        disassembler_test!(
+            and_reg64_reg64,
+            |reg1, reg2| format!("and {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_or_reg64_reg64() {
+        disassembler_test!(
+            or_reg64_reg64,
+            |reg1, reg2| format!("or {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_xor_reg64_reg64() {
         disassembler_test!(
             xor_reg64_reg64,
-            |reg1, reg2| format!("xor {}, {}", reg1, reg2),
+            |reg1, reg2| format!("xor {reg1}, {reg2}"),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );

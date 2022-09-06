@@ -499,6 +499,27 @@ trait Backend<'a> {
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumBitwiseAnd => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_and(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise and on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseOr => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_or(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise or on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseXor => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_xor(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise xor on a non-integer")
+                }
+            }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
                 debug_assert_eq!(
@@ -749,6 +770,33 @@ trait Backend<'a> {
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+
+    /// stores the `src1 & src2` into dst.
+    fn build_int_bitwise_and(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 | src2` into dst.
+    fn build_int_bitwise_or(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 ^ src2` into dst.
+    fn build_int_bitwise_xor(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
 
     /// build_eq stores the result of `src1 == src2` into dst.
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
