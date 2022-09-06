@@ -3,6 +3,7 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod all;
+mod layered_cache;
 mod nonempty_vec;
 mod reference_matrix;
 mod small_string_interner;
