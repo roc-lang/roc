@@ -92,7 +92,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
         run_command(
             &bitcode_path,
             &zig_executable(),
-            &["build", zig_object, "-Drelease=true"],
+            &["build", zig_object, "-Drelease=true", "--verbose"],
             0,
         );
 
