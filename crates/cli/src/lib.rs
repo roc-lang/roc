@@ -106,7 +106,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let flag_prebuilt = Arg::new(FLAG_PREBUILT)
         .long(FLAG_PREBUILT)
-        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
+        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target <your machine>`.)")
         .possible_values(["true", "false"])
         .required(false);
 
@@ -503,7 +503,7 @@ pub fn build(
         matches.value_of(FLAG_PREBUILT) == Some("true")
     } else {
         // When compiling for a different target, default to assuming a prebuilt platform.
-        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for your machine.
         // We make an exception for Wasm, because cross-compiling is the norm in that case.
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
