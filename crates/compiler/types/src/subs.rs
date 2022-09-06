@@ -2,11 +2,11 @@
 use crate::types::{
     name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
 };
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use std::fmt;
 use std::iter::{once, Iterator, Map};
 
@@ -3999,6 +3999,8 @@ pub struct ExposedTypesStorageSubs {
 #[derive(Clone, Debug)]
 pub struct StorageSubs {
     subs: Subs,
+    /// Module -> variable they export -> variable we import
+    module_extended_from_subs_cache: FnvMap<ModuleId, FnvMap<Variable, Variable>>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4016,7 +4018,10 @@ struct StorageSubsOffsets {
 
 impl StorageSubs {
     pub fn new(subs: Subs) -> Self {
-        Self { subs }
+        Self {
+            subs,
+            module_extended_from_subs_cache: Default::default(),
+        }
     }
 
     pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
@@ -4031,8 +4036,18 @@ impl StorageSubs {
         &self.subs
     }
 
-    pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
-        storage_copy_var_to(source, &mut self.subs, variable)
+    pub fn extend_with_variable(
+        &mut self,
+        source: &Subs,
+        source_module: ModuleId,
+        variable: Variable,
+    ) -> Variable {
+        let copy_table = self
+            .module_extended_from_subs_cache
+            .entry(source_module)
+            .or_default();
+
+        storage_copy_var_to(copy_table, source, &mut self.subs, variable)
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
@@ -4326,7 +4341,8 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 pub fn storage_copy_var_to(
-    source: &mut Subs, // mut to set the copy
+    copy_table: &mut FnvMap<Variable, Variable>,
+    source: &Subs,
     target: &mut Subs,
     var: Variable,
 ) -> Variable {
@@ -4342,6 +4358,7 @@ pub fn storage_copy_var_to(
             source,
             target,
             max_rank: rank,
+            copy_table,
         };
 
         let copy = storage_copy_var_to_help(&mut env, var);
@@ -4349,13 +4366,13 @@ pub fn storage_copy_var_to(
         // we have tracked all visited variables, and can now traverse them
         // in one go (without looking at the UnificationTable) and clear the copy field
         for var in env.visited {
-            env.source.modify(var, |descriptor| {
-                if descriptor.copy.is_some() {
-                    descriptor.rank = Rank::NONE;
-                    descriptor.mark = Mark::NONE;
-                    descriptor.copy = OptVariable::NONE;
-                }
-            });
+            // env.source.modify(var, |descriptor| {
+            //     if descriptor.copy.is_some() {
+            //         descriptor.rank = Rank::NONE;
+            //         descriptor.mark = Mark::NONE;
+            //         descriptor.copy = OptVariable::NONE;
+            //     }
+            // });
         }
 
         copy
@@ -4369,8 +4386,9 @@ pub fn storage_copy_var_to(
 
 struct StorageCopyVarToEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
-    source: &'a mut Subs,
+    source: &'a Subs,
     target: &'a mut Subs,
+    copy_table: &'a mut FnvMap<Variable, Variable>,
     max_rank: Rank,
 }
 
@@ -4412,7 +4430,20 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
     let desc = env.source.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    // if let Some(copy) = desc.copy.into_variable() {
+    //     debug_assert!(env.target.contains(copy));
+    //     return copy;
+    // } else if desc.rank != Rank::NONE {
+    //     // DO NOTHING, Fall through
+    //     //
+    //     // The original deep_copy_var can do
+    //     // return var;
+    //     //
+    //     // but we cannot, because this `var` is in the source, not the target, and we
+    //     // should only return variables in the target. so, we have to create a new
+    //     // variable in the target.
+    // }
+    if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
@@ -4443,10 +4474,11 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    env.source.modify(var, |descriptor| {
-        descriptor.mark = Mark::NONE;
-        descriptor.copy = copy.into();
-    });
+    env.copy_table.insert(var, copy);
+    // env.source.modify(var, |descriptor| {
+    //     descriptor.mark = Mark::NONE;
+    //     descriptor.copy = copy.into();
+    // });
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we

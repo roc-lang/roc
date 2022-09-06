@@ -4964,6 +4964,7 @@ fn build_pending_specializations<'a>(
                     }
 
                     procs_base.host_specializations.insert_host_exposed(
+                        mono_env.home,
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
                         annotation,
@@ -5024,6 +5025,7 @@ fn build_pending_specializations<'a>(
                     }
 
                     procs_base.host_specializations.insert_host_exposed(
+                        mono_env.home,
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
                         annotation,
@@ -5102,6 +5104,7 @@ fn build_pending_specializations<'a>(
                     }
 
                     procs_base.host_specializations.insert_host_exposed(
+                        mono_env.home,
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
                         annotation,
@@ -5169,6 +5172,7 @@ fn build_pending_specializations<'a>(
                     }
 
                     procs_base.host_specializations.insert_host_exposed(
+                        mono_env.home,
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
                         annotation,
@@ -5242,6 +5246,7 @@ fn build_pending_specializations<'a>(
                     }
 
                     procs_base.host_specializations.insert_host_exposed(
+                        mono_env.home,
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
                         annotation,

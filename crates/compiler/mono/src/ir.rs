@@ -505,12 +505,15 @@ impl<'a> HostSpecializations<'a> {
 
     pub fn insert_host_exposed(
         &mut self,
+        env_home: ModuleId,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
         opt_annotation: Option<roc_can::def::Annotation>,
         variable: Variable,
     ) {
-        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let variable = self
+            .storage_subs
+            .extend_with_variable(env_subs, env_home, variable);
 
         let mut host_exposed_aliases = std::vec::Vec::new();
 
@@ -587,10 +590,13 @@ impl<'a> ExternalSpecializations<'a> {
     fn insert_external(
         &mut self,
         symbol_or_lambda: LambdaName<'a>,
+        env_home: ModuleId,
         env_subs: &mut Subs,
         variable: Variable,
     ) {
-        let stored_variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let stored_variable = self
+            .storage_subs
+            .extend_with_variable(env_subs, env_home, variable);
         roc_tracing::debug!(original = ?variable, stored = ?stored_variable, "stored needed external");
 
         match self
@@ -649,6 +655,7 @@ impl<'a> Suspended<'a> {
 
     fn specialization(
         &mut self,
+        home: ModuleId,
         subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
         proc_layout: ProcLayout<'a>,
@@ -668,7 +675,7 @@ impl<'a> Suspended<'a> {
         self.symbol_or_lambdas.push(symbol_or_lambda);
         self.layouts.push(proc_layout);
 
-        let variable = self.store.extend_with_variable(subs, variable);
+        let variable = self.store.extend_with_variable(subs, home, variable);
 
         self.variables.push(variable);
     }
@@ -1136,7 +1143,7 @@ impl<'a> Procs<'a> {
                         (PendingSpecializations::Finding(suspended), _)
                         | (PendingSpecializations::Making(suspended), true) => {
                             // register the pending specialization, so this gets code genned later
-                            suspended.specialization(env.subs, name, layout, annotation);
+                            suspended.specialization(env.home, env.subs, name, layout, annotation);
 
                             match self.partial_procs.symbol_to_id(name.name()) {
                                 Some(occupied) => {
@@ -1287,7 +1294,7 @@ impl<'a> Procs<'a> {
         ) {
             (PendingSpecializations::Finding(suspended), _)
             | (PendingSpecializations::Making(suspended), true) => {
-                suspended.specialization(env.subs, name, layout, fn_var);
+                suspended.specialization(env.home, env.subs, name, layout, fn_var);
             }
             (PendingSpecializations::Making(_), false) => {
                 let symbol = name;
@@ -7840,7 +7847,7 @@ fn add_needed_external<'a>(
 
     roc_tracing::debug!(proc_name = ?name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "needed external");
 
-    existing.insert_external(name, env.subs, fn_var);
+    existing.insert_external(name, env.home, env.subs, fn_var);
 }
 
 fn build_call<'a>(
@@ -8207,7 +8214,7 @@ fn call_by_name_help<'a>(
                 debug_assert!(!env.is_imported_symbol(proc_name.name()));
 
                 // register the pending specialization, so this gets code genned later
-                suspended.specialization(env.subs, proc_name, top_level_layout, fn_var);
+                suspended.specialization(env.home, env.subs, proc_name, top_level_layout, fn_var);
 
                 debug_assert_eq!(
                     argument_layouts.len(),
@@ -8380,6 +8387,7 @@ fn call_by_name_module_thunk<'a>(
 
                 // register the pending specialization, so this gets code genned later
                 suspended.specialization(
+                    env.home,
                     env.subs,
                     LambdaName::no_niche(proc_name),
                     top_level_layout,
