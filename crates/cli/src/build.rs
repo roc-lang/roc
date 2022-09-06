@@ -65,7 +65,7 @@ pub fn build_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
     order: BuildOrdering,
@@ -182,7 +182,7 @@ pub fn build_file<'a>(
     let rebuild_thread = spawn_rebuild_thread(
         opt_level,
         linking_strategy,
-        precompiled,
+        prebuilt,
         host_input_path.clone(),
         preprocessed_host_path.clone(),
         binary_path.clone(),
@@ -261,7 +261,7 @@ pub fn build_file<'a>(
 
     let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
         let rebuild_duration = rebuild_thread.join().unwrap();
-        if emit_timings && !precompiled {
+        if emit_timings && !prebuilt {
             println!(
                 "Finished rebuilding and preprocessing the host in {} ms\n",
                 rebuild_duration
@@ -322,7 +322,7 @@ pub fn build_file<'a>(
 
     if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
         let rebuild_duration = thread.join().unwrap();
-        if emit_timings && !precompiled {
+        if emit_timings && !prebuilt {
             println!(
                 "Finished rebuilding and preprocessing the host in {} ms\n",
                 rebuild_duration
@@ -397,7 +397,7 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     host_input_path: PathBuf,
     preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
@@ -407,13 +407,13 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        if !precompiled {
+        if !prebuilt {
             println!("🔨 Rebuilding platform...");
         }
 
         let rebuild_host_start = Instant::now();
 
-        if !precompiled {
+        if !prebuilt {
             match linking_strategy {
                 LinkingStrategy::Additive => {
                     let host_dest = rebuild_host(

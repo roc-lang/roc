@@ -499,7 +499,7 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let precompiled = if matches.is_present(FLAG_PREBUILT) {
+    let prebuilt = if matches.is_present(FLAG_PREBUILT) {
         matches.value_of(FLAG_PREBUILT) == Some("true")
     } else {
         // When compiling for a different target, default to assuming a prebuilt platform.
@@ -547,7 +547,7 @@ pub fn build(
         emit_timings,
         link_type,
         linking_strategy,
-        precompiled,
+        prebuilt,
         threading,
         wasm_dev_stack_bytes,
         build_ordering,
