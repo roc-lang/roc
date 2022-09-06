@@ -22,7 +22,7 @@ jobs:
       - name: remove pre-installed llvm from path
         run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
       
-      - run: $env:PATH  | Format-Table -Wrap -AutoSize
+      - run: $env:GITHUB_PATH  | Format-Table -Wrap -AutoSize
 
       - name: install visual studio build tools
         run: |
