@@ -538,7 +538,7 @@ mod cli_run {
                 executable_filename: "static-site",
                 stdin: &[],
                 input_paths: &["input", "output"],
-                expected_ending: "Processed 4 files with 4 successes and 0 errors\n",
+                expected_ending: "Processed 3 files with 3 successes and 0 errors\n",
                 use_valgrind: false,
             }
         },
