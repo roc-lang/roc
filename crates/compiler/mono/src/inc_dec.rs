@@ -3,7 +3,7 @@ use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
     UpdateModeIds,
 };
-use crate::layout::Layout;
+use crate::layout::{Layout, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -238,8 +238,9 @@ pub type LiveVarSet = MutSet<Symbol>;
 pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
-struct Context<'a> {
+struct Context<'a, 'i> {
     arena: &'a Bump,
+    layout_interner: &'i STLayoutInterner<'a>,
     vars: VarMap,
     jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
@@ -313,8 +314,12 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
-impl<'a> Context<'a> {
-    pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
+impl<'a, 'i> Context<'a, 'i> {
+    pub fn new(
+        arena: &'a Bump,
+        layout_interner: &'i STLayoutInterner<'a>,
+        param_map: &'a ParamMap<'a>,
+    ) -> Self {
         let mut vars = MutMap::default();
 
         for symbol in param_map.iter_symbols() {
@@ -331,6 +336,7 @@ impl<'a> Context<'a> {
 
         Self {
             arena,
+            layout_interner,
             vars,
             jp_live_vars: MutMap::default(),
             param_map,
@@ -532,7 +538,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn visit_call<'i>(
+    fn visit_call(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -602,7 +608,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn visit_higher_order_lowlevel<'i>(
+    fn visit_higher_order_lowlevel(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -831,7 +837,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::many_single_char_names)]
-    fn visit_variable_declaration<'i>(
+    fn visit_variable_declaration(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -955,7 +961,7 @@ impl<'a> Context<'a> {
         reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
-        let reference = layout.contains_refcounted();
+        let reference = layout.contains_refcounted(self.layout_interner);
 
         let info = VarInfo {
             reference,
@@ -976,7 +982,7 @@ impl<'a> Context<'a> {
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: p.layout.contains_refcounted(),
+                reference: p.layout.contains_refcounted(self.layout_interner),
                 consume: !p.borrow,
                 persistent: false,
                 reset: false,
@@ -999,7 +1005,10 @@ impl<'a> Context<'a> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow && p.layout.contains_refcounted() && !b_live_vars.contains(&p.symbol) {
+            if !p.borrow
+                && p.layout.contains_refcounted(self.layout_interner)
+                && !b_live_vars.contains(&p.symbol)
+            {
                 b = self.add_dec(p.symbol, b)
             }
         }
@@ -1022,7 +1031,7 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_stmt<'i>(
+    fn visit_stmt(
         &self,
         codegen: &mut CodegenTools<'i>,
         stmt: &'a Stmt<'a>,
@@ -1425,13 +1434,14 @@ struct CodegenTools<'i> {
 
 pub fn visit_procs<'a, 'i>(
     arena: &'a Bump,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
     param_map: &'a ParamMap<'a>,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
-    let ctx = Context::new(arena, param_map);
+    let ctx = Context::new(arena, layout_interner, param_map);
 
     let mut codegen = CodegenTools {
         home,
@@ -1448,7 +1458,7 @@ fn visit_proc<'a, 'i>(
     arena: &'a Bump,
     codegen: &mut CodegenTools<'i>,
     param_map: &'a ParamMap<'a>,
-    ctx: &Context<'a>,
+    ctx: &Context<'a, 'i>,
     proc: &mut Proc<'a>,
     layout: ProcLayout<'a>,
 ) {

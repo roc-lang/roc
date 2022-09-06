@@ -8,10 +8,10 @@ use insta::assert_snapshot;
 
 use crate::{
     test_key_eq, test_key_neq,
-    util::{check_immediate, derive_test},
+    util::{check_derivable, check_immediate, derive_test},
     v,
 };
-use roc_derive_key::DeriveBuiltin::ToEncoder;
+use roc_derive_key::{encoding::FlatEncodableKey, DeriveBuiltin::ToEncoder, DeriveKey};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
@@ -116,6 +116,63 @@ fn immediates() {
     check_immediate(ToEncoder, v!(F32), Symbol::ENCODE_F32);
     check_immediate(ToEncoder, v!(F64), Symbol::ENCODE_F64);
     check_immediate(ToEncoder, v!(STR), Symbol::ENCODE_STRING);
+}
+
+#[test]
+fn derivable_record_ext_flex_var() {
+    check_derivable(
+        ToEncoder,
+        v!({ a: v!(STR), }* ),
+        DeriveKey::ToEncoder(FlatEncodableKey::Record(vec!["a".into()])),
+    );
+}
+
+#[test]
+fn derivable_record_ext_flex_able_var() {
+    check_derivable(
+        ToEncoder,
+        v!({ a: v!(STR), }a has Symbol::ENCODE_TO_ENCODER),
+        DeriveKey::ToEncoder(FlatEncodableKey::Record(vec!["a".into()])),
+    );
+}
+
+#[test]
+fn derivable_record_with_record_ext() {
+    check_derivable(
+        ToEncoder,
+        v!({ b: v!(STR), }{ a: v!(STR), } ),
+        DeriveKey::ToEncoder(FlatEncodableKey::Record(vec!["a".into(), "b".into()])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_var() {
+    check_derivable(
+        ToEncoder,
+        v!([ A v!(STR) ]* ),
+        DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_able_var() {
+    check_derivable(
+        ToEncoder,
+        v!([ A v!(STR) ]a has Symbol::ENCODE_TO_ENCODER),
+        DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_with_tag_ext() {
+    check_derivable(
+        ToEncoder,
+        v!([ B v!(STR) v!(U8) ][ A v!(STR) ]),
+        DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![
+            ("A".into(), 1),
+            ("B".into(), 2),
+        ])),
+    );
 }
 
 #[test]

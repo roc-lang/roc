@@ -8,7 +8,7 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, CapturesNiche, LambdaName, Layout, UnionLayout};
+use crate::layout::{Builtin, CapturesNiche, LambdaName, Layout, STLayoutInterner, UnionLayout};
 
 mod equality;
 mod refcount;
@@ -73,6 +73,7 @@ pub struct Context<'a> {
 ///
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
+    layout_interner: &'a STLayoutInterner<'a>,
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: Layout<'a>,
@@ -82,7 +83,12 @@ pub struct CodeGenHelp<'a> {
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
+    pub fn new(
+        arena: &'a Bump,
+        layout_interner: &'a STLayoutInterner<'a>,
+        target_info: TargetInfo,
+        home: ModuleId,
+    ) -> Self {
         let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
@@ -90,6 +96,7 @@ impl<'a> CodeGenHelp<'a> {
 
         CodeGenHelp {
             arena,
+            layout_interner,
             home,
             target_info,
             layout_isize,
@@ -122,7 +129,7 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        if !refcount::is_rc_implemented_yet(&layout) {
+        if !refcount::is_rc_implemented_yet(self.layout_interner, &layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
@@ -450,7 +457,7 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             Layout::LambdaSet(lambda_set) => {
-                self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
+                self.replace_rec_ptr(ctx, lambda_set.runtime_representation(self.layout_interner))
             }
 
             // This line is the whole point of the function

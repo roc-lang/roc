@@ -2692,10 +2692,10 @@ pub fn gather_fields_unsorted_iter(
             }
 
             Structure(EmptyRecord) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(..) => break,
 
             // TODO investigate apparently this one pops up in the reporting tests!
-            RigidVar(_) => break,
+            RigidVar(_) | RigidAbleVar(..) => break,
 
             // Stop on errors in the record
             Error => break,
@@ -2792,10 +2792,10 @@ pub fn gather_tags_unsorted_iter(
             }
 
             Structure(EmptyTagUnion) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(_, _) => break,
 
             // TODO investigate, this likely can happen when there is a type error
-            RigidVar(_) => break,
+            RigidVar(_) | RigidAbleVar(_, _) => break,
 
             Error => break,
 

@@ -1299,7 +1299,7 @@ fn tan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_and() {
     assert_evals_to!("Num.bitwiseAnd 20 20", 20, i64);
     assert_evals_to!("Num.bitwiseAnd 25 10", 8, i64);
@@ -1307,7 +1307,7 @@ fn bitwise_and() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_xor() {
     assert_evals_to!("Num.bitwiseXor 20 20", 0, i64);
     assert_evals_to!("Num.bitwiseXor 15 14", 1, i64);
@@ -1316,7 +1316,7 @@ fn bitwise_xor() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_or() {
     assert_evals_to!("Num.bitwiseOr 1 1", 1, i64);
     assert_evals_to!("Num.bitwiseOr 1 2", 3, i64);

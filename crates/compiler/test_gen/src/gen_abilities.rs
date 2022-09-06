@@ -554,7 +554,6 @@ fn encode_derived_tag_one_payload_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A Str]
                 x = A "foo"
                 result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
@@ -578,7 +577,6 @@ fn encode_derived_tag_two_payloads_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A Str Str]
                 x = A "foo" "bar"
                 result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
@@ -602,7 +600,6 @@ fn encode_derived_nested_tag_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A [B Str Str]]
                 x = A (B "foo" "bar")
                 encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
@@ -627,7 +624,6 @@ fn encode_derived_nested_record_tag_record() {
                 provides [main] to "./platform"
 
             main =
-                x : {a: [B {c: Str}]}
                 x = {a: (B ({c: "foo"}))}
                 encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
