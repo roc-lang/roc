@@ -155,7 +155,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "libc",
  "miniz_oxide",
- "object 0.29.0",
+ "object 0.29.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-demangle",
 ]
 
@@ -2572,6 +2572,17 @@ dependencies = [
 [[package]]
 name = "object"
 version = "0.29.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "hashbrown 0.12.3",
+ "indexmap",
+ "memchr",
+]
+
+[[package]]
+name = "object"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
 dependencies = [
@@ -3679,7 +3690,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "capstone",
- "object 0.29.0",
+ "object 0.29.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "packed_struct",
  "roc_builtins",
  "roc_can",

@@ -26,6 +26,7 @@ use target_lexicon::Triple;
 
 mod generate_dylib;
 mod metadata;
+mod pe;
 use metadata::VirtualOffset;
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -298,120 +299,6 @@ fn get_thunks_address_and_offset(data: &[u8], address: u32) -> object::read::Res
 }
 
 #[derive(Debug)]
-struct DynamicRelocationsPe {
-    name_by_virtual_address: MutMap<u32, String>,
-    address_and_offset: MutMap<String, (u32, u32)>,
-
-    /// Virtual offset of the first thunk
-    virtual_address: u32,
-
-    /// Offset in the file of the first thunk
-    offset_in_file: u32,
-}
-
-impl DynamicRelocationsPe {
-    fn new(data: &[u8]) -> Self {
-        Self::new_help(data).unwrap()
-    }
-
-    fn find_roc_dummy_dll(
-        import_table: &ImportTable,
-    ) -> object::read::Result<Option<ImageImportDescriptor>> {
-        use object::LittleEndian as LE;
-
-        let mut it = import_table.descriptors()?;
-        while let Some(descriptor) = it.next()? {
-            let name = import_table.name(descriptor.name.get(LE))?;
-            // dbg!(String::from_utf8_lossy(name));
-
-            if name == b"roc-cheaty-lib.dll" {
-                return Ok(Some(*descriptor));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Appends the functions (e.g. mainForHost) that the host needs from the app
-    fn append_roc_imports(
-        &mut self,
-        import_table: &ImportTable,
-        descriptor: &ImageImportDescriptor,
-    ) -> object::read::Result<()> {
-        use object::LittleEndian as LE;
-
-        let mut thunks = import_table.thunks(descriptor.original_first_thunk.get(LE))?;
-        while let Some(thunk_data) = thunks.next::<ImageNtHeaders64>()? {
-            use object::read::pe::ImageThunkData;
-
-            let address = thunk_data.address();
-
-            let (_, name) = import_table.hint_name(address as _)?;
-            let name = String::from_utf8_lossy(name).to_string();
-
-            self.name_by_virtual_address.insert(address, name.clone());
-            self.address_and_offset
-                .insert(name, (address, self.offset_in_file));
-        }
-
-        Ok(())
-    }
-
-    fn new_help(data: &[u8]) -> object::read::Result<Self> {
-        use object::pe;
-        use object::read::pe::ImageNtHeaders;
-        use object::LittleEndian as LE;
-
-        let dos_header = pe::ImageDosHeader::parse(data)?;
-        let mut offset = dos_header.nt_headers_offset().into();
-        let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
-        let sections = nt_headers.sections(data, offset)?;
-
-        let data_dir = match data_directories.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
-            Some(data_dir) => data_dir,
-            None => internal_error!("No dynamic imports, probably a bug"),
-        };
-
-        let import_va = data_dir.virtual_address.get(LE);
-        let (section_data, section_va) = sections
-            .pe_data_containing(data, import_va)
-            .expect("Invalid import data dir virtual address");
-
-        let import_table = ImportTable::new(section_data, section_va, import_va);
-
-        let mut stored_address = None;
-
-        let mut it = import_table.descriptors()?;
-        while let Some(descriptor) = it.next()? {
-            let name = import_table.name(descriptor.name.get(LE))?;
-            // dbg!(String::from_utf8_lossy(name));
-
-            if name == b"roc-cheaty-lib.dll" {
-                stored_address = Some(descriptor.original_first_thunk.get(LE));
-                break;
-            }
-        }
-
-        // to return the offset relative to the section
-        // let offset = address.wrapping_sub(section_va);
-
-        // Ok((section_va, stored_address.unwrap()))
-
-        let mut this = Self {
-            name_by_virtual_address: Default::default(),
-            address_and_offset: Default::default(),
-            virtual_address: section_va,
-            offset_in_file: stored_address.unwrap(),
-        };
-
-        let descriptor = Self::find_roc_dummy_dll(&import_table)?.unwrap();
-        this.append_roc_imports(&import_table, &descriptor)?;
-
-        Ok(this)
-    }
-}
-
-#[derive(Debug)]
 struct DynamicRelocationsElf64 {
     name_by_virtual_address: MutMap<u64, String>,
     address_and_offset: MutMap<String, (u64, u64)>,
@@ -475,52 +362,6 @@ impl DynamicRelocationsElf64 {
 
         this
     }
-}
-
-fn preprocess_windows(
-    exec_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
-    shared_lib: &Path,
-    verbose: bool,
-    time: bool,
-) -> object::read::Result<()> {
-    let total_start = Instant::now();
-    let exec_parsing_start = total_start;
-    let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
-    let exec_data = &*exec_mmap;
-    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            internal_error!("Failed to parse executable file: {}", err);
-        }
-    };
-
-    let mut md = metadata::Metadata {
-        // TODO symbols like roc_alloc are not in the dynhost.exe (at least I cannot find them)
-        // roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
-        ..Default::default()
-    };
-
-    if verbose {
-        println!(
-            "Found roc symbol definitions: {:+x?}",
-            md.roc_symbol_vaddresses
-        );
-    }
-
-    let exec_parsing_duration = exec_parsing_start.elapsed();
-
-    let import_table = exec_obj.import_table()?.unwrap();
-
-    let mut it = import_table.descriptors()?;
-
-    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
-
-    println!("{:#x?}", dynamic_relocations);
-
-    Ok(())
 }
 
 fn dynamic_relocations_address_and_offset_pe(data: &[u8]) -> object::read::Result<(u32, u32)> {
@@ -594,8 +435,8 @@ pub fn preprocess(
     verbose: bool,
     time: bool,
 ) {
-    if true {
-        preprocess_windows(
+    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
+        crate::pe::preprocess_windows(
             exec_filename,
             metadata_filename,
             out_filename,
@@ -3382,47 +3223,8 @@ mod tests {
                 (0x521e0, 0x531e0),
             ]
         );
-    }
 
-    #[test]
-    fn foobar() {
-        let dynamic_relocations = DynamicRelocationsPe::new(PE_DYNHOST);
-
-        println!("{:#x?}", dynamic_relocations);
-
-        let mut name_by_virtual_address: Vec<_> = dynamic_relocations
-            .name_by_virtual_address
-            .into_iter()
-            .collect();
-
-        name_by_virtual_address.sort_unstable();
-
-        assert_eq!(
-            name_by_virtual_address.as_slice(),
-            [
-                (0xafc54, "roc__mainForHost_1__Fx_caller".into()),
-                (0xafc74, "roc__mainForHost_1__Fx_result_size".into()),
-                (0xafc9a, "roc__mainForHost_1_exposed_generic".into()),
-                (0xafcc0, "roc__mainForHost_size".into()),
-            ]
-        );
-
-        let mut address_and_offset: Vec<_> = dynamic_relocations
-            .address_and_offset
-            .values()
-            .copied()
-            .collect();
-
-        address_and_offset.sort_unstable();
-
-        assert_eq!(
-            address_and_offset.as_slice(),
-            [
-                (0xafc54, 0xaf4c8,),
-                (0xafc74, 0xaf4c8,),
-                (0xafc9a, 0xaf4c8,),
-                (0xafcc0, 0xaf4c8,),
-            ]
-        );
+        //  15 .plt          000001c0  0000000000053120  0000000000053120  00052120  2**4
+        //                   CONTENTS, ALLOC, LOAD, READONLY, CODE
     }
 }
