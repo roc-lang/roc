@@ -27,7 +27,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PRECOMPILED_HOST: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
+    const PRECOMPILED_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
@@ -586,8 +586,8 @@ mod cli_run {
                         ran_without_optimizations = true;
                     });
 
-                    // now we can pass the `PRECOMPILED_HOST` flag, because the `call_once` will
-                    // have compiled the host
+                    // now we can pass the `PRECOMPILED_PLATFORM` flag, because the `call_once` will
+                    // have compiled the platform
 
                     if !ran_without_optimizations {
                         // Check with and without optimizations
@@ -595,7 +595,7 @@ mod cli_run {
                             &file_name,
                             benchmark.stdin,
                             benchmark.executable_filename,
-                            &[PRECOMPILED_HOST],
+                            &[PRECOMPILED_PLATFORM],
                             &app_args,
                             benchmark.expected_ending,
                             benchmark.use_valgrind,
@@ -606,7 +606,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &[PRECOMPILED_HOST, OPTIMIZE_FLAG],
+                        &[PRECOMPILED_PLATFORM, OPTIMIZE_FLAG],
                         &app_args,
                         benchmark.expected_ending,
                         benchmark.use_valgrind,

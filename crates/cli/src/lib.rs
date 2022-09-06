@@ -54,7 +54,7 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
-pub const FLAG_PRECOMPILED: &str = "precompiled-host";
+pub const FLAG_PRECOMPILED: &str = "precompiled-platform";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -106,7 +106,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
         .long(FLAG_PRECOMPILED)
-        .help("Assume the host has been precompiled and skip recompiling the host\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
+        .help("Assume the platform has been precompiled and skip recompiling the platform\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
         .possible_values(["true", "false"])
         .required(false);
 
@@ -502,7 +502,7 @@ pub fn build(
     let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
         matches.value_of(FLAG_PRECOMPILED) == Some("true")
     } else {
-        // When compiling for a different target, default to assuming a precompiled host.
+        // When compiling for a different target, default to assuming a precompiled platform.
         // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
         // We make an exception for Wasm, because cross-compiling is the norm in that case.
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
