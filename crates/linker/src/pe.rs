@@ -8,46 +8,27 @@ use object::{
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::metadata;
-
 pub(crate) fn preprocess_windows(
     exec_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
-    shared_lib: &Path,
-    verbose: bool,
-    time: bool,
+    _metadata_filename: &str,
+    _out_filename: &str,
+    _shared_lib: &Path,
+    _verbose: bool,
+    _time: bool,
 ) -> object::read::Result<()> {
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
     let exec_file = std::fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let exec_data = &*exec_mmap;
-    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+    let _exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
 
-    let mut md = metadata::Metadata {
-        // TODO symbols like roc_alloc are not in the dynhost.exe (at least I cannot find them)
-        // roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
-        ..Default::default()
-    };
-
-    if verbose {
-        println!(
-            "Found roc symbol definitions: {:+x?}",
-            md.roc_symbol_vaddresses
-        );
-    }
-
-    let exec_parsing_duration = exec_parsing_start.elapsed();
-
-    let import_table = exec_obj.import_table()?.unwrap();
-
-    let mut it = import_table.descriptors()?;
+    let _exec_parsing_duration = exec_parsing_start.elapsed();
 
     let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
 
@@ -267,6 +248,7 @@ mod test {
 
         address_and_offset.sort_unstable();
 
+        // get the relocations through the API
         let addresses_api = {
             let descriptor = DynamicRelocationsPe::find_roc_dummy_dll(&import_table)
                 .unwrap()
@@ -293,6 +275,7 @@ mod test {
             addresses
         };
 
+        // get the relocations through using our offsets into the file
         let addresses_file: Vec<_> = address_and_offset
             .iter()
             .map(|(name, (_, offset))| {
@@ -303,6 +286,7 @@ mod test {
             })
             .collect();
 
+        // we want our file offset approach to equal the API
         assert_eq!(addresses_api, addresses_file);
     }
 }

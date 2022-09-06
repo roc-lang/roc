@@ -1,8 +1,6 @@
 use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
-use object::pe::{ImageImportDescriptor, ImageNtHeaders64, ImageThunkData64};
-use object::read::pe::{ImportTable, PeFile64};
 use object::{elf, endian, macho};
 use object::{
     CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
@@ -267,160 +265,6 @@ fn section_address_and_offset<'a>(
                 section_name
             );
         }
-    }
-}
-
-fn get_thunks_address_and_offset(data: &[u8], address: u32) -> object::read::Result<(u32, u32)> {
-    use object::pe;
-    use object::read::pe::ImageNtHeaders;
-    use object::LittleEndian as LE;
-
-    let dos_header = pe::ImageDosHeader::parse(data)?;
-    let mut offset = dos_header.nt_headers_offset().into();
-    let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
-    let sections = nt_headers.sections(data, offset)?;
-
-    let data_dir = match data_directories.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
-        Some(data_dir) => data_dir,
-        None => internal_error!("No dynamic imports, probably a bug"),
-    };
-
-    let import_va = data_dir.virtual_address.get(LE);
-    let (_section_data, section_va) = sections
-        .pe_data_containing(data, import_va)
-        .expect("Invalid import data dir virtual address");
-
-    // let import_table = ImportTable::new(section_data, section_va, import_va);
-
-    // to return the offset relative to the section
-    // let offset = address.wrapping_sub(section_va);
-
-    Ok((section_va, address))
-}
-
-#[derive(Debug)]
-struct DynamicRelocationsElf64 {
-    name_by_virtual_address: MutMap<u64, String>,
-    address_and_offset: MutMap<String, (u64, u64)>,
-
-    /// Virtual offset of the first thunk
-    virtual_address: u64,
-
-    /// Offset in the file of the first thunk
-    offset_in_file: u64,
-}
-
-impl DynamicRelocationsElf64 {
-    fn new(exec_obj: &object::File, verbose: bool) -> Self {
-        let plt_section_name = ".plt";
-
-        let (plt_address, plt_offset) = section_address_and_offset(exec_obj, plt_section_name);
-
-        let mut this = Self {
-            name_by_virtual_address: Default::default(),
-            address_and_offset: Default::default(),
-            virtual_address: plt_address,
-            offset_in_file: plt_offset,
-        };
-
-        if verbose {
-            println!("PLT Address: {:+x}", plt_address);
-            println!("PLT File Offset: {:+x}", plt_offset);
-        }
-
-        let app_syms: Vec<_> = exec_obj.dynamic_symbols().filter(is_roc_symbol).collect();
-
-        let plt_relocs = (match exec_obj.dynamic_relocations() {
-            Some(relocs) => relocs,
-            None => {
-                internal_error!("Executable does not have any dynamic relocations. No work to do. Probably an invalid input.");
-            }
-        })
-        .filter_map(|(_, reloc)| {
-            if let RelocationKind::Elf(7) = reloc.kind() {
-                Some(reloc)
-            } else {
-                None
-            }
-        });
-
-        for (i, reloc) in plt_relocs.enumerate() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
-                    let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
-
-                    let name = symbol.name().unwrap().to_string();
-                    this.name_by_virtual_address
-                        .insert(func_address, name.clone());
-                    this.address_and_offset
-                        .insert(name, (func_offset, func_address));
-                    break;
-                }
-            }
-        }
-
-        this
-    }
-}
-
-fn dynamic_relocations_address_and_offset_pe(data: &[u8]) -> object::read::Result<(u32, u32)> {
-    use object::pe;
-    use object::read::pe::ImageNtHeaders;
-    use object::LittleEndian as LE;
-
-    let dos_header = pe::ImageDosHeader::parse(data)?;
-    let mut offset = dos_header.nt_headers_offset().into();
-    let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
-    let sections = nt_headers.sections(data, offset)?;
-
-    let data_dir = match data_directories.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
-        Some(data_dir) => data_dir,
-        None => internal_error!("No dynamic imports, probably a bug"),
-    };
-
-    let import_va = data_dir.virtual_address.get(LE);
-    let (section_data, section_va) = sections
-        .pe_data_containing(data, import_va)
-        .expect("Invalid import data dir virtual address");
-
-    let import_table = ImportTable::new(section_data, section_va, import_va);
-
-    let mut stored_address = None;
-
-    let mut it = import_table.descriptors()?;
-    while let Some(descriptor) = it.next()? {
-        let name = import_table.name(descriptor.name.get(LE))?;
-        // dbg!(String::from_utf8_lossy(name));
-
-        if name == b"roc-cheaty-lib.dll" {
-            stored_address = Some(descriptor.original_first_thunk.get(LE));
-            break;
-        }
-    }
-
-    // to return the offset relative to the section
-    // let offset = address.wrapping_sub(section_va);
-
-    Ok((section_va, stored_address.unwrap()))
-}
-
-fn dynamic_relocations_address_and_offset(
-    target: &Triple,
-    executable: &object::File,
-    data: &[u8],
-) -> (u64, u64) {
-    use target_lexicon::BinaryFormat::*;
-
-    match target.binary_format {
-        Elf => section_address_and_offset(executable, ".plt"),
-        Macho => section_address_and_offset(executable, "__stubs"),
-        Coff => match dynamic_relocations_address_and_offset_pe(data) {
-            Err(e) => internal_error!("{e}"),
-            Ok((vaddr, offset)) => (vaddr as u64, offset as u64),
-        },
-        Wasm => unimplemented!(),
-        Unknown | _ => todo!("weird binary format {:?}", target.binary_format),
     }
 }
 
@@ -3180,6 +3024,72 @@ mod tests {
             ],
             imports.as_slice(),
         )
+    }
+
+    #[derive(Debug)]
+    struct DynamicRelocationsElf64 {
+        name_by_virtual_address: MutMap<u64, String>,
+        address_and_offset: MutMap<String, (u64, u64)>,
+
+        /// Virtual offset of the first thunk
+        virtual_address: u64,
+
+        /// Offset in the file of the first thunk
+        offset_in_file: u64,
+    }
+
+    impl DynamicRelocationsElf64 {
+        fn new(exec_obj: &object::File, verbose: bool) -> Self {
+            let plt_section_name = ".plt";
+
+            let (plt_address, plt_offset) = section_address_and_offset(exec_obj, plt_section_name);
+
+            let mut this = Self {
+                name_by_virtual_address: Default::default(),
+                address_and_offset: Default::default(),
+                virtual_address: plt_address,
+                offset_in_file: plt_offset,
+            };
+
+            if verbose {
+                println!("PLT Address: {:+x}", plt_address);
+                println!("PLT File Offset: {:+x}", plt_offset);
+            }
+
+            let app_syms: Vec<_> = exec_obj.dynamic_symbols().filter(is_roc_symbol).collect();
+
+            let plt_relocs = (match exec_obj.dynamic_relocations() {
+            Some(relocs) => relocs,
+            None => {
+                internal_error!("Executable does not have any dynamic relocations. No work to do. Probably an invalid input.");
+            }
+        })
+        .filter_map(|(_, reloc)| {
+            if let RelocationKind::Elf(7) = reloc.kind() {
+                Some(reloc)
+            } else {
+                None
+            }
+        });
+
+            for (i, reloc) in plt_relocs.enumerate() {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
+                        let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
+
+                        let name = symbol.name().unwrap().to_string();
+                        this.name_by_virtual_address
+                            .insert(func_address, name.clone());
+                        this.address_and_offset
+                            .insert(name, (func_offset, func_address));
+                        break;
+                    }
+                }
+            }
+
+            this
+        }
     }
 
     #[test]
