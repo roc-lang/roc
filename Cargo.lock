@@ -4879,7 +4879,6 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "criterion",
- "either",
  "indoc",
  "inkwell 0.1.0",
  "lazy_static",
