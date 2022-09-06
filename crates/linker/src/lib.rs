@@ -604,7 +604,6 @@ pub fn preprocess(
                 }
             }
 
-            dbg!(&md.plt_addresses);
         }
         target_lexicon::BinaryFormat::Macho => {
             use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
@@ -3050,7 +3049,6 @@ mod tests {
     use super::*;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
-    const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
     #[test]
     fn collect_definitions() {
@@ -3100,29 +3098,6 @@ mod tests {
                 "roc__mainForHost_size"
             ],
             keys.as_slice()
-        )
-    }
-
-    #[test]
-    fn collect_undefined_symbols_pe() {
-        let object = object::File::parse(PE_DYNHOST).unwrap();
-
-        let imports: Vec<_> = object
-            .imports()
-            .unwrap()
-            .iter()
-            .filter(|import| import.library() == b"roc-cheaty-lib.dll")
-            .map(|import| String::from_utf8_lossy(import.name()))
-            .collect();
-
-        assert_eq!(
-            [
-                "roc__mainForHost_1__Fx_caller",
-                "roc__mainForHost_1__Fx_result_size",
-                "roc__mainForHost_1_exposed_generic",
-                "roc__mainForHost_size"
-            ],
-            imports.as_slice(),
         )
     }
 }
