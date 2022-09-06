@@ -3,8 +3,8 @@ hosted Effect
     imports [InternalHttp.{ Request, Response }]
     generates Effect with [after, map, always, forever, loop]
 
-putLine : Str -> Effect {}
-
-getLine : Effect Str
+stdoutLine : Str -> Effect {}
+stderrLine : Str -> Effect {}
+stdinLine : Effect Str
 
 sendRequest : Box Request -> Effect Response

@@ -113,7 +113,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getLine() -> RocStr {
+pub extern "C" fn roc_fx_stdinLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();
@@ -123,9 +123,15 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: &RocStr) {
+pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
+    let string = line.as_str();
+    eprintln!("{}", string);
 }
 
 #[no_mangle]
