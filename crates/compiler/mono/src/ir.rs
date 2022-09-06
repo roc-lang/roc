@@ -32,8 +32,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
-    Variable, VariableSubsSlice,
+    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSnapshot,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -621,6 +621,22 @@ impl<'a> ExternalSpecializations<'a> {
                 .into_iter()
                 .zip(self.types_to_specialize.into_iter()),
         )
+    }
+
+    fn snapshot_cache(&mut self) -> StorageSnapshot {
+        self.storage_subs.snapshot_cache()
+    }
+
+    fn rollback_cache(&mut self, snapshot: StorageSnapshot) {
+        self.storage_subs.rollback_cache(snapshot)
+    }
+
+    fn invalidate_cache(&mut self, changed_variables: &[Variable]) {
+        self.storage_subs.invalidate_cache(changed_variables)
+    }
+
+    fn invalidate_whole_cache(&mut self) {
+        self.storage_subs.invalidate_whole_cache()
     }
 }
 
@@ -1448,8 +1464,9 @@ impl<'a, 'i> Env<'a, 'i> {
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
-    fn unify(
+    fn unify<'b, 'c: 'b>(
         &mut self,
+        external_specializations: impl IntoIterator<Item = &'b mut ExternalSpecializations<'c>>,
         layout_cache: &mut LayoutCache,
         left: Variable,
         right: Variable,
@@ -1471,7 +1488,10 @@ impl<'a, 'i> Env<'a, 'i> {
             right,
         )?;
 
-        layout_cache.invalidate(changed_variables);
+        layout_cache.invalidate(changed_variables.iter().copied());
+        external_specializations
+            .into_iter()
+            .for_each(|e| e.invalidate_cache(&changed_variables));
 
         Ok(())
     }
@@ -2487,7 +2507,12 @@ fn from_can_let<'a>(
                         // Make sure rigid variables in the annotation are converted to flex variables.
                         instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
-                        let _res = env.unify(layout_cache, var, def.expr_var);
+                        let _res = env.unify(
+                            procs.externals_we_need.values_mut(),
+                            layout_cache,
+                            var,
+                            def.expr_var,
+                        );
 
                         with_hole(
                             env,
@@ -2521,7 +2546,12 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res = env.unify(layout_cache, var, new_def_expr_var);
+                            let _res = env.unify(
+                                procs.externals_we_need.values_mut(),
+                                layout_cache,
+                                var,
+                                new_def_expr_var,
+                            );
 
                             stmt = with_hole(
                                 env,
@@ -3084,15 +3114,25 @@ fn generate_runtime_error_function<'a>(
 struct TypeStateSnapshot {
     subs_snapshot: roc_types::subs::SubsSnapshot,
     layout_snapshot: crate::layout::CacheSnapshot,
+    external_storage_snapshot: VecMap<ModuleId, StorageSnapshot>,
 }
 
 /// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and
 /// accordingly [rolled back][rollback_typestate] a specialization is complete, so as to not
 /// interfere with other specializations.
-fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> TypeStateSnapshot {
+fn snapshot_typestate(
+    subs: &mut Subs,
+    procs: &mut Procs,
+    layout_cache: &mut LayoutCache<'_>,
+) -> TypeStateSnapshot {
     TypeStateSnapshot {
         subs_snapshot: subs.snapshot(),
         layout_snapshot: layout_cache.snapshot(),
+        external_storage_snapshot: procs
+            .externals_we_need
+            .iter_mut()
+            .map(|(module, es)| (*module, es.snapshot_cache()))
+            .collect(),
     }
 }
 
@@ -3101,16 +3141,26 @@ fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> Ty
 /// specializations.
 fn rollback_typestate(
     subs: &mut Subs,
+    procs: &mut Procs,
     layout_cache: &mut LayoutCache<'_>,
     snapshot: TypeStateSnapshot,
 ) {
     let TypeStateSnapshot {
         subs_snapshot,
         layout_snapshot,
+        mut external_storage_snapshot,
     } = snapshot;
 
     subs.rollback_to(subs_snapshot);
     layout_cache.rollback_to(layout_snapshot);
+
+    for (module, es) in procs.externals_we_need.iter_mut() {
+        if let Some((_, snapshot)) = external_storage_snapshot.remove(module) {
+            es.rollback_cache(snapshot);
+        } else {
+            es.invalidate_whole_cache();
+        }
+    }
 }
 
 /// Specialize a single proc.
@@ -3129,7 +3179,12 @@ fn specialize_proc_help<'a>(
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
-    let _unified = env.unify(layout_cache, partial_proc.annotation, fn_var);
+    let _unified = env.unify(
+        procs.externals_we_need.values_mut(),
+        layout_cache,
+        partial_proc.annotation,
+        fn_var,
+    );
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -3705,7 +3760,7 @@ fn specialize_variable<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    let snapshot = snapshot_typestate(env.subs, layout_cache);
+    let snapshot = snapshot_typestate(env.subs, procs, layout_cache);
 
     // for debugging only
     let raw = layout_cache
@@ -3770,7 +3825,7 @@ fn specialize_variable<'a>(
         }
     };
 
-    rollback_typestate(env.subs, layout_cache, snapshot);
+    rollback_typestate(env.subs, procs, layout_cache, snapshot);
 
     result
 }
