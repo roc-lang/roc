@@ -4017,11 +4017,13 @@ struct StorageSubsOffsets {
 #[derive(Clone, Debug)]
 pub struct VariableMapCache(pub Vec<FnvMap<Variable, Variable>>);
 
-impl VariableMapCache {
-    pub fn new() -> Self {
+impl Default for VariableMapCache {
+    fn default() -> Self {
         Self(vec![Default::default()])
     }
+}
 
+impl VariableMapCache {
     fn get(&self, v: &Variable) -> Option<&Variable> {
         self.0.iter().rev().find_map(|cache| cache.get(v))
     }
@@ -4050,7 +4052,7 @@ impl StorageSubs {
 
     pub fn extend_with_variable(&mut self, source: &Subs, variable: Variable) -> Variable {
         storage_copy_var_to(
-            &mut VariableMapCache::new(),
+            &mut VariableMapCache::default(),
             source,
             &mut self.subs,
             variable,

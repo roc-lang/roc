@@ -20,7 +20,7 @@ impl ExternalModuleStorage {
     pub fn new(subs: Subs) -> Self {
         Self {
             storage: StorageSubs::new(subs),
-            variable_mapping_cache: VariableMapCache::new(),
+            variable_mapping_cache: VariableMapCache::default(),
         }
     }
 
