@@ -6,7 +6,7 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
     let mut out_data = Vec::new();
     let mut writer = object::write::elf::Writer::new(endian, true, &mut out_data);
 
-    const DYNAMIC_SECTION: usize = 2;
+    const DYNAMIC_SECTION_INDEX: usize = 2;
 
     let out_sections_index = [
         writer.reserve_dynsym_section_index(),
@@ -66,7 +66,7 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
         for (_index, name) in out_dynsyms {
             writer.write_dynamic_symbol(&object::write::elf::Sym {
                 name: Some(name),
-                section: Some(out_sections_index[DYNAMIC_SECTION]),
+                section: Some(out_sections_index[DYNAMIC_SECTION_INDEX]),
                 st_info: (elf::STB_GLOBAL << 4) | elf::STT_FUNC,
                 st_other: 0,
                 st_shndx: 0,

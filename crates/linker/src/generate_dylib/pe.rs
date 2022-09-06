@@ -109,9 +109,10 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
 
     // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
+        let characteristics = 0x40000040;
         let range = writer.reserve_section(
             *b".rdata\0\0",
-            1073741888,
+            characteristics,
             // virtual size
             exports.len() as u32,
             // size_of_raw_data
@@ -127,7 +128,7 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
     // the header on my machine
     let headers = object::write::pe::NtHeaders {
         machine: 34404,
-        time_date_stamp: 1661696130,
+        time_date_stamp: 0,
         characteristics: 8226,
         major_linker_version: 14,
         minor_linker_version: 0,
