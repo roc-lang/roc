@@ -18,9 +18,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v2
-      
-      - name: remove pre-installed llvm from path
-        run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
 
       - name: install visual studio build tools
         run: |
@@ -41,8 +38,6 @@ jobs:
         run: |
           curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v13.0.0/LLVM-13.0.0-win64.7z
           7z x LLVM-13.0.0-win64.7z -oC:/LLVM-13.0.0-win64
-           @("C:/LLVM-13.0.0-win64/bin") +  (Get-Content $env:GITHUB_PATH) | Set-Content $env:GITHUB_PATH    
-      #    ^^^ llvm bin path needs to be prepended and not appended to work 
         
       - run: lld-link.exe --version
       
