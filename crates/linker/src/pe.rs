@@ -50,6 +50,14 @@ struct DynamicRelocationsPe {
 
     /// Offset in the file of the first thunk
     section_offset_in_file: u32,
+
+    /// Offset in the file of the imports directory
+    #[allow(dead_code)]
+    imports_offset_in_file: u32,
+
+    /// The dummy .dll is the `dummy_import_index`th import of the host .exe
+    #[allow(dead_code)]
+    dummy_import_index: u32,
 }
 
 impl DynamicRelocationsPe {
@@ -59,17 +67,20 @@ impl DynamicRelocationsPe {
 
     fn find_roc_dummy_dll(
         import_table: &ImportTable,
-    ) -> object::read::Result<Option<ImageImportDescriptor>> {
+    ) -> object::read::Result<Option<(ImageImportDescriptor, u32)>> {
         use object::LittleEndian as LE;
 
+        let mut index = 0;
         let mut it = import_table.descriptors()?;
         while let Some(descriptor) = it.next()? {
             let name = import_table.name(descriptor.name.get(LE))?;
             // dbg!(String::from_utf8_lossy(name));
 
             if name == b"roc-cheaty-lib.dll" {
-                return Ok(Some(*descriptor));
+                return Ok(Some((*descriptor, index)));
             }
+
+            index += 1;
         }
 
         Ok(None)
@@ -144,28 +155,37 @@ impl DynamicRelocationsPe {
 
         let import_table = ImportTable::new(section_data, section_va, import_va);
 
-        let mut it = import_table.descriptors()?;
-        while let Some(descriptor) = it.next()? {
-            let name = import_table.name(descriptor.name.get(LE))?;
-            // dbg!(String::from_utf8_lossy(name));
+        let imports_offset_in_section = import_va.wrapping_sub(section_va);
+        let imports_offset_in_file = offset_in_file + imports_offset_in_section;
 
-            if name == b"roc-cheaty-lib.dll" {
-                // stored_address = Some(descriptor.original_first_thunk.get(LE));
-                break;
-            }
-        }
+        let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?.unwrap();
 
         let mut this = Self {
             name_by_virtual_address: Default::default(),
             address_and_offset: Default::default(),
             section_virtual_address: section_va,
             section_offset_in_file: offset_in_file,
+            imports_offset_in_file,
+            dummy_import_index,
         };
 
-        let descriptor = Self::find_roc_dummy_dll(&import_table)?.unwrap();
         this.append_roc_imports(&import_table, &descriptor)?;
 
         Ok(this)
+    }
+}
+
+#[allow(dead_code)]
+fn remove_dummy_dll_import_table(
+    data: &mut [u8],
+    imports_offset_in_file: u32,
+    dummy_import_index: u32,
+) {
+    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+    let start = imports_offset_in_file as usize + W * dummy_import_index as usize;
+    for b in data[start..][..W].iter_mut() {
+        *b = 0;
     }
 }
 
@@ -246,7 +266,7 @@ mod test {
 
         // get the relocations through the API
         let addresses_api = {
-            let descriptor = DynamicRelocationsPe::find_roc_dummy_dll(&import_table)
+            let (descriptor, _) = DynamicRelocationsPe::find_roc_dummy_dll(&import_table)
                 .unwrap()
                 .unwrap();
 
@@ -307,5 +327,30 @@ mod test {
             ],
             imports.as_slice(),
         )
+    }
+
+    #[test]
+    fn remove_dummy_dll_import() {
+        let dynamic_relocations = DynamicRelocationsPe::new(PE_DYNHOST);
+        let mut data = PE_DYNHOST.to_vec();
+
+        remove_dummy_dll_import_table(
+            &mut data,
+            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.dummy_import_index,
+        );
+
+        // parse and check that it's really gone
+        let object = object::File::parse(data.as_slice()).unwrap();
+
+        assert_eq!(
+            object
+                .imports()
+                .unwrap()
+                .iter()
+                .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+                .count(),
+            0
+        );
     }
 }
