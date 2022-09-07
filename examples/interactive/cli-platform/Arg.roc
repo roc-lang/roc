@@ -171,8 +171,8 @@ parse = \@Parser parser, args ->
         WithConfig parser2 _config ->
             parse parser2 args
 
-argBool : Config -> Parser Bool
-argBool = \config ->
+bool : Config -> Parser Bool
+bool = \config ->
     fn = \args ->
         { long, short } = config
 
@@ -184,8 +184,8 @@ argBool = \config ->
 
     @Parser (Arg config fn)
 
-argStr : Config -> Parser Str
-argStr = \config ->
+str : Config -> Parser Str
+str = \config ->
     fn = \args ->
         { long, short } = config
 
@@ -199,43 +199,43 @@ apply = \arg1, arg2 -> andMap arg2 arg1
 
 # bool undashed long argument is missing
 expect
-    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parser = bool { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["foo"] == Err MissingRequiredArg
 
 # bool dashed long argument without value is missing
 expect
-    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parser = bool { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo"] == Err MissingRequiredArg
 
 # bool dashed long argument with value is determined true
 expect
-    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parser = bool { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo", "true"] == Ok True
 
 # bool dashed long argument with value is determined false
 expect
-    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parser = bool { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo", "false"] == Ok False
 
 # bool dashed long argument with value is determined wrong type
 expect
-    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parser = bool { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo", "not-a-bool"] == Err WrongType
 
 # string dashed long argument without value is missing
 expect
-    parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
+    parser = str { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo"] == Err MissingRequiredArg
 
 # string dashed long argument with value is determined
 expect
-    parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
+    parser = str { long: "foo", help: NotProvided, short: NotProvided }
 
     parse parser ["--foo", "itsme"] == Ok "itsme"
 
@@ -243,8 +243,8 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
-        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
+        |> apply (str { long: "foo", short: NotProvided, help: NotProvided })
+        |> apply (str { long: "bar", short: NotProvided, help: NotProvided })
 
     cases = [
         ["--foo", "true", "--bar", "baz"],
@@ -258,9 +258,9 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
-        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
-        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
-        |> apply (argBool { long: "bool", short: NotProvided, help: NotProvided })
+        |> apply (str { long: "foo", short: NotProvided, help: NotProvided })
+        |> apply (str { long: "bar", short: NotProvided, help: NotProvided })
+        |> apply (bool { long: "bool", short: NotProvided, help: NotProvided })
 
     toHelp parser
     == {
