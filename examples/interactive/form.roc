@@ -3,8 +3,8 @@ app "form"
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, Task }]
     provides [main] to pf
 
-main : Task {} * [Read [Stdin], Write [Stdout]]
-main =
+main : List Str -> Task {} * [Read [Stdin], Write [Stdout]]
+main = \_args ->
     _ <- await (Stdout.line "What's your first name?")
     firstName <- await Stdin.line
     _ <- await (Stdout.line "What's your last name?")

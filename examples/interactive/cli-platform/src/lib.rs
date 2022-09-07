@@ -20,7 +20,7 @@ use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8);
+    fn roc_main(output: *mut u8, args: RocList<RocStr>);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -84,11 +84,14 @@ pub extern "C" fn rust_main() -> i32 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    let args: RocList<RocStr> = std::env::args().map(|s| RocStr::from(s.as_str())).collect();
+
     unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer);
+        roc_main(buffer, args);
 
         let result = call_the_closure(buffer);
 

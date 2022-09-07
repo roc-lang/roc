@@ -3,8 +3,8 @@ app "echo"
     imports [pf.Stdin, pf.Stdout, pf.Task]
     provides [main] to pf
 
-main : Task.Task {} [] [Read [Stdin], Write [Stdout]]
-main =
+main : List Str -> Task.Task {} [] [Read [Stdin], Write [Stdout]]
+main = \_args ->
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
     Task.loop {} (\_ -> Task.map tick Step)
 
