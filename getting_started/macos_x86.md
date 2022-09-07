@@ -18,13 +18,13 @@
 
 ## How to install `examples/` dependencies
 
-1. Install the Rust compiler, for examples with Rust-based platforms:
+1. Install the Rust compiler, for apps with Rust-based platforms:
 
     ```sh
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. Install the Zig compiler, for examples with Zig-based platforms:
+1. Install the Zig compiler, for apps with Zig-based platforms:
 
     ```sh
     brew install zig
