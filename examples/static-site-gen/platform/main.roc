@@ -5,5 +5,5 @@ platform "static-site-gen"
     imports []
     provides [transformFileContentForHost]
 
-transformFileContentForHost : Str, Str -> Str
-transformFileContentForHost = \relPath, htmlContent -> transformFileContent relPath htmlContent
+transformFileContentForHost : Box Str, Box Str -> Str
+transformFileContentForHost = \relPath, htmlContent -> transformFileContent (Box.unbox relPath) (Box.unbox htmlContent)
