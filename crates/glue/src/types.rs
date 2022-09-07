@@ -359,6 +359,12 @@ impl Types {
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
+        for (id, existing_type) in self.types.iter().enumerate() {
+            if self.is_equivalent(&typ, &existing_type) {
+                return TypeId(id);
+            }
+        }
+
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
