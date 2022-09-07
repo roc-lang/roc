@@ -9,7 +9,7 @@ jobs:
     name: test nightly macos x86_64
         strategy:
       matrix:
-        os: [ ubuntu-20.04, ubuntu-22.04, macos-12 ]
+        os: [ macos-12 ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -21,10 +21,6 @@ jobs:
       - name: get the url of today`s release for macos x86_64
         if: startsWith(matrix.os, 'macos')
         run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_x86_64)" >> $GITHUB_ENV
-
-      - name: get the url of today`s release for linux x86_64
-        if: startsWith(matrix.os, 'ubuntu')
-        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
 
       - name: get the archive from the url
         run: curl -OL ${{ env.RELEASE_URL }}
