@@ -15,6 +15,11 @@ Parser a := [
     Lazy ({} -> a),
 ]
 
+Type : [
+    Str,
+    Bool,
+]
+
 Help : {
     configs : List Config,
 }
@@ -25,6 +30,7 @@ Config : {
     long : Str,
     short : OptionStr,
     help : OptionStr,
+    type : Type,
 }
 
 OptConfig : {
@@ -186,7 +192,7 @@ bool = \{ long, short ? NotProvided, help ? NotProvided } ->
             Ok "false" -> Ok False
             Ok _ -> Err WrongType
 
-    @Parser (Arg { long, short, help } fn)
+    @Parser (Arg { long, short, help, type: Bool } fn)
 
 str : _ -> Parser Str # TODO: panics if OptConfig annotated
 str = \{ long, short ? NotProvided, help ? NotProvided } ->
@@ -195,7 +201,7 @@ str = \{ long, short ? NotProvided, help ? NotProvided } ->
             Err NotFound -> Err NotFound
             Ok foundArg -> Ok foundArg
 
-    @Parser (Arg { long, short, help } fn)
+    @Parser (Arg { long, short, help, type: Str } fn)
 
 apply = \arg1, arg2 -> andMap arg2 arg1
 
@@ -297,8 +303,8 @@ expect
     toHelp parser
     == {
         configs: [
-            { long: "foo", short: NotProvided, help: Some "the foo flag" },
-            { long: "bar", short: Some "B", help: NotProvided },
-            { long: "bool", short: NotProvided, help: NotProvided },
+            { long: "foo", short: NotProvided, help: Some "the foo flag", type: Str },
+            { long: "bar", short: Some "B", help: NotProvided, type: Str },
+            { long: "bool", short: NotProvided, help: NotProvided, type: Bool },
         ],
     }
