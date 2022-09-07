@@ -7,7 +7,7 @@ name: Test latest nightly release for macOS x86_64
 jobs:
   test-nightly:
     name: test nightly macos x86_64
-        strategy:
+    strategy:
       matrix:
         os: [ macos-12 ]
     runs-on: ${{ matrix.os }}
