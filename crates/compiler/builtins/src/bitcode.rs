@@ -14,6 +14,17 @@ pub fn get_builtins_host_obj_path() -> String {
         .expect("Failed to convert builtins_host_path to str")
 }
 
+pub fn get_builtins_windows_obj_path() -> String {
+    let builtins_host_path = get_lib_path()
+        .expect(LIB_DIR_ERROR)
+        .join("builtins-windows-x86_64.obj");
+
+    builtins_host_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_host_path to str")
+}
+
 pub fn get_builtins_wasm32_obj_path() -> String {
     let builtins_wasm32_path = get_lib_path()
         .expect(LIB_DIR_ERROR)

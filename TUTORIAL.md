@@ -508,7 +508,7 @@ stoplightStr =
         Green | Yellow -> "not red"
 ```
 
-This will give the same answer for `spotlightStr` as if we had written the following:
+This will give the same answer for `stoplightStr` as if we had written the following:
 
 ```coffee
 stoplightStr =
