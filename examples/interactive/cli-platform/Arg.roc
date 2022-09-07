@@ -13,10 +13,12 @@ Parser a := [
     Lazy ({} -> a)
 ]
 
+OptionStr : [Some Str, NotProvided]
+
 Config : {
     long : Str,
-    short : Str,
-    help : Str,
+    short : OptionStr,
+    help : OptionStr,
 }
 
 Help : {
@@ -40,14 +42,18 @@ toHelp = \parser -> #toHelpHelp parser []
 #             help1 = toHelpHelp inner1 configs
 #             toHelpHelp inner1 help1.configs
 
-findOneArg : Str, Str, List Str -> Result Str [NotFound]*
-findOneArg = \long, short, args ->
-    longArg = "--\(long)"
-    shortArg = "-\(short)"
+findOneArg : Str, OptionStr, List Str -> Result Str [NotFound]*
+findOneArg = \long, optShort, args ->
+    argMatches = \arg ->
+        if arg == "--\(long)" then
+            True
+        else
+            when optShort is
+                Some short -> arg == "-\(short)"
+                NotProvided -> False
 
     # TODO allow = as well, etc.
-    result = List.findFirstIndex args \arg ->
-        arg == longArg || arg == shortArg
+    result = List.findFirstIndex args argMatches
 
     when result is
         Ok index ->
@@ -161,7 +167,7 @@ argBool = \config ->
 argStr : Config -> Parser Str
 argStr = \config ->
     fn = \args ->
-        { long, short ? "" } = config
+        { long, short } = config
 
         when findOneArg long short args is
             Err NotFound -> Err NotFound
@@ -172,41 +178,41 @@ argStr = \config ->
 apply = \arg1, arg2 -> andMap arg2 arg1
 
 expect
-    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["foo"] == Err MissingRequiredArg
 
 expect
-    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo"] == Err MissingRequiredArg
 
 expect
-    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "true"] == Ok True
 
 expect
-    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "false"] == Ok False
 
 expect
-    parser = argStr { long: "foo", short: "F", help: "foo arg" }
+    parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo"] == Err MissingRequiredArg
 
 expect
-    parser = argStr { long: "foo", short: "F", help: "foo arg" }
+    parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "itsme"] == Ok "itsme"
 
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> apply (argStr { long: "foo", short: "F", help: "blah" })
-        |> apply (argStr { long: "bar", short: "B", help: "stuff" })
+        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
+        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
 
     parse parser ["--foo", "true", "--bar", "baz"] == Ok "foo: true bar: baz"
 
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> apply (argStr { long: "foo", short: "F", help: "blah" })
-        |> apply (argStr { long: "bar", short: "B", help: "stuff" })
+        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
+        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
 
     parse parser ["--foo", "true", "--bar", "baz", "--other", "something"] == Ok "foo: true bar: baz"
