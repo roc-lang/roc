@@ -62,11 +62,17 @@ mod cli_run {
     const ALLOW_VALGRIND: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
+    enum Arg<'a> {
+        ExamplePath(&'a str),
+        PlainText(&'a str),
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
     struct Example<'a> {
         filename: &'a str,
         executable_filename: &'a str,
         stdin: &'a [&'a str],
-        input_paths: &'a [&'a str],
+        arguments: &'a [Arg<'a>],
         expected_ending: &'a str,
         use_valgrind: bool,
     }
@@ -223,7 +229,7 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
-        input_paths: &[&str],
+        args: &[&Arg],
         expected_ending: &str,
     ) {
         assert!(input_paths.is_empty(), "Wasm does not support input files");
@@ -273,8 +279,15 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     let mut app_args: Vec<String> = vec![];
-                    for file in example.input_paths {
-                        app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
+                    for arg in example.arguments {
+                        match arg {
+                            Arg::ExamplePath(file) => {
+                                app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
+                            }
+                            Arg::PlainText(arg) => {
+                                app_args.push(arg.to_string());
+                            }
+                        }
                     }
 
                     match example.executable_filename {
@@ -368,7 +381,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "helloWorld",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -376,7 +389,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "rocLovesPlatforms",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
@@ -387,7 +400,7 @@ mod cli_run {
         //     filename: "rocLovesC.roc",
         //     executable_filename: "rocLovesC",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending:"Roc <3 C!\n",
         //     use_valgrind: true,
         // },
@@ -395,7 +408,7 @@ mod cli_run {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
@@ -403,7 +416,7 @@ mod cli_run {
             filename: "rocLovesSwift.roc",
             executable_filename: "rocLovesSwift",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
@@ -411,7 +424,7 @@ mod cli_run {
             filename: "rocLovesWebAssembly.roc",
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
@@ -419,7 +432,7 @@ mod cli_run {
             filename: "rocLovesZig.roc",
             executable_filename: "rocLovesZig",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Zig!\n",
             use_valgrind: true,
         },
@@ -427,7 +440,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "libhello",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"",
             use_valgrind: true,
         },
@@ -435,7 +448,7 @@ mod cli_run {
             filename: "fibonacci.roc",
             executable_filename: "fibonacci",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"55\n",
             use_valgrind: true,
         },
@@ -443,7 +456,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-gui",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -451,7 +464,7 @@ mod cli_run {
             filename: "breakout.roc",
             executable_filename: "breakout",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -459,7 +472,7 @@ mod cli_run {
             filename: "quicksort.roc",
             executable_filename: "quicksort",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             use_valgrind: true,
         },
@@ -467,7 +480,7 @@ mod cli_run {
         //     filename: "Quicksort.roc",
         //     executable_filename: "quicksort",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
@@ -475,7 +488,7 @@ mod cli_run {
             filename: "effects.roc",
             executable_filename: "effects",
             stdin: &["hi there!"],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
@@ -483,7 +496,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "tea-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
@@ -491,7 +504,7 @@ mod cli_run {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: false,
         },
@@ -499,7 +512,7 @@ mod cli_run {
             filename: "tui.roc",
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
@@ -507,7 +520,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "ms!\nThe list was small!\n",
         //     use_valgrind: true,
         // },
@@ -515,7 +528,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "task-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "successfully wrote to file\n",
         //     use_valgrind: true,
         // },
@@ -524,7 +537,7 @@ mod cli_run {
                 filename: "False.roc",
                 executable_filename: "false",
                 stdin: &[],
-                input_paths: &["examples/hello.false"],
+                arguments: &[Arg::ExamplePath("examples/hello.false")],
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
@@ -534,7 +547,7 @@ mod cli_run {
                 filename: "static-site.roc",
                 executable_filename: "static-site",
                 stdin: &[],
-                input_paths: &["input", "output"],
+                arguments: &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
                 expected_ending: "Processed 3 files with 3 successes and 0 errors\n",
                 use_valgrind: false,
             }
@@ -564,8 +577,15 @@ mod cli_run {
                     let mut ran_without_optimizations = false;
 
                     let mut app_args: Vec<String> = vec![];
-                    for file in benchmark.input_paths {
-                        app_args.push(examples_dir("benchmarks").join(file).to_str().unwrap().to_string());
+                    for arg in benchmark.arguments {
+                        match arg {
+                            Arg::ExamplePath(file) => {
+                                app_args.push(examples_dir("benchmarks").join(file).to_str().unwrap().to_string());
+                            }
+                            Arg::PlainText(arg) => {
+                                app_args.push(arg.to_string());
+                            }
+                        }
                     }
 
                     BENCHMARKS_BUILD_PLATFORM.call_once( || {
@@ -717,7 +737,7 @@ mod cli_run {
                 filename: "NQueens.roc",
                 executable_filename: "nqueens",
                 stdin: &["6"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "4\n",
                 use_valgrind: true,
             },
@@ -725,7 +745,7 @@ mod cli_run {
                 filename: "CFold.roc",
                 executable_filename: "cfold",
                 stdin: &["3"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "11 & 11\n",
                 use_valgrind: true,
             },
@@ -733,7 +753,7 @@ mod cli_run {
                 filename: "Deriv.roc",
                 executable_filename: "deriv",
                 stdin: &["2"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "1 count: 6\n2 count: 22\n",
                 use_valgrind: true,
             },
@@ -741,7 +761,7 @@ mod cli_run {
                 filename: "RBTreeCk.roc",
                 executable_filename: "rbtree-ck",
                 stdin: &["100"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "10\n",
                 use_valgrind: true,
             },
@@ -749,7 +769,7 @@ mod cli_run {
                 filename: "RBTreeInsert.roc",
                 executable_filename: "rbtree-insert",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "Node Black 0 {} Empty Empty\n",
                 use_valgrind: true,
             },
@@ -757,7 +777,7 @@ mod cli_run {
     //            filename: "RBTreeDel.roc",
     //            executable_filename: "rbtree-del",
     //            stdin: &["420"],
-    //            input_paths: &[],
+    //            arguments: &[],
     //            expected_ending: "30\n",
     //            use_valgrind: true,
     //        },
@@ -765,7 +785,7 @@ mod cli_run {
                 filename: "TestAStar.roc",
                 executable_filename: "test-astar",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "True\n",
                 use_valgrind: false,
             },
@@ -773,7 +793,7 @@ mod cli_run {
                 filename: "TestBase64.roc",
                 executable_filename: "test-base64",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 use_valgrind: true,
             },
@@ -781,7 +801,7 @@ mod cli_run {
                 filename: "Closure.roc",
                 executable_filename: "closure",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "",
                 use_valgrind: false,
             },
@@ -789,7 +809,7 @@ mod cli_run {
                 filename: "Issue2279.roc",
                 executable_filename: "issue2279",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "Hello, world!\n",
                 use_valgrind: true,
             },
@@ -797,7 +817,7 @@ mod cli_run {
                 filename: "QuicksortApp.roc",
                 executable_filename: "quicksortapp",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "todo put the correct quicksort answer here",
                 use_valgrind: true,
             },
