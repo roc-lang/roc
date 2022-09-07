@@ -603,7 +603,6 @@ pub fn preprocess(
                     }
                 }
             }
-
         }
         target_lexicon::BinaryFormat::Macho => {
             use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
