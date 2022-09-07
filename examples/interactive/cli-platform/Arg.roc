@@ -177,42 +177,52 @@ argStr = \config ->
 
 apply = \arg1, arg2 -> andMap arg2 arg1
 
+# bool undashed long argument is missing
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["foo"] == Err MissingRequiredArg
 
+# bool dashed long argument without value is missing
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo"] == Err MissingRequiredArg
 
+# bool dashed long argument with value is determined true
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "true"] == Ok True
 
+# bool dashed long argument with value is determined false
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "false"] == Ok False
 
+# bool dashed long argument with value is determined wrong type
+expect
+    parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+    parse parser ["--foo", "not-a-bool"] == Err WrongType
+
+# string dashed long argument without value is missing
 expect
     parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo"] == Err MissingRequiredArg
 
+# string dashed long argument with value is determined
 expect
     parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
     parse parser ["--foo", "itsme"] == Ok "itsme"
 
+# two string parsers complete cases
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
         |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
         |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
 
-    parse parser ["--foo", "true", "--bar", "baz"] == Ok "foo: true bar: baz"
+    cases = [
+        ["--foo", "true", "--bar", "baz"],
+        ["--bar", "baz", "--foo", "true"],
+        ["--foo", "true", "--bar", "baz", "--other", "something"],
+    ]
 
-expect
-    parser =
-        succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
-        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
-
-    parse parser ["--foo", "true", "--bar", "baz", "--other", "something"] == Ok "foo: true bar: baz"
+    List.all cases \args -> parse parser args == Ok "foo: true bar: baz"
