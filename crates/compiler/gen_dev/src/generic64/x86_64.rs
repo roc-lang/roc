@@ -1463,14 +1463,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
         CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
     {
-        use crate::generic64::RegStorage;
-
-        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RCX));
-
-        mov_reg64_reg64(buf, dst, src1);
-        mov_reg64_reg64(buf, X86_64GeneralReg::RCX, src2);
-
-        shl_reg64_reg64(buf, dst)
+        shift_reg64_reg64_reg64(buf, storage_manager, shl_reg64_reg64, dst, src1, src2)
     }
 
     fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
@@ -1483,14 +1476,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
         CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
     {
-        use crate::generic64::RegStorage;
-
-        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RCX));
-
-        mov_reg64_reg64(buf, dst, src1);
-        mov_reg64_reg64(buf, X86_64GeneralReg::RCX, src2);
-
-        shr_reg64_reg64(buf, dst)
+        shift_reg64_reg64_reg64(buf, storage_manager, shr_reg64_reg64, dst, src1, src2)
     }
 
     fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
@@ -1527,7 +1513,22 @@ fn shift_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         }};
     }
 
-    helper!(buf, dst, src1, src2)
+    // if RCX is one of our input registers, we need to move some stuff around
+    if let X86_64GeneralReg::RCX = dst {
+        storage_manager.with_tmp_general_reg(buf, |_, buf, tmp| {
+            helper!(buf, tmp, src1, src2);
+
+            mov_reg64_reg64(buf, dst, tmp);
+        })
+    } else if let X86_64GeneralReg::RCX = src2 {
+        storage_manager.with_tmp_general_reg(buf, |_, buf, tmp| {
+            mov_reg64_reg64(buf, tmp, src2);
+
+            helper!(buf, dst, src1, tmp);
+        })
+    } else {
+        helper!(buf, dst, src1, src2)
+    }
 }
 
 impl X86_64Assembler {
