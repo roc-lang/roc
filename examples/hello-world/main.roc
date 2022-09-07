@@ -38,11 +38,6 @@ toHelp = \parser -> #toHelpHelp parser []
 #             help1 = toHelpHelp inner1 configs
 #             toHelpHelp inner1 help1.configs
 
-expect
-    parser = argBool { help: "blah", long: "foo", short: "F" }
-
-    parse parser ["foo"] == Ok True
-
 findOneArg : Str, Str, List Str -> Result Str [NotFound]*
 findOneArg = \long, short, args ->
     longArg = "--\(long)"
@@ -198,16 +193,44 @@ argStr = \config ->
 
     @Parser (Arg config fn)
 
-main =
-    apply = \arg1, arg2 -> andMap arg2 arg1
+apply = \arg1, arg2 -> andMap arg2 arg1
 
+expect
+    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parse parser ["foo"] == Err MissingRequiredArg
+
+expect
+    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parse parser ["--foo"] == Err MissingRequiredArg
+
+expect
+    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parse parser ["--foo", "true"] == Ok True
+
+expect
+    parser = argBool { help: "foo arg", long: "foo", short: "F" }
+    parse parser ["--foo", "false"] == Ok False
+
+expect
+    parser = argStr { long: "foo", short: "F", help: "foo arg" }
+    parse parser ["--foo"] == Err MissingRequiredArg
+
+expect
+    parser = argStr { long: "foo", short: "F", help: "foo arg" }
+    parse parser ["--foo", "itsme"] == Ok "itsme"
+
+expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
         |> apply (argStr { long: "foo", short: "F", help: "blah" })
         |> apply (argStr { long: "bar", short: "B", help: "stuff" })
 
-    when parse parser ["subcmd", "--foo", "true", "--bar", "baz", "--stuff", "things"] is
-        Ok str -> "Ok \(str)\n\n"
-        Err NotFound -> "nope!\n\n"
+    parse parser ["--foo", "true", "--bar", "baz"] == Ok "foo: true bar: baz"
 
+expect
+    parser =
+        succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
+        |> apply (argStr { long: "foo", short: "F", help: "blah" })
+        |> apply (argStr { long: "bar", short: "B", help: "stuff" })
 
+    parse parser ["--foo", "true", "--bar", "baz", "--other", "something"] == Ok "foo: true bar: baz"
