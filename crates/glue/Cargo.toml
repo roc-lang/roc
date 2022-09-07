@@ -18,6 +18,7 @@ roc_module = { path = "../compiler/module" }
 roc_collections = { path = "../compiler/collections" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
+roc_tracing = { path = "../tracing" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 target-lexicon = "0.12.3"
 clap = { version = "3.2.18", default-features = false, features = ["std", "color", "suggestions", "derive"] }

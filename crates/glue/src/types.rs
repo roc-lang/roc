@@ -653,6 +653,8 @@ impl<'a> Env<'a> {
     }
 
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
+
         let layout = self
             .layout_cache
             .from_var(self.arena, var, self.subs)
