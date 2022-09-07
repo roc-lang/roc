@@ -12,7 +12,7 @@ Parser a := [
     Arg Config (List Str -> Result a [NotFound, WrongType]),
     WithConfig (Parser a) Config,
     # Default (Parser a) a,
-    Lazy ({} -> a)
+    Lazy ({} -> a),
 ]
 
 OptionStr : [Some Str, NotProvided]
@@ -24,7 +24,7 @@ Config : {
 }
 
 Help : {
-    configs : List Config
+    configs : List Config,
 }
 
 succeed : a -> Parser a
@@ -33,7 +33,8 @@ succeed = \val -> @Parser (Succeed val)
 toHelp : Parser * -> Help
 toHelp = \parser ->
     configs = toHelpHelper parser []
-    { configs } 
+
+    { configs }
 
 toHelpHelper : Parser *, List Config -> List Config
 toHelpHelper = \@Parser parser, configs ->
@@ -85,7 +86,6 @@ andMap = \@Parser parser, @Parser mapper ->
                     #     parser2
                     #     |> andMap (@Parser mapper)
                     #     |> Default (fn defaultVal)
-
                     Arg config run ->
                         Arg config \args ->
                             run args
@@ -106,7 +106,6 @@ andMap = \@Parser parser, @Parser mapper ->
                                 Err err -> Err err
 
                     # Default parser2 defaultVal ->
-
                     WithConfig parser2 config2 ->
                         parser2
                         |> andMap (@Parser mapper)
@@ -142,7 +141,6 @@ andMap = \@Parser parser, @Parser mapper ->
                     #     parser2
                     #     |> andMap (@Parser mapper)
                     #     |> Default (fn defaultVal)
-
                     Arg config run ->
                         Arg config \args ->
                             run args
@@ -169,7 +167,6 @@ parse = \@Parser parser, args ->
         #     parse parser2 args
         #     |> Result.withDefault defaultVal
         #     |> Ok
-
         Lazy thunk -> Ok (thunk {})
         WithConfig parser2 _config ->
             parse parser2 args
@@ -203,36 +200,43 @@ apply = \arg1, arg2 -> andMap arg2 arg1
 # bool undashed long argument is missing
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["foo"] == Err MissingRequiredArg
 
 # bool dashed long argument without value is missing
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo"] == Err MissingRequiredArg
 
 # bool dashed long argument with value is determined true
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo", "true"] == Ok True
 
 # bool dashed long argument with value is determined false
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo", "false"] == Ok False
 
 # bool dashed long argument with value is determined wrong type
 expect
     parser = argBool { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo", "not-a-bool"] == Err WrongType
 
 # string dashed long argument without value is missing
 expect
     parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo"] == Err MissingRequiredArg
 
 # string dashed long argument with value is determined
 expect
     parser = argStr { long: "foo", help: NotProvided, short: NotProvided }
+
     parse parser ["--foo", "itsme"] == Ok "itsme"
 
 # two string parsers complete cases
@@ -257,11 +261,12 @@ expect
         |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
         |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
         |> apply (argBool { long: "bool", short: NotProvided, help: NotProvided })
-    
-    toHelp parser == {
+
+    toHelp parser
+    == {
         configs: [
             { long: "foo", short: NotProvided, help: NotProvided },
             { long: "bar", short: NotProvided, help: NotProvided },
             { long: "bool", short: NotProvided, help: NotProvided },
-        ]
+        ],
     }
