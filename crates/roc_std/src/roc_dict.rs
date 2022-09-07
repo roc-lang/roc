@@ -1,11 +1,17 @@
-use crate::roc_list::{self, RocList};
+use crate::roc_list::RocList;
 use core::{
     fmt::{self, Debug},
     hash::Hash,
 };
 
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RocDict<K, V>(RocList<(K, V)>);
+pub struct RocDict<K, V>(RocList<RocDictItem<K, V>>);
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct RocDictItem<K, V> {
+    key: K,
+    value: V,
+}
 
 impl<K, V> RocDict<K, V> {
     pub fn len(&self) -> usize {
@@ -16,16 +22,16 @@ impl<K, V> RocDict<K, V> {
         Self(RocList::with_capacity(capacity))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
-        self.into_iter()
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.0.iter().map(|item| (&item.key, &item.value))
     }
 
     pub fn iter_keys(&self) -> impl Iterator<Item = &K> {
-        self.0.iter().map(|(key, _)| key)
+        self.0.iter().map(|item| &item.key)
     }
 
     pub fn iter_values(&self) -> impl Iterator<Item = &V> {
-        self.0.iter().map(|(_, val)| val)
+        self.0.iter().map(|item| &item.value)
     }
 }
 
@@ -55,23 +61,5 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
         f.debug_map()
             .entries(self.iter().map(|(k, v)| (k, v)))
             .finish()
-    }
-}
-
-impl<K, V> IntoIterator for RocDict<K, V> {
-    type Item = (K, V);
-    type IntoIter = roc_list::IntoIter<(K, V)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a RocDict<K, V> {
-    type Item = &'a (K, V);
-    type IntoIter = core::slice::Iter<'a, (K, V)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.as_slice().iter()
     }
 }
