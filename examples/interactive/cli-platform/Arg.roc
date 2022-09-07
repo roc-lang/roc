@@ -3,6 +3,7 @@ interface Arg
         Parser,
         succeed,
         parse,
+        toHelp,
     ]
     imports []
 
@@ -30,18 +31,17 @@ succeed : a -> Parser a
 succeed = \val -> @Parser (Succeed val)
 
 toHelp : Parser * -> Help
-toHelp = \parser -> #toHelpHelp parser []
-    { configs: [] }
+toHelp = \parser ->
+    configs = toHelpHelper parser []
+    { configs } 
 
-# toHelpHelp : Parser *, List Config -> Help
-# toHelpHelp = \@Parser parser, configs ->
-#     when parser is
-#         Succeed _ -> { configs }
-#         Arg config _ -> { configs: List.append configs config }
-#         Default { parser: inner } -> { configs: List.append configs (toHelpHelp inner configs) }
-#         Both inner1 inner2 ->
-#             help1 = toHelpHelp inner1 configs
-#             toHelpHelp inner1 help1.configs
+toHelpHelper : Parser *, List Config -> List Config
+toHelpHelper = \@Parser parser, configs ->
+    when parser is
+        Succeed _ -> configs
+        Lazy _ -> configs
+        WithConfig innerParser config -> toHelpHelper innerParser (List.append configs config)
+        Arg config _ -> List.append configs config
 
 findOneArg : Str, OptionStr, List Str -> Result Str [NotFound]*
 findOneArg = \long, optShort, args ->
@@ -171,7 +171,7 @@ parse = \@Parser parser, args ->
         #     |> Ok
 
         Lazy thunk -> Ok (thunk {})
-        WithConfig parser2 config ->
+        WithConfig parser2 _config ->
             parse parser2 args
 
 argBool : Config -> Parser Bool
@@ -249,3 +249,19 @@ expect
     ]
 
     List.all cases \args -> parse parser args == Ok "foo: true bar: baz"
+
+# string and bool parsers build help
+expect
+    parser =
+        succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
+        |> apply (argStr { long: "foo", short: NotProvided, help: NotProvided })
+        |> apply (argStr { long: "bar", short: NotProvided, help: NotProvided })
+        |> apply (argBool { long: "bool", short: NotProvided, help: NotProvided })
+    
+    toHelp parser == {
+        configs: [
+            { long: "foo", short: NotProvided, help: NotProvided },
+            { long: "bar", short: NotProvided, help: NotProvided },
+            { long: "bool", short: NotProvided, help: NotProvided },
+        ]
+    }
