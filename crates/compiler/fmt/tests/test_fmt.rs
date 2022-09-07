@@ -5524,6 +5524,49 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn single_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                "abc" -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                """
+                abc
+                def
+                """ -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_that_can_be_single_line_in_pattern() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                when foo is
+                    """
+                    abc
+                    """ -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                when foo is
+                    "abc" -> ""
+                "#
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {
