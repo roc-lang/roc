@@ -56,7 +56,7 @@ impl<T> RocList<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.into_iter()
+        self.as_slice().iter()
     }
 
     /// Used for both roc_alloc and roc_realloc - given the number of elements,
