@@ -385,7 +385,7 @@ impl Types {
     pub fn get_type(&self, id: TypeId) -> &RocType {
         match self.types.get(id.0) {
             Some(typ) => typ,
-            None => unreachable!(),
+            None => unreachable!("{:?}", id),
         }
     }
 
