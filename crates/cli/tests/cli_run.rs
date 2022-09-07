@@ -484,6 +484,14 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
+        args:"interactive" => Example {
+            filename: "args.roc",
+            executable_filename: "args",
+            stdin: &[],
+            arguments: &[Arg::PlainText("hello"), Arg::PlainText("world")],
+            expected_ending: "args hello world\n",
+            use_valgrind: false,
+        },
         effects:"interactive" => Example {
             filename: "effects.roc",
             executable_filename: "effects",
