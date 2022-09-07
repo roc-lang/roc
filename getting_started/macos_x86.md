@@ -2,6 +2,9 @@
 
 ## How to install Roc
 
+In order to develop in Roc, you need to install the Roc CLI,
+which includes the Roc compiler and various helpful utilities.
+
 1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
 
 1. To prevent "roc can't be opened because Apple can't check it...":
@@ -16,7 +19,10 @@
     roc_nightly-macos_x86_64-<VERSION>.tar.gz
     ```
 
-## How to install `examples/` dependencies
+## How to install Roc platform dependencies
+
+In order to compile Roc apps (either in `examples/` or in your own projects),
+you need to install one or more of these platform language compilers, too.
 
 1. Install the Rust compiler, for apps with Rust-based platforms:
 
