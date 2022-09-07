@@ -9,7 +9,6 @@ interface Arg
 Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
-    WithConfig (Parser a) Config,
     # Default (Parser a) a,
     Lazy ({} -> a)
 ]
@@ -70,11 +69,6 @@ andMap = \@Parser parser, @Parser mapper ->
                     Lazy thunk ->
                         Lazy \{} -> fn (thunk {})
 
-                    WithConfig parser2 config ->
-                        parser2
-                        |> andMap (@Parser mapper)
-                        |> WithConfig config
-
                     # Default parser2 defaultVal ->
                     #     parser2
                     #     |> andMap (@Parser mapper)
@@ -101,21 +95,12 @@ andMap = \@Parser parser, @Parser mapper ->
 
                     # Default parser2 defaultVal ->
 
-                    WithConfig parser2 config2 ->
-                        parser2
-                        |> andMap (@Parser mapper)
-                        |> WithConfig config2
-
                     Arg config2 run2 ->
                         # Parse first the one and then the other.
-                        combinedParser = Arg config2 \args ->
+                        Arg config2 \args ->
                             when run args is
                                 Ok fn -> run2 args |> Result.map fn
                                 Err err -> Err err
-
-                        # Store the extra config.
-                        @Parser combinedParser
-                        |> WithConfig config
 
             Lazy thunk ->
                 fn = thunk {}
@@ -127,11 +112,6 @@ andMap = \@Parser parser, @Parser mapper ->
                     Lazy innerThunk ->
                         Lazy \{} -> fn (innerThunk {})
 
-                    WithConfig parser2 config ->
-                        parser2
-                        |> andMap (@Parser mapper)
-                        |> WithConfig config
-
                     # Default parser2 defaultVal ->
                     #     parser2
                     #     |> andMap (@Parser mapper)
@@ -141,11 +121,6 @@ andMap = \@Parser parser, @Parser mapper ->
                         Arg config \args ->
                             run args
                             |> Result.map fn
-
-            WithConfig mapper2 config ->
-                @Parser parser
-                |> andMap mapper2
-                |> WithConfig config
 
     @Parser unwrapped
 
@@ -165,8 +140,6 @@ parse = \@Parser parser, args ->
         #     |> Ok
 
         Lazy thunk -> Ok (thunk {})
-        WithConfig parser2 config ->
-            parse parser2 args
 
 argBool : Config -> Parser Bool
 argBool = \config ->
