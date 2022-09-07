@@ -3124,9 +3124,16 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for index in fields.iter_variables() {
-                        let var = subs[index];
+                    for (_, var_index, field_index) in fields.iter_all() {
+                        let var = subs[var_index];
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+
+                        // When generalizing annotations with rigid optionals, we want to promote
+                        // them to non-rigid, so that usages at specialized sites don't have to
+                        // exactly include the optional field.
+                        if let RecordField::RigidOptional(()) = subs[field_index] {
+                            subs[field_index] = RecordField::Optional(());
+                        }
                     }
 
                     rank
@@ -3499,7 +3506,7 @@ fn deep_copy_var_help(
                                 let slice = SubsSlice::extend_new(
                                     &mut subs.record_fields,
                                     field_types.into_iter().map(|f| match f {
-                                        RecordField::RigidOptional(()) => RecordField::Optional(()),
+                                        RecordField::RigidOptional(()) => internal_error!("RigidOptionals should be generalized to non-rigid by this point"),
 
                                         RecordField::Demanded(_)
                                         | RecordField::Required(_)

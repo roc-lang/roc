@@ -7761,4 +7761,18 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn unify_optional_record_fields_in_two_closed_records() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : { x ? Str, y ? Str } -> {}
+                
+                f {x : ""}
+                "#
+            ),
+            "{}",
+        );
+    }
 }
