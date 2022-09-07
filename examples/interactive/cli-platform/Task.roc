@@ -39,10 +39,6 @@ succeed = \ok -> InternalTask.succeed ok
 fail : err -> Task * err *
 fail = \err -> InternalTask.fail err
 
-withDefault : Task ok * fx, ok -> Task ok * fx
-withDefault = \task, default ->
-    onFail task \_ -> Task.succeed default
-
 attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
 attempt = \task, transform ->
     effect = Effect.after

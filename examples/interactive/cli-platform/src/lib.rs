@@ -377,32 +377,3 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
         }
     }
 }
-
-#[no_mangle]
-pub extern "C" fn roc_fx_envVarUtf8(key: &RocStr) -> RocStr {
-    let val: String = dbg!(std::env::var(dbg!(key.as_str()))).unwrap();
-
-    RocStr::from(val.as_str())
-}
-
-#[no_mangle]
-pub extern "C" fn roc_fx_writeUtf8(path: &RocStr, string: &RocStr) {
-    write_bytes(path, string.as_str().as_bytes())
-}
-
-#[no_mangle]
-pub extern "C" fn roc_fx_writeBytes(path: &RocStr, bytes: &RocList<u8>) {
-    write_bytes(path, bytes.as_slice())
-}
-
-fn write_bytes(path: &RocStr, bytes: &[u8]) {
-    // TODO return Result
-    let mut file = File::create(path.as_str()).unwrap();
-    file.write_all(bytes).unwrap();
-}
-
-#[no_mangle]
-pub extern "C" fn roc_fx_errLine(line: &RocStr) {
-    let string = line.as_str();
-    eprintln!("{}", string);
-}
