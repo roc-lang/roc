@@ -360,7 +360,7 @@ impl Types {
         layout: Layout<'a>,
     ) -> TypeId {
         for (id, existing_type) in self.types.iter().enumerate() {
-            if self.is_equivalent(&typ, &existing_type) {
+            if self.is_equivalent(&typ, existing_type) {
                 return TypeId(id);
             }
         }
