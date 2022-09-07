@@ -17,10 +17,6 @@ jobs:
       
       - name: fetch releases data and save to file
         run: curl https://api.github.com/repos/roc-lang/roc/releases --output roc_releases.json
-        
-      - run: cat roc_releases.json | wc -c
-      
-      - run: cat roc_releases.json | head
       
       - name: get the url of today`s release for linux x86_64
         if: startsWith(matrix.os, 'ubuntu')
