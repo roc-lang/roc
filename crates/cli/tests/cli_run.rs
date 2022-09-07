@@ -489,7 +489,7 @@ mod cli_run {
             executable_filename: "args",
             stdin: &[],
             arguments: &[Arg::PlainText("hello"), Arg::PlainText("world")],
-            expected_ending: "args hello world\n",
+            expected_ending: "hello world\n",
             use_valgrind: false,
         },
         effects:"interactive" => Example {
