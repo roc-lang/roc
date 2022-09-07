@@ -1179,6 +1179,30 @@ fn add_tag_union<'a>(
     };
 
     let tag_union_type = match layout {
+        _ if union_tags.is_newtype_wrapper(subs)
+            && matches!(
+                subs.get_content_without_compacting(var),
+                // Make sure this is a tag union, *not* a recursive tag union!
+                // Otherwise, we could end up with a recursive tag union
+                // getting unwrapped incorrectly.
+                Content::Structure(FlatType::TagUnion(_, _))
+            ) =>
+        {
+            let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
+
+            // A newtype wrapper should always have exactly one payload.
+            debug_assert_eq!(payload_vars.len(), 1);
+
+            // A newtype wrapper should always have the same layout as its payload.
+            let payload_layout = layout;
+            let payload_id = add_type_help(env, payload_layout, payload_vars[0], None, types);
+
+            RocTagUnion::SingleTagStruct {
+                name: name.clone(),
+                tag_name: tag_name.to_string(),
+                payload_fields: vec![payload_id],
+            }
+        }
         Layout::Union(union_layout) => {
             use UnionLayout::*;
 
