@@ -29,8 +29,8 @@ Config : {
 
 OptConfig : {
     long : Str,
-    short ? OptionStr,
-    help ? OptionStr,
+    short ?OptionStr,
+    help ?OptionStr,
 }
 
 succeed : a -> Parser a
@@ -178,7 +178,7 @@ parse = \@Parser parser, args ->
             parse parser2 args
 
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
-bool = \{long, short ? NotProvided, help ? NotProvided} ->
+bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
@@ -186,16 +186,16 @@ bool = \{long, short ? NotProvided, help ? NotProvided} ->
             Ok "false" -> Ok False
             Ok _ -> Err WrongType
 
-    @Parser (Arg {long, short, help} fn)
+    @Parser (Arg { long, short, help } fn)
 
 str : _ -> Parser Str # TODO: panics if OptConfig annotated
-str = \{long, short ? NotProvided, help ? NotProvided} ->
+str = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
             Ok foundArg -> Ok foundArg
 
-    @Parser (Arg {long, short, help} fn)
+    @Parser (Arg { long, short, help } fn)
 
 apply = \arg1, arg2 -> andMap arg2 arg1
 
