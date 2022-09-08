@@ -1,3 +1,5 @@
+# The Roc Compiler
+
 Here's how the compiler is laid out.
 
 ## Parsing

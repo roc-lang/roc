@@ -1,3 +1,5 @@
+# Snippet ideas
+
 I think snippet insertion would make for an awesome demo that shows off the potential of the editor and a basic version would not be that difficult to implement.
 With snippet insertion I mean the following:
 
@@ -25,8 +27,6 @@ I think the snippet insertion commands also set us up for quality interaction wi
 The CC0 license seems like a good fit for the snippets.
 
 Fuzzy matching should be done to suggest a closest fuzzy match, so if the user types the snippet command `empty Map`, we should suggest `empty Dict`.
-
-# Snippet ideas
 
 ## Pure Text Snippets
 
@@ -92,7 +92,7 @@ Snippets are inserted based on type of value on which the cursor is located.
     - len list (fuzzy matches should be length of list)
 - append element to list
 
-# fuzzy matching
+## fuzzy matching
 
  some pairs for fuzzy matching unit tests:
 
@@ -106,7 +106,7 @@ Snippets are inserted based on type of value on which the cursor is located.
 - head > takeFirst
 - filter > keepIf
 
-# Inspiration
+## Inspiration
 
 - [grepper](https://www.codegrepper.com/) snippet collection that embeds in google search results. See also this [collection of common questions](https://www.codegrepper.com/code-examples/rust).
 - [github copilot](https://copilot.github.com/) snippet generation with machine learning
