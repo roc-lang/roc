@@ -1,42 +1,36 @@
-#
-# An example .markdownlint-cli2.yaml file
-#
-
-# Disable some built-in rules
 config:
-  no-trailing-spaces: false
+  blanks-around-fences: false
+  blanks-around-headings: false
+  blanks-around-lists: false
+  commands-show-output: false
+  emphasis-style: false
+  fenced-code-language: false
+  first-line-heading: false
+  list-indent: false
+  line-length: false
+  list-marker-space: false
+  single-title: false
+  single-trailing-newline: false
+  no-bare-urls: false
+  no-duplicate-heading: false
+  no-emphasis-as-heading: false
+  no-hard-tabs: false
+  no-inline-html: false
   no-multiple-blanks: false
+  no-space-in-code: false
+  no-trailing-punctuation: false
+  no-trailing-spaces: false
+  ul-indent: false
+  ul-style: false
 
-# Include a custom rule package
-customRules:
-  - markdownlint-rule-titlecase
+ignores:
+  - "crates/vendor/**/*.md"
 
-# Fix any fixable errors
+# Enable fixing of linting errors reported by rules that emit fix information 
 fix: true
 
-# Define a custom front matter pattern
-frontMatter: "<head>[^]*<\/head>"
-
-# Define glob expressions to use (only valid at root)
-globs:
-  - "!*bout.md"
-
-# Define glob expressions to ignore
-ignores:
-  - "ignore*.md"
-
-# Use a plugin to recognize math
-markdownItPlugins:
-  -
-    - "@iktakahiro/markdown-it-katex"
-
-# Disable inline config comments
+# Disable the support of HTML comments within Markdown content
 noInlineConfig: true
 
 # Disable progress on stdout (only valid at root)
 noProgress: true
-
-# Use a specific formatter (only valid at root)
-outputFormatters:
-  -
-    - markdownlint-cli2-formatter-default
