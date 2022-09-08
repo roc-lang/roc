@@ -595,7 +595,7 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
                 return numer;
             }
 
-            sr = @ctz(u128, denom);
+            sr = @ctz(denom);
 
             return .{
                 .hi = math.shr(u128, numer.hi, sr),
@@ -606,8 +606,8 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         // K X
         // ---
         // 0 K
-        var denom_leading_zeros = @clz(u128, denom);
-        var numer_hi_leading_zeros = @clz(u128, numer.hi);
+        var denom_leading_zeros = @clz(denom);
+        var numer_hi_leading_zeros = @clz(numer.hi);
         sr = 1 + N_UDWORD_BITS + denom_leading_zeros - numer_hi_leading_zeros;
         // 2 <= sr <= N_UTWORD_BITS - 1
         // q.all = n.all << (N_UTWORD_BITS - sr);
