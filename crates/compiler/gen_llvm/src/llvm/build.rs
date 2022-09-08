@@ -6607,7 +6607,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum RocReturn {
     /// Return as normal
     Return,
@@ -6951,7 +6951,16 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         builder.build_return(Some(&return_value));
                     }
                     RocReturn::ByPointer => {
-                        debug_assert!(matches!(cc_return, CCReturn::ByPointer));
+                        match cc_return {
+                            CCReturn::Return => {
+                                let result = call.try_as_basic_value().left().unwrap();
+                                env.builder.build_store(return_pointer, result);
+                            }
+
+                            CCReturn::ByPointer | CCReturn::Void => {
+                                // the return value (if any) is already written to the return pointer
+                            }
+                        }
 
                         builder.build_return(None);
                     }
