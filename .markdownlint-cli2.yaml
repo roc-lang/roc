@@ -3,7 +3,6 @@ config:
   fenced-code-language: false
   first-line-heading: false
   line-length: false
-  single-trailing-newline: false
   no-bare-urls: false
   no-duplicate-heading: false
   no-emphasis-as-heading: false
