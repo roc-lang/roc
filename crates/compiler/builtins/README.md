@@ -61,23 +61,33 @@ In these builtin definitions you will need to allocate for and list the argument
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
 
 ## Connecting the definition to the implementation
+
 ### module/src/low_level.rs
+
 This `LowLevel` thing connects the builtin defined in this module to its implementation. It's referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
 
 ## Bottom level LLVM values and functions
+
 ### gen/src/llvm/build.rs
+
 This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If it's simple fundamental stuff like `INT_ADD` then it certainly should be written here.
 
 ## Letting the compiler know these functions exist
+
 ### builtins/src/std.rs
+
 It's one thing to actually write these functions, it's _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
 
 ## Specifying how we pass args to the function
+
 ### builtins/mono/src/borrow.rs
+
 After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Testing it
+
 ### solve/tests/solve_expr.rs
+
 To make sure that Roc is properly inferring the type of the new builtin, add a test to this file similar to:
 
 ```
@@ -97,6 +107,7 @@ fn atan() {
 But replace `Num.atan` and the type signature with the new builtin.
 
 ### test_gen/test/*.rs
+
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
 
 ```

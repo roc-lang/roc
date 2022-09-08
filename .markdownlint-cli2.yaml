@@ -1,5 +1,4 @@
 config:
-  blanks-around-headings: false
   blanks-around-lists: false
   commands-show-output: false
   emphasis-style: false

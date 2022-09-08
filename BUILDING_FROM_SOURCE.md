@@ -113,6 +113,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
+
 **version: 0.9.1**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
@@ -127,6 +128,7 @@ If you want to install it manually, you can also download Zig directly [here](ht
 > WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
 ### LLVM
+
 **version: 13.0.x**
 
 For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding

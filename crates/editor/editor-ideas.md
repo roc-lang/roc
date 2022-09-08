@@ -65,6 +65,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - VR debugging: render massive curved screen with rectangle showing code (and expression values) for every function in call stack.
 
 ### Testing
+
 - [Wallaby.js](https://wallabyjs.com/) could serve as inspiration for live gutters showing tested / untested / passing / failing code based on tests, combined with time travel debugging (inline runtime values / inline error reports / inline code coverage); could be useful for debugging as well
 
 ### Cool regular editors

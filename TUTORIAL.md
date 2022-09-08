@@ -1201,18 +1201,21 @@ and also `Num.cos 1` and have them all work as expected; the number literal `1` 
 you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
 ### Typed Number Literals
+
 When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
 `1u8` specifies `1` as an unsigned 8-bit integer, `5i32` specifies `5` as a signed 32-bit integer, etc.
 The full list of possible suffixes includes:
 `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128`, `nat`, `f32`, `f64`, `dec`
 
 ### Hexadecimal Integer Literals
+
 Integer literals can be written in hexadecimal form by prefixing with `0x` followed by hexadecimal characters.
 `0xFE` evaluates to decimal `254`
 The integer type can be specified as a suffix to the hexadecimal literal,
 so `0xC8u8` evaluates to decimal `200` as an unsigned 8-bit integer.
 
 ### Binary Integer Literals
+
 Integer literals can be written in binary form by prefixing with `0b` followed by the 1's and 0's representing
 each bit. `0b0000_1000` evaluates to decimal `8`
 The integer type can be specified as a suffix to the binary literal,
