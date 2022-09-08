@@ -142,7 +142,7 @@ pub enum ReadErr {
     Other,
 }
 
-#[repr(C)]
+#[repr(u8)]
 pub enum WriteErr {
     Other,
     PermissionDenied,
