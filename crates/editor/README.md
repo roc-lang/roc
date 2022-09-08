@@ -46,10 +46,10 @@ From roc to render:
 - The `ed_model` is filled in part with data obtained by loading and typechecking the roc file with the same function (`load_and_typecheck`) that is used by the compiler.
 - `ed_model` also contains an `EdModule`, which holds the parsed abstract syntax tree (AST).
 - In the `init_model` function:
-    + The AST is converted into a tree of `MarkupNode`. The different types of `MarkupNode` are similar to the elements/nodes in HTML. A line of roc code is represented as a nested `MarkupNode` containing mostly text `MarkupNode`s. The line `foo = "bar"` is represented as
+  + The AST is converted into a tree of `MarkupNode`. The different types of `MarkupNode` are similar to the elements/nodes in HTML. A line of roc code is represented as a nested `MarkupNode` containing mostly text `MarkupNode`s. The line `foo = "bar"` is represented as
     three text `MarkupNode`; representing `foo`, ` = ` and `bar`. Multiple lines of roc code are represented as nested `MarkupNode` that contain other nested `MarkupNode`.
-    + `CodeLines` holds a `Vec` of `String`, each line of code is a `String`. When saving the file, the content of `CodeLines` is written to disk.
-    + `GridNodeMap` maps every position of a char of roc code to a `MarkNodeId`, for easy interaction with the caret.
+  + `CodeLines` holds a `Vec` of `String`, each line of code is a `String`. When saving the file, the content of `CodeLines` is written to disk.
+  + `GridNodeMap` maps every position of a char of roc code to a `MarkNodeId`, for easy interaction with the caret.
 - Back in `editor/src/editor/main.rs` we convert the `EdModel` to `RenderedWgpu` by calling `model_to_wgpu`.
 - The `RenderedWgpu` is passed to the `glyph_brush` to draw the characters(glyphs) on the screen.
 

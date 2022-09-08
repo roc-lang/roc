@@ -17,8 +17,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [What FP can learn from Smalltalk](https://youtu.be/baxtyeFVn3w) by [Aditya Siram](https://github.com/deech)
 * [Moldable development](https://youtu.be/Pot9GnHFOVU) by [Tudor Gîrba](https://github.com/girba)
 * [Unity game engine](https://unity.com/)
-    * Scripts can expose values as text inputs, sliders, checkboxes, etc or even generate custom graphical inputs
-    * Drag-n-drop game objects and component into script interfaces
+  * Scripts can expose values as text inputs, sliders, checkboxes, etc or even generate custom graphical inputs
+  * Drag-n-drop game objects and component into script interfaces
 * [How to Visualize Data Structures in VS Code](https://addyosmani.com/blog/visualize-data-structures-vscode/)
 
 ### Live Interactivity
@@ -83,11 +83,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Dark Demo](https://youtu.be/QgimI2SnpTQ) by [Ellen Chisa](https://twitter.com/ellenchisa)
 * [Introduction to JetBrains MPS](https://youtu.be/JoyzxjgVlQw) by [Kolja Dummann](https://www.youtube.com/channel/UCq_mWDvKdXYJJzBmXkci17w)
 * [Eve](http://witheve.com/)
-    * code editor as prose writer
-    * live preview
-    * possible inspiration for live interactivity as well
+  * code editor as prose writer
+  * live preview
+  * possible inspiration for live interactivity as well
 * [Unreal Engine 4](https://www.unrealengine.com/en-US/)
-    * [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
+  * [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
 
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 * [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
@@ -112,10 +112,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Update without user interaction. e.g. autosave.
 * Could be efficient way to communicate with smart assistant.
 * You don't have to remember complex keyboard shortcuts if you can describe actions to execute them. Examples:
-    * Add latest datetime package to dependencies.
-    * Generate unit test for this function.
-    * Show edit history for this function.
-    * Adjusting settings: switch to light theme, increase font size...
+  * Add latest datetime package to dependencies.
+  * Generate unit test for this function.
+  * Show edit history for this function.
+  * Adjusting settings: switch to light theme, increase font size...
 * Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
 * Nice special use case: using voice to code while on treadmill desk.
 * Use word embeddings to find most similar voice command to recorded input in vector space.
@@ -155,24 +155,24 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ### Beginner-focused Features
 
- * Show Roc cheat sheet on start-up.
- * Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
- * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .
- * Adjust UI based on beginner/novice/expert?
+* Show Roc cheat sheet on start-up.
+* Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
+* Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .
+* Adjust UI based on beginner/novice/expert?
 
 ### Productivity features
 
 * When refactoring;
-    - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
-    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
-    - When updating dependencies with breaking changes; show similar diffs from github projects that have successfully updated that dependency.
-    - AST backed renaming, changing variable/function/type name should change it all over the codebase.
+  - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
+  - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
+  - When updating dependencies with breaking changes; show similar diffs from github projects that have successfully updated that dependency.
+  - AST backed renaming, changing variable/function/type name should change it all over the codebase.
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
-    - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used.
+  - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used.
 * When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
-    * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
+  * Searchbar for examples/docs. With permission search strings could be shared with the platform/package authors so they know exactly what their users are struggling with.
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
@@ -182,11 +182,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
 * Instead of going to definition and having to navigate back and forth between files, show an editable view inside the current file. See [this video](https://www.youtube.com/watch?v=EenznqbW5w8)
 * When encountering an unexpected error in the user's program we show a button at the bottom to start an automated search on this error. The search would:
-    * look for similar errors in github issues of the relevant libraries
-    * search stackoverflow questions
-    * search a local history of previously encountered errors and fixes
-    * search through a database of our zullip questions
-    * ...
+  * look for similar errors in github issues of the relevant libraries
+  * search stackoverflow questions
+  * search a local history of previously encountered errors and fixes
+  * search through a database of our zullip questions
+  * ...
 * smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 * After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 * Show most commonly changed settings on first run so new users can quickly customize their experience. Keeping record of changed settings should be opt-in.
@@ -220,11 +220,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 #### Autocomplete
 
 - Use more space for autocomplete options:
-   * Multiple columns. Columns could have different sources, i.e. middle column suggests based on current folder, left column on whole project, right column on github.
-   * show cell with completion + auto import suggestion
+  * Multiple columns. Columns could have different sources, i.e. middle column suggests based on current folder, left column on whole project, right column on github.
+  * show cell with completion + auto import suggestion
 - Webcam based eye tracking for quick selection.
 - Machine Learning:
-   * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
+  * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
 - It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning.
 - When ranking autocomplete suggestions, take into account how new a function is. Newly created functions are likely to be used soon.
@@ -249,20 +249,20 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 * [Scrivner](https://www.literatureandlatte.com/scrivener/overview) writing app for novelists, screenwriters, and more
 * Word processors (Word, Google Docs, etc)
-    * Comments that are parallel to the text of the document.
-    * Comments can act as discussions and not just statements.
-    * Easy tooling around adding tables and other stylised text
+  * Comments that are parallel to the text of the document.
+  * Comments can act as discussions and not just statements.
+  * Easy tooling around adding tables and other stylised text
 * Excel and Google Sheets
-    * Not sure, maybe something they do well that we (code editors) could learn from
+  * Not sure, maybe something they do well that we (code editors) could learn from
 
 ## Machine Learning Ideas
 
 * Ability to record all changes to abstract syntax tree with user permission.
-    * I think it is possible to create powerful automatic error resolution by having a dataset available of ast's with a specific error and the subsequent transformation that fixed the error.
-    * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
-    * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
-        * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
-        * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
+  * I think it is possible to create powerful automatic error resolution by having a dataset available of ast's with a specific error and the subsequent transformation that fixed the error.
+  * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
+  * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
+    * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
+    * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 * It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
@@ -271,15 +271,15 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ## Testing
 
 * From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
-    * Makes sense for unit tests, keeps the test close to the source
-    * Doesn't necessarily make sense for integration or e2e testing
-    * Maybe easier to manually trigger a test related to exactly what code you're writing
+  * Makes sense for unit tests, keeps the test close to the source
+  * Doesn't necessarily make sense for integration or e2e testing
+  * Maybe easier to manually trigger a test related to exactly what code you're writing
 * Ability to generate unit tests for a selected function in context menu
-    * A table should appear to enter input and expected output pairs quickly
+  * A table should appear to enter input and expected output pairs quickly
 * Ability to "record" unit tests
-    * Select a function to record.
-    * Do a normal run, and save the input and output of the selected function.
-    * Generate a unit test with that input-output pair
+  * Select a function to record.
+  * Do a normal run, and save the input and output of the selected function.
+  * Generate a unit test with that input-output pair
 * [vitest](https://twitter.com/antfu7/status/1468233216939245579) only run tests that could possibly have changed (because the code they test/use has changed)
 * Ability to show in sidebar if code is tested by a test. Clicking on the test in the sidebar should bring you to that test.
 
@@ -291,7 +291,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ## Documentation
 
 * Ability to see module as it would be presented on a package website.
-    * Modern editors may guide developers to the source code too easily.
+  * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift.
 * Make it easy to ask for/add examples and suggest improvements to a project's docs.
@@ -332,8 +332,8 @@ If we make an integrated terminal, we can automatically add executed commands to
 - It's nice to enhance the feeling of reward after completing a task, this increases motivation.
 - Great for tutorials and the first run of the editor.
 - Suggestions of occasions for positive feedback:
-    - Being able to compile successfully after starting out with more than X errors.
-    - Making a test succeed after repeated failures.
+  - Being able to compile successfully after starting out with more than X errors.
+  - Making a test succeed after repeated failures.
 - Positive feedback could be delivered with messages and/or animations. Animations could be with fireworks, flying roc logo birds, sounds...
 - The intensity of the message/animation could be increased based on the duration/difficulty of the task.
 - Suggest to search for help or take a break after being stuck on a test/compile errors... for some time. A search could be done for group chats for relevant libraries.
@@ -354,7 +354,7 @@ If we make an integrated terminal, we can automatically add executed commands to
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY === EMPATHY
-    * Visual Imapirments
+  * Visual Imapirments
       No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
       Insensitivity to certain or all colors.
       Need of highcontrast
@@ -365,9 +365,9 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
 
       On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
-      - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
+    - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
 
-    * Motor impariments
+  * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
       Too much mouse waving and sitting for too long is bad for humans.
       Keyboard is basic accessability tool but
@@ -375,19 +375,19 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       They rely on eye tracking to move mouse cursor arond.
       If we employ *some* voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
       That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
-    * Builtin fonts that can be read more easily by those with dyslexia.
+  * Builtin fonts that can be read more easily by those with dyslexia.
 
 * Nice backtraces that highlight important information
 * Ability to show import connection within project visually
-    * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
+  * This could be done by drawing connections between files or functions in the tree view. This would make it easier for people to get their bearings in new big projects.
 * Connections could also be drawn between functions that call each other in the tree view. The connections could be animated to show the execution flow of the program.
 * Ability to inline statements contained in called functions into the callee function for debugging.
-    * The value of expressions can be shown at the end of the line like in the [Inventing on Principle talk](https://youtu.be/8QiPFmIMxFc?t=1181)
-    * This would give a clear overview of the execution and should make it easy to pinpoint the line where the bug originates.
-    * That specific line can then be right clicked to go to the actual function.
-    * Having to jump around between different functions and files is unnecessary and makes it difficult to see the forest through the trees.
+  * The value of expressions can be shown at the end of the line like in the [Inventing on Principle talk](https://youtu.be/8QiPFmIMxFc?t=1181)
+  * This would give a clear overview of the execution and should make it easy to pinpoint the line where the bug originates.
+  * That specific line can then be right clicked to go to the actual function.
+  * Having to jump around between different functions and files is unnecessary and makes it difficult to see the forest through the trees.
 * "Error mode" where the editor jumps you to the next error
-    * Similar in theory to diff tools that jump you to the next merge conflict
+  * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
 * Command to change the file to put all exposed functions at the top of the file, private functions below. Other alternative; ability to show a "file explorer" that shows exposed functions first, followed by private functions.
 * We could provide a more expansive explanation in errors that can benefit from it. This explanation could be folded(shown on click) by default in the editor.
