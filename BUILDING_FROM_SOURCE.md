@@ -158,7 +158,7 @@ By default, the script installs it as `clang-13`. You can address this with syml
 sudo ln -s /usr/bin/clang-13 /usr/bin/clang
 ```
 
-There are also alternative installation options at http://releases.llvm.org/download.html
+There are also alternative installation options at <http://releases.llvm.org/download.html>
 
 [Troubleshooting](#troubleshooting)
 
