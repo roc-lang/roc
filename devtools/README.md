@@ -22,6 +22,7 @@ If you use lorri or direnv it is possible to load the dev flake instead of the r
 For lorri:
 1. copy the `shell.nix` at the root of this repo to the folder containing your dev tools flake.
 1. edit `.envrc` to contain:
+
 ```
 eval "$(lorri direnv --shell-file path-to-your-dev-flake-folder/shell.nix)"
 ``` 
@@ -38,6 +39,7 @@ If your extension is not available on nix, you can add them [from the vscode mar
 
 Instead of running `code` in the last step you can use the `--extensions-dir` flag to allow you to install extensions using the vscode GUI.
 On MacOS or Linux:
+
 ```
 code --extensions-dir="$HOME/.vscode/extensions"
 ```

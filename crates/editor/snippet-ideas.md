@@ -71,10 +71,12 @@ Snippets are inserted based on type of value on which the cursor is located.
     + example: >> `percEncodedString = Url.percentEncode ^String^`
 - command: list files in directory
     + example: >>
+
         ```
         path <- File.pathFromStr ^String^
         dirContents <- File.enumerateDir path
         ```
+
 - command: remove/create file
 - command: read/write from file
 - command: concatenate strings

@@ -30,6 +30,7 @@ But we can use these values and some of these are necessary for implementing bui
 Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
 
 Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+
 ```
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
@@ -54,6 +55,7 @@ fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 ```
+
 In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symbol::ARG_1` and` Symvol::ARG_2` designating which argument is which.
 
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
@@ -77,6 +79,7 @@ After we have all of this, we need to specify if the arguments we're passing are
 ## Testing it
 ### solve/tests/solve_expr.rs
 To make sure that Roc is properly inferring the type of the new builtin, add a test to this file similar to:
+
 ```
  #[test]
 fn atan() {
@@ -90,16 +93,19 @@ fn atan() {
     );
 }
 ```
+
 But replace `Num.atan` and the type signature with the new builtin.
 
 ### test_gen/test/*.rs
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
+
 ```
 #[test]
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
 }
 ```
+
 But replace `Num.atan`, the return value, and the return type with your new builtin.
 
 # Mistakes that are easy to make!!

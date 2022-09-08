@@ -5,11 +5,13 @@
 ### 1. Build the Roc website
 
 For a minimal build (when just working on the web REPL)
+
 ```bash
 cp -r www/public www/build
 ```
 
 Or, for a full build (with std lib documentation, downloadable source code, etc.)
+
 ```bash
 www/build.sh
 ```

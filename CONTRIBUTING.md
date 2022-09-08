@@ -11,11 +11,13 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 ## Running Tests
 
 Most contributors execute the following commands befor pushing their code:
+
 ```
 cargo test
 cargo fmt --all -- --check
 cargo clippy --workspace --tests -- --deny warnings
 ```
+
 Execute `cargo fmt --all` to fix the formatting.
 
 ## Contribution Tips
@@ -30,6 +32,7 @@ Execute `cargo fmt --all` to fix the formatting.
   2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key).
   3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
   4. Make git sign your commits automatically:
+
    ```
    git config --global commit.gpgsign true
    ```

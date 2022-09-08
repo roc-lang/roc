@@ -16,20 +16,25 @@ If you are running ArchLinux or a derivative like Manjaro, you'll need to run `s
 
 Install nix (not necessary on NixOS):
 - If you are using WSL (Windows subsystem for Linux):
+
 ```
 sh <(curl -L https://nixos.org/nix/install) --no-daemon
 ```
+
 - For everything else:
+
 ```
 sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
 Open a new terminal and install nixFlakes in your environment:
+
 ```
 nix-env -iA nixpkgs.nixFlakes
 ```
 
 Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
+
 ```
 experimental-features = nix-command flakes
 ```
@@ -40,9 +45,11 @@ If you don't know how to do this, restarting your computer will also do the job.
 #### Usage
 
 Now with nix set up, you just need to run one command from the roc project root directory:
+
 ```
 nix develop
 ```
+
 You should be in a shell with everything needed to build already installed.
 Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
@@ -61,6 +68,7 @@ The editor is a :construction:WIP:construction: and not ready yet to replace you
 `cargo run edit` should work on NixOS and MacOS. If you use Linux x86_64, follow the instructions below.
 
 If you're not already in a nix shell, execute `nix develop` at the the root of the repo folder and then execute:
+
 ```
 nixVulkanIntel cargo run edit
 ```
@@ -125,11 +133,13 @@ For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
 `$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
+
 ```
 export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
 ```
 
 For Ubuntu and Debian:
+
 ```
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
@@ -164,10 +174,12 @@ On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 If you encounter:
+
 ```
 error: No suitable version of LLVM was found system-wide or pointed
        to by LLVM_SYS_130_PREFIX.
 ```
+
 Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
@@ -191,11 +203,14 @@ The official LLVM pre-built binaries for Windows lack features that roc needs. I
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
 1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
+
 ```
 <# ! Replace YOUR_USERNAME ! #>
 $env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.0-win64'
 ```
+
 1. add the LLVM bin to the path to prevent issue #3952:
+
 ```
 <# ! Replace YOUR_USERNAME ! #>
 [Environment]::SetEnvironmentVariable(

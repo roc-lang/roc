@@ -701,6 +701,7 @@ in the list returns `True`:
 List.any [1, 2, 3] Num.isOdd
 # returns True because 1 and 3 are odd
 ```
+
 ```coffee
 List.any [1, 2, 3] Num.isNegative
 # returns False because none of these is negative
@@ -712,6 +713,7 @@ There's also `List.all` which only returns `True` if all the elements in the lis
 List.all [1, 2, 3] Num.isOdd
 # returns False because 2 is not odd
 ```
+
 ```coffee
 List.all [1, 2, 3] Num.isPositive
 # returns True because all of these are positive
@@ -791,6 +793,7 @@ For example, what do each of these return?
 ```coffee
 List.get ["a", "b", "c"] 1
 ```
+
 ```coffee
 List.get ["a", "b", "c"] 100
 ```
@@ -864,6 +867,7 @@ functions where argument order matters. For example, these two uses of `List.app
 ```coffee
 List.append ["a", "b", "c"] "d"
 ```
+
 ```coffee
 ["a", "b", "c"]
     |> List.append "d"
@@ -875,9 +879,11 @@ sugar for `Num.div a b`:
 ```coffee
 first / second
 ```
+
 ```coffee
 Num.div first second
 ```
+
 ```coffee
 first
     |> Num.div second
@@ -1020,9 +1026,11 @@ What we want is something like one of these:
 ```coffee
 reverse : List elem -> List elem
 ```
+
 ```coffee
 reverse : List value -> List value
 ```
+
 ```coffee
 reverse : List a -> List a
 ```
