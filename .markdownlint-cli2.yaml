@@ -1,0 +1,42 @@
+#
+# An example .markdownlint-cli2.yaml file
+#
+
+# Disable some built-in rules
+config:
+  no-trailing-spaces: false
+  no-multiple-blanks: false
+
+# Include a custom rule package
+customRules:
+  - markdownlint-rule-titlecase
+
+# Fix any fixable errors
+fix: true
+
+# Define a custom front matter pattern
+frontMatter: "<head>[^]*<\/head>"
+
+# Define glob expressions to use (only valid at root)
+globs:
+  - "!*bout.md"
+
+# Define glob expressions to ignore
+ignores:
+  - "ignore*.md"
+
+# Use a plugin to recognize math
+markdownItPlugins:
+  -
+    - "@iktakahiro/markdown-it-katex"
+
+# Disable inline config comments
+noInlineConfig: true
+
+# Disable progress on stdout (only valid at root)
+noProgress: true
+
+# Use a specific formatter (only valid at root)
+outputFormatters:
+  -
+    - markdownlint-cli2-formatter-default
