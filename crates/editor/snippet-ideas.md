@@ -34,14 +34,14 @@ Pure text snippets are not templates and do not contain typed holes.
 Fish hooks are used when subvariants should be created e.g.: <collection> means this pure text snippets should be created for all Roc collections such as Dict, Set, List...
 
 - command: empty <collection>
-  + example: empty dict >> `{::}`
+  - example: empty dict >> `{::}`
 - command: <common algorithm>
-  + example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
-  + common algorithms: sieve of erathostenes, greatest common divisor, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
+  - example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
+  - common algorithms: sieve of erathostenes, greatest common divisor, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
 - command: current date/datetime
-  + example: current datetime >> `now <- Time.now\n`
+  - example: current datetime >> `now <- Time.now\n`
 - command: list range 1 to 5
-  + example: [1, 2, 3, 4, 5]
+  - example: [1, 2, 3, 4, 5]
 - command: use commandline args
 - command: post/get/put request
 - command: extract float(s)/number/emal addresses  from string. regex match float/number/email address/...
@@ -54,22 +54,22 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
 Snippets are inserted based on type of value on which the cursor is located.
 
 - command: <all builtins for current type>
-  + example:
-    * We have the cursor like this `people|`
-    * User presses snippet shortcut or dot key
-    * We show  a list with all builtin functions for the List type
-    * User chooses contains
-    * We change code to `List.contains people |Blank`
+  - example:
+    - We have the cursor like this `people|`
+    - User presses snippet shortcut or dot key
+    - We show  a list with all builtin functions for the List type
+    - User chooses contains
+    - We change code to `List.contains people |Blank`
 - command: Str to chars/charlist
 
 ## Snippets with Typed Holes
 
 - command: sort ^List *^ (by ^Record Field^) {ascending/descending}
-  + example: sort people by age descending >> ...
+  - example: sort people by age descending >> ...
 - command: escape url
-  + example: >> `percEncodedString = Url.percentEncode ^String^`
+  - example: >> `percEncodedString = Url.percentEncode ^String^`
 - command: list files in directory
-  + example: >>
+  - example: >>
 
         ```
         path <- File.pathFromStr ^String^
@@ -86,10 +86,10 @@ Snippets are inserted based on type of value on which the cursor is located.
 - command: reverse stirng
 - command: lambda/anonymous function
 - we should auto create type hole commands for all builtins.
-  + example: List has builtins reverse, repeat, len... generated snippet commands should be:
-    * reverse list > List.reverse ^List *^
-    * repeat list > List.repeat ^elem^ ^Nat^
-    * len list (fuzzy matches should be length of list)
+  - example: List has builtins reverse, repeat, len... generated snippet commands should be:
+    - reverse list > List.reverse ^List *^
+    - repeat list > List.repeat ^elem^ ^Nat^
+    - len list (fuzzy matches should be length of list)
 - append element to list
 
 # fuzzy matching

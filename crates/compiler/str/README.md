@@ -17,8 +17,8 @@ On a 64-bit system, this `struct` would take up 16B in memory. On a 32-bit syste
 
 Here's what the fields mean:
 
-* `pointer` is the memory address of the heap-allocated memory containing the `Bool` elements. For an empty list, the pointer is null (that is, 0).
-* `length` is the number of `Bool` elements in the list. For an empty list, this is also 0.
+- `pointer` is the memory address of the heap-allocated memory containing the `Bool` elements. For an empty list, the pointer is null (that is, 0).
+- `length` is the number of `Bool` elements in the list. For an empty list, this is also 0.
 
 ## Nonempty list
 
@@ -115,8 +115,8 @@ We use a very simple system to distinguish the two: if the high bit in that `usi
 
 This has a couple of implications:
 
-* `capacity` actually has a maximum of `isize::MAX`, not `usize::MAX` - because if its high bit flips to 1, then now suddenly it's considered a refcount by the host. As it happens, capacity's maximum value is naturally `isize::MAX` anyway, so there's no downside here.
-* `refcount` actually begins at `isize::MIN` and increments towards 0, rather than beginning at 0 and incrementing towards a larger number. When a decrement instruction is executed and the refcount is `isize::MIN`, it gets freed instead. Since all refcounts do is count up and down, and they only ever compare the refcount to a fixed constant, there's no real performance cost to comparing to `isize::MIN` instead of to 0. So this has no significant downside either.
+- `capacity` actually has a maximum of `isize::MAX`, not `usize::MAX` - because if its high bit flips to 1, then now suddenly it's considered a refcount by the host. As it happens, capacity's maximum value is naturally `isize::MAX` anyway, so there's no downside here.
+- `refcount` actually begins at `isize::MIN` and increments towards 0, rather than beginning at 0 and incrementing towards a larger number. When a decrement instruction is executed and the refcount is `isize::MIN`, it gets freed instead. Since all refcounts do is count up and down, and they only ever compare the refcount to a fixed constant, there's no real performance cost to comparing to `isize::MIN` instead of to 0. So this has no significant downside either.
 
 Using this representation, hosts can trivially distinguish any list they receive as being either refcounted or having a capacity value, without any runtime cost in either the refcounted case or the capacity case.
 
@@ -146,14 +146,14 @@ Whenever a list grows, it will grow in-place if it's Unique and there is enough 
 
 Strings have several things in common with lists:
 
-* They are a `2 * usize` struct, sometimes with a non-null pointer to some heap memory
-* They have a length and a capacity, and they can grow in basically the same way
-* They are reference counted in basically the same way
+- They are a `2 * usize` struct, sometimes with a non-null pointer to some heap memory
+- They have a length and a capacity, and they can grow in basically the same way
+- They are reference counted in basically the same way
 
 However, they also have two things going on that lists do not:
 
-* The Small String Optimization
-* Literals stored in read-only memory
+- The Small String Optimization
+- Literals stored in read-only memory
 
 ## The Small String Optimization
 

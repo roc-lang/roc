@@ -83,16 +83,16 @@ That will help us improve this document for everyone who reads it in the future!
 
 To build the compiler, you need these installed:
 
-* [Zig](https://ziglang.org/), see below for version
-* `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
-* On Debian/Ubuntu `sudo apt-get install pkg-config`
-* LLVM, see below for version
-* [rust](https://rustup.rs/)
-* Also run `cargo install bindgen` after installing rust. You may need to open a new terminal.
+- [Zig](https://ziglang.org/), see below for version
+- `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
+- On Debian/Ubuntu `sudo apt-get install pkg-config`
+- LLVM, see below for version
+- [rust](https://rustup.rs/)
+- Also run `cargo install bindgen` after installing rust. You may need to open a new terminal.
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
-* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
+- [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
 For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal development you should be fine without it.
