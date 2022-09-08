@@ -159,7 +159,7 @@ pub struct RelocationSection<'a> {
 }
 
 impl<'a> RelocationSection<'a> {
-    fn new(arena: &'a Bump, name: &'a str) -> Self {
+    pub fn new(arena: &'a Bump, name: &'a str) -> Self {
         RelocationSection {
             name,
             target_section_index: 0,

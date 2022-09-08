@@ -1479,7 +1479,7 @@ impl<'a> NameSection<'a> {
         self.function_names.push((index, name));
     }
 
-    pub fn empty(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump) -> Self {
         NameSection {
             function_names: bumpalo::vec![in arena],
         }
@@ -1517,12 +1517,12 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
 
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Custom section ID
         if module_bytes[*cursor] != Self::ID as u8 {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
         *cursor += 1;
 
@@ -1535,7 +1535,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
             // This is a different Custom section. This host has no debug info.
             // Not a parse error, just an empty section.
             *cursor = cursor_start;
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Find function names subsection
