@@ -150,33 +150,25 @@ pub enum WriteErr {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_fileWriteUtf8(
-    path: &RocList<u8>,
-    string: &RocStr,
+    roc_path: &RocList<u8>,
+    roc_string: &RocStr,
 ) -> RocResult<(), WriteErr> {
-    use std::io::Write;
-
-    match File::create(path_from_list(path)) {
-        Ok(mut file) => match file.write_all(string.as_str().as_bytes()) {
-            Ok(()) => RocResult::ok(()),
-            Err(_) => {
-                todo!("Report a file write error");
-            }
-        },
-        Err(_) => {
-            todo!("Report a file open error");
-        }
-    }
+    write_slice(roc_path, roc_string.as_str().as_bytes())
 }
 
 #[no_mangle]
 pub extern "C" fn roc_fx_fileWriteBytes(
-    path: &RocList<u8>,
-    bytes: &RocList<u8>,
+    roc_path: &RocList<u8>,
+    roc_bytes: &RocList<u8>,
 ) -> RocResult<(), WriteErr> {
+    write_slice(roc_path, roc_bytes.as_slice())
+}
+
+fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> {
     use std::io::Write;
 
-    match File::create(path_from_list(path)) {
-        Ok(mut file) => match file.write_all(bytes.as_slice()) {
+    match File::create(path_from_list(roc_path)) {
+        Ok(mut file) => match file.write_all(bytes) {
             Ok(()) => RocResult::ok(()),
             Err(_) => {
                 todo!("Report a file write error");
