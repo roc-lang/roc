@@ -1,6 +1,5 @@
 config:
   commands-show-output: false
-  emphasis-style: false
   fenced-code-language: false
   first-line-heading: false
   list-indent: false

@@ -690,8 +690,8 @@ includes in its union."
 ## Opaque Types
 
 In Elm, you can choose to expose (or not) custom types' constructors in order to create [opaque types](http://sporto.github.io/elm-patterns/advanced/opaque-types.html).
-Since Roc's _tags_ can be constructed in any module without importing anything, Roc has a separate
-_opaque type_ language feature to enable information hiding.
+Since Roc's *tags* can be constructed in any module without importing anything, Roc has a separate
+*opaque type* language feature to enable information hiding.
 
 As an example, suppose I define these inside the `Username` module:
 

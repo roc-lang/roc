@@ -377,7 +377,7 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Keyboard is basic accessability tool but
       Keyboard is also optional, some people have too shaky hands even for keyboard.
       They rely on eye tracking to move mouse cursor arond.
-      If we employ _some_ voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
+      If we employ *some* voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
       That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
     * Builtin fonts that can be read more easily by those with dyslexia.
 
