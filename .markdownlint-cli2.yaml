@@ -5,7 +5,6 @@ config:
   line-length: false
   no-duplicate-heading: false
   no-emphasis-as-heading: false
-  no-hard-tabs: false
   no-inline-html: false
   no-multiple-blanks: false
   no-space-in-code: false

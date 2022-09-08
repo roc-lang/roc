@@ -212,7 +212,7 @@ Okay, so first we’ll enumerate some terminology, and the exact algorithm. Then
     | Type_function region
 
     Type_function = \region ->
-    	let left_type, new_region = Type (region + 1)
+      let left_type, new_region = Type (region + 1)
       let right_type, new_region = Type (new_region)
       let func_type = left_type -[Lambda region]-> right_type
       (func_type, new_region)
@@ -313,9 +313,9 @@ has unification proceed as follows:
 => Fo -[[] + Fo:f:1]-> (b' -[[] + Fo:f:2]-> {})
    <specialization time>
       step 1:
-			  uls_Fo =  { [[] + Fo:f:1], [[] + Fo:f:2] }
+        uls_Fo =  { [[] + Fo:f:1], [[] + Fo:f:2] }
       step 2 (sort):
-			  uls_Fo' = { [[] + Fo:f:2], [[] + Fo:f:1] }
+        uls_Fo' = { [[] + Fo:f:2], [[] + Fo:f:1] }
       step 3:
         1. iteration: [[] + Fo:f:2]
              b'  -[[]]-> {}             (t_f1 after removing Fo:f:2)
@@ -342,7 +342,7 @@ has unification proceed as follows:
         uls_Go =  { [[] + Go:g:1] }
       step 2 (sort):
         uls_Go' = { [[] + Go:g:1] }
-			step 3:
+      step 3:
         1. iteration: [[] + Go:g:1]
              Go -[[]]-> {}     (t_f1 after removing Go:g:1)
            ~ Go -[[Go#g]]-> {}
@@ -398,7 +398,7 @@ Then, the call `h (@Go {})` has the trace
         uls_Go =  { [[] + Go:g:1] }
       step 2 (sort):
         uls_Go' = { [[] + Go:g:1] }
-			step 3:
+      step 3:
         1. iteration: [[] + Go:g:1]
              Go -[[]]-> {}     (t_f1 after removing Go:g:1)
            ~ Go -[[Go#g]]-> {}
@@ -497,8 +497,8 @@ Let’s get to it.
                   uls_Go = { [[] + Go:g:2] }
                 step 2:
                   uls_Go = { [[] + Go:g:2] } (sorted)
-					      step_3:
-					        1. iteration: [[] + Go:g:2]
+                step_3:
+                  1. iteration: [[] + Go:g:2]
                        {} -[[]]-> {} (t_f1 after removing Go:g:2)
                      ~ {} -[[lamG]]-> {}
                      = {} -[[lamG]]-> {}
@@ -675,7 +675,7 @@ Type = \region ->
 | Type_function region
 
 Type_function = \region ->
-	let left_type = Type (region * 2)
+  let left_type = Type (region * 2)
   let right_type = Type (region * 2 + 1)
   let func_type = left_type -[Lambda region]-> right_type
   func_type
