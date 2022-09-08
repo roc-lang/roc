@@ -1,4 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
+use crate::expr::fmt_str_literal;
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use crate::Buf;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern};
@@ -146,9 +147,7 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            StrLiteral(literal) => {
-                todo!("Format string literal: {:?}", literal);
-            }
+            StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
             SingleQuote(string) => {
                 buf.push('\'');
                 buf.push_str(string);
