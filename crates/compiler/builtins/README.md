@@ -56,7 +56,7 @@ fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 ```
 
-In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symbol::ARG_1` and` Symvol::ARG_2` designating which argument is which.
+In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symbol::ARG_1` and `Symvol::ARG_2` designating which argument is which.
 
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
 

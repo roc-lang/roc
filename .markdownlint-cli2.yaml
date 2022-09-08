@@ -6,7 +6,6 @@ config:
   no-duplicate-heading: false
   no-emphasis-as-heading: false
   no-inline-html: false
-  no-space-in-code: false
   no-trailing-punctuation: false
   no-trailing-spaces: false
   ul-indent: false
