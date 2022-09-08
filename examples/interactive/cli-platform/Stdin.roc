@@ -4,6 +4,6 @@ interface Stdin
 
 line : Task Str * [Read [Stdin]*]*
 line =
-    Effect.getLine
+    Effect.stdinLine
     |> Effect.map Ok
     |> InternalTask.fromEffect
