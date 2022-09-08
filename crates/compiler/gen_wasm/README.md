@@ -88,7 +88,6 @@ main =
     1 + 2 + 4
 ```
 
-
 ### Direct translation of Mono IR
 
 The Mono IR contains two functions, `Num.add` and `main`, so we generate two corresponding WebAssembly functions.

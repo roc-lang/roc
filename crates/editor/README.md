@@ -1,5 +1,4 @@
 
-
 ## :construction: Work In Progress :construction:
 
 The editor is a work in progress, only a limited subset of Roc expressions are currently supported.
@@ -54,7 +53,6 @@ From roc to render:
 - Back in `editor/src/editor/main.rs` we convert the `EdModel` to `RenderedWgpu` by calling `model_to_wgpu`.
 - The `RenderedWgpu` is passed to the `glyph_brush` to draw the characters(glyphs) on the screen.
 
-
 ### Important files
 
 To understand how the editor works it is useful to know the most important files:
@@ -74,7 +72,6 @@ Important folders/files outside the editor folder:
 - ast/src/lang/core/expr
 - ast/src/lang/core/ast.rs
 - ast/src/lang/env.rs
-
 
 ## Contributing
 

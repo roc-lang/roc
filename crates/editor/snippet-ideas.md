@@ -62,7 +62,6 @@ Snippets are inserted based on type of value on which the cursor is located.
         * We change code to `List.contains people |Blank`
 - command: Str to chars/charlist
 
-
 ## Snippets with Typed Holes
 
 - command: sort ^List *^ (by ^Record Field^) {ascending/descending}

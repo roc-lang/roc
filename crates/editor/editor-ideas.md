@@ -74,7 +74,6 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Helix](https://github.com/helix-editor/helix) modal (terminal, for now) editor in rust. Good UX.
 * [Kakoune](https://kakoune.org/) editor with advanced text selection and manipulation features.
 
-
 ### Structured Editing
 
 * [Greenfoot](https://www.youtube.com/watch?v=uUVA7nTh0XY)
@@ -256,7 +255,6 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Excel and Google Sheets
     * Not sure, maybe something they do well that we (code editors) could learn from
 
-
 ## Machine Learning Ideas
 
 * Ability to record all changes to abstract syntax tree with user permission.
@@ -269,7 +267,6 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 * It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
 * To allow for more privacy; data gathering can be kept only local or only shared within a team/company. Say we offer the ability to save the changes made after an error occurred. Another developer in the company who encounters this error could be notified someone has previously encountered this error along with their changes made after the error. Optionally, the first developer's name can be shown (only within team/company) so the second developer can quickly ask for help.
-
 
 ## Testing
 
@@ -329,7 +326,6 @@ If we make an integrated terminal, we can automatically add executed commands to
 ### Inspiration
 
 - [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
-
 
 ## Positive feedback
 

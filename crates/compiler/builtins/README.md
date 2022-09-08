@@ -25,7 +25,6 @@ But we can use these values and some of these are necessary for implementing bui
 - ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
 - ..writing `List elem, Nat -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
-
 ### can/src/builtins.rs
 
 Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
