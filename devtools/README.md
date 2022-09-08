@@ -27,7 +27,7 @@ For lorri:
 
 ```
 eval "$(lorri direnv --shell-file path-to-your-dev-flake-folder/shell.nix)"
-``` 
+```
 
 ## Extensions
 

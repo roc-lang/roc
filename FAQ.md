@@ -475,4 +475,4 @@ The split of Rust for the compiler and Zig for the standard library has worked w
 
 ## Why is the website so basic?
 
-We have a very basic website on purpose, it helps set expectations that roc is a work in progress and not ready yet for a first release. 
+We have a very basic website on purpose, it helps set expectations that roc is a work in progress and not ready yet for a first release.

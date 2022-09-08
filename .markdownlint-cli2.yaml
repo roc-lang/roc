@@ -7,7 +7,6 @@ config:
   no-emphasis-as-heading: false
   no-inline-html: false
   no-trailing-punctuation: false
-  no-trailing-spaces: false
   ul-indent: false
   ul-style: false
 
