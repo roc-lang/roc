@@ -10,7 +10,7 @@ Unlike most editors, we use projectional or structural editing to edit the [Abst
 - Install the compiler, see [here](../BUILDING_FROM_SOURCE.md).
 - Run the following from the roc folder:
 
-```
+```sh
 cargo run edit
 ```
 

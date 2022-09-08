@@ -216,13 +216,13 @@ Closed record annotations look the same as they do in Elm, e.g.
 
 In Elm:
 
-```
+```elm
 { a | name : Str, email : Str } -> Str
 ```
 
 In Roc:
 
-```
+```coffee
 { name : Str, email : Str }* -> Str
 ```
 
@@ -526,7 +526,7 @@ the type of the union it goes in.
 
 Here are some examples of using tags in a REPL:
 
-```
+```coffee
 > True
 True : [True]*
 

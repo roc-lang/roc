@@ -18,25 +18,25 @@ Install nix (not necessary on NixOS):
 
 - If you are using WSL (Windows subsystem for Linux):
 
-```
+```sh
 sh <(curl -L https://nixos.org/nix/install) --no-daemon
 ```
 
 - For everything else:
 
-```
+```sh
 sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
 Open a new terminal and install nixFlakes in your environment:
 
-```
+```sh
 nix-env -iA nixpkgs.nixFlakes
 ```
 
 Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
 
-```
+```text
 experimental-features = nix-command flakes
 ```
 
@@ -47,7 +47,7 @@ If you don't know how to do this, restarting your computer will also do the job.
 
 Now with nix set up, you just need to run one command from the roc project root directory:
 
-```
+```sh
 nix develop
 ```
 
@@ -70,7 +70,7 @@ The editor is a :construction:WIP:construction: and not ready yet to replace you
 
 If you're not already in a nix shell, execute `nix develop` at the the root of the repo folder and then execute:
 
-```
+```sh
 nixVulkanIntel cargo run edit
 ```
 
@@ -101,7 +101,7 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 
 You may see an error like this during builds:
 
-```
+```text
 /usr/bin/ld: cannot find -lxcb-render
 /usr/bin/ld: cannot find -lxcb-shape
 /usr/bin/ld: cannot find -lxcb-xfixes
@@ -109,7 +109,7 @@ You may see an error like this during builds:
 
 If so, you can fix it like so:
 
-```
+```sh
 sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
@@ -138,13 +138,13 @@ For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
 running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
 
-```
+```sh
 export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
 ```
 
 For Ubuntu and Debian:
 
-```
+```sh
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
@@ -154,7 +154,7 @@ chmod +x llvm.sh
 If you use this script, you'll need to add `clang` to your `PATH`.
 By default, the script installs it as `clang-13`. You can address this with symlinks like so:
 
-```
+```sh
 sudo ln -s /usr/bin/clang-13 /usr/bin/clang
 ```
 
@@ -179,7 +179,7 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 If you encounter:
 
-```
+```text
 error: No suitable version of LLVM was found system-wide or pointed
        to by LLVM_SYS_130_PREFIX.
 ```
@@ -192,7 +192,7 @@ If installing LLVM fails, it might help to run `sudo xcode-select -r` before ins
 
 It might also be useful to add these exports to your shell:
 
-```
+```sh
 export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
 export CPPFLAGS="-I/usr/local/opt/llvm/include"
 ```
@@ -208,14 +208,14 @@ The official LLVM pre-built binaries for Windows lack features that roc needs. I
 1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
 1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
 
-```
+```text
 <# ! Replace YOUR_USERNAME ! #>
 $env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.0-win64'
 ```
 
 1. add the LLVM bin to the path to prevent issue #3952:
 
-```
+```text
 <# ! Replace YOUR_USERNAME ! #>
 [Environment]::SetEnvironmentVariable(
    "Path",
@@ -242,7 +242,7 @@ makes build times a lot faster, and I highly recommend it.
 
 Create `~/.cargo/config.toml` if it does not exist and add this to it:
 
-```
+```toml
 [build]
 # Link with lld, per https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306
 # Use target-cpu=native, per https://deterministic.space/high-performance-rust.html

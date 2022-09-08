@@ -81,7 +81,7 @@ WebAssembly functions can have any number of local variables. They are declared 
 In this backend, each symbol in the Mono IR gets one WebAssembly local. To illustrate, let's translate a simple Roc example to WebAssembly text format.
 The WebAssembly code below is completely unoptimised and uses far more locals than necessary. But that does help to illustrate the concept of locals.
 
-```
+```coffee
 app "test" provides [main] to "./platform"
 
 main =
@@ -96,7 +96,7 @@ The code ends up being quite bloated, with lots of `local.set` and `local.get` i
 
 I've added comments on each line to show what is on the stack and in the locals at each point in the program.
 
-```
+```text
   (func (;0;) (param i64 i64) (result i64)   ; declare function index 0 (Num.add) with two i64 parameters and an i64 result
     local.get 0              ; load param 0                                    stack=[param0]
     local.get 1              ; load param 1                                    stack=[param0, param1]
@@ -126,7 +126,7 @@ I've added comments on each line to show what is on the stack and in the locals 
 This code doesn't actually require any locals at all.
 (It also doesn't need the `return` instructions, but that's less of a problem.)
 
-```
+```text
   (func (;0;) (param i64 i64) (result i64)
     local.get 0
     local.get 1
@@ -153,7 +153,7 @@ When the `WasmBackend` generates code for a `Let` statement, it can "label" the 
 
 In practice it should be very common for values to appear on the VM stack in the right order, because in the Mono IR, statements occur in dependency order! We should only generate locals when the dependency graph is a little more complicated, and we actually need them.
 
-```
+```text
   ┌─────────────────┐     ┌─────────────┐
   │                 │     │             │
   │                 ├─────►   Storage   ├──────┐

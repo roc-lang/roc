@@ -28,7 +28,7 @@ First we'd have the `struct` above, with both `length` and `capacity` set to 2. 
 
 Here's how that heap memory would be laid out on a 64-bit system. It's a total of 48 bytes.
 
-```
+```text
 |------16B------|------16B------|---8B---|---8B---|
      string #1       string #2   refcount  unused
 ```
@@ -96,7 +96,7 @@ Some lists may end up beginning with excess capacity due to memory alignment req
 
 This means the list `[True, True, False]` would have a memory layout like this):
 
-```
+```text
 |--------------8B--------------|--1B--|--1B--|--1B--|-----5B-----|
   either refcount or capacity   bool1  bool2  bool3     unused
 ```
@@ -181,7 +181,7 @@ Using this strategy with a [conditional move instruction](https://stackoverflow.
 
 Thus, the layout of a small string on a 64-bit big-endian architecture would be:
 
-```
+```text
 |-----------usize length field----------|-----------usize pointer field---------|
 |-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|
  len   'R'  'i'  'c'  'h'  'a'  'r'  'd'  ' '  'F'  'e'  'l'  'd'  'm'  'a'  'n'
@@ -196,7 +196,7 @@ that would make an `isize` either negative or positive) will actually be the `us
 
 That means we'd have to move swap the order of the struct's length and pointer fields. Here's how the string `"Roc string"` would be stored on a little-endian system:
 
-```
+```text
 |-----------usize pointer field---------|-----------usize length field----------|
 |-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|
   'R'  'o'  'c'  ' '  's'  't'  'r'  'i'  'n'  'g'   0    0    0    0    0   len

@@ -31,7 +31,7 @@ Right at the top of this module is a function called `builtin_defs`. All this is
 
 Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
 
-```
+```rust
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
     let len_var = var_store.fresh();
@@ -90,7 +90,7 @@ After we have all of this, we need to specify if the arguments we're passing are
 
 To make sure that Roc is properly inferring the type of the new builtin, add a test to this file similar to:
 
-```
+```rust
  #[test]
 fn atan() {
     infer_eq_without_problem(
@@ -110,7 +110,7 @@ But replace `Num.atan` and the type signature with the new builtin.
 
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
 
-```
+```rust
 #[test]
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);

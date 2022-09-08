@@ -12,7 +12,7 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 
 Most contributors execute the following commands befor pushing their code:
 
-```
+```sh
 cargo test
 cargo fmt --all -- --check
 cargo clippy --workspace --tests -- --deny warnings
@@ -34,7 +34,7 @@ Execute `cargo fmt --all` to fix the formatting.
   3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
   4. Make git sign your commits automatically:
 
-   ```
+   ```sh
    git config --global commit.gpgsign true
    ```
 

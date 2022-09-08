@@ -90,7 +90,7 @@ f (@Foo {})
 
 The unification trace for the call `f (@Foo {})` proceeds as follows. I use `'tN`, where `N` is a number, to represent fresh unbound type variables. Since `f` is a generalized type, `a'` is the fresh type “based on `a`" created for a particular usage of `f`.
 
-```
+```text
   typeof f
 ~ Foo -'t1-> 't2
 =>
@@ -102,14 +102,14 @@ The unification trace for the call `f (@Foo {})` proceeds as follows. I use `'tN
 
 Now that the specialization lambdas’ type variables point to concrete types, we can resolve the concrete lambdas of `Foo:hashThunk:1` and `Foo:hashThunk:2`. Cool! Let’s do that. We know that
 
-```
+```text
 hashThunk = \@Foo {} -> \{} -> 1
 #^^^^^^^^   Foo -[[Foo#hashThunk]]-> \{} -[[lam2]]-> U64
 ```
 
 So `Foo:hashThunk:1` is `[[Foo#hashThunk]]` and `Foo:hashThunk:2` is `[[lam2]]`. Applying that to the type of `f` we get the trace
 
-```
+```text
   Foo -[[zeroHash] + Foo:hashThunk:1]-> ({} -[[lam1] + Foo:hashThunk:2]-> U64)
 <specialization time>
   Foo:hashThunk:1 -> [[Foo#hashThunk]]
@@ -160,7 +160,7 @@ Suppose we have the call
 
 With the present specialization technique, unification proceeds as follows:
 
-```
+```text
 == solve (f (@Fo {})) ==
   typeof f
 ~ Fo -'t1-> 't2
@@ -206,7 +206,7 @@ Okay, so first we’ll enumerate some terminology, and the exact algorithm. Then
 
 - **The region invariant.** Previously we discussed the “region” of a lambda set in a specialization function definition. The way regions are assigned in the compiler follows a very specific ordering and holds a invariant we’ll call the “region invariant”. First, let’s define a procedure for creating function types and assigning regions:
 
-    ```
+    ```text
     Type = \region ->
       (Type_atom, region)
     | Type_function region
@@ -220,7 +220,7 @@ Okay, so first we’ll enumerate some terminology, and the exact algorithm. Then
 
     This procedure would create functions that look like the trees(abbreviating `L=Lambda`, `a=atom` below)
 
-    ```
+    ```text
      -[L 1]->
     a         a
 
@@ -303,7 +303,7 @@ With our algorithm, the call
 
 has unification proceed as follows:
 
-```
+```text
 == solve (f (@Fo {})) ==
   typeof f
 ~ Fo -'t1-> 't2
@@ -360,32 +360,32 @@ There we go. We’ve recovered the specialization type of the second lambda set 
 
 Suppose instead we let-generalized the motivating example, so it was a program like
 
-```
+```coffee
 h = f (@Fo {})
 h (@Go {})
 ```
 
 `h` still gets resolved correctly in this case. It’s basically the same unification trace as above, except that after we find out that
 
-```
+```text
 typeof f = Fo -[[Fo#f]]-> (b''' -[[] + b''':g:1]-> {})
 ```
 
 we see that `h` has type
 
-```
+```text
 b''' -[[] + b''':g:1]-> {}
 ```
 
 We generalize this to
 
-```
+```text
 h : c -[[] + c:g:1]-> {}
 ```
 
 Then, the call `h (@Go {})` has the trace
 
-```
+```text
 === solve h (@Go {}) ===
   typeof h
 ~ Go -'t1-> 't2
@@ -462,7 +462,7 @@ Here is the call we’re going to trace:
 
 Let’s get to it.
 
-```
+```text
 === solve (f (@Fo {}) (@Go {})) ===
   typeof f
 ~ Fo, Go -'t1-> 't2
@@ -573,13 +573,13 @@ f = \flag, a, b, c ->
 
 The first branch has type (`a` has generalized type `a'`)
 
-```
+```text
 c'' -[[] + a':j:2]-> {}
 ```
 
 The second branch has type (`b` has generalized type `b'`)
 
-```
+```text
 c''' -[[] + b':j:2]-> {}
 ```
 
@@ -587,7 +587,7 @@ So now, how do we unify this? Well, following the construction above, we must un
 
 Well, one idea is that during normal type unification, we simply take the union of unspecialized lambda sets with **disjoint** variables. In the case above, we would get `c' -[[] + a':j:2 + b':j:2]` (supposing `c` has type `c'`). During lambda set compaction, when we unify ambient types, choose one non-concrete type to unify with. Since we’re maintaining the invariant that each generalized type variable appears at least once on one side of an arrow, eventually you will have picked up all type variables in unspecialized lambda sets.
 
-```
+```text
 === monomorphize (f A (@C {}) (@D {}) (@E {})) ===
 (inside f, solving `it`:)
 
@@ -633,7 +633,7 @@ it : E -[[lamE]]-> {}
 
 The disjointedness is important - we want to unify unspecialized lambdas whose type variables are equivalent. For example,
 
-```
+```coffee
 f = \flag, a, c ->
   it = when flag is
     A -> j a
@@ -643,13 +643,13 @@ f = \flag, a, c ->
 
 Should produce `it` having generalized type
 
-```
+```text
 c' -[[] + a':j:2]-> {}
 ```
 
 and not
 
-```
+```text
 c' -[[] + a':j:2 + a':j:2]-> {}
 ```
 
@@ -683,7 +683,7 @@ Type_function = \region ->
 
 Which produces a tree like
 
-```
+```text
                            -[L 1]->
           -[L 2]->                            -[L 3]->
  -[L 4]->          -[L 5]->          -[L 6]->          -[L 7]->

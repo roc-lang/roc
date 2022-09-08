@@ -1,6 +1,5 @@
 config:
   commands-show-output: false
-  fenced-code-language: false
   first-line-heading: false
   line-length: false
   no-duplicate-heading: false

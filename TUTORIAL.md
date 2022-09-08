@@ -15,13 +15,13 @@ Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
 short. Run this in a terminal:
 
-```
+```sh
 $ roc repl
 ```
 
 You should see this:
 
-```
+```sh
 The rockin’ roc repl
 ```
 
@@ -131,13 +131,13 @@ main = Stdout.line "I'm a Roc application!"
 
 Try running this with:
 
-```
+```sh
 $ roc Hello.roc
 ```
 
 You should see this:
 
-```
+```sh
 I'm a Roc application!
 ```
 
@@ -157,7 +157,7 @@ total = Num.toStr (birds + iguanas)
 
 Now if you run `roc Hello.roc`, you should see this:
 
-```
+```sh
 There are 5 animals.
 ```
 
