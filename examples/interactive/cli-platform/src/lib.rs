@@ -167,7 +167,7 @@ pub extern "C" fn roc_fx_fileWriteBytes(
 fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> {
     use std::io::Write;
 
-    match File::create(path_from_list(roc_path)) {
+    match File::create(path_from_roc_path(roc_path)) {
         Ok(mut file) => match file.write_all(bytes) {
             Ok(()) => RocResult::ok(()),
             Err(_) => {
@@ -186,7 +186,7 @@ fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> 
 /// https://doc.rust-lang.org/std/os/windows/ffi/trait.OsStringExt.html#tymethod.from_wide -
 /// or whether we want to try to set the Windows code page to UTF-8 instead.
 #[cfg(target_family = "unix")]
-fn path_from_list(bytes: &RocList<u8>) -> &Path {
+fn path_from_roc_path(bytes: &RocList<u8>) -> &Path {
     Path::new(os_str_from_list(bytes))
 }
 
@@ -196,7 +196,7 @@ pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_fileReadBytes(path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
-    let path = path_from_list(path);
+    let path = path_from_roc_path(path);
     println!("TODO read bytes from {:?}", path);
 
     RocResult::ok(RocList::empty())
