@@ -2,6 +2,6 @@ interface InternalFile
     exposes [ReadErr, WriteErr]
     imports []
 
-ReadErr : [NotFound]
+ReadErr : [NotFound, Other]
 
-WriteErr : [PermissionDenied]
+WriteErr : [PermissionDenied, Other]

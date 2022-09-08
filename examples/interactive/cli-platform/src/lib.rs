@@ -7,9 +7,11 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
-use roc_std::{RocList, RocStr};
-use std::ffi::CStr;
+use roc_std::{RocList, RocResult, RocStr};
+use std::ffi::{CStr, OsStr};
+use std::fs::File;
 use std::os::raw::c_char;
+use std::path::Path;
 use std::time::Duration;
 
 extern "C" {
@@ -132,6 +134,80 @@ pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
 pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
     let string = line.as_str();
     eprintln!("{}", string);
+}
+
+#[repr(C)]
+pub enum ReadErr {
+    NotFound,
+    Other,
+}
+
+#[repr(C)]
+pub enum WriteErr {
+    Other,
+    PermissionDenied,
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileWriteUtf8(
+    path: &RocList<u8>,
+    string: &RocStr,
+) -> RocResult<(), WriteErr> {
+    use std::io::Write;
+
+    match File::create(path_from_list(path)) {
+        Ok(mut file) => match file.write_all(string.as_str().as_bytes()) {
+            Ok(()) => RocResult::ok(()),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileWriteBytes(
+    path: &RocList<u8>,
+    bytes: &RocList<u8>,
+) -> RocResult<(), WriteErr> {
+    use std::io::Write;
+
+    match File::create(path_from_list(path)) {
+        Ok(mut file) => match file.write_all(bytes.as_slice()) {
+            Ok(()) => RocResult::ok(()),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
+}
+
+/// TODO: do this on Windows too. This may be trickier because it's unclear
+/// whether we want to use wide encoding (in which case we have to convert from
+/// &[u8] to &[u16] by converting UTF-8 to UTF-16) and then windows::OsStrExt::from_wide -
+/// https://doc.rust-lang.org/std/os/windows/ffi/trait.OsStringExt.html#tymethod.from_wide -
+/// or whether we want to try to set the Windows code page to UTF-8 instead.
+#[cfg(target_family = "unix")]
+fn path_from_list(bytes: &RocList<u8>) -> &Path {
+    Path::new(os_str_from_list(bytes))
+}
+
+pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
+    std::os::unix::ffi::OsStrExt::from_bytes(bytes.as_slice())
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileReadBytes(path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
+    let path = path_from_list(path);
+    println!("TODO read bytes from {:?}", path);
+
+    RocResult::ok(RocList::empty())
 }
 
 #[no_mangle]
