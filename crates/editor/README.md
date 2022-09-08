@@ -28,6 +28,7 @@ Make sure to [create an issue](https://github.com/roc-lang/roc/issues/new/choose
 ## Inspiration
 
 We thank the following open source projects in particular for inspiring us when designing the Roc editor:
+
 - [learn-wgpu](https://github.com/sotrh/learn-wgpu)
 - [rgx](https://github.com/cloudhead/rgx)
 - [elm-editor](https://github.com/jxxcarlson/elm-editor)
@@ -40,6 +41,7 @@ This debug view shows important data structures that can be found in `editor/src
 Add or delete some code to see how these data structures are updated.
 
 From roc to render:
+
 - `./roc edit` or `cargo run edit` is first handled in `cli/src/main.rs`, from there the editor's launch function is called (`editor/src/editor/main.rs`).
 - In `run_event_loop` we initialize the winit window, wgpu, the editor's model(`EdModel`) and start the rendering loop.
 - The `ed_model` is filled in part with data obtained by loading and typechecking the roc file with the same function (`load_and_typecheck`) that is used by the compiler.
@@ -56,6 +58,7 @@ From roc to render:
 ### Important files
 
 To understand how the editor works it is useful to know the most important files:
+
 - editor/src/editor/main.rs
 - editor/src/editor/mvc/ed_update.rs
 - editor/src/editor/mvc/ed_model.rs
@@ -64,6 +67,7 @@ To understand how the editor works it is useful to know the most important files
 - editor/src/editor/render_debug.rs
 
 Important folders/files outside the editor folder:
+
 - code_markup/src/markup/convert
 - code_markup/src/markup/nodes.rs
 - ast/src/lang/core/def

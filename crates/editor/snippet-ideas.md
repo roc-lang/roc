@@ -96,6 +96,7 @@ Snippets are inserted based on type of value on which the cursor is located.
 # fuzzy matching
 
  some pairs for fuzzy matching unit tests:
+
  - hashmap > Dict
  - map > map (function), Dict
  - for > map, mapWithIndex, walk, walkBackwards, zip

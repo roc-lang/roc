@@ -56,6 +56,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
 * We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.
 * We previuously mentioned showing expression values next to the code. I think when debugging it would be valuable to focus more on these valuas/data. A possible way to do this would be to create scrollable view(without need to jump between files) of inputs and outputs of user defined functions. Clicking on a function could then show the code with the expression values side by side. Having a good overview of how the values change could make it easy to find where exactly things go wrong.
+
 - (Machine learning) algorithms to extract and show useful information from debug values.
 - Ability to mark e.g. a specific record field for tracking(filter out the noise) that is being repeatedly updated throughout the program.
 - Ability to collapse/fold debug output coming from specific line.

@@ -15,6 +15,7 @@ On Macos and Linux, we highly recommend Using [nix](https://nixos.org/download.h
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
 Install nix (not necessary on NixOS):
+
 - If you are using WSL (Windows subsystem for Linux):
 
 ```
@@ -119,6 +120,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
 If you prefer a package manager, you can try the following:
+
 - For MacOS, you can install with `brew install zig`
 - For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
 - For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)

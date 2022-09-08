@@ -1,6 +1,7 @@
 # Work in progress!
 
 Roc is not ready for a 0.1 release yet, but we do have:
+
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://github.com/roc-lang/roc/blob/main/TUTORIAL.md)
 - [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)

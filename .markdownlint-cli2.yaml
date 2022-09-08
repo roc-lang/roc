@@ -1,5 +1,4 @@
 config:
-  blanks-around-lists: false
   commands-show-output: false
   emphasis-style: false
   fenced-code-language: false

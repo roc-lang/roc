@@ -165,6 +165,7 @@ There are 5 animals.
 short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
+
 - The first def assigns the name `main` to the expression `Stdout.line "I have \(numDefs) definitions."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
@@ -231,6 +232,7 @@ addAndStringify = \num1, num2 ->
 ```
 
 We did two things here:
+
 * We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
 * We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
@@ -1524,11 +1526,13 @@ main =
 ```
 
 This way, it reads like a series of instructions:
+
 1. First, run the `Stdout.line` task and await its completion. Ignore its output (hence the underscore in `_ <-`)
 2. Next, run the `Stdin.line` task and await its completion. Name its output `text`.
 3. Finally, run the `Stdout.line` task again, using the `text` value we got from the `Stdin.line` effect.
 
 Some important things to note about backpassing and `await`:
+
 * `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
@@ -1608,6 +1612,7 @@ addHttps = \record ->
 ```
 
 This function uses *constrained records* in its type. The annotation is saying:
+
 * This function takes a record which has at least a `url` field, and possibly others
 * That `url` field has the type `Str`
 * It returns a record of exactly the same type as the one it was given

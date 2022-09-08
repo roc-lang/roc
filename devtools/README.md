@@ -4,6 +4,7 @@ The easiest way to do this is to use another flake for all your dev tools that t
 Use the flake in this folder that uses your editor of choice as a starting template. If your editor is not listed, feel free to make a PR and add your flake.
 
 Further steps:
+
 1. Copy the flake for your favorite editor to a new folder outside of the roc repo folder.
 1. Run `git init` in the new folder.
 1. Rename the copied flake to `flake.nix`.
@@ -20,6 +21,7 @@ I recommend creating a git repository to save this custom flake.
 
 If you use lorri or direnv it is possible to load the dev flake instead of the roc flake.
 For lorri:
+
 1. copy the `shell.nix` at the root of this repo to the folder containing your dev tools flake.
 1. edit `.envrc` to contain:
 
