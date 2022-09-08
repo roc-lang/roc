@@ -159,7 +159,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
  * Show Roc cheat sheet on start-up.
  * Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
  * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .
-* Adjust UI based on beginner/novice/expert?
+ * Adjust UI based on beginner/novice/expert?
 
 ### Productivity features
 
@@ -204,7 +204,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Taking into account the eye position with eye tracking could make commands very powerful/accurate. e.g.: make `Num *` a `List (Num *)`, use eye position to determine which `Num *`.
 * Feature to automatically minimize visibility(exposing values/functions/...) based on usage in tests. Suggested changes can be shown to the user for fine-grained control.
 * Locally record file/function navigation behavior to offer suggestions where to navigate next. With user permission, this navigation behavior can be shared with their team so that e.g. new members get offered useful suggestions on navigating to the next relevant file.
- * Intelligent search: "search this folder for <term>", "search all tests for <term>"
+* Intelligent search: "search this folder for <term>", "search all tests for <term>"
 * Show some kind of warning if path str in code does not exist locally.
 * repl on panic/error: ability to inspect all values and try executing some things at the location of the error.
 * show values in memory on panic/error
@@ -358,7 +358,7 @@ If we make an integrated terminal, we can automatically add executed commands to
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY === EMPATHY
-   * Visual Imapirments
+    * Visual Imapirments
       No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
       Insensitivity to certain or all colors.
       Need of highcontrast
@@ -371,7 +371,7 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
       - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
 
-   * Motor impariments
+    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
       Too much mouse waving and sitting for too long is bad for humans.
       Keyboard is basic accessability tool but

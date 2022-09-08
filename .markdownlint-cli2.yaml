@@ -2,7 +2,6 @@ config:
   commands-show-output: false
   fenced-code-language: false
   first-line-heading: false
-  list-indent: false
   line-length: false
   list-marker-space: false
   single-title: false
