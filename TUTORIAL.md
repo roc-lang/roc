@@ -1308,7 +1308,7 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/interactive/cli-platform/main.roc` package.
 
-# Building a Command-Line Interface (CLI)
+## Building a Command-Line Interface (CLI)
 
 ## Tasks
 
@@ -1537,13 +1537,13 @@ Some important things to note about backpassing and `await`:
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
-# Appendix: Advanced Concepts
+## Appendix: Advanced Concepts
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
 This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine
 to stop reading here and go build things!
 
-## Open Records and Closed Records
+### Open Records and Closed Records
 
 Let's say I write a function which takes a record with a `firstName`
 and `lastName` field, and puts them together with a space in between:
@@ -1601,7 +1601,7 @@ a closed record by putting a `{}` as the type variable (so for example, `{ email
 `{ email : Str }`). In practice, closed records are basically always written without the `{}` on the end,
 but later on we'll see a situation where putting types other than `*` in that spot can be useful.
 
-## Constrained Records
+### Constrained Records
 
 The type variable can also be a named type variable, like so:
 
@@ -1637,7 +1637,7 @@ field of that record. So if you passed it a record that was not guaranteed to ha
 present (such as an `{ a : Str, b : Bool }*` record, which only guarantees that the fields `a` and `b` are present),
 the function might try to access a `c` field at runtime that did not exist!
 
-## Type Variables in Record Annotations
+### Type Variables in Record Annotations
 
 You can add type annotations to make record types less flexible than what the compiler infers, but not more
 flexible. For example, you can use an annotation to tell the compiler to treat a record as closed when it would
@@ -1755,7 +1755,7 @@ prevent the compiler from raising an error that would have revealed the mistake.
 That said, this is a useful technique to know about if you want to (for example) make a record
 type that accumulates more and more fields as it progresses through a series of operations.
 
-## Open and Closed Tag Unions
+### Open and Closed Tag Unions
 
 Just like how Roc has open records and closed records, it also has open and closed tag unions.
 
@@ -1807,7 +1807,7 @@ the implementation actually handles.
 > accept `example : [Foo Str, Bar Bool] -> Bool` as the type annotation, even though the catch-all branch
 > would permit the more flexible `example : [Foo Str, Bar Bool]* -> Bool` annotation instead.
 
-## Combining Open Unions
+### Combining Open Unions
 
 When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`,
 the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred
@@ -1888,7 +1888,7 @@ In summary, here's a way to think about the difference between open unions in a 
 * If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
 * If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
 
-## Type Variables in Tag Unions
+### Type Variables in Tag Unions
 
 Earlier we saw these two examples, one with an open tag union and the other with a closed one:
 
@@ -1952,11 +1952,11 @@ be equivalent.
 > Also just like with records, you can use this to compose tag union type aliases. For example, you can write
 > `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
 
-## Phantom Types
+### Phantom Types
 
 [This part of the tutorial has not been written yet. Coming soon!]
 
-## Operator Desugaring Table
+### Operator Desugaring Table
 
 Here are various Roc expressions involving operators, and what they desugar to.
 

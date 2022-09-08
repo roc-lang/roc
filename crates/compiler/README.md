@@ -1,6 +1,6 @@
 Here's how the compiler is laid out.
 
-# Parsing
+## Parsing
 
 The main goal of parsing is to take a plain old String (such as the contents a .roc source file read from the filesystem) and translate that String into an `Expr` value.
 
@@ -45,7 +45,7 @@ This is gibberish to the parser, so it will produce an error rather than an `Exp
 
 Roc's parser is implemented using the [`marwes/combine`](http://github.com/marwes/combine-language/) crate.
 
-# Evaluating
+## Evaluating
 
 One of the useful things we can do with an `Expr` is to evaluate it.
 
@@ -141,7 +141,7 @@ More info on here:
 
 https://wiki.haskell.org/GHC_optimisations#Fusion
 
-# Getting started with the code
+## Getting started with the code
 
 The compiler contains a lot of code! If you're new to the project it can be hard to know where to start. It's useful to have some sort of "main entry point", or at least a "good place to start" for each of the main phases.
 

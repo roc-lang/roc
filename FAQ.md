@@ -29,7 +29,7 @@ fantastical, and it has incredible potential for puns. Here are some different w
 
 Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
 
-# Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
+## Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
 
 The Roc editor is one of the key areas where we want to innovate. Constraining ourselves to a plugin for existing editors would severely limit our possibilities for innovation.
 

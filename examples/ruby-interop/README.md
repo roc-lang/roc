@@ -65,7 +65,7 @@ roc build --lib && make -B
 
 The `-B` flag is necessary when you only change .roc files, because otherwise `make` thinks there's no work to do and doesn't bother rebuilding.
 
-# About this example
+## About this example
 
 This was created by following a [tutorial on Ruby C extensions](https://silverhammermba.github.io/emberb/c/) and [some documentation](https://github.com/ruby/ruby/blob/master/doc/extension.rdoc#label-Prepare+extconf.rb) (along with [more nicely formatted, but potentially out-of-date docs](https://docs.ruby-lang.org/en/2.4.0/extension_rdoc.html)).
 

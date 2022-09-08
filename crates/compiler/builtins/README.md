@@ -120,7 +120,7 @@ fn atan() {
 
 But replace `Num.atan`, the return value, and the return type with your new builtin.
 
-# Mistakes that are easy to make!!
+## Mistakes that are easy to make!!
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things dont work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
 
