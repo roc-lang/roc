@@ -25,7 +25,9 @@ WriteErr a : [
 ## If writing to the file fails, for example because of a file permissions issue,
 ## the task fails with [WriteErr].
 ##
-## To write unformatted bytes to a file, you can use [writeBytes] instead.
+## This opens the file first and closes it after writing to it.
+##
+## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
 # write : Path, val, fmt -> Task {} (WriteErr *) [Write [File]*]*
 #     | val has Encode.Encoding, fmt has Encode.EncoderFormatting
 # write = \path, val, fmt ->
@@ -33,7 +35,14 @@ WriteErr a : [
 #     # TODO handle encoding errors here, once they exist
 #     |> writeBytes
 
-## To format data before writing it to a file, you can use [write] instead.
+## Write bytes to a file.
+##
+##     # Writes the bytes 1, 2, 3 to the file `myfile.dat`.
+##     File.writeBytes (Path.fromStr "myfile.dat") [1, 2, 3]
+##
+## This opens the file first and closes it after writing to it.
+##
+## To format data before writing it to a file, you can use [File.write] instead.
 writeBytes : Path, List U8 -> Task {} (WriteErr *) [Write [File]*]*
 writeBytes = \path, bytes ->
     InternalPath.toBytes path
@@ -41,7 +50,14 @@ writeBytes = \path, bytes ->
     |> InternalTask.fromEffect
     |> Task.mapFail FileWriteErr
 
-## To write unformatted bytes to a file, you can use [writeBytes] instead.
+## Write a [Str] to a file, encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8).
+##
+##     # Writes "Hello!" encoded as UTF-8 to the file `myfile.txt`.
+##     File.writeUtf8 (Path.fromStr "myfile.txt") "Hello!"
+##
+## This opens the file first and closes it after writing to it.
+##
+## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
 writeUtf8 : Path, Str -> Task {} (WriteErr *) [Write [File]*]*
 writeUtf8 = \path, str ->
     InternalPath.toBytes path
@@ -49,6 +65,14 @@ writeUtf8 = \path, str ->
     |> InternalTask.fromEffect
     |> Task.mapFail FileWriteErr
 
+## Read all the bytes in a file.
+##
+##     # Read all the bytes in `myfile.txt`.
+##     File.readBytes (Path.fromStr "myfile.txt")
+##
+## This opens the file first and closes it after reading its contents.
+##
+## To read and decode data from a file, you can use [File.read] instead.
 readBytes : Path -> Task (List U8) (ReadErr *) [Read [File]*]*
 readBytes = \path ->
     InternalPath.toBytes path
@@ -56,6 +80,15 @@ readBytes = \path ->
     |> InternalTask.fromEffect
     |> Task.mapFail FileReadErr
 
+## Read a [Str] from a file containing [UTF-8](https://en.wikipedia.org/wiki/UTF-8)-encoded text.
+##
+##     # Reads UTF-8 encoded text into a `Str` from the file `myfile.txt`.
+##     File.readUtf8 (Path.fromStr "myfile.txt")
+##
+## This opens the file first and closes it after writing to it.
+## The task will fail with `FileReadUtf8Err` if the given file contains invalid UTF-8.
+##
+## To read unformatted bytes from a file, you can use [File.readBytes] instead.
 readUtf8 : Path -> Task Str (ReadErr [FileReadUtf8Err _]*) [Read [File]*]*
 readUtf8 = \path ->
     effect = Effect.map (Effect.fileReadBytes (InternalPath.toBytes path)) \result ->
