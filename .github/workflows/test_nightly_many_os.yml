@@ -16,7 +16,12 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: fetch releases data and save to file
-        run: curl https://api.github.com/repos/roc-lang/roc/releases --output roc_releases.json
+        run: |
+          curl --request GET \
+          --url https://api.github.com/repos/roc-lang/roc/releases \
+          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'content-type: application/json' \
+          --output roc_releases.json
 
       - name: get the url of today`s release for linux x86_64
         if: startsWith(matrix.os, 'ubuntu')
