@@ -191,8 +191,6 @@ pub fn build_file<'a>(
         exposed_closure_types,
     );
 
-    // TODO try to move as much of this linking as possible to the prebuilt platform,
-    // to minimize the amount of platform-application linking required.
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
