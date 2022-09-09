@@ -2790,9 +2790,9 @@ fn list_map_n<'a>(
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
-        7 + arg_elem_layouts.len() * 4
-    } else {
         7 + arg_elem_layouts.len() * 3
+    } else {
+        9
     };
 
     let has_return_val = false;
