@@ -249,7 +249,7 @@ impl<'a> LowLevelCall<'a> {
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
                     output: *FromUtf8Result   i32
-                    arg: RocList              i64, i32
+                    arg: RocList              i32
                     start                     i32
                     count                     i32
                     update_mode: UpdateMode   i32
@@ -264,7 +264,7 @@ impl<'a> LowLevelCall<'a> {
                     &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 5, false);
             }
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
@@ -419,7 +419,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load all the arguments for Zig
                 //    (List return pointer)  i32
-                //    list: RocList,         i64, i32
+                //    list: RocList,         i32
                 //    alignment: u32,        i32
                 //    index: usize,          i32
                 //    element: Opaque,       i32
@@ -453,7 +453,7 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
             }
             ListWithCapacity => {
                 // List.withCapacity : Nat -> List elem
@@ -481,8 +481,8 @@ impl<'a> LowLevelCall<'a> {
                 // List.concat : List elem, List elem -> List elem
                 // Zig arguments          Wasm types
                 //  (return pointer)       i32
-                //  list_a: RocList        i64, i32
-                //  list_b: RocList        i64, i32
+                //  list_a: RocList        i32
+                //  list_b: RocList        i32
                 //  alignment: u32         i32
                 //  element_width: usize   i32
 
@@ -502,7 +502,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 5, false);
             }
 
             ListReserve => {
@@ -523,7 +523,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  spare: usize               i32
                 //  element_width: usize       i32
@@ -550,7 +550,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 6, false);
             }
 
             ListAppendUnsafe => {
@@ -566,7 +566,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
 
@@ -587,7 +587,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 3, false);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
@@ -603,7 +603,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
@@ -626,7 +626,7 @@ impl<'a> LowLevelCall<'a> {
                 }
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 5, false);
             }
             ListSublist => {
                 // As a low-level, record is destructured
@@ -651,7 +651,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
                 //  start: usize,              i32
@@ -673,7 +673,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[start, len]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 7, false);
             }
             ListDropAt => {
                 // List.dropAt : List elem, Nat -> List elem
@@ -695,7 +695,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  element_width: usize,      i32
                 //  alignment: u32,            i32
                 //  drop_index: usize,         i32
@@ -717,7 +717,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 5, false);
             }
             ListSwap => {
                 // List.swap : List elem, Nat, Nat -> List elem
@@ -731,7 +731,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
                 //  index_1: usize,            i32
@@ -754,7 +754,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 7, false);
             }
 
             // Num
@@ -2321,7 +2321,7 @@ pub fn call_higher_order_lowlevel<'a>(
             let cb = &mut backend.code_builder;
 
             // (return pointer)      i32
-            // input: RocList,       i64, i32
+            // input: RocList,       i32
             // caller: CompareFn,    i32
             // data: Opaque,         i32
             // inc_n_data: IncN,     i32
@@ -2346,7 +2346,7 @@ pub fn call_higher_order_lowlevel<'a>(
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
 
-            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 9, false);
+            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 8, false);
         }
     }
 }
