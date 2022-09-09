@@ -408,7 +408,7 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         if !prebuilt {
-            println!("🔨 Rebuilding platform...");
+            eprintln!("🔨 Rebuilding platform...");
         }
 
         let rebuild_host_start = Instant::now();

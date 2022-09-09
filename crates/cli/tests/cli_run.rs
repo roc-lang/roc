@@ -104,14 +104,11 @@ mod cli_run {
             stdin,
         );
 
-        // If there is any stderr, it should be reporting the runtime and that's it!
-        if !(compile_out.stderr.is_empty()
-            || compile_out.stderr.starts_with("runtime: ") && compile_out.stderr.ends_with("ms\n"))
-        {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
+        let ignorable = "🔨 Rebuilding platform...\n";
+        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
+        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
+        if !(stderr.is_empty() || is_reporting_runtime) {
+            panic!("`roc` command had unexpected stderr: {}", stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);

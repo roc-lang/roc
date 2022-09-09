@@ -42,7 +42,9 @@ mod glue_cli_run {
                     let out = run_app(&dir.join("app.roc"), std::iter::empty());
 
                     assert!(out.status.success());
-                    assert_eq!(out.stderr, "");
+                    let ignorable = "🔨 Rebuilding platform...\n";
+                    let stderr = out.stderr.replacen(ignorable, "", 1);
+                    assert_eq!(stderr, "");
                     assert!(
                         out.stdout.ends_with($ends_with),
                         "Unexpected stdout ending\n\nexpected:\n\n{}\n\nbut stdout was:\n\n{}",
@@ -190,14 +192,11 @@ mod glue_cli_run {
             ),
         );
 
-        // If there is any stderr, it should be reporting the runtime and that's it!
-        if !(glue_out.stderr.is_empty()
-            || glue_out.stderr.starts_with("runtime: ") && glue_out.stderr.ends_with("ms\n"))
-        {
-            panic!(
-                "`roc glue` command had unexpected stderr: {}",
-                glue_out.stderr
-            );
+        let ignorable = "🔨 Rebuilding platform...\n";
+        let stderr = glue_out.stderr.replacen(ignorable, "", 1);
+        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
+        if !(stderr.is_empty() || is_reporting_runtime) {
+            panic!("`roc glue` command had unexpected stderr: {}", stderr);
         }
 
         assert!(glue_out.status.success(), "bad status {:?}", glue_out);
@@ -215,14 +214,11 @@ mod glue_cli_run {
             &[],
         );
 
-        // If there is any stderr, it should be reporting the runtime and that's it!
-        if !(compile_out.stderr.is_empty()
-            || compile_out.stderr.starts_with("runtime: ") && compile_out.stderr.ends_with("ms\n"))
-        {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
+        let ignorable = "🔨 Rebuilding platform...\n";
+        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
+        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
+        if !(stderr.is_empty() || is_reporting_runtime) {
+            panic!("`roc` command had unexpected stderr: {}", stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
