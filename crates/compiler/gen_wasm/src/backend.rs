@@ -418,9 +418,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 self.storage.arg_types.push(PTR_TYPE);
                 None
             }
-            ZigPackedStruct => {
-                internal_error!("C calling convention does not return Zig packed structs")
-            }
         };
 
         // Create a block so we can exit the function without skipping stack frame "pop" code.
@@ -528,7 +525,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 n_inner_wasm_args += 1;
                 None
             }
-            x => internal_error!("A Roc function should never use ReturnMethod {:?}", x),
         };
 
         // Load all the arguments for the inner function
@@ -1349,16 +1345,14 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             } => {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(self.layout_interner, *ret_layout);
-                let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
-                    self.storage.load_symbols_for_call(
-                        self.env.arena,
-                        &mut self.code_builder,
-                        arguments,
-                        ret_sym,
-                        &wasm_layout,
-                        CallConv::C,
-                    );
-                debug_assert!(!ret_zig_packed_struct); // only true in another place where we use the same helper fn
+                let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    ret_sym,
+                    &wasm_layout,
+                    CallConv::C,
+                );
                 self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
             }
         }
@@ -1382,16 +1376,14 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
-            self.storage.load_symbols_for_call(
-                self.env.arena,
-                &mut self.code_builder,
-                arguments,
-                ret_sym,
-                &wasm_layout,
-                CallConv::C,
-            );
-        debug_assert!(!ret_zig_packed_struct);
+        let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+            self.env.arena,
+            &mut self.code_builder,
+            arguments,
+            ret_sym,
+            &wasm_layout,
+            CallConv::C,
+        );
 
         let roc_proc_index = self
             .proc_lookup

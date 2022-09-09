@@ -493,7 +493,7 @@ impl<'a> Storage<'a> {
         return_symbol: Symbol,
         return_layout: &WasmLayout,
         call_conv: CallConv,
-    ) -> (usize, bool, bool) {
+    ) -> (usize, bool) {
         use ReturnMethod::*;
 
         let mut num_wasm_args = 0;
@@ -507,14 +507,6 @@ impl<'a> Storage<'a> {
                 num_wasm_args += 1;
                 symbols_to_load.push(return_symbol);
                 false
-            }
-            ZigPackedStruct => {
-                // Workaround for Zig's incorrect implementation of the C calling convention.
-                // We need to copy the packed struct into the stack frame
-                // Load the address before the call so that afterward, it will be 2nd on the value stack,
-                // ready for the store instruction.
-                symbols_to_load.push(return_symbol);
-                true
             }
         };
 
@@ -533,7 +525,7 @@ impl<'a> Storage<'a> {
         // If the symbols were already at the top of the stack, do nothing!
         // Should be common for simple cases, due to the structure of the Mono IR
         if !code_builder.verify_stack_match(&symbols_to_load) {
-            if matches!(return_method, WriteToPointerArg | ZigPackedStruct) {
+            if matches!(return_method, WriteToPointerArg) {
                 self.load_return_address_ccc(code_builder, return_symbol);
             };
 
@@ -545,11 +537,7 @@ impl<'a> Storage<'a> {
             }
         }
 
-        (
-            num_wasm_args,
-            has_return_val,
-            return_method == ZigPackedStruct,
-        )
+        (num_wasm_args, has_return_val)
     }
 
     /// Generate code to copy a StoredValue to an arbitrary memory location

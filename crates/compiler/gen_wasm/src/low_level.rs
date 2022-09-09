@@ -135,7 +135,7 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool, bool) {
+    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
@@ -147,29 +147,8 @@ impl<'a> LowLevelCall<'a> {
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a, '_>, name: &'a str) {
-        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
+        let (num_wasm_args, has_return_val) = self.load_args(backend);
         backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
-
-        if ret_zig_packed_struct {
-            match self.ret_storage {
-                StoredValue::StackMemory {
-                    size,
-                    alignment_bytes,
-                    ..
-                } => {
-                    // The address of the return value was already loaded before the call
-                    let align = Align::from(alignment_bytes);
-                    if size > 4 {
-                        backend.code_builder.i64_store(align, 0);
-                    } else {
-                        backend.code_builder.i32_store(align, 0);
-                    }
-                }
-                _ => {
-                    internal_error!("Zig packed struct should always be stored to StackMemory")
-                }
-            }
-        }
     }
 
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
