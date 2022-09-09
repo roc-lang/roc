@@ -10,7 +10,7 @@ use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, Un
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
@@ -142,7 +142,6 @@ impl<'a> LowLevelCall<'a> {
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(backend.layout_interner, self.ret_layout),
-            CallConv::Zig,
         )
     }
 
@@ -255,7 +254,6 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
                 backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
@@ -478,7 +476,6 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 // Load monomorphization constants
@@ -518,7 +515,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -558,7 +554,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -598,7 +593,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.get_local(elem_local);
@@ -638,7 +632,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -691,7 +684,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -739,7 +731,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_width as i32);
@@ -778,7 +769,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
