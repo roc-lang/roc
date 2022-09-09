@@ -589,12 +589,16 @@ macro_rules! assert_llvm_evals_to {
                 #[allow(clippy::redundant_closure_call)]
                 let given = $transform(raw);
                 assert_eq!(&given, &$expected, "LLVM test failed");
+
+                // on Windows, there are issues with the drop instances of some roc_std
+                #[cfg(windows)]
+                std::mem::forget(given);
             }
             Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
         }
 
         // artificially extend the lifetime of `lib`
-        let _ = lib;
+        lib.close().unwrap();
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
