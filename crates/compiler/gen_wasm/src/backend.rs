@@ -15,7 +15,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 
-use crate::layout::{CallConv, ReturnMethod, WasmLayout};
+use crate::layout::{ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
 use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
@@ -402,7 +402,7 @@ impl<'a> WasmBackend<'a> {
         use ReturnMethod::*;
         let ret_layout = WasmLayout::new(self.env.layout_interner, &proc.ret_layout);
 
-        let ret_type = match ret_layout.return_method(CallConv::C) {
+        let ret_type = match ret_layout.return_method() {
             Primitive(ty, _) => Some(ty),
             NoReturnValue => None,
             WriteToPointerArg => {
@@ -499,7 +499,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         let mut n_inner_wasm_args = 0;
-        let ret_type_and_size = match inner_ret_layout.return_method(CallConv::C) {
+        let ret_type_and_size = match inner_ret_layout.return_method() {
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::Primitive(ty, size) => {
                 // If the inner function returns a primitive, load the address to store it at
@@ -840,7 +840,7 @@ impl<'a> WasmBackend<'a> {
 
         let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
         let cond_type =
-            WasmLayout::new(self.env.layout_interner, cond_layout).arg_types(CallConv::C)[0];
+            WasmLayout::new(self.env.layout_interner, cond_layout).arg_types()[0];
 
         // then, we jump whenever the value under scrutiny is equal to the value of a branch
         for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -1248,7 +1248,6 @@ impl<'a> WasmBackend<'a> {
                     arguments,
                     ret_sym,
                     &wasm_layout,
-                    CallConv::C,
                 );
                 self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
             }
@@ -1279,7 +1278,6 @@ impl<'a> WasmBackend<'a> {
             arguments,
             ret_sym,
             &wasm_layout,
-            CallConv::C,
         );
 
         let roc_proc_index = self

@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, STLayoutInterner};
 
-use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
+use crate::layout::{stack_memory_arg_types, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_TYPE};
 
@@ -58,7 +58,7 @@ pub enum StoredValue {
 impl StoredValue {
     /// Value types to pass to Wasm functions
     /// One Roc value can become 0, 1, or 2 Wasm arguments
-    pub fn arg_types(&self, conv: CallConv) -> &'static [ValueType] {
+    pub fn arg_types(&self) -> &'static [ValueType] {
         use ValueType::*;
         match self {
             // Simple numbers: 1 Roc argument => 1 Wasm argument
@@ -71,7 +71,7 @@ impl StoredValue {
                 }
             }
             // Stack memory values: 1 Roc argument => 0-2 Wasm arguments
-            Self::StackMemory { size, format, .. } => conv.stack_memory_arg_types(*size, *format),
+            Self::StackMemory { size, format, .. } => stack_memory_arg_types(*size, *format),
         }
     }
 }
@@ -248,7 +248,7 @@ impl<'a> Storage<'a> {
                     use StackMemoryFormat::*;
 
                     self.arg_types
-                        .extend_from_slice(CallConv::C.stack_memory_arg_types(size, format));
+                        .extend_from_slice(stack_memory_arg_types(size, format));
 
                     let location = match format {
                         Int128 | Float128 | Decimal => {
@@ -491,14 +491,13 @@ impl<'a> Storage<'a> {
         arguments: &[Symbol],
         return_symbol: Symbol,
         return_layout: &WasmLayout,
-        call_conv: CallConv,
     ) -> (usize, bool) {
         use ReturnMethod::*;
 
         let mut num_wasm_args = 0;
         let mut symbols_to_load = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
 
-        let return_method = return_layout.return_method(call_conv);
+        let return_method = return_layout.return_method();
         let has_return_val = match return_method {
             Primitive(..) => true,
             NoReturnValue => false,
@@ -511,7 +510,7 @@ impl<'a> Storage<'a> {
 
         for arg in arguments {
             let stored = self.symbol_storage_map.get(arg).unwrap();
-            let arg_types = stored.arg_types(call_conv);
+            let arg_types = stored.arg_types();
             num_wasm_args += arg_types.len();
             match arg_types.len() {
                 0 => {}
@@ -529,10 +528,7 @@ impl<'a> Storage<'a> {
             };
 
             for arg in arguments {
-                match call_conv {
-                    CallConv::C => self.load_symbol_ccc(code_builder, *arg),
-                    CallConv::Zig => self.load_symbol_zig(code_builder, *arg),
-                }
+                self.load_symbol_ccc(code_builder, *arg);
             }
         }
 
