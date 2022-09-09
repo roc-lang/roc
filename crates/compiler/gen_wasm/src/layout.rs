@@ -12,8 +12,6 @@ pub enum ReturnMethod {
     WriteToPointerArg,
     /// This layout is empty and requires no return value or argument (e.g. refcount helpers)
     NoReturnValue,
-    /// This layout is returned as a packed struct in an integer. Only used by Zig, not C.
-    ZigPackedStruct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,13 +198,7 @@ impl CallConv {
                 match self {
                     CallConv::C => WriteToPointerArg,
 
-                    CallConv::Zig => {
-                        if size <= 8 {
-                            ZigPackedStruct
-                        } else {
-                            WriteToPointerArg
-                        }
-                    }
+                    CallConv::Zig => WriteToPointerArg,
                 }
             }
         }
