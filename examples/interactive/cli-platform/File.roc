@@ -2,13 +2,9 @@ interface File
     exposes [ReadErr, WriteErr, writeUtf8, writeBytes, readUtf8, readBytes]
     imports [Effect, Task.{ Task }, InternalTask, InternalFile, Path.{ Path }, InternalPath]
 
-ReadErr a : [
-    FileReadErr InternalFile.ReadErr
-]a
+ReadErr : InternalFile.ReadErr
 
-WriteErr a : [
-    FileWriteErr InternalFile.WriteErr
-]a
+WriteErr : InternalFile.WriteErr
 
 ## For example, suppose you have a [JSON](https://en.wikipedia.org/wiki/JSON)
 ## [EncodingFormat] named `Json.toCompactUtf8`. Then you can use that format
@@ -43,7 +39,7 @@ WriteErr a : [
 ## This opens the file first and closes it after writing to it.
 ##
 ## To format data before writing it to a file, you can use [File.write] instead.
-writeBytes : Path, List U8 -> Task {} (WriteErr *) [Write [File]*]*
+writeBytes : Path, List U8 -> Task {} [FileWriteErr WriteErr]* [Write [File]*]*
 writeBytes = \path, bytes ->
     InternalPath.toBytes path
     |> Effect.fileWriteBytes bytes
@@ -58,7 +54,7 @@ writeBytes = \path, bytes ->
 ## This opens the file first and closes it after writing to it.
 ##
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
-writeUtf8 : Path, Str -> Task {} (WriteErr *) [Write [File]*]*
+writeUtf8 : Path, Str -> Task {} [FileWriteErr WriteErr]* [Write [File]*]*
 writeUtf8 = \path, str ->
     InternalPath.toBytes path
     |> Effect.fileWriteUtf8 str
@@ -73,7 +69,7 @@ writeUtf8 = \path, str ->
 ## This opens the file first and closes it after reading its contents.
 ##
 ## To read and decode data from a file, you can use [File.read] instead.
-readBytes : Path -> Task (List U8) (ReadErr *) [Read [File]*]*
+readBytes : Path -> Task (List U8) [FileReadErr ReadErr]* [Read [File]*]*
 readBytes = \path ->
     InternalPath.toBytes path
     |> Effect.fileReadBytes
@@ -89,7 +85,12 @@ readBytes = \path ->
 ## The task will fail with `FileReadUtf8Err` if the given file contains invalid UTF-8.
 ##
 ## To read unformatted bytes from a file, you can use [File.readBytes] instead.
-readUtf8 : Path -> Task Str (ReadErr [FileReadUtf8Err _]*) [Read [File]*]*
+readUtf8 :
+    Path
+    -> Task
+        Str
+        [FileReadErr ReadErr, FileReadUtf8Err _]*
+        [Read [File]*]*
 readUtf8 = \path ->
     effect = Effect.map (Effect.fileReadBytes (InternalPath.toBytes path)) \result ->
         when result is
@@ -101,7 +102,12 @@ readUtf8 = \path ->
 
     InternalTask.fromEffect effect
 
-# read : Path, fmt -> Task val (ReadErr [FileReadDecodeErr DecodeError]*) [Read [File]*]*
+# read :
+#     Path
+#     -> Task
+#         Str
+#         [FileReadErr ReadErr, FileReadDecodeErr DecodeErr]*
+#         [Read [File]*]*
 #     | val has Decode.Decoding, fmt has Decode.DecoderFormatting
 # read = \path ->
 #     effect = Effect.after (Effect.fileReadBytes path) \result ->
