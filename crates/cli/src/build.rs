@@ -261,7 +261,7 @@ pub fn build_file<'a>(
         let rebuild_duration = rebuild_thread.join().unwrap();
         if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
@@ -322,7 +322,7 @@ pub fn build_file<'a>(
         let rebuild_duration = thread.join().unwrap();
         if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
