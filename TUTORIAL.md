@@ -1308,8 +1308,6 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/interactive/cli-platform/main.roc` package.
 
-## Building a Command-Line Interface (CLI)
-
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
