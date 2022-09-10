@@ -839,8 +839,7 @@ impl<'a> WasmBackend<'a> {
         }
 
         let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
-        let cond_type =
-            WasmLayout::new(self.env.layout_interner, cond_layout).arg_types()[0];
+        let cond_type = WasmLayout::new(self.env.layout_interner, cond_layout).arg_types()[0];
 
         // then, we jump whenever the value under scrutiny is equal to the value of a branch
         for (i, (value, _, _)) in branches.iter().enumerate() {

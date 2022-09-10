@@ -126,9 +126,7 @@ impl WasmLayout {
     pub fn return_method(&self) -> ReturnMethod {
         match self {
             Self::Primitive(ty, size) => ReturnMethod::Primitive(*ty, *size),
-            Self::StackMemory { size, format, .. } => {
-                stack_memory_return_method(*size, *format)
-            }
+            Self::StackMemory { size, format, .. } => stack_memory_return_method(*size, *format),
         }
     }
 }
