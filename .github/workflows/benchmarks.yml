@@ -1,0 +1,47 @@
+on: [pull_request]
+
+name: Benchmarks
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+  ROC_NUM_WORKERS: 1
+
+jobs:
+  prep-dependency-container:
+    name: benchmark roc programs
+    runs-on: [self-hosted, i7-6700K]
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: "main"
+          clean: "true"
+
+      - name: Earthly version
+        run: earthly --version
+
+      - name: on main; prepare a self-contained benchmark folder
+        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder
+
+      - uses: actions/checkout@v3
+        with:
+          clean: "false" # we want to keep the benchmark folder
+
+      - name: on current branch; prepare a self-contained benchmark folder
+        run: ./ci/safe-earthly.sh +prep-bench-folder
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: build benchmark runner
+        run: cd ci/bench-runner && cargo build --release && cd ../..
+
+      - name: run benchmarks with regression check
+        run: ./ci/bench-runner/target/release/bench-runner --check-executables-changed
