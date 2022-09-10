@@ -1,9 +1,13 @@
 interface Arg
     exposes [
         Parser,
-        succeed,
+
         parse,
         toHelp,
+
+        succeed,
+        bool,
+        str,
     ]
     imports []
 
