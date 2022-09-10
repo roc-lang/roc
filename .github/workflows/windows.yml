@@ -19,10 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: install visual studio build tools
-        run: |
-          curl.exe -L -O https://aka.ms/vs/17/release/vs_BuildTools.exe
-          ./vs_BuildTools.exe
+      #- name: install visual studio build tools
+      #  run: |
+      #    curl.exe -L -O https://aka.ms/vs/17/release/vs_BuildTools.exe
+      #    ./vs_BuildTools.exe
 
       - name: download and install zig
         run: |
@@ -33,22 +33,22 @@ jobs:
 
       - name: zig version
         run: zig version
-        
-      - name: remove pre-installed llvm from path
-        run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
+
+      #- name: remove pre-installed llvm from path
+      #  run: ($env:GITHUB_PATH.Split(';') | Where-Object -FilterScript {$_ -ne 'C:\Program Files\LLVM\bin'}) -join ';' | Set-Content $env:GITHUB_PATH -Encoding utf8
 
       - name: set up llvm 13
         run: |
           curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v13.0.0/LLVM-13.0.0-win64.7z
           7z x LLVM-13.0.0-win64.7z -oC:/LLVM-13.0.0-win64
-          
-      - name: set up llvm 12 # we need both 12 and 13 to prevent github.com/roc-lang/roc/issues/3952
-        run: |
-          curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v12.0.1/LLVM-12.0.1-win64.7z
-          7z x LLVM-12.0.1-win64.7z -oC:/LLVM-12.0.1-win64
-          @("C:/LLVM-12.0.1-win64/bin") +  (Get-Content $env:GITHUB_PATH) | Set-Content $env:GITHUB_PATH 
-        
+
+      #- name: set up llvm 12 # we need both 12 and 13 to prevent github.com/roc-lang/roc/issues/3952
+      #  run: |
+      #    curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v12.0.1/LLVM-12.0.1-win64.7z
+      #    7z x LLVM-12.0.1-win64.7z -oC:/LLVM-12.0.1-win64
+      #    @("C:/LLVM-12.0.1-win64/bin") +  (Get-Content $env:GITHUB_PATH) | Set-Content $env:GITHUB_PATH 
+
       - run: lld-link.exe --version
-      
-      - name: build tests
-        run: cargo test --no-run --locked --release
+
+      - name: build
+        run: cargo build
