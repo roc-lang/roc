@@ -416,9 +416,9 @@ impl<'a> LowLevelCall<'a> {
                     code_builder.i32_add();
                 }
 
-                backend.storage.load_symbol_zig(code_builder, list);
+                backend.storage.load_symbols(code_builder, &[list]);
                 code_builder.i32_const(elem_alignment as i32);
-                backend.storage.load_symbol_zig(code_builder, index);
+                backend.storage.load_symbols(code_builder, &[index]);
 
                 code_builder.get_local(new_elem_local);
                 if new_elem_offset > 0 {
@@ -2697,8 +2697,7 @@ pub fn call_higher_order_lowlevel<'a>(
             // alignment: u32,       i32
             // element_width: usize, i32
 
-            backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs);
+            backend.storage.load_symbols(cb, &[return_sym, *xs]);
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend
@@ -2757,11 +2756,11 @@ fn list_map_n<'a>(
 
     let cb = &mut backend.code_builder;
 
-    backend.storage.load_symbols(cb, &[return_sym]);
+    let mut args_vec = Vec::with_capacity_in(arg_symbols.len() + 1, backend.env.arena);
+    args_vec.push(return_sym);
+    args_vec.extend_from_slice(arg_symbols);
+    backend.storage.load_symbols(cb, &args_vec);
 
-    for s in arg_symbols {
-        backend.storage.load_symbol_zig(cb, *s);
-    }
     cb.i32_const(wrapper_fn_ptr);
     if closure_data_exists {
         backend.storage.load_symbols(cb, &[captured_environment]);

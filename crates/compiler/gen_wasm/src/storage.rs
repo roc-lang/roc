@@ -397,47 +397,6 @@ impl<'a> Storage<'a> {
         }
     }
 
-    // TODO: expose something higher level instead, shared among higher-order calls
-    pub fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
-        if let StoredValue::StackMemory {
-            location,
-            size,
-            alignment_bytes,
-            format: StackMemoryFormat::DataStructure,
-        } = self.get(&arg)
-        {
-            if *size == 0 {
-                // do nothing
-            } else if *size > 16 {
-                self.load_symbol_ccc(code_builder, arg);
-            } else {
-                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
-                code_builder.get_local(local_id);
-                let align = Align::from(*alignment_bytes);
-
-                if *size == 1 {
-                    code_builder.i32_load8_u(align, offset);
-                } else if *size == 2 {
-                    code_builder.i32_load16_u(align, offset);
-                } else if *size <= 4 {
-                    code_builder.i32_load(align, offset);
-                } else if *size <= 8 {
-                    code_builder.i64_load(align, offset);
-                } else if *size <= 12 {
-                    code_builder.i64_load(align, offset);
-                    code_builder.get_local(local_id);
-                    code_builder.i32_load(align, offset + 8);
-                } else {
-                    code_builder.i64_load(align, offset);
-                    code_builder.get_local(local_id);
-                    code_builder.i64_load(align, offset + 8);
-                }
-            }
-        } else {
-            self.load_symbol_ccc(code_builder, arg);
-        }
-    }
-
     /// stack memory values are returned by pointer. e.g. a roc function
     ///
     /// add : I128, I128 -> I128
