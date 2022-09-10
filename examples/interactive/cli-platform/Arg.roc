@@ -1,4 +1,4 @@
-interface ArgParse
+interface Arg
     exposes [
         Parser,
 
