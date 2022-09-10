@@ -14,7 +14,7 @@ jobs:
     name: windows-cargo-build
     runs-on: windows-2022
     env:
-      LLVM_SYS_130_PREFIX: "C:\LLVM-13.0.0-win64"
+      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.0-win64
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v2
@@ -42,7 +42,7 @@ jobs:
           curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v13.0.0/LLVM-13.0.0-win64.7z
           7z x LLVM-13.0.0-win64.7z -oC:\LLVM-13.0.0-win64
           
-      - run: dir $LLVM_SYS_130_PREFIX
+      - run: dir $env:LLVM_SYS_130_PREFIX
 
       #- name: set up llvm 12 # we need both 12 and 13 to prevent github.com/roc-lang/roc/issues/3952
       #  run: |
@@ -53,4 +53,4 @@ jobs:
       - run: lld-link.exe --version
 
       - name: build
-        run: LLVM_SYS_130_PREFIX=$LLVM_SYS_130_PREFIX cargo build
+        run: LLVM_SYS_130_PREFIX=$env:LLVM_SYS_130_PREFIX cargo build
