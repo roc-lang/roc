@@ -26,7 +26,7 @@ jobs:
         run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
 
       - name: check code style with clippy --release
-        run: cargo clippy --workspace --tests --release -- --deny warnings
+        run: nix develop -c cargo clippy --workspace --tests --release -- --deny warnings
 
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
