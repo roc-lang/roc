@@ -6605,25 +6605,6 @@ All branches in an `if` must have the same type!
     Tip: To extract the `.inputs` field it must be non-optional, but the
     type says this field is optional. Learn more about optional fields at
     TODO.
-
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This 1st argument to `job` has an unexpected type:
-
-    9│      job { inputs: ["build", "test"] }
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-    The argument is a record of type:
-
-        { inputs : List Str }
-
-    But `job` needs its 1st argument to be:
-
-        { inputs ? List Str }
-
-    Tip: To extract the `.inputs` field it must be non-optional, but the
-    type says this field is optional. Learn more about optional fields at
-    TODO.
     "###
     );
 

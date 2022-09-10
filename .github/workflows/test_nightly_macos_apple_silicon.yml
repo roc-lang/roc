@@ -5,7 +5,7 @@ on:
 name: Test latest nightly release for macOS Apple Silicon
 
 jobs:
-  test-and-build:
+  test-nightly:
     name: test nightly macos aarch64
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
@@ -16,7 +16,7 @@ jobs:
         run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
 
       - name: get the url of today`s release for macos apple silicon
-        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh)" >> $GITHUB_ENV
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh silicon)" >> $GITHUB_ENV
 
       - name: get the archive from the url
         run: curl -OL ${{ env.RELEASE_URL }}

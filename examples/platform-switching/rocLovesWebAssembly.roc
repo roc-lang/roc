@@ -1,5 +1,5 @@
 app "rocLovesWebAssembly"
-    packages { pf: "main.roc" }
+    packages { pf: "web-assembly-platform/main.roc" }
     imports []
     provides [main] to pf
 

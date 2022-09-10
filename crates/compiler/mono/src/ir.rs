@@ -23,6 +23,7 @@ use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
 use roc_intern::Interner;
+use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -557,14 +558,15 @@ impl<'a> HostSpecializations<'a> {
     }
 }
 
-/// Specializations of this module's symbols that other modules need
+/// Specializations of this module's symbols that other modules need.
+/// One struct represents one pair of modules, e.g. what module A wants of module B.
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     pub symbol_or_lambda: std::vec::Vec<LambdaName<'a>>,
-    storage_subs: StorageSubs,
+    storage: ExternalModuleStorage,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
 }
@@ -579,7 +581,7 @@ impl<'a> ExternalSpecializations<'a> {
     pub fn new() -> Self {
         Self {
             symbol_or_lambda: std::vec::Vec::new(),
-            storage_subs: StorageSubs::new(Subs::default()),
+            storage: ExternalModuleStorage::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
         }
     }
@@ -590,7 +592,7 @@ impl<'a> ExternalSpecializations<'a> {
         env_subs: &mut Subs,
         variable: Variable,
     ) {
-        let stored_variable = self.storage_subs.extend_with_variable(env_subs, variable);
+        let stored_variable = self.storage.extend_with_variable(env_subs, variable);
         roc_tracing::debug!(original = ?variable, stored = ?stored_variable, "stored needed external");
 
         match self
@@ -616,11 +618,27 @@ impl<'a> ExternalSpecializations<'a> {
         impl Iterator<Item = (LambdaName<'a>, std::vec::Vec<Variable>)>,
     ) {
         (
-            self.storage_subs,
+            self.storage.into_storage_subs(),
             self.symbol_or_lambda
                 .into_iter()
                 .zip(self.types_to_specialize.into_iter()),
         )
+    }
+
+    fn snapshot_cache(&mut self) -> ExternalModuleStorageSnapshot {
+        self.storage.snapshot_cache()
+    }
+
+    fn rollback_cache(&mut self, snapshot: ExternalModuleStorageSnapshot) {
+        self.storage.rollback_cache(snapshot)
+    }
+
+    fn invalidate_cache(&mut self, changed_variables: &[Variable]) {
+        self.storage.invalidate_cache(changed_variables)
+    }
+
+    fn invalidate_whole_cache(&mut self) {
+        self.storage.invalidate_whole_cache()
     }
 }
 
@@ -668,7 +686,7 @@ impl<'a> Suspended<'a> {
         self.symbol_or_lambdas.push(symbol_or_lambda);
         self.layouts.push(proc_layout);
 
-        let variable = self.store.extend_with_variable(subs, variable);
+        let variable = self.store.import_variable_from(subs, variable).variable;
 
         self.variables.push(variable);
     }
@@ -1448,8 +1466,9 @@ impl<'a, 'i> Env<'a, 'i> {
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
-    fn unify(
+    fn unify<'b, 'c: 'b>(
         &mut self,
+        external_specializations: impl IntoIterator<Item = &'b mut ExternalSpecializations<'c>>,
         layout_cache: &mut LayoutCache,
         left: Variable,
         right: Variable,
@@ -1471,7 +1490,10 @@ impl<'a, 'i> Env<'a, 'i> {
             right,
         )?;
 
-        layout_cache.invalidate(changed_variables);
+        layout_cache.invalidate(changed_variables.iter().copied());
+        external_specializations
+            .into_iter()
+            .for_each(|e| e.invalidate_cache(&changed_variables));
 
         Ok(())
     }
@@ -2487,7 +2509,12 @@ fn from_can_let<'a>(
                         // Make sure rigid variables in the annotation are converted to flex variables.
                         instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
-                        let _res = env.unify(layout_cache, var, def.expr_var);
+                        let _res = env.unify(
+                            procs.externals_we_need.values_mut(),
+                            layout_cache,
+                            var,
+                            def.expr_var,
+                        );
 
                         with_hole(
                             env,
@@ -2521,7 +2548,12 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res = env.unify(layout_cache, var, new_def_expr_var);
+                            let _res = env.unify(
+                                procs.externals_we_need.values_mut(),
+                                layout_cache,
+                                var,
+                                new_def_expr_var,
+                            );
 
                             stmt = with_hole(
                                 env,
@@ -3084,15 +3116,25 @@ fn generate_runtime_error_function<'a>(
 struct TypeStateSnapshot {
     subs_snapshot: roc_types::subs::SubsSnapshot,
     layout_snapshot: crate::layout::CacheSnapshot,
+    external_storage_snapshot: VecMap<ModuleId, ExternalModuleStorageSnapshot>,
 }
 
 /// Takes a snapshot of the type state. Snapshots should be taken before new specializations, and
 /// accordingly [rolled back][rollback_typestate] a specialization is complete, so as to not
 /// interfere with other specializations.
-fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> TypeStateSnapshot {
+fn snapshot_typestate(
+    subs: &mut Subs,
+    procs: &mut Procs,
+    layout_cache: &mut LayoutCache<'_>,
+) -> TypeStateSnapshot {
     TypeStateSnapshot {
         subs_snapshot: subs.snapshot(),
         layout_snapshot: layout_cache.snapshot(),
+        external_storage_snapshot: procs
+            .externals_we_need
+            .iter_mut()
+            .map(|(module, es)| (*module, es.snapshot_cache()))
+            .collect(),
     }
 }
 
@@ -3101,16 +3143,26 @@ fn snapshot_typestate(subs: &mut Subs, layout_cache: &mut LayoutCache<'_>) -> Ty
 /// specializations.
 fn rollback_typestate(
     subs: &mut Subs,
+    procs: &mut Procs,
     layout_cache: &mut LayoutCache<'_>,
     snapshot: TypeStateSnapshot,
 ) {
     let TypeStateSnapshot {
         subs_snapshot,
         layout_snapshot,
+        mut external_storage_snapshot,
     } = snapshot;
 
     subs.rollback_to(subs_snapshot);
     layout_cache.rollback_to(layout_snapshot);
+
+    for (module, es) in procs.externals_we_need.iter_mut() {
+        if let Some((_, snapshot)) = external_storage_snapshot.remove(module) {
+            es.rollback_cache(snapshot);
+        } else {
+            es.invalidate_whole_cache();
+        }
+    }
 }
 
 /// Specialize a single proc.
@@ -3129,7 +3181,12 @@ fn specialize_proc_help<'a>(
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
-    let _unified = env.unify(layout_cache, partial_proc.annotation, fn_var);
+    let _unified = env.unify(
+        procs.externals_we_need.values_mut(),
+        layout_cache,
+        partial_proc.annotation,
+        fn_var,
+    );
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -3705,7 +3762,7 @@ fn specialize_variable<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    let snapshot = snapshot_typestate(env.subs, layout_cache);
+    let snapshot = snapshot_typestate(env.subs, procs, layout_cache);
 
     // for debugging only
     let raw = layout_cache
@@ -3770,7 +3827,7 @@ fn specialize_variable<'a>(
         }
     };
 
-    rollback_typestate(env.subs, layout_cache, snapshot);
+    rollback_typestate(env.subs, procs, layout_cache, snapshot);
 
     result
 }
@@ -4874,7 +4931,10 @@ pub fn with_hole<'a>(
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
-                            if record_needs_specialization {
+                            // If the records needs specialization or it's a thunk, we need to
+                            // create the specialized definition or force the thunk, respectively.
+                            // Both cases are handled below.
+                            if record_needs_specialization || procs.is_module_thunk(structure) {
                                 stmt = specialize_symbol(
                                     env,
                                     procs,

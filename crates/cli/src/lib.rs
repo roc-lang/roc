@@ -13,6 +13,7 @@ use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -635,14 +636,14 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    let bytes = std::fs::read(&binary_path).unwrap();
 
                     let x = roc_run(
                         arena,
                         opt_level,
                         triple,
                         args,
-                        &mut bytes,
+                        &bytes,
                         expectations,
                         interns,
                     );
@@ -670,19 +671,10 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &mut bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
                 }
             }
         }
@@ -747,7 +739,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     opt_level: OptLevel,
     triple: Triple,
     args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) -> io::Result<i32> {
@@ -840,7 +832,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
     opt_level: OptLevel,
     args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) -> std::io::Result<i32> {
@@ -953,7 +945,7 @@ unsafe fn roc_run_native_debug(
 }
 
 #[cfg(target_os = "linux")]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
     let flags = 0;
     let anonymous_file_name = "roc_file_descriptor\0";
@@ -975,7 +967,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -1001,7 +993,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "windows"))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -1031,7 +1023,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
     _args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     _expectations: VecMap<ModuleId, Expectations>,
     _interns: Interns,
 ) -> io::Result<i32> {

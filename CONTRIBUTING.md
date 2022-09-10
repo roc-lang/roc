@@ -11,14 +11,17 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 ## Running Tests
 
 Most contributors execute the following commands befor pushing their code:
-```
+
+```sh
 cargo test
 cargo fmt --all -- --check
 cargo clippy --workspace --tests -- --deny warnings
 ```
+
 Execute `cargo fmt --all` to fix the formatting.
 
 ## Contribution Tips
+
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.
 - Create an issue if the purpose of a struct/field/type/function/... is not immediately clear from its name or nearby comments.
 - You can find good first issues [here](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
@@ -30,7 +33,8 @@ Execute `cargo fmt --all` to fix the formatting.
   2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key).
   3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
   4. Make git sign your commits automatically:
-   ```
+
+   ```sh
    git config --global commit.gpgsign true
    ```
 

@@ -2,7 +2,7 @@
 use crate::types::{
     name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
 };
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
@@ -4014,6 +4014,25 @@ struct StorageSubsOffsets {
     problems: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct VariableMapCache(pub Vec<FnvMap<Variable, Variable>>);
+
+impl Default for VariableMapCache {
+    fn default() -> Self {
+        Self(vec![Default::default()])
+    }
+}
+
+impl VariableMapCache {
+    fn get(&self, v: &Variable) -> Option<&Variable> {
+        self.0.iter().rev().find_map(|cache| cache.get(v))
+    }
+
+    fn insert(&mut self, key: Variable, value: Variable) -> Option<Variable> {
+        self.0.last_mut().unwrap().insert(key, value)
+    }
+}
+
 impl StorageSubs {
     pub fn new(subs: Subs) -> Self {
         Self { subs }
@@ -4031,8 +4050,13 @@ impl StorageSubs {
         &self.subs
     }
 
-    pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
-        storage_copy_var_to(source, &mut self.subs, variable)
+    pub fn extend_with_variable(&mut self, source: &Subs, variable: Variable) -> Variable {
+        storage_copy_var_to(
+            &mut VariableMapCache::default(),
+            source,
+            &mut self.subs,
+            variable,
+        )
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
@@ -4326,7 +4350,8 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 pub fn storage_copy_var_to(
-    source: &mut Subs, // mut to set the copy
+    copy_table: &mut VariableMapCache,
+    source: &Subs,
     target: &mut Subs,
     var: Variable,
 ) -> Variable {
@@ -4339,26 +4364,13 @@ pub fn storage_copy_var_to(
 
         let mut env = StorageCopyVarToEnv {
             visited,
+            copy_table,
             source,
             target,
             max_rank: rank,
         };
 
-        let copy = storage_copy_var_to_help(&mut env, var);
-
-        // we have tracked all visited variables, and can now traverse them
-        // in one go (without looking at the UnificationTable) and clear the copy field
-        for var in env.visited {
-            env.source.modify(var, |descriptor| {
-                if descriptor.copy.is_some() {
-                    descriptor.rank = Rank::NONE;
-                    descriptor.mark = Mark::NONE;
-                    descriptor.copy = OptVariable::NONE;
-                }
-            });
-        }
-
-        copy
+        storage_copy_var_to_help(&mut env, var)
     };
 
     arena.reset();
@@ -4369,7 +4381,8 @@ pub fn storage_copy_var_to(
 
 struct StorageCopyVarToEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
-    source: &'a mut Subs,
+    copy_table: &'a mut VariableMapCache,
+    source: &'a Subs,
     target: &'a mut Subs,
     max_rank: Rank,
 }
@@ -4410,9 +4423,10 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
     use Content::*;
     use FlatType::*;
 
+    let var = env.source.get_root_key_without_compacting(var);
     let desc = env.source.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
@@ -4437,16 +4451,13 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         copy: OptVariable::NONE,
     };
 
-    let copy = env.target.fresh_unnamed_flex_var();
+    let copy = env.target.fresh(make_descriptor(unnamed_flex_var()));
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    env.source.modify(var, |descriptor| {
-        descriptor.mark = Mark::NONE;
-        descriptor.copy = copy.into();
-    });
+    env.copy_table.insert(var, copy);
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we

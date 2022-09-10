@@ -28,7 +28,7 @@ roc_build = { path = "../compiler/build" }
 libloading = "0.7.1"
 inkwell = { path = "../vendor/inkwell" }
 signal-hook = "0.3.14"
-libc = "0.2.106"
+libc = "0.2.132"
 
 [dev-dependencies]
 test_gen = { path = "../compiler/test_gen" }
