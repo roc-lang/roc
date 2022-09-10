@@ -91,6 +91,15 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
             .map_err(|e| format!("{}: {}", output_dirname, e))?
     };
 
+    if !input_dir.exists() {
+        return Err(format!("{} does not exist. The first argument should be the directory where your Markdown files are.", input_dir.display()));
+    }
+
+    // This check seems pointless but without it we get CI failures on x86. Why? I dunno.
+    if !output_dir.exists() {
+        return Err(format!("Could not create {}", output_dir.display()));
+    }
+
     let mut input_files: Vec<PathBuf> = vec![];
     find_files(&input_dir, &mut input_files)
         .map_err(|e| format!("Error finding input files: {}", e))?;
@@ -153,7 +162,8 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
-    let roc_output_str = unsafe { roc_transformFileContentForHost(&roc_relpath, &roc_content_html) };
+    let roc_output_str =
+        unsafe { roc_transformFileContentForHost(&roc_relpath, &roc_content_html) };
 
     let output_file = output_dir.join(&output_relpath);
     let rust_output_str: &str = &roc_output_str;
