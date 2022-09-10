@@ -53,4 +53,4 @@ jobs:
       - run: lld-link.exe --version
 
       - name: build
-        run: LLVM_SYS_130_PREFIX=$env:LLVM_SYS_130_PREFIX cargo build
+        run: cargo build
