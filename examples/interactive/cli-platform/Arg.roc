@@ -21,6 +21,14 @@ Parser a := [
     Lazy ({} -> a),
 ]
 
+ParseError a : [
+    MissingRequiredArg Str,
+    WrongType {
+        arg: Str,
+        expected: Type,
+    }
+]a
+
 Type : [
     Str,
     Bool,
@@ -171,15 +179,15 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-parse : Parser a, List Str -> Result a [MissingRequiredArg, WrongType]*
+parse : Parser a, List Str -> Result a (ParseError*)
 parse = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
-        Arg _ run ->
+        Arg {long, type} run ->
             when run args is
                 Ok val -> Ok val
-                Err NotFound -> Err MissingRequiredArg
-                Err WrongType -> Err WrongType
+                Err NotFound -> Err (MissingRequiredArg long)
+                Err WrongType -> Err (WrongType { arg: long, expected: type })
 
         # Default parser2 defaultVal ->
         #     parse parser2 args
@@ -215,13 +223,13 @@ apply = \arg1, arg2 -> andMap arg2 arg1
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["foo"] == Err MissingRequiredArg
+    parse parser ["foo"] == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument without value is missing
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo"] == Err MissingRequiredArg
+    parse parser ["--foo"] == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument with value is determined true
 expect
@@ -239,7 +247,7 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo", "not-a-bool"] == Err WrongType
+    parse parser ["--foo", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
 
 # bool dashed short argument with value is determined true
 expect
@@ -257,13 +265,13 @@ expect
 expect
     parser = bool { long: "foo", short: Some "F" }
 
-    parse parser ["-F", "not-a-bool"] == Err WrongType
+    parse parser ["-F", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
 
 # string dashed long argument without value is missing
 expect
     parser = str { long: "foo" }
 
-    parse parser ["--foo"] == Err MissingRequiredArg
+    parse parser ["--foo"] == Err (MissingRequiredArg "foo")
 
 # string dashed long argument with value is determined
 expect
@@ -275,7 +283,7 @@ expect
 expect
     parser = str { long: "foo", short: Some "F" }
 
-    parse parser ["-F"] == Err MissingRequiredArg
+    parse parser ["-F"] == Err (MissingRequiredArg "foo")
 
 # string dashed short argument with value is determined
 expect

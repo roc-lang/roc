@@ -12,7 +12,7 @@ main = \args ->
     when Arg.parse parser args is
         Ok mode ->
             Stdout.line "You chose mode \(mode)"
-        Err MissingRequiredArg ->
-            Stdout.line "I'm missing an arg!"
-        Err WrongType ->
-            Stdout.line "I got the wrong type for an arg!"
+        Err (MissingRequiredArg arg) ->
+            Stdout.line """The arg "\(arg)" was not provided!"""
+        Err (WrongType { arg, expected: _ }) ->
+            Stdout.line """The arg "\(arg)" must have a type"""
