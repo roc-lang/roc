@@ -52,7 +52,7 @@ pub enum VersionComparison {
     DisallowsEqual,
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct PackageName<'a>(&'a str);
 
 impl<'a> PackageName<'a> {
@@ -160,7 +160,7 @@ pub struct HostedHeader<'a> {
     pub after_with: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
     NewPackage(PackageName<'a>),
@@ -262,7 +262,7 @@ pub struct TypedIdent<'a> {
     pub ann: Loc<TypeAnnotation<'a>>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PackageEntry<'a> {
     pub shorthand: &'a str,
     pub spaces_after_shorthand: &'a [CommentOrNewline<'a>],

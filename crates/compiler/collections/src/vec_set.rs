@@ -1,6 +1,6 @@
 use std::iter::FromIterator;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VecSet<T> {
     elements: Vec<T>,
 }

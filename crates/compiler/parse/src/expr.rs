@@ -558,7 +558,7 @@ fn numeric_negate_expression<'a, T>(
     expr: Loc<Expr<'a>>,
     spaces: &'a [CommentOrNewline<'a>],
 ) -> Loc<Expr<'a>> {
-    debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
+    debug_assert_eq!(state.bytes().first(), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
     let start = state.pos();
     let region = Region::new(start, expr.region.end());

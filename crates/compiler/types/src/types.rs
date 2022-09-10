@@ -1980,7 +1980,7 @@ pub enum Reason {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>, CalledVia),
@@ -2063,7 +2063,7 @@ impl AliasKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AliasVar {
     pub name: Lowercase,
     pub var: Variable,

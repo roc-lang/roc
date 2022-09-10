@@ -1,4 +1,4 @@
-FROM rust:1.62.1-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
+FROM rust:1.63.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 WORKDIR /earthbuild
 
 prep-debian:

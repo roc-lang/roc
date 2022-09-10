@@ -64,7 +64,7 @@ impl Output {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub enum IntValue {
     I128([u8; 16]),
     U128([u8; 16]),
@@ -336,7 +336,7 @@ pub struct ClosureData {
 ///
 /// We distinguish them from closures so we can have better error messages
 /// during constraint generation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessorData {
     pub name: Symbol,
     pub function_var: Variable,
@@ -473,7 +473,7 @@ pub struct Field {
     pub loc_expr: Box<Loc<Expr>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recursive {
     NotRecursive = 0,
     Recursive = 1,

@@ -29,7 +29,7 @@ pub enum AbilityImplError {
 }
 
 /// Indexes a requested deriving of an ability for an opaque type.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct RequestedDeriveKey {
     pub opaque: Symbol,
     pub ability: Symbol,

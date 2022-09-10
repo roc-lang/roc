@@ -109,7 +109,7 @@ pub enum StrSegment<'a> {
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
@@ -581,7 +581,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),

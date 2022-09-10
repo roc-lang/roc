@@ -284,7 +284,7 @@ impl AbilityAliases {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapturedSymbols<'a> {
     None,
     Captured(&'a [(Symbol, Variable)]),
@@ -317,7 +317,7 @@ pub struct Proc<'a> {
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
@@ -326,13 +326,13 @@ pub enum HostExposedLayouts<'a> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SelfRecursive {
     NotSelfRecursive,
     SelfRecursive(JoinPointId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Parens {
     NotNeeded,
     InTypeParam,
@@ -1502,7 +1502,7 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
     pub borrow: bool,
@@ -1586,7 +1586,7 @@ pub enum Stmt<'a> {
 }
 
 /// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchInfo<'a> {
     None,
     Constructor {
@@ -1629,7 +1629,7 @@ impl<'a> BranchInfo<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModifyRc {
     /// Increment a reference count
     Inc(Symbol, u64),
@@ -1723,7 +1723,7 @@ impl<'a> ListLiteralElement<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call<'a> {
     pub call_type: CallType<'a>,
     pub arguments: &'a [Symbol],
@@ -1775,7 +1775,7 @@ impl<'a> Call<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CallSpecId {
     id: u32,
 }
@@ -1790,7 +1790,7 @@ impl CallSpecId {
     pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateModeId {
     id: u32,
 }
@@ -1805,7 +1805,7 @@ impl UpdateModeId {
     pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateModeIds {
     next: u32,
 }
@@ -1822,7 +1822,7 @@ impl UpdateModeIds {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallType<'a> {
     ByName {
         name: LambdaName<'a>,
@@ -1841,7 +1841,7 @@ pub enum CallType<'a> {
     HigherOrder(&'a HigherOrderLowLevel<'a>),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PassedFunction<'a> {
     /// name of the top-level function that is passed as an argument
     /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
@@ -1858,7 +1858,7 @@ pub struct PassedFunction<'a> {
     pub owns_captured_environment: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HigherOrderLowLevel<'a> {
     pub op: crate::low_level::HigherOrder,
 

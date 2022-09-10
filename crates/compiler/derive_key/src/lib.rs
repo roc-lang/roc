@@ -23,7 +23,7 @@ use encoding::{FlatEncodable, FlatEncodableKey};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DeriveError {
     /// Unbound variable present in the type-to-derive. It may be possible to derive for this type
     /// once the unbound variable is resolved.
