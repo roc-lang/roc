@@ -135,7 +135,7 @@ If you want to install it manually, you can also download Zig directly [here](ht
 
 For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
 `$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
+running `llc --version` - it should mention "LLVM version 13.0.1" at the top.
 You may also need to manually specify a prefix env var like so:
 
 ```sh
@@ -202,26 +202,14 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 **Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
-1. Download and install [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all we need)
-1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.0).
+1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
 1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
 
 ```text
 <# ! Replace YOUR_USERNAME ! #>
-$env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.0-win64'
-```
-
-1. add the LLVM bin to the path to prevent issue #3952:
-
-```text
-<# ! Replace YOUR_USERNAME ! #>
-[Environment]::SetEnvironmentVariable(
-   "Path",
-   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.0-win64\bin",
-   "User"
-)
+$env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.1-win64'
 ```
 
 Once all that was done, `cargo build` ran successfully for Roc!
