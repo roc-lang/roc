@@ -14,7 +14,7 @@ jobs:
     name: windows-cargo-build
     runs-on: windows-2022
     env:
-      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.0-win64
+      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v2
@@ -39,8 +39,8 @@ jobs:
 
       - name: set up llvm 13
         run: |
-          curl.exe -L -O https://github.com/PLC-lang/llvm-package-windows/releases/download/v13.0.0/LLVM-13.0.0-win64.7z
-          7z x LLVM-13.0.0-win64.7z -oC:\LLVM-13.0.0-win64
+          curl.exe -L -O https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
+          7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
           
       - run: dir $env:LLVM_SYS_130_PREFIX
 
