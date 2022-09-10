@@ -1,27 +1,37 @@
-use roc_module::symbol::Interns;
-use roc_mono::{
-    ir::ProcLayout,
-    layout::{CapturesNiche, LayoutCache},
+#[cfg(not(windows))]
+use {
+    roc_intern::GlobalInterner,
+    roc_module::symbol::Interns,
+    roc_mono::{
+        ir::ProcLayout,
+        layout::{CapturesNiche, Layout, LayoutCache},
+    },
+    roc_parse::ast::Expr,
+    roc_repl_eval::{
+        eval::{jit_to_ast, ToAstProblem},
+        ReplAppMemory,
+    },
+    roc_target::TargetInfo,
+    roc_types::subs::{Subs, Variable},
+    std::sync::Arc,
 };
-use roc_parse::ast::Expr;
-use roc_repl_eval::{
-    eval::{jit_to_ast, ToAstProblem},
-    ReplAppMemory,
-};
-use roc_target::TargetInfo;
-use roc_types::subs::{Subs, Variable};
 
+#[cfg(not(windows))]
 mod app;
+#[cfg(not(windows))]
 pub mod run;
 
+#[cfg(not(windows))]
 use app::{ExpectMemory, ExpectReplApp};
 
+#[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
@@ -46,7 +56,8 @@ pub fn get_values<'a>(
 
             let content = subs.get_content_without_compacting(variable);
 
-            let mut layout_cache = LayoutCache::new(target_info);
+            // TODO: pass layout_cache to jit_to_ast directly
+            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
             let proc_layout = ProcLayout {
@@ -55,7 +66,7 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            let element = jit_to_ast(
+            jit_to_ast(
                 arena,
                 app,
                 "expect_repl_main_fn",
@@ -63,10 +74,9 @@ pub fn get_values<'a>(
                 content,
                 subs,
                 interns,
+                layout_interner.fork(),
                 target_info,
-            )?;
-
-            element
+            )?
         };
 
         result.push(expr);
@@ -75,6 +85,7 @@ pub fn get_values<'a>(
     Ok((app.offset, result))
 }
 
+#[cfg(not(windows))]
 #[cfg(test)]
 mod test {
     use indoc::indoc;
@@ -126,7 +137,7 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects) = expect_mono_module_to_dylib(
+        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
             arena,
             target.clone(),
             loaded,
@@ -141,6 +152,7 @@ mod test {
         const BUFFER_SIZE: usize = 1024;
 
         let mut shared_buffer = [0u8; BUFFER_SIZE];
+        let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
         let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
@@ -148,15 +160,16 @@ mod test {
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects(
+        let (_failed, _passed) = crate::run::run_expects_with_memory(
             &mut writer,
             RenderTarget::ColorTerminal,
             arena,
             interns,
+            &layout_interner.into_global(),
             &lib,
             &mut expectations,
-            shared_buffer.as_mut_ptr(),
             expects,
+            &mut memory,
         )
         .unwrap();
 

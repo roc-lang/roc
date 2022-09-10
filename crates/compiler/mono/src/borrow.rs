@@ -309,6 +309,7 @@ impl<'a> ParamMap<'a> {
                 }
 
                 Expect { remainder, .. } => stack.push(remainder),
+                ExpectFx { remainder, .. } => stack.push(remainder),
 
                 Switch {
                     branches,
@@ -820,6 +821,10 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(param_map, remainder);
             }
 
+            ExpectFx { remainder, .. } => {
+                self.collect_stmt(param_map, remainder);
+            }
+
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
             Ret(_) | RuntimeError(_) => {
@@ -908,10 +913,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
-        | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked
-        | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf | NumPow | NumPowInt
-        | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy
-        | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
+        | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
+        | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
         NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
         | NumRound | NumCeiling | NumFloor | NumToFrac | Not | NumIsFinite | NumAtan | NumAcos
@@ -988,6 +993,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
             }
 
             Expect { remainder, .. } => stack.push(remainder),
+            ExpectFx { remainder, .. } => stack.push(remainder),
 
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 

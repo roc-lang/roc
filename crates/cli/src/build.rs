@@ -356,15 +356,8 @@ pub fn build_file<'a>(
             }
 
             let (mut child, _) =  // TODO use lld
-                link(
-                    target,
-                    binary_path.clone(),
-                    &inputs,
-                    link_type
-                )
-                .map_err(|_| {
-                    todo!("gracefully handle `ld` failing to spawn.")
-                })?;
+            link(target, binary_path.clone(), &inputs, link_type)
+                .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
                 .wait()

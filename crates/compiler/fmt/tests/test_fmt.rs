@@ -1098,47 +1098,114 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    // fn empty_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn empty_block_string() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+            """
+            "#
+        ));
+    }
 
-    // #[test]
-    // fn basic_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """blah"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn oneline_empty_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                """
+                "#
+            ),
+        );
+    }
 
-    // #[test]
-    // fn newlines_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """blah
-    //                 spam
-    //         foo"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn basic_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin"""
+                "#
+            ),
+            indoc!(
+                r#"
+                "griffin"
+                "#
+            ),
+        );
+    }
 
-    // #[test]
-    // fn quotes_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """
+    #[test]
+    fn multiline_basic_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin
+                harpy"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                griffin
+                harpy
+                """
+                "#
+            ),
+        );
+    }
 
-    //         "" \""" ""\"
+    #[test]
+    fn newlines_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin
+                        harpy
+                phoenix"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                griffin
+                        harpy
+                phoenix
+                """
+                "#
+            ),
+        );
+    }
 
-    //         """
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn quotes_block_string_single_segment() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+            "griffin"
+            """
+            "#
+        ));
+    }
+
+    #[test]
+    fn quotes_block_string() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+
+            "" \""" ""\"
+
+            """
+            "#
+        ));
+    }
 
     #[test]
     fn zero() {
@@ -5455,6 +5522,49 @@ mod test_fmt {
                 foo = bar
             "#
         ));
+    }
+
+    #[test]
+    fn single_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                "abc" -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                """
+                abc
+                def
+                """ -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_that_can_be_single_line_in_pattern() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                when foo is
+                    """
+                    abc
+                    """ -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                when foo is
+                    "abc" -> ""
+                "#
+            ),
+        );
     }
 
     // this is a parse error atm

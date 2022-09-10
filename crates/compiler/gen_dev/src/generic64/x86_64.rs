@@ -7,7 +7,7 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, STLayoutInterner};
 use roc_target::TargetInfo;
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
@@ -266,12 +266,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
+        if X86_64SystemV::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
             storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
-            let stack_size = layout.stack_size(TARGET_INFO);
+            let stack_size = layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO);
             match layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
@@ -324,10 +324,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         let mut general_i = 0;
         let mut float_i = 0;
-        if Self::returns_via_arg_pointer(ret_layout) {
+        if Self::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
             // Save space on the stack for the result we will be return.
-            let base_offset =
-                storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+            let base_offset = storage_manager.claim_stack_area(
+                dst,
+                ret_layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO),
+            );
             // Set the first reg to the address base + offset.
             let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
             general_i += 1;
@@ -386,8 +388,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         tmp_stack_offset += 8;
                     }
                 }
-                x if x.stack_size(TARGET_INFO) == 0 => {}
-                x if x.stack_size(TARGET_INFO) > 16 => {
+                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
+                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) > 16 => {
                     // TODO: Double check this.
                     // Just copy onto the stack.
                     // Use return reg as buffer because it will be empty right now.
@@ -431,8 +433,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(TARGET_INFO) == 0 => {}
-            x if !Self::returns_via_arg_pointer(x) => {
+            x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(storage_manager.env.layout_interner, x) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 if size <= 8 {
@@ -487,9 +489,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(TARGET_INFO) == 0 => {}
-            x if !Self::returns_via_arg_pointer(x) => {
-                let size = layout.stack_size(TARGET_INFO);
+            x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(storage_manager.env.layout_interner, x) => {
+                let size = layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO);
                 let offset = storage_manager.claim_stack_area(sym, size);
                 if size <= 8 {
                     X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
@@ -516,10 +518,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
 }
 
 impl X86_64SystemV {
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
+    fn returns_via_arg_pointer<'a>(
+        interner: &STLayoutInterner<'a>,
+        ret_layout: &Layout<'a>,
+    ) -> bool {
         // TODO: This will need to be more complex/extended to fully support the calling convention.
         // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        ret_layout.stack_size(TARGET_INFO) > 16
+        ret_layout.stack_size(interner, TARGET_INFO) > 16
     }
 }
 
@@ -667,7 +672,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     ) {
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut i = 0;
-        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
+        if X86_64WindowsFastcall::returns_via_arg_pointer(
+            storage_manager.env.layout_interner,
+            ret_layout,
+        ) {
             storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[i]);
             i += 1;
         }
@@ -682,7 +690,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
                         i += 1;
                     }
-                    x if x.stack_size(TARGET_INFO) == 0 => {}
+                    x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
@@ -717,9 +725,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         ret_layout: &Layout<'a>,
     ) {
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        if Self::returns_via_arg_pointer(ret_layout) {
+        if Self::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
             // Save space on the stack for the arg we will return.
-            storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+            storage_manager.claim_stack_area(
+                dst,
+                ret_layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO),
+            );
             todo!("claim first parama reg for the address");
         }
         for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
@@ -768,7 +779,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         tmp_stack_offset += 8;
                     }
                 }
-                x if x.stack_size(TARGET_INFO) == 0 => {}
+                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
@@ -809,10 +820,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
 }
 
 impl X86_64WindowsFastcall {
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
+    fn returns_via_arg_pointer<'a>(
+        interner: &STLayoutInterner<'a>,
+        ret_layout: &Layout<'a>,
+    ) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        ret_layout.stack_size(TARGET_INFO) > 8
+        ret_layout.stack_size(interner, TARGET_INFO) > 8
     }
 }
 
@@ -902,6 +916,22 @@ fn x86_64_generic_cleanup_stack<'a>(
     X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
 }
 
+type Reg64 = X86_64GeneralReg;
+
+fn binop_move_src_to_dst_reg64<F>(buf: &mut Vec<'_, u8>, f: F, dst: Reg64, src1: Reg64, src2: Reg64)
+where
+    F: FnOnce(&mut Vec<'_, u8>, X86_64GeneralReg, X86_64GeneralReg),
+{
+    if dst == src1 {
+        f(buf, dst, src2);
+    } else if dst == src2 {
+        f(buf, dst, src1);
+    } else {
+        mov_reg64_reg64(buf, dst, src1);
+        f(buf, dst, src2);
+    }
+}
+
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
@@ -940,22 +970,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, src1);
         add_reg64_imm32(buf, dst, imm32);
     }
+
     #[inline(always)]
-    fn add_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        if dst == src1 {
-            add_reg64_reg64(buf, dst, src2);
-        } else if dst == src2 {
-            add_reg64_reg64(buf, dst, src1);
-        } else {
-            mov_reg64_reg64(buf, dst, src1);
-            add_reg64_reg64(buf, dst, src2);
-        }
+    fn add_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, add_reg64_reg64, dst, src1, src2)
     }
+
     #[inline(always)]
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -1007,6 +1027,130 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         mov_reg64_reg64(buf, dst, src1);
         imul_reg64_reg64(buf, dst, src2);
+    }
+
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        mul_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
+    }
+
+    fn mul_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            mulss_freg32_freg32(buf, dst, src2);
+        } else if dst == src2 {
+            mulss_freg32_freg32(buf, dst, src1);
+        } else {
+            movss_freg32_freg32(buf, dst, src1);
+            mulss_freg32_freg32(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
+    fn mul_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            mulsd_freg64_freg64(buf, dst, src2);
+        } else if dst == src2 {
+            mulsd_freg64_freg64(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            mulsd_freg64_freg64(buf, dst, src2);
+        }
+    }
+
+    fn div_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            divss_freg32_freg32(buf, dst, src2);
+        } else if dst == src2 {
+            divss_freg32_freg32(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            divss_freg32_freg32(buf, dst, src2);
+        }
+    }
+
+    fn div_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            divsd_freg64_freg64(buf, dst, src2);
+        } else if dst == src2 {
+            divsd_freg64_freg64(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            divsd_freg64_freg64(buf, dst, src2);
+        }
+    }
+
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        idiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
+    }
+
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        udiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
     #[inline(always)]
@@ -1115,31 +1259,20 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("sign extending 4 byte values");
-        } else if size == 2 {
-            todo!("sign extending 2 byte values");
-        } else if size == 1 {
-            todo!("sign extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for sign extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 | 1 => todo!("sign extending {size} byte values"),
+            _ => internal_error!("Invalid size for sign extension: {size}"),
         }
     }
     #[inline(always)]
     fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("zero extending 4 byte values");
-        } else if size == 2 {
-            todo!("zero extending 2 byte values");
-        } else if size == 1 {
-            movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset);
-        } else {
-            internal_error!("Invalid size for zero extension: {}", size);
+        match size {
+            8 => Self::mov_reg64_base32(buf, dst, offset),
+            4 | 2 => todo!("zero extending {size} byte values"),
+            1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            _ => internal_error!("Invalid size for zero extension: {size}"),
         }
     }
 
@@ -1266,6 +1399,22 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
+
+    fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+        seto_reg64(buf, dst);
+    }
+
+    fn and_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, and_reg64_reg64, dst, src1, src2)
+    }
+
+    fn or_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, or_reg64_reg64, dst, src1, src2)
+    }
+
+    fn xor_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
+        binop_move_src_to_dst_reg64(buf, xor_reg64_reg64, dst, src1, src2)
+    }
 }
 
 impl X86_64Assembler {
@@ -1280,12 +1429,25 @@ impl X86_64Assembler {
     }
 }
 const REX: u8 = 0x40;
-const REX_W: u8 = REX | 0x8;
+
+// see https://wiki.osdev.org/X86-64_Instruction_Encoding#Encoding
+/// If set, 64-bit operand size is used
+const REX_PREFIX_W: u8 = 0b1000;
+/// Extension to the MODRM.reg
+const REX_PREFIX_R: u8 = 0b0100;
+#[allow(unused)]
+/// Extension to the SIB.index field
+const REX_PREFIX_X: u8 = 0b0010;
+/// Extension to the MODRM.rm
+const REX_PREFIX_B: u8 = 0b0001;
+
+/// Wide REX
+const REX_W: u8 = REX | REX_PREFIX_W;
 
 #[inline(always)]
 fn add_rm_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 1
+        byte | REX_PREFIX_B
     } else {
         byte
     }
@@ -1299,7 +1461,7 @@ fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 #[inline(always)]
 fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
     if reg.value() > 7 {
-        byte | 4
+        byte | REX_PREFIX_R
     } else {
         byte
     }
@@ -1356,6 +1518,27 @@ fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     binop_reg64_reg64(0x01, buf, dst, src);
 }
 
+/// `AND r/m64,r64` -> Bitwise logical and r64 to r/m64.
+#[inline(always)]
+fn and_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x23, buf, src, dst);
+}
+
+/// `OR r/m64,r64` -> Bitwise logical or r64 to r/m64.
+#[inline(always)]
+fn or_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x0B, buf, src, dst);
+}
+
+/// `XOR r/m64,r64` -> Bitwise logical exclusive or r64 to r/m64.
+#[inline(always)]
+fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // NOTE: src and dst are flipped by design
+    binop_reg64_reg64(0x33, buf, src, dst);
+}
+
 /// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
 #[inline(always)]
 fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
@@ -1393,6 +1576,86 @@ fn addss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
         ])
     } else {
         buf.extend(&[0xF3, 0x0F, 0x58, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `MULSD xmm1,xmm2/m64` -> Multiply the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn mulsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF2,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x59,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF2, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `DIVSS xmm1,xmm2/m64` -> Divide the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn divss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x5E,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF3, 0x0F, 0x5E, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `DIVSD xmm1,xmm2/m64` -> Divide the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn divsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF2,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x5E,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF2, 0x0F, 0x5E, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `ADDSS xmm1,xmm2/m64` -> Add the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn mulss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x59,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF3, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -1463,6 +1726,60 @@ fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gen
     // IMUL is strange, the parameters are reversed from must other binary ops.
     // The final encoding is (src, dst) instead of (dst, src).
     extended_binop_reg64_reg64(0x0F, 0xAF, buf, src, dst);
+}
+
+/// `MUL r/m64` -> Unsigned Multiply r/m64 to r64.
+#[inline(always)]
+fn mul_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
+    let mut rex = REX_W;
+    rex = add_reg_extension(src, rex);
+
+    if src.value() > 7 {
+        rex |= REX_PREFIX_B;
+    }
+
+    buf.extend(&[rex, 0xF7, 0b1110_0000 | (src as u8 % 8)]);
+}
+
+/// `IDIV r/m64` -> Signed divide RDX:RAX by r/m64, with result stored in RAX ← Quotient, RDX ← Remainder.
+#[inline(always)]
+fn idiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
+    let mut rex = REX_W;
+    rex = add_reg_extension(src, rex);
+
+    if src.value() > 7 {
+        rex |= REX_PREFIX_B;
+    }
+
+    // The CQO instruction can be used to produce a double quadword dividend
+    // from a quadword before a quadword division.
+    //
+    // The CQO instruction (available in 64-bit mode only) copies the sign (bit 63)
+    // of the value in the RAX register into every bit position in the RDX register
+    buf.extend(&[0x48, 0x99]);
+
+    buf.extend(&[rex, 0xF7, 0b1111_1000 | (src as u8 % 8)]);
+}
+
+/// `DIV r/m64` -> Unsigned divide RDX:RAX by r/m64, with result stored in RAX ← Quotient, RDX ← Remainder.
+#[inline(always)]
+fn udiv_reg64_reg64(buf: &mut Vec<'_, u8>, src: X86_64GeneralReg) {
+    let mut rex = REX_W;
+    rex = add_reg_extension(src, rex);
+
+    if src.value() > 7 {
+        rex |= REX_PREFIX_B;
+    }
+
+    // The CQO instruction can be used to produce a double quadword dividend
+    // from a quadword before a quadword division.
+    //
+    // The CQO instruction (available in 64-bit mode only) copies the sign (bit 63)
+    // of the value in the RAX register into every bit position in the RDX register
+    buf.extend(&[0x48, 0x99]);
+
+    // adds a cqo (convert doubleword to quadword)
+    buf.extend(&[rex, 0xF7, 0b1111_0000 | (src as u8 % 8)]);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
@@ -1847,6 +2164,12 @@ fn setge_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9d, buf, reg);
 }
 
+/// `SETO r/m64` -> Set byte if oveflow flag is set.
+#[inline(always)]
+fn seto_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x90, buf, reg);
+}
+
 /// `RET` -> Near return to calling procedure.
 #[inline(always)]
 fn ret(buf: &mut Vec<'_, u8>) {
@@ -1892,13 +2215,6 @@ fn push_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     } else {
         buf.push(0x50 | reg_mod);
     }
-}
-
-/// `XOR r/m64,r64` -> Xor r64 to r/m64.
-#[inline(always)]
-#[allow(dead_code)]
-fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x31, buf, dst, src);
 }
 
 // When writing tests, it is a good idea to test both a number and unnumbered register.
@@ -2047,10 +2363,30 @@ mod tests {
     }
 
     #[test]
+    fn test_and_reg64_reg64() {
+        disassembler_test!(
+            and_reg64_reg64,
+            |reg1, reg2| format!("and {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_or_reg64_reg64() {
+        disassembler_test!(
+            or_reg64_reg64,
+            |reg1, reg2| format!("or {reg1}, {reg2}"),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_xor_reg64_reg64() {
         disassembler_test!(
             xor_reg64_reg64,
-            |reg1, reg2| format!("xor {}, {}", reg1, reg2),
+            |reg1, reg2| format!("xor {reg1}, {reg2}"),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
@@ -2083,6 +2419,73 @@ mod tests {
             |reg1, reg2| format!("imul {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mul_reg64_reg64() {
+        disassembler_test!(
+            mul_reg64_reg64,
+            |reg| format!("mul {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mulsd_freg64_freg64() {
+        disassembler_test!(
+            mulsd_freg64_freg64,
+            |reg1, reg2| format!("mulsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_mulss_freg32_freg32() {
+        disassembler_test!(
+            mulss_freg32_freg32,
+            |reg1, reg2| format!("mulss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_idiv_reg64_reg64() {
+        disassembler_test!(
+            idiv_reg64_reg64,
+            |reg| format!("cqo\nidiv {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_div_reg64_reg64() {
+        disassembler_test!(
+            udiv_reg64_reg64,
+            |reg| format!("cqo\ndiv {}", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_divsd_freg64_freg64() {
+        disassembler_test!(
+            divsd_freg64_freg64,
+            |reg1, reg2| format!("divsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_divss_freg32_freg32() {
+        disassembler_test!(
+            divss_freg32_freg32,
+            |reg1, reg2| format!("divss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
         );
     }
 

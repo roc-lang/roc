@@ -554,7 +554,6 @@ fn encode_derived_tag_one_payload_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A Str]
                 x = A "foo"
                 result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
@@ -578,7 +577,6 @@ fn encode_derived_tag_two_payloads_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A Str Str]
                 x = A "foo" "bar"
                 result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
@@ -602,7 +600,6 @@ fn encode_derived_nested_tag_string() {
                 provides [main] to "./platform"
 
             main =
-                x : [A [B Str Str]]
                 x = A (B "foo" "bar")
                 encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
@@ -627,7 +624,6 @@ fn encode_derived_nested_record_tag_record() {
                 provides [main] to "./platform"
 
             main =
-                x : {a: [B {c: Str}]}
                 x = {a: (B ({c: "foo"}))}
                 encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
@@ -691,7 +687,6 @@ fn encode_derived_list_of_records() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_derived_list_of_lists_of_strings() {
     assert_evals_to!(
         indoc!(
@@ -954,7 +949,10 @@ fn encode_then_decode_list_of_lists_of_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
 fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
@@ -973,7 +971,10 @@ fn decode_record_two_fields() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
 fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
         indoc!(
@@ -987,6 +988,74 @@ fn decode_record_two_fields_string_and_int() {
             "#
         ),
         RocStr::from("ab10"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_record_two_fields_string_and_string_infer() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Encode, Decode, Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok {first, second} -> Str.concat first second
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_record_two_fields_string_and_string_infer_local_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                when decoded is
+                    Ok rcd -> Str.concat rcd.first rcd.second
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Decode, Json] provides [main] to "./platform"
+
+            main =
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                when decoded is
+                    Ok {first, second} -> Str.concat first second
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
         RocStr
     )
 }
@@ -1014,7 +1083,8 @@ fn decode_empty_record() {
 #[test]
 #[cfg(all(
     any(feature = "gen-llvm", feature = "gen-wasm"),
-    not(feature = "gen-llvm-wasm") // hits a wasm3 stack overflow
+    not(feature = "gen-llvm-wasm"), // hits a wasm3 stack overflow
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
 ))]
 fn decode_record_of_record() {
     assert_evals_to!(

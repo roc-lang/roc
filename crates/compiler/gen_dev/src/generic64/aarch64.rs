@@ -440,7 +440,84 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        todo!("register multiplication for AArch64");
+        todo!("register signed multiplication for AArch64");
+    }
+
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("register unsigned multiplication for AArch64");
+    }
+
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("register signed division for AArch64");
+    }
+
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("register unsigned division for AArch64");
+    }
+
+    #[inline(always)]
+    fn mul_freg32_freg32_freg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("multiplication for floats for AArch64");
+    }
+    #[inline(always)]
+    fn mul_freg64_freg64_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("multiplication for floats for AArch64");
+    }
+
+    #[inline(always)]
+    fn div_freg32_freg32_freg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("division for floats for AArch64");
+    }
+    #[inline(always)]
+    fn div_freg64_freg64_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+    ) {
+        todo!("division for floats for AArch64");
     }
 
     #[inline(always)]
@@ -749,9 +826,40 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("registers greater than or equal for AArch64");
     }
 
+    fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {
+        todo!("set if overflow for AArch64");
+    }
+
     #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)
+    }
+
+    fn and_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise and for AArch64")
+    }
+
+    fn or_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise or for AArch64")
+    }
+
+    fn xor_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise xor for AArch64")
     }
 }
 

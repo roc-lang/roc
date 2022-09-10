@@ -1,6 +1,6 @@
+# www.roc-lang.org
 
-How to update www.roc-lang.org :
-
+## How to update site
 
 - create a new branch, for example `update-www` based on `www`
 - pull `main` into `update-www`

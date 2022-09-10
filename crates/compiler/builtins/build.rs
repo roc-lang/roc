@@ -44,8 +44,12 @@ fn main() {
     }
 
     generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
-
     generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
+    generate_bc_file(
+        &bitcode_path,
+        "ir-windows-x86_64",
+        "builtins-windows-x86_64",
+    );
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -55,6 +59,12 @@ fn main() {
     const BUILTINS_HOST_FILE: &str = "builtins-host.o";
 
     generate_object_file(&bitcode_path, "object", BUILTINS_HOST_FILE);
+
+    generate_object_file(
+        &bitcode_path,
+        "windows-x86_64-object",
+        "builtins-windows-x86_64.obj",
+    );
 
     generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
 

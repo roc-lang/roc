@@ -125,6 +125,7 @@ to destructure variants inline in function declarations, like in these two examp
 ```elm
 \(UserId id1) (UserId id2) ->
 ```
+
 ```elm
 \(UserId id) ->
 ```
@@ -137,6 +138,7 @@ You can write the above like so in Roc:
 ```elm
 \UserId id1, UserId id2 ->
 ```
+
 ```elm
 \UserId id ->
 ```
@@ -214,13 +216,13 @@ Closed record annotations look the same as they do in Elm, e.g.
 
 In Elm:
 
-```
+```elm
 { a | name : Str, email : Str } -> Str
 ```
 
 In Roc:
 
-```
+```coffee
 { name : Str, email : Str }* -> Str
 ```
 
@@ -356,8 +358,8 @@ ergonomics of destructuring mean this wouldn't be a good fit for data modeling.
 Roc's pattern matching conditionals work about the same as how they do in Elm.
 Here are two differences:
 
-* Roc uses the syntax `when`...`is` instead of `case`...`of`
-* In Roc, you can use `|` to handle multiple patterns in the same way
+- Roc uses the syntax `when`...`is` instead of `case`...`of`
+- In Roc, you can use `|` to handle multiple patterns in the same way
 
 For example:
 
@@ -398,9 +400,9 @@ This is the biggest semantic difference between Roc and Elm.
 Let's start with the motivation. Suppose I'm using a platform for making a
 web server, and I want to:
 
-* Read some data from a file
-* Send an HTTP request containing some of the data from the file
-* Write some data to a file containing some of the data from the HTTP response
+- Read some data from a file
+- Send an HTTP request containing some of the data from the file
+- Write some data to a file containing some of the data from the HTTP response
 
 Assuming I'm writing this on a Roc platform which has a `Task`-based API,
 and that `Task.await` is like Elm's `Task.andThen` but with the arguments
@@ -524,7 +526,7 @@ the type of the union it goes in.
 
 Here are some examples of using tags in a REPL:
 
-```
+```coffee
 > True
 True : [True]*
 
@@ -599,8 +601,8 @@ tagToStr = \tag ->
 
 Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.
 
-* The type `[Foo, Bar Str]` is a **closed** tag union.
-* The type `[Foo]*` is an **open** tag union.
+- The type `[Foo, Bar Str]` is a **closed** tag union.
+- The type `[Foo]*` is an **open** tag union.
 
 You can pass `x` to `tagToStr` because an open tag union is type-compatible with
 any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
@@ -688,8 +690,8 @@ includes in its union."
 ## Opaque Types
 
 In Elm, you can choose to expose (or not) custom types' constructors in order to create [opaque types](http://sporto.github.io/elm-patterns/advanced/opaque-types.html).
-Since Roc's _tags_ can be constructed in any module without importing anything, Roc has a separate
-_opaque type_ language feature to enable information hiding.
+Since Roc's *tags* can be constructed in any module without importing anything, Roc has a separate
+*opaque type* language feature to enable information hiding.
 
 As an example, suppose I define these inside the `Username` module:
 
@@ -1011,6 +1013,7 @@ list =
 
     num + 1
 ```
+
 Both snippets are calling `List.map` passing `numbers` as the first argument,
 and a `\num -> num + 1` function for the other argument.
 
@@ -1123,8 +1126,8 @@ Like Elm, Roc organizes numbers into integers and floating-point numbers.
 However, Roc breaks them down even further. For example, Roc has two different
 sizes of float types to choose from:
 
-* `F64` - a 64-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
-* `F32` - a 32-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
+- `F64` - a 64-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
+- `F32` - a 32-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
 
 Both types are desirable in different situations. For example, when doing
 simulations, the precision of the `F64` type is desirable. On the other hand,
@@ -1141,11 +1144,11 @@ them take longer than they do with floats.
 Similarly to how there are different sizes of floating point numbers,
 there are also different sizes of integer to choose from:
 
-* `I8`
-* `I16`
-* `I32`
-* `I64`
-* `I128`
+- `I8`
+- `I16`
+- `I32`
+- `I64`
+- `I128`
 
 Roc also has *unsigned* integers which are never negative. They are
 `U8`, `U16`, `U32`, `U64`, `U128`, and `Nat`.
@@ -1156,9 +1159,9 @@ target (for example, WebAssembly) at runtime it will be the same as `U32` instea
 `Nat` comes up most often with collection lengths and indexing into collections.
 For example:
 
-* `List.len : List * -> Nat`
-* `List.get : List elem, Nat -> Result elem [OutOfBounds]*`
-* `List.set : List elem, Nat, elem -> List elem`
+- `List.len : List * -> Nat`
+- `List.get : List elem, Nat -> Result elem [OutOfBounds]*`
+- `List.set : List elem, Nat, elem -> List elem`
 
 As with floats, which integer type to use depends on the values you want to support
 as well as your performance needs. For example, raw sequences of bytes are typically
@@ -1177,10 +1180,10 @@ This accepts any of the numeric types discussed above, from `I128` to `F32`
 to `D64` and everything in between. This is because those are all type aliases
 for `Num` types. For example:
 
-* `I64` is a type alias for `Num (Integer Signed64)`
-* `U8` is a type alias for `Num (Integer Unsigned8)`
-* `F32` is a type alias for `Num (Fraction Binary32)`
-* `Dec` is a type alias for `Num (Fraction Decimal)`
+- `I64` is a type alias for `Num (Integer Signed64)`
+- `U8` is a type alias for `Num (Integer Unsigned8)`
+- `F32` is a type alias for `Num (Fraction Binary32)`
+- `Dec` is a type alias for `Num (Fraction Decimal)`
 
 (Those types like `Integer`, `Fraction`, and `Signed64` are all defined like `Never`;
 you can never instantiate one. They are used only as phantom types.)
@@ -1235,9 +1238,9 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 
 `comparable`, `appendable`, and `number` don't exist in Roc.
 
-* `number` is replaced by `Num`, as described previously.
-* `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
-* `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
+- `number` is replaced by `Num`, as described previously.
+- `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
+- `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
 
 That said, Roc's `Dict` and `Set` do have a restriction on their keys, just not `comparable`.
 See the section on Abilities in [the tutorial](TUTORIAL.md) for details.
@@ -1246,23 +1249,23 @@ See the section on Abilities in [the tutorial](TUTORIAL.md) for details.
 
 `elm/core` has these modules:
 
-* `Array`
-* `Basics`
-* `Bitwise`
-* `Char`
-* `Debug`
-* `Dict`
-* `List`
-* `Maybe`
-* `Platform`
-* `Platform.Cmd`
-* `Platform.Sub`
-* `Process`
-* `Result`
-* `Set`
-* `String`
-* `Task`
-* `Tuple`
+- `Array`
+- `Basics`
+- `Bitwise`
+- `Char`
+- `Debug`
+- `Dict`
+- `List`
+- `Maybe`
+- `Platform`
+- `Platform.Cmd`
+- `Platform.Sub`
+- `Process`
+- `Result`
+- `Set`
+- `String`
+- `Task`
+- `Tuple`
 
 In Roc, the standard library is not a standalone package. It is baked into the compiler,
 and you can't upgrade it independently of a compiler release; whatever version of
@@ -1272,25 +1275,25 @@ possible to ship Roc's standard library as a separate package!)
 
 Roc's standard library has these modules:
 
-* `Str`
-* `Bool`
-* `Num`
-* `List`
-* `Dict`
-* `Set`
-* `Result`
+- `Str`
+- `Bool`
+- `Num`
+- `List`
+- `Dict`
+- `Set`
+- `Result`
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all tags, so they do not need to be exposed; they are globally available regardless!)
-* In Roc it's called `Str` instead of `String`.
-* `List` refers to something more like Elm's `Array`, as noted earlier.
-* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
-* No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.not` or `Num.negate` or `Num.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implement it: `never = \a -> never a`.)
-* No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [Pair a b]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
-* No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
-* No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
-* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [Null, NonNull a]*`.
+- All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all tags, so they do not need to be exposed; they are globally available regardless!)
+- In Roc it's called `Str` instead of `String`.
+- `List` refers to something more like Elm's `Array`, as noted earlier.
+- No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
+- No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.not` or `Num.negate` or `Num.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implement it: `never = \a -> never a`.)
+- No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [Pair a b]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
+- No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
+- No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
+- No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [Null, NonNull a]*`.
 
 ## Operator Desugaring Table
 

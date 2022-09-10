@@ -11,7 +11,7 @@ env:
 
 jobs:
   test-zig-rust-wasm:
-    name: test zig, rust, wasm
+    name: test zig, rust, wasm...
     runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 90
     env:
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/checkout@v2
         with:
           clean: "true"
+
+      - name: Check for duplicate AUTHORS
+        run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh

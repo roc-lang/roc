@@ -636,7 +636,7 @@ fn parse_defs_end<'a>(
         let parse_expect_vanilla =
             crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
         let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
-        let parse_expect = either!(parse_expect_vanilla, parse_expect_fx);
+        let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
 
         match space0_after_e(
             crate::pattern::loc_pattern_help(min_indent),
@@ -682,11 +682,11 @@ fn parse_defs_end<'a>(
                         let preceding_comment = Region::new(spaces_before_current_start, start);
 
                         let value_def = match expect_flavor {
-                            Either::First(_) => ValueDef::Expect {
+                            Either::Second(_) => ValueDef::Expect {
                                 condition: arena.alloc(loc_def_expr),
                                 preceding_comment,
                             },
-                            Either::Second(_) => ValueDef::ExpectFx {
+                            Either::First(_) => ValueDef::ExpectFx {
                                 condition: arena.alloc(loc_def_expr),
                                 preceding_comment,
                             },

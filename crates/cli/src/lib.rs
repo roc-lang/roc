@@ -7,21 +7,16 @@ use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_gen_llvm::run_roc::RocCallResult;
-use roc_gen_llvm::run_roc_dylib;
-use roc_load::{ExecutionMode, Expectations, LoadConfig, LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_repl_expect::run::{expect_mono_module_to_dylib, roc_dev_expect};
-use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Instant;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -73,51 +68,51 @@ const VERSION: &str = include_str!("../../../version.txt");
 pub fn build_app<'a>() -> Command<'a> {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
-        .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
-        .help("Limit the number of threads (and hence cores) used during compilation.")
+        .help("Limit the number of threads (and hence cores) used during compilation")
         .takes_value(true)
         .validator(|s| s.parse::<usize>())
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
         .long(FLAG_OPT_SIZE)
-        .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to have a small binary size\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_dev = Arg::new(FLAG_DEV)
         .long(FLAG_DEV)
-        .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
+        .help("Make compilation finish as soon as possible, at the expense of runtime performance")
         .required(false);
 
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
-        .help("Store LLVM debug information in the generated program.")
+        .help("Store LLVM debug information in the generated program")
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
         .long(FLAG_TIME)
-        .help("Prints detailed compilation time information.")
+        .help("Print detailed compilation time information")
         .required(false);
 
     let flag_linker = Arg::new(FLAG_LINKER)
         .long(FLAG_LINKER)
-        .help("Sets which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+        .help("Set which linker to use\n(The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.)")
         .possible_values(["surgical", "legacy"])
         .required(false);
 
     let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
         .long(FLAG_PRECOMPILED)
-        .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+        .help("Assume the host has been precompiled and skip recompiling the host\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
         .possible_values(["true", "false"])
         .required(false);
 
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
         .long(FLAG_WASM_STACK_SIZE_KB)
-        .help("Stack size in kilobytes for wasm32 target. Only applies when --dev also provided.")
+        .help("Stack size in kilobytes for wasm32 target\n(This only applies when --dev also provided.)")
         .takes_value(true)
         .validator(|s| s.parse::<u32>())
         .required(false);
@@ -129,7 +124,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .default_value(DEFAULT_ROC_FILENAME);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the app being run, e.g. `roc run -- arg1 arg2`")
+        .help("Arguments to pass into the app being run\ne.g. `roc run -- arg1 arg2`")
         .allow_invalid_utf8(true)
         .multiple_values(true)
         .takes_value(true)
@@ -138,7 +133,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
-        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
+        .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
@@ -161,13 +156,13 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
-                    .help("Build a C library instead of an executable.")
+                    .help("Build a C library instead of an executable")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
-                    .help("Does not link. Instead just outputs the `.o` file")
+                    .help("Do not link\n(Instead, just output the `.o` file.)")
                     .required(false),
             )
             .arg(
@@ -179,7 +174,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         )
         .subcommand(Command::new(CMD_TEST)
-            .about("Run all top-level `expect`s in a main module and any modules it imports.")
+            .about("Run all top-level `expect`s in a main module and any modules it imports")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -214,7 +209,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_DEV)
-            .about("`check` a .roc file, and then run it if there were no errors.")
+            .about("`check` a .roc file, and then run it if there were no errors")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -237,14 +232,14 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
-                    .help("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .help("Checks that specified files are formatted\n(If formatting is needed, return a non-zero exit code.)")
                     .required(false),
             )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
-            .about("Check the code for problems, but doesn’t build or run it")
+            .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
             .arg(
@@ -266,7 +261,7 @@ pub fn build_app<'a>() -> Command<'a> {
                 )
         )
         .subcommand(Command::new(CMD_GLUE)
-            .about("Generate glue code between a platform's Roc API and its host language.")
+            .about("Generate glue code between a platform's Roc API and its host language")
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the platform module")
@@ -275,7 +270,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
             .arg(
                 Arg::new(GLUE_FILE)
-                    .help("The filename for the generated glue code. Currently, this must be a .rs file because only Rust glue generation is supported so far.")
+                    .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
@@ -300,7 +295,7 @@ pub fn build_app<'a>() -> Command<'a> {
                     Arg::new(DIRECTORY_OR_FILES)
                         .multiple_values(true)
                         .required(false)
-                        .help("(optional) The directory or files to open on launch."),
+                        .help("(optional) The directory or files to open on launch"),
                 ),
         )
     } else {
@@ -320,9 +315,18 @@ pub enum FormatMode {
     CheckOnly,
 }
 
-const SHM_SIZE: i64 = 1024;
+#[cfg(windows)]
+pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
+    todo!("running tests does not work on windows right now")
+}
 
+#[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_gen_llvm::llvm::build::LlvmBackendMode;
+    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_target::TargetInfo;
+    use std::time::Instant;
+
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -393,7 +397,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = expect_mono_module_to_dylib(
+    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -407,21 +411,14 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let mut shared_buffer = vec![0u8; SHM_SIZE as usize];
-
-    let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
-    let mut result = RocCallResult::default();
-    let slice = (shared_buffer.as_mut_ptr(), shared_buffer.len());
-    unsafe { set_shared_buffer(slice, &mut result) };
-
     let (failed, passed) = roc_repl_expect::run::run_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
         interns,
+        &layout_interner.into_global(),
         &lib,
         &mut expectations,
-        shared_buffer.as_mut_ptr(),
         expects,
     )
     .unwrap();
@@ -639,14 +636,14 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    let bytes = std::fs::read(&binary_path).unwrap();
 
                     let x = roc_run(
                         arena,
                         opt_level,
                         triple,
                         args,
-                        &mut bytes,
+                        &bytes,
                         expectations,
                         interns,
                     );
@@ -674,19 +671,10 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &mut bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
                 }
             }
         }
@@ -751,7 +739,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     opt_level: OptLevel,
     triple: Triple,
     args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) -> io::Result<i32> {
@@ -844,7 +832,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
     opt_level: OptLevel,
     args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) -> std::io::Result<i32> {
@@ -931,20 +919,14 @@ impl ExecutableFile {
                 libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
 
-            #[cfg(all(target_family = "windows"))]
+            #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
-                use std::process::Command;
-
                 let _ = argv;
                 let _ = envp;
-
-                let mut command = Command::new(path);
-
-                let output = command.output().unwrap();
-
-                println!("{}", String::from_utf8_lossy(&output.stdout));
-
-                std::process::exit(0)
+                use memexec::memexec_exe;
+                let bytes = std::fs::read(path).unwrap();
+                memexec_exe(&bytes).unwrap();
+                std::process::exit(0);
             }
         }
     }
@@ -953,98 +935,17 @@ impl ExecutableFile {
 // with Expect
 #[cfg(target_family = "unix")]
 unsafe fn roc_run_native_debug(
-    executable: ExecutableFile,
-    argv: &[*const c_char],
-    envp: &[*const c_char],
-    mut expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
+    _executable: ExecutableFile,
+    _argv: &[*const c_char],
+    _envp: &[*const c_char],
+    _expectations: VecMap<ModuleId, Expectations>,
+    _interns: Interns,
 ) {
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
-
-    match libc::fork() {
-        0 => {
-            // we are the child
-
-            if executable.execve(argv, envp) < 0 {
-                // Get the current value of errno
-                let e = errno::errno();
-
-                // Extract the error code as an i32
-                let code = e.0;
-
-                // Display a human-friendly error message
-                println!("💥 Error {}: {}", code, e);
-            }
-        }
-        -1 => {
-            // something failed
-
-            // Get the current value of errno
-            let e = errno::errno();
-
-            // Extract the error code as an i32
-            let code = e.0;
-
-            // Display a human-friendly error message
-            println!("Error {}: {}", code, e);
-
-            process::exit(1)
-        }
-        1.. => {
-            let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-            let cstring = CString::new(name).unwrap();
-
-            let arena = &bumpalo::Bump::new();
-            let interns = arena.alloc(interns);
-
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => {
-                        // clean up
-                        libc::shm_unlink(cstring.as_ptr().cast());
-
-                        // done!
-                        process::exit(0);
-                    }
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
-                        let shared_fd =
-                            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
-
-                        libc::ftruncate(shared_fd, SHM_SIZE);
-
-                        let shared_ptr = libc::mmap(
-                            std::ptr::null_mut(),
-                            SHM_SIZE as usize,
-                            libc::PROT_READ,
-                            libc::MAP_SHARED,
-                            shared_fd,
-                            0,
-                        );
-
-                        let shared_memory_ptr: *mut u8 = shared_ptr.cast();
-
-                        roc_dev_expect(
-                            &mut std::io::stdout(),
-                            arena,
-                            &mut expectations,
-                            interns,
-                            shared_memory_ptr,
-                        )
-                        .unwrap();
-                    }
-                    _ => println!("received signal {}", sig),
-                }
-            }
-        }
-        _ => unreachable!(),
-    }
+    todo!()
 }
 
 #[cfg(target_os = "linux")]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
     let flags = 0;
     let anonymous_file_name = "roc_file_descriptor\0";
@@ -1066,7 +967,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -1092,7 +993,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "windows"))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -1122,7 +1023,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
     _args: I,
-    binary_bytes: &mut [u8],
+    binary_bytes: &[u8],
     _expectations: VecMap<ModuleId, Expectations>,
     _interns: Interns,
 ) -> io::Result<i32> {
@@ -1203,6 +1104,7 @@ pub enum Target {
     System,
     Linux32,
     Linux64,
+    Windows64,
     Wasm32,
 }
 
@@ -1220,6 +1122,7 @@ impl Target {
             System => "system",
             Linux32 => "linux32",
             Linux64 => "linux64",
+            Windows64 => "windows64",
             Wasm32 => "wasm32",
         }
     }
@@ -1229,6 +1132,7 @@ impl Target {
         Target::System.as_str(),
         Target::Linux32.as_str(),
         Target::Linux64.as_str(),
+        Target::Windows64.as_str(),
         Target::Wasm32.as_str(),
     ];
 
@@ -1250,6 +1154,13 @@ impl Target {
                 operating_system: OperatingSystem::Linux,
                 environment: Environment::Musl,
                 binary_format: BinaryFormat::Elf,
+            },
+            Windows64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Windows,
+                environment: Environment::Gnu,
+                binary_format: BinaryFormat::Coff,
             },
             Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
@@ -1282,8 +1193,46 @@ impl std::str::FromStr for Target {
             "system" => Ok(Target::System),
             "linux32" => Ok(Target::Linux32),
             "linux64" => Ok(Target::Linux64),
+            "windows64" => Ok(Target::Windows64),
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
+    }
+}
+
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
+#[cfg(windows)]
+#[allow(unused_imports)]
+use windows_roc_platform_functions::*;
+
+#[cfg(windows)]
+mod windows_roc_platform_functions {
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        libc::malloc(size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        libc::realloc(c_ptr, new_size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        libc::free(c_ptr)
     }
 }

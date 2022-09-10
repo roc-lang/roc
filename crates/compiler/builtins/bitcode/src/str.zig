@@ -215,9 +215,12 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
         return @bitCast(isize, self.str_capacity) < 0;
+    }
+
+    test "isSmallStr: returns true for empty string" {
+        try expect(isSmallStr(RocStr.empty()));
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
@@ -1652,17 +1655,17 @@ pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
 }
 
 inline fn strToBytes(arg: RocStr) RocList {
-    if (arg.isEmpty()) {
+    const length = arg.len();
+    if (length == 0) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
-        const length = arg.len();
         const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
         return RocList{ .length = length, .bytes = ptr, .capacity = length };
     } else {
-        return RocList{ .length = arg.len(), .bytes = arg.str_bytes, .capacity = arg.str_capacity };
+        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity = arg.str_capacity };
     }
 }
 

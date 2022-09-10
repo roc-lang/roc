@@ -121,11 +121,20 @@ pub fn build_zig_host_native(
         .env("HOME", env_home);
 
     if let Some(shared_lib_path) = shared_lib_path {
+        // with LLVM, the builtins are already part of the roc app,
+        // but with the dev backend, they are missing. To minimize work,
+        // we link them as part of the host executable
+        let builtins_obj = if target.contains("windows") {
+            bitcode::get_builtins_windows_obj_path()
+        } else {
+            bitcode::get_builtins_host_obj_path()
+        };
+
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            &builtins_obj,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -138,15 +147,23 @@ pub fn build_zig_host_native(
         "str",
         zig_str_path,
         "--pkg-end",
-        // include the zig runtime
-        "-fcompiler-rt",
         // include libc
-        "--library",
-        "c",
+        "-lc",
         // cross-compile?
         "-target",
         target,
     ]);
+
+    // some examples need the compiler-rt in the app object file.
+    // but including it on windows causes weird crashes, at least
+    // when we use zig 0.9. It looks like zig 0.10 is going to fix
+    // this problem for us, so this is a temporary workaround
+    if !target.contains("windows") {
+        command.args(&[
+            // include the zig runtime
+            "-fcompiler-rt",
+        ]);
+    }
 
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
@@ -474,15 +491,29 @@ pub fn rebuild_host(
             host_input_path.with_file_name("host.bc")
         }
     } else {
-        host_input_path.with_file_name(if shared_lib_path.is_some() {
-            "dynhost"
+        let os = roc_target::OperatingSystem::from(target.operating_system);
+
+        if shared_lib_path.is_some() {
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "exe",
+                roc_target::OperatingSystem::Unix => "",
+                roc_target::OperatingSystem::Wasi => "",
+            };
+
+            host_input_path
+                .with_file_name("dynhost")
+                .with_extension(extension)
         } else {
-            match roc_target::OperatingSystem::from(target.operating_system) {
-                roc_target::OperatingSystem::Windows => "host.obj",
-                roc_target::OperatingSystem::Unix => "host.o",
-                roc_target::OperatingSystem::Wasi => "host.o",
-            }
-        })
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "obj",
+                roc_target::OperatingSystem::Unix => "o",
+                roc_target::OperatingSystem::Wasi => "o",
+            };
+
+            host_input_path
+                .with_file_name("host")
+                .with_extension(extension)
+        }
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -519,13 +550,19 @@ pub fn rebuild_host(
             }
             Architecture::X86_64 => {
                 let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+
+                let target = match target.operating_system {
+                    OperatingSystem::Windows => "x86_64-windows-gnu",
+                    _ => "native",
+                };
+
                 build_zig_host_native(
                     &env_path,
                     &env_home,
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    "native",
+                    target,
                     opt_level,
                     shared_lib_path,
                 )
@@ -1182,17 +1219,12 @@ fn link_windows(
                 .args(&["build-exe"])
                 .args(input_paths)
                 .args([
+                    "-target",
+                    "x86_64-windows-gnu",
+                    "--subsystem",
+                    "console",
                     "-lc",
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
-                    "-target",
-                    "native",
-                    "--pkg-begin",
-                    "str",
-                    zig_str_path.to_str().unwrap(),
-                    "--pkg-end",
-                    "--strip",
-                    "-O",
-                    "Debug",
                 ])
                 .spawn()?;
 

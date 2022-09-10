@@ -3,6 +3,7 @@
 ## Adding a bitcode builtin
 
 To add a builtin:
+
 1. Add the function to the relevant module. For `Num` builtin use it in `src/num.zig`, for `Str` builtins use `src/str.zig`, and so on. **For anything you add, you must add tests for it!** Not only does to make the builtins more maintainable, it's the the easiest way to test these functions on Zig. To run the test, run: `zig build test`
 2. Make sure the function is public with the `pub` keyword and uses the C calling convention. This is really easy, just add `pub` and `callconv(.C)` to the function declaration like so: `pub fn atan(num: f64) callconv(.C) f64 { ... }`
 3. In `src/main.zig`, export the function. This is also organized by module. For example, for a `Num` function find the `Num` section and add: `comptime { exportNumFn(num.atan, "atan"); }`. The first argument is the function, the second is the name of it in LLVM.

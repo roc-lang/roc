@@ -1,5 +1,5 @@
 app "rocLovesSwift"
-    packages { pf: "main.roc" }
+    packages { pf: "swift-platform/main.roc" }
     imports []
     provides [main] to pf
 

@@ -536,7 +536,7 @@ fn optional_field_let_no_use_default_nested() {
                     { x ? 10, y } = r
                     x + y
 
-                f { x: 4, y: 9 }
+                f { y: 9, x: 4 }
                 "#
         ),
         13,
@@ -1041,6 +1041,46 @@ fn generalized_accessor() {
             "#
         ),
         RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn update_record_that_is_a_thunk() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = Num.toStr fromOriginal.birds
+            
+            original = { birds: 5, iguanas: 7, zebras: 2, goats: 1 }
+            
+            fromOriginal = { original & birds: 4, iguanas: 3 }
+            "#
+        ),
+        RocStr::from("4"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn update_record_that_is_a_thunk_single_field() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = Num.toStr fromOriginal.birds
+            
+            original = { birds: 5 }
+            
+            fromOriginal = { original & birds: 4 }
+            "#
+        ),
+        RocStr::from("4"),
         RocStr
     );
 }

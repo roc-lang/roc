@@ -1,13 +1,11 @@
 use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
-use object::write;
 use object::{elf, endian, macho};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
-    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
-    SectionIndex, SectionKind, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope,
-    SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
+    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
+    SymbolIndex, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -21,11 +19,10 @@ use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
+mod generate_dylib;
 mod metadata;
 use metadata::VirtualOffset;
 
@@ -54,22 +51,35 @@ fn report_timing(label: &str, duration: Duration) {
 }
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
-    matches!(
-        (link_type, target),
-        (
-            LinkType::Executable,
+    if let LinkType::Executable = link_type {
+        match target {
             Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Linux,
                 binary_format: target_lexicon::BinaryFormat::Elf,
                 ..
-            } // | Triple {
-              //     operating_system: target_lexicon::OperatingSystem::Darwin,
-              //     binary_format: target_lexicon::BinaryFormat::Macho,
-              //     ..
-              // }
-        )
-    )
+            } => true,
+
+            // macho support is incomplete
+            Triple {
+                operating_system: target_lexicon::OperatingSystem::Darwin,
+                binary_format: target_lexicon::BinaryFormat::Macho,
+                ..
+            } => false,
+
+            // windows support is incomplete
+            Triple {
+                architecture: target_lexicon::Architecture::X86_64,
+                operating_system: target_lexicon::OperatingSystem::Windows,
+                binary_format: target_lexicon::BinaryFormat::Coff,
+                ..
+            } => false,
+
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 pub fn build_and_preprocess_host(
@@ -80,7 +90,12 @@ pub fn build_and_preprocess_host(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
-    let dummy_lib = host_input_path.with_file_name("libapp.so");
+    let dummy_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        host_input_path.with_file_name("libapp.obj")
+    } else {
+        host_input_path.with_file_name("libapp.so")
+    };
+
     generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
     let dynhost = host_input_path.with_file_name("dynhost");
@@ -121,120 +136,324 @@ fn generate_dynamic_lib(
     exported_closure_types: Vec<String>,
     dummy_lib_path: &Path,
 ) {
-    let dummy_obj_file = Builder::new()
-        .prefix("roc_lib")
-        .suffix(".o")
-        .tempfile()
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    let dummy_obj_file = dummy_obj_file.path();
-
-    let obj_target = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => BinaryFormat::Elf,
-        target_lexicon::BinaryFormat::Macho => BinaryFormat::MachO,
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    };
-    let obj_arch = match target.architecture {
-        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    };
-    let mut out_object = write::Object::new(obj_target, obj_arch, Endianness::Little);
-
-    let text_section = out_object.section_id(write::StandardSection::Text);
-
-    let mut add_symbol = |name: &String| {
-        out_object.add_symbol(write::Symbol {
-            name: name.as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: write::SymbolSection::Section(text_section),
-            flags: SymbolFlags::None,
-        });
-    };
+    let mut custom_names = Vec::new();
 
     for sym in exposed_to_host {
-        for name in &[
+        custom_names.extend([
             format!("roc__{}_1_exposed", sym),
             format!("roc__{}_1_exposed_generic", sym),
             format!("roc__{}_size", sym),
-        ] {
-            add_symbol(name);
-        }
+        ]);
 
         for closure_type in &exported_closure_types {
-            for name in &[
+            custom_names.extend([
                 format!("roc__{}_1_{}_caller", sym, closure_type),
                 format!("roc__{}_1_{}_size", sym, closure_type),
                 format!("roc__{}_1_{}_result_size", sym, closure_type),
-            ] {
-                add_symbol(name)
-            }
+            ]);
         }
     }
-    std::fs::write(
-        &dummy_obj_file,
-        out_object.write().expect("failed to build output object"),
-    )
-    .expect("failed to write object to file");
 
-    let (ld_prefix_args, ld_flag_soname) = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => (vec!["-shared"], "-soname"),
-        target_lexicon::BinaryFormat::Macho => {
-            // This path only exists on macOS Big Sur, and it causes ld errors
-            // on Catalina if it's specified with -L, so we replace it with a
-            // redundant -lSystem if the directory isn't there.
-            let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-            let big_sur_fix = if Path::new(big_sur_path).exists() {
-                "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"
-            } else {
-                "-lSystem" // We say -lSystem twice in the case of non-Big-Sur OSes, but it's fine.
+    // on windows (PE) binary search is used on the symbols,
+    // so they must be in alphabetical order
+    custom_names.sort_unstable();
+
+    if !dummy_lib_is_up_to_date(target, dummy_lib_path, &custom_names) {
+        let bytes = crate::generate_dylib::generate(target, &custom_names)
+            .unwrap_or_else(|e| internal_error!("{e}"));
+
+        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
+    }
+}
+
+fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]>) -> bool {
+    use target_lexicon::{Architecture as TLA, OperatingSystem as TLO};
+
+    match target.architecture {
+        TLA::X86_64 => {
+            if object.architecture() != object::Architecture::X86_64 {
+                return false;
+            }
+
+            let target_format = match target.operating_system {
+                TLO::Linux => object::BinaryFormat::Elf,
+                TLO::Windows => object::BinaryFormat::Pe,
+                _ => todo!("surgical linker does not support target {:?}", target),
             };
 
-            (vec![big_sur_fix, "-lSystem", "-dylib"], "-install_name")
+            object.format() == target_format
         }
+        TLA::Aarch64(_) => object.architecture() == object::Architecture::Aarch64,
+        _ => todo!("surgical linker does not support target {:?}", target),
+    }
+}
+
+/// Checks whether the dummy `.dll/.so` is up to date, in other words that it exports exactly the
+/// symbols that it is supposed to export, and is built for the right target. If this is the case,
+/// we can skip rebuildingthe dummy lib.
+fn dummy_lib_is_up_to_date(
+    target: &Triple,
+    dummy_lib_path: &Path,
+    custom_names: &[String],
+) -> bool {
+    if !std::path::Path::exists(dummy_lib_path) {
+        return false;
+    }
+
+    let exec_file = fs::File::open(dummy_lib_path).unwrap_or_else(|e| internal_error!("{}", e));
+    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let exec_data = &*exec_mmap;
+
+    let object = object::File::parse(exec_data).unwrap();
+
+    // the user may have been cross-compiling.
+    // The dynhost on disk must match our current target
+    if !object_matches_target(target, &object) {
+        return false;
+    }
+
+    // we made this dynhost file. For the file to be the same as what we'd generate,
+    // we need all symbols to be there and in the correct order
+    let dynamic_symbols: Vec<_> = object.exports().unwrap();
+
+    let it1 = dynamic_symbols.iter().map(|e| e.name());
+    let it2 = custom_names.iter().map(|s| s.as_bytes());
+
+    it1.eq(it2)
+}
+
+fn is_roc_symbol(sym: &object::Symbol) -> bool {
+    if let Ok(name) = sym.name() {
+        name.trim_start_matches('_').starts_with("roc_")
+    } else {
+        false
+    }
+}
+
+fn is_roc_definition(sym: &object::Symbol) -> bool {
+    sym.is_definition() && is_roc_symbol(sym)
+}
+
+fn is_roc_undefined(sym: &object::Symbol) -> bool {
+    sym.is_undefined() && is_roc_symbol(sym)
+}
+
+fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
+    let mut vaddresses = MutMap::default();
+
+    for sym in object.symbols().filter(is_roc_definition) {
+        // remove potentially trailing "@version".
+        let name = sym
+            .name()
+            .unwrap()
+            .trim_start_matches('_')
+            .split('@')
+            .next()
+            .unwrap();
+
+        let address = sym.address() as u64;
+
+        // special exceptions for memcpy and memset.
+        if name == "roc_memcpy" {
+            vaddresses.insert("memcpy".to_string(), address);
+        } else if name == "roc_memset" {
+            vaddresses.insert("memset".to_string(), address);
+        }
+
+        vaddresses.insert(name.to_string(), address);
+    }
+
+    vaddresses
+}
+
+fn collect_roc_undefined_symbols<'file, 'data>(
+    object: &'file object::File<'data, &'data [u8]>,
+    target: &Triple,
+) -> Vec<Symbol<'file, 'data>> {
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => object.dynamic_symbols(),
+        target_lexicon::BinaryFormat::Macho => object.symbols(),
         _ => {
-            // The supported() function should have been called earlier
-            // to verify this is a supported platform!
-            unreachable!();
+            // We should have verified this via supported() before calling this function
+            unreachable!()
         }
-    };
+    }
+    .filter(is_roc_undefined)
+    .collect()
+}
 
-    let output = Command::new("ld")
-        .args(ld_prefix_args)
-        .args(&[
-            ld_flag_soname,
-            dummy_lib_path.file_name().unwrap().to_str().unwrap(),
-            dummy_obj_file.to_str().unwrap(),
-            "-o",
-            dummy_lib_path.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
+struct Surgeries<'a> {
+    surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
+    app_func_addresses: MutMap<u64, &'a str>,
+    indirect_warning_given: bool,
+}
 
-    if !output.status.success() {
-        match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
-                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
-                stderr
-            ),
-            Err(utf8_err) => panic!(
-                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
-                utf8_err
-            ),
+impl<'a> Surgeries<'a> {
+    fn new(application_symbols: &[Symbol], app_func_addresses: MutMap<u64, &'a str>) -> Self {
+        let mut surgeries = MutMap::default();
+
+        // for each symbol that the host expects from the application
+        // we start with an empty set of places to perform surgery
+        for symbol in application_symbols {
+            let name = symbol.name().unwrap().to_string();
+            surgeries.insert(name, vec![]);
+        }
+
+        Self {
+            surgeries,
+            app_func_addresses,
+            indirect_warning_given: false,
+        }
+    }
+
+    fn append_text_sections(
+        &mut self,
+        object_bytes: &[u8],
+        object: &object::File<'a, &'a [u8]>,
+        verbose: bool,
+    ) {
+        let text_sections: Vec<Section> = object
+            .sections()
+            .filter(|sec| sec.kind() == SectionKind::Text)
+            .collect();
+        if text_sections.is_empty() {
+            internal_error!("No text sections found. This application has no code.");
+        }
+        if verbose {
+            println!();
+            println!("Text Sections");
+            for sec in text_sections.iter() {
+                println!("{:+x?}", sec);
+            }
+        }
+
+        if verbose {
+            println!();
+            println!("Analyzing instuctions for branches");
+        }
+
+        for text_section in text_sections {
+            self.append_text_section(object_bytes, &text_section, verbose)
+        }
+    }
+
+    fn append_text_section(&mut self, object_bytes: &[u8], sec: &Section, verbose: bool) {
+        let (file_offset, compressed) = match sec.compressed_file_range() {
+            Ok(CompressedFileRange {
+                format: CompressionFormat::None,
+                offset,
+                ..
+            }) => (offset, false),
+            Ok(range) => (range.offset, true),
+            Err(err) => {
+                internal_error!(
+                    "Issues dealing with section compression for {:+x?}: {}",
+                    sec,
+                    err
+                );
+            }
+        };
+
+        let data = match sec.uncompressed_data() {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
+            }
+        };
+        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
+        let mut inst = Instruction::default();
+
+        while decoder.can_decode() {
+            decoder.decode_out(&mut inst);
+
+            // Note: This gets really complex fast if we want to support more than basic calls/jumps.
+            // A lot of them have to load addresses into registers/memory so we would have to discover that value.
+            // Would probably require some static code analysis and would be impossible in some cases.
+            // As an alternative we can leave in the calls to the plt, but change the plt to jmp to the static function.
+            // That way any indirect call will just have the overhead of an extra jump.
+            match inst.try_op_kind(0) {
+                // Relative Offsets.
+                Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
+                    let target = inst.near_branch_target();
+                    if let Some(func_name) = self.app_func_addresses.get(&target) {
+                        if compressed {
+                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
+                        }
+
+                        if verbose {
+                            println!(
+                                "Found branch from {:+x} to {:+x}({})",
+                                inst.ip(),
+                                target,
+                                func_name
+                            );
+                        }
+
+                        // TODO: Double check these offsets are always correct.
+                        // We may need to do a custom offset based on opcode instead.
+                        let op_kind = inst.op_code().try_op_kind(0).unwrap();
+                        let op_size: u8 = match op_kind {
+                            OpCodeOperandKind::br16_1 | OpCodeOperandKind::br32_1 => 1,
+                            OpCodeOperandKind::br16_2 => 2,
+                            OpCodeOperandKind::br32_4 | OpCodeOperandKind::br64_4 => 4,
+                            _ => {
+                                internal_error!(
+                                    "Ran into an unknown operand kind when analyzing branches: {:?}",
+                                    op_kind
+                                );
+                            }
+                        };
+                        let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
+                        if verbose {
+                            println!(
+                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
+                                op_size, offset,
+                            );
+                            println!(
+                                "\tIts current value is {:+x?}",
+                                &object_bytes[offset as usize..(offset + op_size as u64) as usize]
+                            )
+                        }
+                        self.surgeries
+                            .get_mut(*func_name)
+                            .unwrap()
+                            .push(metadata::SurgeryEntry {
+                                file_offset: offset,
+                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
+                                size: op_size,
+                            });
+                    }
+                }
+                Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
+                    internal_error!(
+                        "Found branch type instruction that is not yet support: {:+x?}",
+                        inst
+                    );
+                }
+                Ok(_) => {
+                    if (inst.is_call_far_indirect()
+                        || inst.is_call_near_indirect()
+                        || inst.is_jmp_far_indirect()
+                        || inst.is_jmp_near_indirect())
+                        && !self.indirect_warning_given
+                        && verbose
+                    {
+                        self.indirect_warning_given = true;
+                        println!();
+                        println!("Cannot analyze through indirect jmp type instructions");
+                        println!("Most likely this is not a problem, but it could mean a loss in optimizations");
+                        println!();
+                    }
+                }
+                Err(err) => {
+                    internal_error!("Failed to decode assembly: {}", err);
+                }
+            }
         }
     }
 }
 
-// TODO: Most of this file is a mess of giant functions just to check if things work.
-// Clean it all up and refactor nicely.
+/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
 pub fn preprocess(
     target: &Triple,
     exec_filename: &str,
@@ -260,37 +479,10 @@ pub fn preprocess(
         }
     };
 
-    let mut md: metadata::Metadata = Default::default();
-
-    for sym in exec_obj.symbols().filter(|sym| {
-        sym.is_definition()
-            && sym.name().is_ok()
-            && sym
-                .name()
-                .unwrap()
-                .trim_start_matches('_')
-                .starts_with("roc_")
-    }) {
-        // remove potentially trailing "@version".
-        let name = sym
-            .name()
-            .unwrap()
-            .trim_start_matches('_')
-            .split('@')
-            .next()
-            .unwrap()
-            .to_string();
-
-        // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            md.roc_symbol_vaddresses
-                .insert("memcpy".to_string(), sym.address() as u64);
-        } else if name == "roc_memset" {
-            md.roc_symbol_vaddresses
-                .insert("memset".to_string(), sym.address() as u64);
-        }
-        md.roc_symbol_vaddresses.insert(name, sym.address() as u64);
-    }
+    let mut md = metadata::Metadata {
+        roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
+        ..Default::default()
+    };
 
     if verbose {
         println!(
@@ -301,7 +493,9 @@ pub fn preprocess(
 
     let exec_parsing_duration = exec_parsing_start.elapsed();
 
-    // Extract PLT related information for app functions.
+    // PLT stands for Procedure Linkage Table which is, put simply, used to call external
+    // procedures/functions whose address isn't known in the time of linking, and is left
+    // to be resolved by the dynamic linker at run time.
     let symbol_and_plt_processing_start = Instant::now();
     let plt_section_name = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => ".plt",
@@ -335,24 +529,7 @@ pub fn preprocess(
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
-    let app_syms: Vec<Symbol> = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => exec_obj.dynamic_symbols(),
-        target_lexicon::BinaryFormat::Macho => exec_obj.symbols(),
-        _ => {
-            // We should have verified this via supported() before calling this function
-            unreachable!()
-        }
-    }
-    .filter(|sym| {
-        sym.is_undefined()
-            && sym.name().is_ok()
-            && sym
-                .name()
-                .unwrap()
-                .trim_start_matches('_')
-                .starts_with("roc_")
-    })
-    .collect();
+    let app_syms = collect_roc_undefined_symbols(&exec_obj, target);
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
     let mut macho_load_so_offset = None;
@@ -530,7 +707,6 @@ pub fn preprocess(
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
         md.app_functions.push(name.clone());
-        md.surgeries.insert(name.clone(), vec![]);
         md.dynamic_symbol_indices.insert(name, sym.index().0 as u64);
     }
     if verbose {
@@ -545,142 +721,13 @@ pub fn preprocess(
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
+    // look at the text (i.e. code) sections and see collect work needs to be done
     let text_disassembly_start = Instant::now();
-    let text_sections: Vec<Section> = exec_obj
-        .sections()
-        .filter(|sec| sec.kind() == SectionKind::Text)
-        .collect();
-    if text_sections.is_empty() {
-        internal_error!("No text sections found. This application has no code.");
-    }
-    if verbose {
-        println!();
-        println!("Text Sections");
-        for sec in text_sections.iter() {
-            println!("{:+x?}", sec);
-        }
-    }
 
-    if verbose {
-        println!();
-        println!("Analyzing instuctions for branches");
-    }
-    let mut indirect_warning_given = false;
-    for sec in text_sections {
-        let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(
-                range @ CompressedFileRange {
-                    format: CompressionFormat::None,
-                    ..
-                },
-            ) => (range.offset, false),
-            Ok(range) => (range.offset, true),
-            Err(err) => {
-                internal_error!(
-                    "Issues dealing with section compression for {:+x?}: {}",
-                    sec,
-                    err
-                );
-            }
-        };
+    let mut surgeries = Surgeries::new(&app_syms, app_func_addresses);
+    surgeries.append_text_sections(exec_data, &exec_obj, verbose);
+    md.surgeries = surgeries.surgeries;
 
-        let data = match sec.uncompressed_data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
-            }
-        };
-        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
-        let mut inst = Instruction::default();
-
-        while decoder.can_decode() {
-            decoder.decode_out(&mut inst);
-
-            // Note: This gets really complex fast if we want to support more than basic calls/jumps.
-            // A lot of them have to load addresses into registers/memory so we would have to discover that value.
-            // Would probably require some static code analysis and would be impossible in some cases.
-            // As an alternative we can leave in the calls to the plt, but change the plt to jmp to the static function.
-            // That way any indirect call will just have the overhead of an extra jump.
-            match inst.try_op_kind(0) {
-                // Relative Offsets.
-                Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
-                    let target = inst.near_branch_target();
-                    if let Some(func_name) = app_func_addresses.get(&target) {
-                        if compressed {
-                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
-                        }
-
-                        if verbose {
-                            println!(
-                                "Found branch from {:+x} to {:+x}({})",
-                                inst.ip(),
-                                target,
-                                func_name
-                            );
-                        }
-
-                        // TODO: Double check these offsets are always correct.
-                        // We may need to do a custom offset based on opcode instead.
-                        let op_kind = inst.op_code().try_op_kind(0).unwrap();
-                        let op_size: u8 = match op_kind {
-                            OpCodeOperandKind::br16_1 | OpCodeOperandKind::br32_1 => 1,
-                            OpCodeOperandKind::br16_2 => 2,
-                            OpCodeOperandKind::br32_4 | OpCodeOperandKind::br64_4 => 4,
-                            _ => {
-                                internal_error!(
-                                    "Ran into an unknown operand kind when analyzing branches: {:?}",
-                                    op_kind
-                                );
-                            }
-                        };
-                        let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
-                        if verbose {
-                            println!(
-                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
-                                op_size, offset,
-                            );
-                            println!(
-                                "\tIts current value is {:+x?}",
-                                &exec_data[offset as usize..(offset + op_size as u64) as usize]
-                            )
-                        }
-                        md.surgeries
-                            .get_mut(*func_name)
-                            .unwrap()
-                            .push(metadata::SurgeryEntry {
-                                file_offset: offset,
-                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
-                                size: op_size,
-                            });
-                    }
-                }
-                Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
-                    internal_error!(
-                        "Found branch type instruction that is not yet support: {:+x?}",
-                        inst
-                    );
-                }
-                Ok(_) => {
-                    if (inst.is_call_far_indirect()
-                        || inst.is_call_near_indirect()
-                        || inst.is_jmp_far_indirect()
-                        || inst.is_jmp_near_indirect())
-                        && !indirect_warning_given
-                        && verbose
-                    {
-                        indirect_warning_given = true;
-                        println!();
-                        println!("Cannot analyaze through indirect jmp type instructions");
-                        println!("Most likely this is not a problem, but it could mean a loss in optimizations");
-                        println!();
-                    }
-                }
-                Err(err) => {
-                    internal_error!("Failed to decode assembly: {}", err);
-                }
-            }
-        }
-    }
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
     let scanning_dynamic_deps_duration;
@@ -2495,8 +2542,7 @@ pub fn surgery_elf(
 
     // Backup section header table.
     let sh_size = sh_ent_size as usize * sh_num as usize;
-    let mut sh_tab = vec![];
-    sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
+    let sh_tab = exec_mmap[sh_offset as usize..][..sh_size].to_vec();
 
     let mut offset = sh_offset as usize;
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
@@ -2520,13 +2566,6 @@ pub fn surgery_elf(
 
     // First decide on sections locations and then recode every exact symbol locations.
 
-    // Copy sections and resolve their symbols/relocations.
-    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
-    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
-    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
-    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
-    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
-
     // TODO: In the future Roc may use a data section to store memoized toplevel thunks
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
@@ -2547,6 +2586,13 @@ pub fn surgery_elf(
     if text_sections.is_empty() {
         internal_error!("No text sections found. This application has no code.");
     }
+
+    // Copy sections and resolve their symbols/relocations.
+    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
+    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
+    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
+    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
+    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
 
     // Calculate addresses and load symbols.
     // Note, it is important the bss sections come after the rodata sections.
@@ -2612,20 +2658,16 @@ pub fn surgery_elf(
         .chain(bss_sections.iter())
         .chain(text_sections.iter())
     {
-        let data = match sec.data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!(
-                    "Failed to load data for section, {:+x?}: {}",
-                    sec.name().unwrap(),
-                    err
-                );
-            }
-        };
+        let data = sec.data().unwrap_or_else(|err| {
+            internal_error!(
+                "Failed to load data for section, {:+x?}: {err}",
+                sec.name().unwrap(),
+            )
+        });
         let (section_offset, section_virtual_offset) =
             section_offset_map.get(&sec.index()).unwrap();
         let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
-        exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(data);
+        exec_mmap[section_offset..][..data.len()].copy_from_slice(data);
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
@@ -2720,7 +2762,7 @@ pub fn surgery_elf(
 
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
-    exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
+    exec_mmap[offset..][..sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
 
     // Flush app only data to speed up write to disk.
@@ -2748,31 +2790,33 @@ pub fn surgery_elf(
     let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
 
-    let new_rodata_section = &mut section_headers[section_headers.len() - 2];
-    new_rodata_section.sh_name = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    new_rodata_section.sh_flags = endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64);
-    new_rodata_section.sh_addr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_section.sh_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
-    new_rodata_section.sh_size = endian::U64::new(LittleEndian, new_rodata_section_size);
-    new_rodata_section.sh_link = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_info = endian::U32::new(LittleEndian, 0);
-    new_rodata_section.sh_addralign = endian::U64::new(LittleEndian, 16);
-    new_rodata_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+    // set the new rodata section header
+    section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
+        sh_name: endian::U32::new(LittleEndian, 0),
+        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64),
+        sh_addr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        sh_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
+        sh_size: endian::U64::new(LittleEndian, new_rodata_section_size),
+        sh_link: endian::U32::new(LittleEndian, 0),
+        sh_info: endian::U32::new(LittleEndian, 0),
+        sh_addralign: endian::U64::new(LittleEndian, 16),
+        sh_entsize: endian::U64::new(LittleEndian, 0),
+    };
 
-    let new_text_section_index = section_headers.len() - 1;
-    let new_text_section = &mut section_headers[new_text_section_index];
-    new_text_section.sh_name = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    new_text_section.sh_flags =
-        endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64);
-    new_text_section.sh_addr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_section.sh_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
-    new_text_section.sh_size = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_section.sh_link = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_info = endian::U32::new(LittleEndian, 0);
-    new_text_section.sh_addralign = endian::U64::new(LittleEndian, 16);
-    new_text_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+    // set the new text section header
+    section_headers[section_headers.len() - 1] = elf::SectionHeader64 {
+        sh_name: endian::U32::new(LittleEndian, 0),
+        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
+        sh_addr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        sh_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
+        sh_size: endian::U64::new(LittleEndian, new_text_section_size),
+        sh_link: endian::U32::new(LittleEndian, 0),
+        sh_info: endian::U32::new(LittleEndian, 0),
+        sh_addralign: endian::U64::new(LittleEndian, 16),
+        sh_entsize: endian::U64::new(LittleEndian, 0),
+    };
 
     // Reload and update file header and size.
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(exec_mmap, 0);
@@ -2785,25 +2829,31 @@ pub fn surgery_elf(
         ph_offset as usize,
         ph_num as usize,
     );
-    let new_rodata_segment = &mut program_headers[program_headers.len() - 2];
-    new_rodata_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    new_rodata_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R);
-    new_rodata_segment.p_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
-    new_rodata_segment.p_vaddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_segment.p_paddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
-    new_rodata_segment.p_filesz = endian::U64::new(LittleEndian, new_rodata_section_size);
-    new_rodata_segment.p_memsz = endian::U64::new(LittleEndian, new_rodata_section_virtual_size);
-    new_rodata_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
 
-    let new_text_segment = &mut program_headers[program_headers.len() - 1];
-    new_text_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    new_text_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X);
-    new_text_segment.p_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
-    new_text_segment.p_vaddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_segment.p_paddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
-    new_text_segment.p_filesz = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_segment.p_memsz = endian::U64::new(LittleEndian, new_text_section_size);
-    new_text_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
+    // set the new rodata section program header
+    program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
+        p_flags: endian::U32::new(LittleEndian, elf::PF_R),
+        p_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
+        p_vaddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        p_paddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
+        p_filesz: endian::U64::new(LittleEndian, new_rodata_section_size),
+        p_memsz: endian::U64::new(LittleEndian, new_rodata_section_virtual_size),
+        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+    };
+
+    // set the new text section program header
+    let new_text_section_index = program_headers.len() - 1;
+    program_headers[new_text_section_index] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
+        p_flags: endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X),
+        p_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
+        p_vaddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        p_paddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
+        p_filesz: endian::U64::new(LittleEndian, new_text_section_size),
+        p_memsz: endian::U64::new(LittleEndian, new_text_section_size),
+        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+    };
 
     // Update calls from platform and dynamic symbols.
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
@@ -2837,8 +2887,7 @@ pub fn surgery_elf(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 4]
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..4]
                         .copy_from_slice(&data);
                 }
                 8 => {
@@ -2847,8 +2896,7 @@ pub fn surgery_elf(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 8]
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -2888,9 +2936,7 @@ pub fn surgery_elf(
                 LittleEndian,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
-                    None => {
-                        internal_error!("Size missing for: {}", func_name);
-                    }
+                    None => internal_error!("Size missing for: {func_name}"),
                 },
             );
         }
@@ -2946,4 +2992,62 @@ fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) ->
     assert_eq!(count, body.len(), "Failed to load all structs");
     assert!(tail.is_empty(), "End of data was not aligned");
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
+
+    #[test]
+    fn collect_definitions() {
+        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+
+        let symbols = collect_roc_definitions(&object);
+
+        let mut keys = symbols.keys().collect::<Vec<_>>();
+        keys.sort_unstable();
+
+        assert_eq!(
+            [
+                "memcpy",
+                "memset",
+                "roc_alloc",
+                "roc_dealloc",
+                "roc_fx_getInt",
+                "roc_fx_getInt_help",
+                "roc_fx_putInt",
+                "roc_fx_putLine",
+                "roc_memcpy",
+                "roc_memset",
+                "roc_panic",
+                "roc_realloc"
+            ],
+            keys.as_slice(),
+        )
+    }
+
+    #[test]
+    fn collect_undefined_symbols_elf() {
+        let object = object::File::parse(ELF64_DYNHOST).unwrap();
+
+        let mut triple = Triple::host();
+        triple.binary_format = target_lexicon::BinaryFormat::Elf;
+
+        let symbols = collect_roc_undefined_symbols(&object, &triple);
+
+        let mut keys: Vec<_> = symbols.iter().filter_map(|s| s.name().ok()).collect();
+        keys.sort_unstable();
+
+        assert_eq!(
+            [
+                "roc__mainForHost_1__Fx_caller",
+                "roc__mainForHost_1__Fx_result_size",
+                "roc__mainForHost_1_exposed_generic",
+                "roc__mainForHost_size"
+            ],
+            keys.as_slice()
+        )
+    }
 }

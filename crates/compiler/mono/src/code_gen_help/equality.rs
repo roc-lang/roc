@@ -629,7 +629,7 @@ fn eq_list<'a>(
     // let size = literal int
     let size = root.create_symbol(ident_ids, "size");
     let size_expr = Expr::Literal(Literal::Int(
-        (elem_layout.stack_size(root.target_info) as i128).to_ne_bytes(),
+        (elem_layout.stack_size(root.layout_interner, root.target_info) as i128).to_ne_bytes(),
     ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 

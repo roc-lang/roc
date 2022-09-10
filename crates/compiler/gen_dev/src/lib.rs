@@ -14,7 +14,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, Layout, LayoutId, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 mod generic64;
 mod object_builder;
@@ -23,6 +25,7 @@ mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
@@ -405,6 +408,9 @@ trait Backend<'a> {
                 );
                 self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumAddChecked => {
+                self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
                 bitcode::NUM_ACOS[FloatWidth::F64].to_string(),
@@ -442,6 +448,22 @@ trait Backend<'a> {
                 );
                 self.build_num_mul(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumDiv: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumDiv: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumDiv: expected to have the same argument and return layout"
+                );
+                self.build_num_div(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumNeg => {
                 debug_assert_eq!(
                     1,
@@ -476,6 +498,27 @@ trait Backend<'a> {
                     "NumSub: expected to have the same argument and return layout"
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
+            }
+            LowLevel::NumBitwiseAnd => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_and(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise and on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseOr => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_or(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise or on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseXor => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_xor(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise xor on a non-integer")
+                }
             }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
@@ -678,6 +721,13 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
+            Symbol::NUM_ADD_CHECKED => {
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
             _ => todo!("the function, {:?}", func_sym),
         }
     }
@@ -699,14 +749,54 @@ trait Backend<'a> {
     /// build_num_add stores the sum of src1 and src2 into dst.
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
+    /// build_num_add_checked stores the sum of src1 and src2 into dst.
+    fn build_num_add_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
+    );
+
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+
+    /// build_num_mul stores `src1 / src2` into dst.
+    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+
+    /// stores the `src1 & src2` into dst.
+    fn build_int_bitwise_and(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 | src2` into dst.
+    fn build_int_bitwise_or(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 ^ src2` into dst.
+    fn build_int_bitwise_xor(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
 
     /// build_eq stores the result of `src1 == src2` into dst.
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
@@ -1004,7 +1094,8 @@ trait Backend<'a> {
                 }
             }
 
-            Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+            Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
+            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 
             Stmt::RuntimeError(_) => {}
         }
