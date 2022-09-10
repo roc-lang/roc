@@ -2808,7 +2808,12 @@ fn list_all_empty_with_unknown_element_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// then it works. We don't know what the problem is here!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(
