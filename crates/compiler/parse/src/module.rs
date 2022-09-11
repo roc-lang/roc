@@ -409,9 +409,8 @@ fn targets<'a>() -> impl Parser<
                             specialize(|_, pos| ETargets::TargetTriple(pos), target_triple_ident()),
                             |n| Spaced::Item(TargetTriple::new(n))
                         )),
-                        // The target triple must be followed by exactly one space.
-                        // We could relax this in the future, but seemed unnecessary.
-                        word1(b' ', ETargets::SpaceAfterTargetTriple)
+                        // The target triple must be followed by a colon.
+                        word1(b':', ETargets::ColonAfterTargetTriple)
                     ),
                     loc!(map!(
                         specialize(|_, pos| ETargets::BuildCmd(pos), string_literal::parse()),
