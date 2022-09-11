@@ -319,14 +319,14 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
-        let (_, ((before_provides, after_provides), (provides, _provides_type)), state) =
-            specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
-
         let (_, ((before_tests, after_tests), tests), state) =
             specialize(EHeader::Tests, tests()).parse(arena, state)?;
 
         let (_, ((before_targets, after_targets), targets), state) =
             specialize(EHeader::Targets, targets()).parse(arena, state)?;
+
+        let (_, ((before_provides, after_provides), (provides, _provides_type)), state) =
+            specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
         let header = PlatformHeader {
             name,
