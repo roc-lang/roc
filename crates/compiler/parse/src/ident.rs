@@ -145,6 +145,21 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
+pub fn target_triple_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, state: State<'a>| match chomp_part(is_allowed_in_target_triple, state.bytes()) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            let width = ident.len();
+            Ok((MadeProgress, ident, state.advance(width)))
+        }
+    }
+}
+
+/// ASCII alphabetic, or ASCII digit, or `_`, or `-`
+fn is_allowed_in_target_triple(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '-'
+}
+
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
         Ok($state.advance($n))

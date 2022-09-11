@@ -94,6 +94,8 @@ impl_space_problem! {
     EPackageEntry<'a>,
     EPackages<'a>,
     EPattern<'a>,
+    ETargets,
+    ETests,
     EProvides<'a>,
     ERecord<'a>,
     ERequires<'a>,
@@ -119,6 +121,8 @@ pub enum EHeader<'a> {
     Packages(EPackages<'a>, Position),
     Generates(EGenerates, Position),
     GeneratesWith(EGeneratesWith, Position),
+    Targets(ETargets, Position),
+    Tests(ETests, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -126,6 +130,34 @@ pub enum EHeader<'a> {
     AppName(EString<'a>, Position),
     PlatformName(EPackageName<'a>, Position),
     IndentStart(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETests {
+    Tests(Position),
+    IndentTests(Position),
+    IndentTestFnNameStart(Position),
+    TestFnName(Position),
+    Space(BadInputError, Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETargets {
+    Targets(Position),
+    Open(Position),
+    To(Position),
+    IndentTargets(Position),
+    IndentTo(Position),
+    IndentRecordStart(Position),
+    IndentRecordEnd(Position),
+    IndentPackage(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Entry(Position),
+    TargetTriple(Position),
+    SpaceAfterTargetTriple(Position),
+    BuildCmd(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -9,7 +9,8 @@ use roc_parse::{
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-        PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+        PackageEntry, PackageName, PlatformHeader, PlatformRequires, TargetTriple, TargetsEntry,
+        To, TypedIdent,
     },
     ident::UppercaseIdent,
 };
@@ -286,6 +287,8 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
+                    tests: header.tests.remove_spaces(arena),
+                    targets: header.targets.remove_spaces(arena),
                     before_header: &[],
                     after_platform_keyword: &[],
                     before_requires: &[],
@@ -298,6 +301,10 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     after_imports: &[],
                     before_provides: &[],
                     after_provides: &[],
+                    before_tests: &[],
+                    after_tests: &[],
+                    before_targets: &[],
+                    after_targets: &[],
                 },
             },
             Module::Hosted { header } => Module::Hosted {
@@ -394,6 +401,22 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
 impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for TargetTriple<'a> {
+    fn remove_spaces(&self, _: &'a Bump) -> Self {
+        // Target triples already don't have any spaces
+        self.clone()
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for TargetsEntry<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        TargetsEntry {
+            target: self.target.remove_spaces(arena),
+            cmd_to_run: self.cmd_to_run.remove_spaces(arena),
+        }
     }
 }
 
