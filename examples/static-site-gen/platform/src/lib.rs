@@ -95,7 +95,6 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
         return Err(format!("{} does not exist. The first argument should be the directory where your Markdown files are.", input_dir.display()));
     }
 
-    // This check seems pointless but without it we get CI failures on x86. Why? I dunno.
     if !output_dir.exists() {
         return Err(format!("Could not create {}", output_dir.display()));
     }
@@ -167,14 +166,10 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     let output_file = output_dir.join(&output_relpath);
     let rust_output_str: &str = &roc_output_str;
-    fs::write(&output_file, rust_output_str).map_err(|e| format!("{}", e))?;
 
-    println!(
-        "{} -> {}",
-        input_relpath.display(),
-        output_relpath.display()
-    );
-    Ok(())
+    println!("{} -> {}", input_file.display(), output_file.display());
+
+    fs::write(output_file, rust_output_str).map_err(|e| format!("{}", e))
 }
 
 fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> {
