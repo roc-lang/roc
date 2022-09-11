@@ -11,6 +11,7 @@ main =
 
     Task.attempt task \result ->
         when result is
-            Ok {} -> Stdout.line "Successfully wrote a string to out.txt"
-            Err (FileWriteErr PermissionDenied) -> Stderr.line "Err: PermissionDenied"
-            Err (FileWriteErr Other) -> Stderr.line "Err: Other"
+            Err (FileWriteErr _ PermissionDenied) -> Stderr.line "Err: PermissionDenied"
+            Err (FileWriteErr _ Unsupported) -> Stderr.line "Err: Unsupported"
+            Err (FileWriteErr _ (Unrecognized _ other)) -> Stderr.line "Err: \(other)"
+            _ -> Stdout.line "Successfully wrote a string to out.txt"

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+mod file_glue;
 mod glue;
 
 use core::alloc::Layout;
@@ -13,6 +14,9 @@ use std::fs::File;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
+
+use file_glue::ReadErr;
+use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -136,24 +140,35 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
     eprintln!("{}", string);
 }
 
+// #[no_mangle]
+// pub extern "C" fn roc_fx_fileWriteUtf8(
+//     roc_path: &RocList<u8>,
+//     roc_string: &RocStr,
+//     // ) -> RocResult<(), WriteErr> {
+// ) -> (u8, u8) {
+//     let _ = write_slice(roc_path, roc_string.as_str().as_bytes());
+
+//     (255, 255)
+// }
+
+type Fail = Foo;
+
 #[repr(C)]
-pub enum ReadErr {
-    NotFound,
-    Other,
+pub struct Foo {
+    data: u8,
+    tag: u8,
 }
 
-#[repr(u8)]
-pub enum WriteErr {
-    Other,
-    PermissionDenied,
-}
-
+// #[no_mangle]
+// pub extern "C" fn roc_fx_fileWriteUtf8(roc_path: &RocList<u8>, roc_string: &RocStr) -> Fail {
+//     write_slice2(roc_path, roc_string.as_str().as_bytes())
+// }
 #[no_mangle]
 pub extern "C" fn roc_fx_fileWriteUtf8(
     roc_path: &RocList<u8>,
-    roc_string: &RocStr,
+    roc_str: &RocStr,
 ) -> RocResult<(), WriteErr> {
-    write_slice(roc_path, roc_string.as_str().as_bytes())
+    write_slice(roc_path, roc_str.as_str().as_bytes())
 }
 
 #[no_mangle]
