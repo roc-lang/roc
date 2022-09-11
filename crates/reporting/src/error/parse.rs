@@ -3177,14 +3177,44 @@ fn to_tests_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([alloc.reflow("I was expecting a function name next, like")]),
                 alloc
-                    .parser_suggestion("tests myExpectFxFunction")
+                    .parser_suggestion("tests myExpectFxFunctionName")
                     .indent(4),
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "WEIRD TESTS".to_string(),
+                title: "INVALID TESTS ENTRY".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ETests::IndentTests(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("platform"),
+                    alloc.reflow(" module should have a "),
+                    alloc.keyword("tests"),
+                    alloc.reflow(" entry here:"),
+                ]),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I need a "),
+                    alloc.keyword("tests"),
+                    alloc.reflow(" entry that looks something like this:"),
+                ]),
+                alloc
+                    .parser_suggestion("tests myExpectFxFunctionName")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCOMPLETE PLATFORM HEADER".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3217,7 +3247,7 @@ fn to_targets_report<'a>(
                     "I was expecting a build command string next, like",
                 )]),
                 alloc
-                    .parser_suggestion("targets { wasm32_unknown_unknown \"build-wasm.sh\" }")
+                    .parser_suggestion("targets { wasm32_unknown_unknown: \"my_wasm_build_cmd\" }")
                     .indent(4),
             ]);
 
@@ -3228,6 +3258,49 @@ fn to_targets_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+
+        ETargets::Targets(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("platform"),
+                    alloc.reflow(" module should have a "),
+                    alloc.keyword("targets"),
+                    alloc.reflow(" entry here:"),
+                ]),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I need a "),
+                    alloc.keyword("targets"),
+                    alloc.reflow(" entry that looks something like this:"),
+                ]),
+                alloc.concat([
+                    alloc
+                        .parser_suggestion("targets {\n")
+                        .indent(4),
+                    alloc
+                        .parser_suggestion("x86_64-unknown-freebsd: \"my_x64_freebsd_build_cmd\",\n")
+                        .indent(8),
+                    alloc
+                        .parser_suggestion("wasm32-unknown-unknown: \"my_wasm_build_cmd\",\n")
+                        .indent(8),
+                    alloc
+                        .parser_suggestion("}")
+                        .indent(4),
+                ])
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCOMPLETE PLATFORM HEADER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
 
         ETargets::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
