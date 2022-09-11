@@ -495,7 +495,7 @@ fn gen_from_mono_module_dev_wasm32(
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
         panic!(
-            "Failed to read host object file {}! Try setting --precompiled-host=false",
+            "Failed to read host object file {}! Try setting --prebuilt-platform=false",
             preprocessed_host_path.display()
         )
     });

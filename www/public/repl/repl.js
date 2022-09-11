@@ -137,7 +137,7 @@ async function processInputQueue() {
 // ----------------------------------------------------------------------------
 
 // Create an executable Wasm instance from an array of bytes
-// (Browser validates the module and does the final compilation to the host's machine code.)
+// (Browser validates the module and does the final compilation.)
 async function js_create_app(wasm_module_bytes) {
   const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
   const importObj = getMockWasiImports(wasiLinkObject);

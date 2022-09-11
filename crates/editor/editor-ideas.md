@@ -360,7 +360,7 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Need of highcontrast
       Or Everything Magnified for me with no glasses.
       Or Total blindness where we need to trough sound to communicate to the user
-      Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
+      Screen readers read trees of labeled elements. Each OS has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
 

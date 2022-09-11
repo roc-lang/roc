@@ -24,7 +24,7 @@ editor = ["roc_editor"]
 
 run-wasm32 = ["wasmer", "wasmer-wasi"]
 
-# Compiling for a different platform than the host can cause linker errors.
+# Compiling for a different target than the current machine can cause linker errors.
 target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
 target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
