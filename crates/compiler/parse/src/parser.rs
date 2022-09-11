@@ -157,6 +157,8 @@ pub enum ETargets {
     TargetTriple(Position),
     ColonAfterTargetTriple(Position),
     BuildCmd(Position),
+    IndentBuildCmdOpen(Position),
+    IndentBuildCmdEnd(Position),
     Space(BadInputError, Position),
 }
 

@@ -412,10 +412,15 @@ fn targets<'a>() -> impl Parser<
                         // The target triple must be followed by a colon.
                         word1(b':', ETargets::ColonAfterTargetTriple)
                     ),
-                    loc!(map!(
-                        specialize(|_, pos| ETargets::BuildCmd(pos), string_literal::parse()),
-                        Spaced::Item
-                    ))
+                    space0_around_ee(
+                        loc!(map!(
+                            specialize(|_, pos| ETargets::BuildCmd(pos), string_literal::parse()),
+                            Spaced::Item
+                        )),
+                        min_indent,
+                        ETargets::IndentBuildCmdOpen,
+                        ETargets::IndentBuildCmdEnd,
+                    )
                 ),
                 |(target, cmd_to_run)| Spaced::Item(TargetsEntry { target, cmd_to_run })
             )),
