@@ -401,7 +401,7 @@ fn targets<'a>() -> impl Parser<
             ETargets::IndentRecordStart
         ),
         collection_trailing_sep_e!(
-            word1(b'{', ETargets::ListStart),
+            word1(b'{', ETargets::RecordStart),
             loc!(map!(
                 and!(
                     skip_second!(
@@ -420,8 +420,8 @@ fn targets<'a>() -> impl Parser<
                 ),
                 |(target, cmd_to_run)| Spaced::Item(TargetsEntry { target, cmd_to_run })
             )),
-            word1(b',', ETargets::ListEnd),
-            word1(b'}', ETargets::ListEnd),
+            word1(b',', ETargets::RecordEnd),
+            word1(b'}', ETargets::RecordEnd),
             min_indent,
             ETargets::Open,
             ETargets::IndentRecordEnd,
