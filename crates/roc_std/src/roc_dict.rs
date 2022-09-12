@@ -58,6 +58,39 @@ impl<K: Hash, V> RocDict<K, V> {
     }
 }
 
+impl<'a, K, V> IntoIterator for &'a RocDict<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = IntoIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            index: 0,
+            items: &self,
+        }
+    }
+}
+
+pub struct IntoIter<'a, K, V> {
+    index: usize,
+    items: &'a RocDict<K, V>,
+}
+
+impl<'a, K, V> Iterator for IntoIter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self
+            .items
+            .0
+            .get(self.index)
+            .map(|item| (&item.key, &item.value));
+
+        self.index += 1;
+
+        item
+    }
+}
+
 impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RocDict ")?;
