@@ -89,6 +89,12 @@ impl<'a, K, V> Iterator for IntoIter<'a, K, V> {
 
         item
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.items.0.len() - self.index;
+
+        (remaining, Some(remaining))
+    }
 }
 
 impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
