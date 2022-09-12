@@ -5,6 +5,8 @@ interface InternalPath
         wrap,
         unwrap,
         toBytes,
+        fromArbitraryBytes,
+        fromOsBytes,
     ]
     imports []
 
@@ -61,3 +63,11 @@ toBytes = \@InternalPath path ->
         FromOperatingSystem bytes -> bytes
         ArbitraryBytes bytes -> bytes
         FromStr str -> Str.toUtf8 str
+
+fromArbitraryBytes : List U8 -> InternalPath
+fromArbitraryBytes = \bytes ->
+    @InternalPath (ArbitraryBytes bytes)
+
+fromOsBytes : List U8 -> InternalPath
+fromOsBytes = \bytes ->
+    @InternalPath (FromOperatingSystem bytes)
