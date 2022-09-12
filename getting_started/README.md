@@ -23,8 +23,8 @@ If you have a specific question, the [FAQ](../FAQ.md) might have an answer, alth
 You can run examples as follows:
 
 ```sh
-cd examples/hello-world
-roc run
+cd examples
+roc run helloWorld.roc
 ```
 
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
