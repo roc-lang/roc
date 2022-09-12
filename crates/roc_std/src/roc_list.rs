@@ -56,7 +56,7 @@ impl<T> RocList<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.as_slice().iter()
+        self.into_iter()
     }
 
     /// Used for both roc_alloc and roc_realloc - given the number of elements,
@@ -498,6 +498,15 @@ where
 impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T> {
     fn from(array: [T; SIZE]) -> Self {
         Self::from_iter(array)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a RocList<T> {
+    type Item = &'a T;
+    type IntoIter = core::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
     }
 }
 
