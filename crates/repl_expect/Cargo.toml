@@ -6,7 +6,7 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = {version = "3.11.0", features = ["collections"]}
 target-lexicon = "0.12.2"
 
 roc_builtins = {path = "../compiler/builtins"}

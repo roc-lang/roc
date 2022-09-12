@@ -14,7 +14,7 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 static_assertions = "1.1.0"
 bitvec = "1"
 

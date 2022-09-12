@@ -7,7 +7,7 @@ license = "UPL-1.0"
 
 [dependencies]
 bitvec = "1"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }
 roc_intern = { path = "../intern" }
