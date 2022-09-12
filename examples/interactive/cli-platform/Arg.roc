@@ -17,8 +17,8 @@ interface Arg
 Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
+
     WithConfig (Parser a) Config,
-    # Default (Parser a) a,
     Lazy ({} -> a),
 ]
 
@@ -109,10 +109,6 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    # Default parser2 defaultVal ->
-                    #     parser2
-                    #     |> andMap (@Parser mapper)
-                    #     |> Default (fn defaultVal)
                     Arg config run ->
                         Arg config \args ->
                             run args
@@ -132,7 +128,6 @@ andMap = \@Parser parser, @Parser mapper ->
                                 Ok fn -> Ok (fn (thunk {}))
                                 Err err -> Err err
 
-                    # Default parser2 defaultVal ->
                     WithConfig parser2 config2 ->
                         parser2
                         |> andMap (@Parser mapper)
@@ -164,10 +159,6 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    # Default parser2 defaultVal ->
-                    #     parser2
-                    #     |> andMap (@Parser mapper)
-                    #     |> Default (fn defaultVal)
                     Arg config run ->
                         Arg config \args ->
                             run args
@@ -190,10 +181,6 @@ parse = \@Parser parser, args ->
                 Err NotFound -> Err (MissingRequiredArg long)
                 Err WrongType -> Err (WrongType { arg: long, expected: type })
 
-        # Default parser2 defaultVal ->
-        #     parse parser2 args
-        #     |> Result.withDefault defaultVal
-        #     |> Ok
         Lazy thunk -> Ok (thunk {})
         WithConfig parser2 _config ->
             parse parser2 args
