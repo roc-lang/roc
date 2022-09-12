@@ -324,7 +324,13 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             Where(annot, has_clauses) => {
                 annot.format_with_options(buf, parens, newlines, indent);
-                buf.spaces(1);
+
+                // Always put the `|` on the next line, indented.
+                let indent = indent + INDENT;
+
+                buf.newline();
+                buf.indent(indent);
+
                 for (i, has) in has_clauses.iter().enumerate() {
                     buf.push(if i == 0 { '|' } else { ',' });
                     buf.spaces(1);
