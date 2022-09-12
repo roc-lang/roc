@@ -197,6 +197,15 @@ parse = \@Parser parser, args ->
         WithConfig parser2 _config ->
             parse parser2 args
 
+## Like [parse], runs a parser to completion on a list of arguments.
+## If the parser fails, a formatted error and help message is returned.
+parseFormatted : Parser a, List Str -> Result a Str
+parseFormatted = \parser, args ->
+    when parse parser args is
+        Ok a -> Ok a
+        Err e ->
+            Str.concat (Str.concat (formatHelp parser) "\n\n") (formatError e)
+
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
 bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
