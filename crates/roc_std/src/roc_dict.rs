@@ -65,7 +65,7 @@ impl<'a, K, V> IntoIterator for &'a RocDict<K, V> {
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
             index: 0,
-            items: &self,
+            items: self,
         }
     }
 }
