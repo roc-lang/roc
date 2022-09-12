@@ -43,6 +43,9 @@ section.history {
   margin: 16px 0;
   padding: 8px;
 }
+#loading-message {
+  margin: 40% 10%;
+}
 .history-item {
   margin-bottom: 24px;
 }
