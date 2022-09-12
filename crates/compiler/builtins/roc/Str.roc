@@ -34,6 +34,7 @@ interface Str
         toI8,
         toScalars,
         replaceFirst,
+        replaceLast,
         splitFirst,
         splitLast,
         walkUtf8WithIndex,
@@ -284,6 +285,17 @@ substringUnsafe : Str, Nat, Nat -> Str
 replaceFirst : Str, Str, Str -> Result Str [NotFound]*
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
+        Ok { before, after } ->
+            "\(before)\(flower)\(after)"
+        err -> err
+
+## Returns the string with the last occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
+replaceLast : Str, Str, Str -> Result Str [NotFound]*
+replaceLast = \haystack, needle, flower ->
+    when splitLast haystack needle is
         Ok { before, after } ->
             "\(before)\(flower)\(after)"
         err -> err
