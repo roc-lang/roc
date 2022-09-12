@@ -707,7 +707,7 @@ mod cli_run {
                     all_benchmarks.insert(benchmark.filename, benchmark);
                 )*
 
-                check_for_benchmarks("../../examples/benchmarks", &mut all_benchmarks);
+                check_for_benchmarks("../../crates/cli_testing_examples/benchmarks", &mut all_benchmarks);
             }
         }
     }
