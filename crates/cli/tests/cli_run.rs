@@ -471,7 +471,7 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        effects:"interactive" => Example {
+        effects:"cli" => Example {
             filename: "effects.roc",
             executable_filename: "effects",
             stdin: &["hi there!"],
@@ -487,7 +487,7 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"interactive" => Example {
+        cli:"cli" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
@@ -495,7 +495,7 @@ mod cli_run {
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: false,
         },
-        tui:"interactive" => Example {
+        tui:"cli" => Example {
             filename: "tui.roc",
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
