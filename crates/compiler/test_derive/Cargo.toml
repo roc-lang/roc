@@ -28,5 +28,5 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 lazy_static = "1.4.0"
 indoc = "1.0.7"
 ven_pretty = { path = "../../vendor/pretty" }
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 insta = "1.19.0"
