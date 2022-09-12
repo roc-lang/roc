@@ -1,0 +1,45 @@
+.main {
+  display: flex;
+  max-width: 900px;
+  margin: 0 auto;
+  color: #222;
+}
+.navbar {
+  padding: 32px;
+  font-family: Verdana, Geneva, Tahoma, sans-serif;
+}
+.navbar ul {
+  margin: 0;
+  padding: 0;
+}
+.nav-link {
+  list-style: none;
+  margin: 8px;
+  padding: 8px 16px;
+  background-color: lightgray;
+  font-size: large;
+}
+.nav-link--current {
+  background-color: lightblue;
+}
+
+.article {
+  font-family: "Times New Roman", Times, serif;
+}
+.article h1, h2 {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #444;
+}
+.article blockquote {
+  margin: 8px 0;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background-color: #eee;
+  font-style: italic;
+  color: #444;
+}
+.article pre {
+  background-color: #222;
+  color: yellow;
+  padding: 16px;
+}
