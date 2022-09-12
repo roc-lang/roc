@@ -1,4 +1,4 @@
-app "echo"
+app "file"
     packages { pf: "cli-platform/main.roc" }
     imports [pf.Stdout, pf.Stderr, pf.Task, pf.File, pf.Path]
     provides [main] to pf
