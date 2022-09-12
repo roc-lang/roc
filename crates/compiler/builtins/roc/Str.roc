@@ -33,6 +33,7 @@ interface Str
         toU8,
         toI8,
         toScalars,
+        replaceFirst,
         splitFirst,
         splitLast,
         walkUtf8WithIndex,
@@ -275,6 +276,17 @@ countUtf8Bytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string with the first occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
+replaceFirst : Str, Str, Str -> Result Str [NotFound]*
+replaceFirst = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            "\(before)\(flower)\(after)"
+        err -> err
 
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
