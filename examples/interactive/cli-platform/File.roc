@@ -24,10 +24,10 @@ WriteErr : InternalFile.WriteErr
 ## This opens the file first and closes it after writing to it.
 ##
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
-write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr]* [Write [File]*]*
-    | val has Encode.Encoding, fmt has Encode.EncoderFormatting
+write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr]* [Write [File]*]* | val has Encode.Encoding, fmt has Encode.EncoderFormatting
 write = \path, val, fmt ->
     bytes = Encode.toBytes val fmt
+
     # TODO handle encoding errors here, once they exist
     writeBytes path bytes
 
@@ -88,9 +88,9 @@ readBytes = \path ->
 readUtf8 :
     Path
     -> Task
-        Str
-        [FileReadErr Path ReadErr, FileReadUtf8Err Path _]*
-        [Read [File]*]*
+    Str
+    [FileReadErr Path ReadErr, FileReadUtf8Err Path _]*
+    [Read [File]*]*
 readUtf8 = \path ->
     effect = Effect.map (Effect.fileReadBytes (InternalPath.toBytes path)) \result ->
         when result is
@@ -117,7 +117,5 @@ readUtf8 = \path ->
 #                 when Decode.fromBytes bytes fmt is
 #                     Ok val -> Ok val
 #                     Err decodingErr -> Err (FileReadDecodeErr decodingErr)
-
 #             Err readErr -> Err (FileReadErr readErr)
-
 #     InternalTask.fromEffect effect
