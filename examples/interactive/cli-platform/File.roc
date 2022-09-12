@@ -85,10 +85,7 @@ delete = \path ->
 ## To read and decode data from a file, you can use `File.read` instead.
 readBytes : Path -> Task (List U8) [FileReadErr Path ReadErr]* [Read [File]*]*
 readBytes = \path ->
-    InternalPath.toBytes path
-    |> Effect.fileReadBytes
-    |> InternalTask.fromEffect
-    |> Task.mapFail \err -> FileReadErr path err
+    toReadTask path \bytes -> Effect.fileReadBytes bytes
 
 ## Read a [Str] from a file containing [UTF-8](https://en.wikipedia.org/wiki/UTF-8)-encoded text.
 ##
@@ -140,3 +137,10 @@ toWriteTask = \path, toEffect ->
     |> toEffect
     |> InternalTask.fromEffect
     |> Task.mapFail \err -> FileWriteErr path err
+
+toReadTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileReadErr Path err]* [Read [File]*]*
+toReadTask = \path, toEffect ->
+    InternalPath.toBytes path
+    |> toEffect
+    |> InternalTask.fromEffect
+    |> Task.mapFail \err -> FileReadErr path err
