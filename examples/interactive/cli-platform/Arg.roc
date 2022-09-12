@@ -4,12 +4,11 @@ interface Arg
 
         parse,
         toHelp,
+        parseFormatted,
 
         succeed,
         bool,
         str,
-
-        apply,
     ]
     imports []
 
@@ -197,15 +196,6 @@ parse = \@Parser parser, args ->
         WithConfig parser2 _config ->
             parse parser2 args
 
-## Like [parse], runs a parser to completion on a list of arguments.
-## If the parser fails, a formatted error and help message is returned.
-parseFormatted : Parser a, List Str -> Result a Str
-parseFormatted = \parser, args ->
-    when parse parser args is
-        Ok a -> Ok a
-        Err e ->
-            Str.concat (Str.concat (formatHelp parser) "\n\n") (formatError e)
-
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
 bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
@@ -225,6 +215,50 @@ str = \{ long, short ? NotProvided, help ? NotProvided } ->
             Ok foundArg -> Ok foundArg
 
     @Parser (Arg { long, short, help, type: Str } fn)
+
+## Like [parse], runs a parser to completion on a list of arguments.
+## If the parser fails, a formatted error and help message is returned.
+parseFormatted : Parser a, List Str -> Result a Str
+parseFormatted = \parser, args ->
+    Result.mapErr
+        (parse parser args)
+        \e ->
+            Str.concat (Str.concat (formatHelp parser) "\n\n") (formatError e)
+
+formatHelp : Parser a -> Str
+formatHelp = \parser ->
+    Str.joinWith (List.map (toHelp parser).configs formatConfig) "\n"
+
+formatConfig : Config -> Str
+formatConfig = \{long, short, help, type} ->
+    formattedShort =
+        when short is
+            NotProvided -> ""
+            Some s -> ", -\(s)"
+
+    formattedType = formatType type
+
+    formattedHelp =
+        when help is
+            NotProvided -> ""
+            Some h -> "    \(h)"
+
+    "--\(long)\(formattedShort)\(formattedHelp)  (\(formattedType))"
+
+formatType : Type -> Str
+formatType = \type ->
+    when type is
+        Bool -> "bool"
+        Str -> "string"
+
+formatError : ParseError [] -> Str
+formatError = \err ->
+    when err is
+        MissingRequiredArg arg ->
+            "Argument `--\(arg)` is required but was not provided!"
+        WrongType { arg, expected } ->
+            formattedType = formatType expected
+            "The argument `--\(arg)` expects a value of type \(formattedType)!"
 
 apply = \arg1, arg2 -> andMap arg2 arg1
 
@@ -331,3 +365,40 @@ expect
             { long: "bool", short: NotProvided, help: NotProvided, type: Bool },
         ],
     }
+
+# format argument is missing
+expect
+    parser = bool { long: "foo" }
+
+    when parse parser ["foo"] is
+        Ok _ -> False
+        Err e ->
+            err = formatError e
+            err == "Argument `--foo` is required but was not provided!"
+
+# format argument has wrong type
+expect
+    parser = bool { long: "foo" }
+
+    when parse parser ["--foo", "12"] is
+        Ok _ -> False
+        Err e ->
+            err = formatError e
+            err == "The argument `--foo` expects a value of type bool!"
+
+# format help menu
+expect
+    parser =
+        succeed (\_foo -> \_bar -> \_baz -> \_bool -> "")
+        |> apply (str { long: "foo", help: Some "the foo flag" })
+        |> apply (str { long: "bar", short: Some "B" })
+        |> apply (str { long: "baz", short: Some "z", help: Some "the baz flag" })
+        |> apply (bool { long: "bool" })
+
+    formatHelp parser ==
+        """
+        --foo    the foo flag  (string)
+        --bar, -B  (string)
+        --baz, -z    the baz flag  (string)
+        --bool  (bool)
+        """
