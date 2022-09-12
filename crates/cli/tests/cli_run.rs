@@ -348,6 +348,7 @@ mod cli_run {
                     all_examples.insert($name, $example);
                 )*
 
+                check_for_tests("../cli_testing_examples", &mut all_examples);
                 check_for_tests("../../examples", &mut all_examples);
             }
         }
