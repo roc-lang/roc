@@ -33,6 +33,7 @@ interface Str
         toU8,
         toI8,
         toScalars,
+        replaceEach,
         replaceFirst,
         replaceLast,
         splitFirst,
@@ -277,6 +278,19 @@ countUtf8Bytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string with each occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
+replaceEach : Str, Str, Str -> Result Str [NotFound]*
+replaceEach = \haystack, needle, flower ->
+    when replaceFirst haystack needle flower is
+        Ok progress ->
+            when replaceEach progress needle flower is
+                Ok finished -> finished
+                Err -> progress
+        err -> err
 
 ## Returns the string with the first occurrence of a substring replaced with a replacement.
 ## If the substring is not found, returns `Err NotFound`.
