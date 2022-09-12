@@ -218,6 +218,16 @@ pub extern "C" fn roc_fx_fileReadBytes(path: &RocList<u8>) -> RocResult<RocList<
 }
 
 #[no_mangle]
+pub extern "C" fn roc_fx_fileDelete(roc_path: &RocList<u8>) -> RocResult<(), ReadErr> {
+    match std::fs::remove_file(path_from_roc_path(roc_path)) {
+        Ok(()) => RocResult::ok(()),
+        Err(_) => {
+            todo!("Report a file write error");
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
     let mut builder = reqwest::blocking::ClientBuilder::new();
 
