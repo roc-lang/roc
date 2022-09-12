@@ -545,7 +545,7 @@ impl<'a> Formattable for Tag<'a> {
 
 impl<'a> Formattable for HasClause<'a> {
     fn is_multiline(&self) -> bool {
-        self.var.value.is_multiline() || self.ability.is_multiline()
+        self.ability.is_multiline()
     }
 
     fn format_with_options<'buf>(
