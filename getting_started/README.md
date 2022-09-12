@@ -6,7 +6,7 @@ play around with as long as you have a high tolerance for missing features and c
 
 The [tutorial](../TUTORIAL.md) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages. (If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/roc-lang/roc/blob/main/roc-for-elm-programmers.md) may be of interest.)
 
-There's also a folder of [examples](https://github.com/roc-lang/roc/tree/main/examples) - the [CLI form example](https://github.com/roc-lang/roc/tree/main/examples/interactive/form.roc) in particular is a reasonable starting point to build on.
+There's also a folder of [examples](https://github.com/roc-lang/roc/tree/main/examples) - the [CLI form example](https://github.com/roc-lang/roc/tree/main/examples/cli/form.roc) in particular is a reasonable starting point to build on.
 
 If you have a specific question, the [FAQ](../FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
@@ -27,10 +27,10 @@ cd examples
 roc run helloWorld.roc
 ```
 
-Some examples like `examples/benchmarks/NQueens.roc` require input after running.
+Some examples like `crates/cli_testing_examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.
 
-[examples/benchmarks](examples/benchmarks) contains larger examples.
+[crates/cli_testing_examples/benchmarks](crates/cli_testing_examples/benchmarks) contains larger examples.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 

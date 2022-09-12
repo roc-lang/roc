@@ -44,9 +44,9 @@ you need to install one or more of these platform language compilers, too.
 
     ```sh
     # Note: If you installed Rust in this terminal session, you'll need to open a new one first!
-    ./roc examples/platform-switching/rocLovesRust.roc
+    ./roc crates/cli_testing_examples/platform-switching/rocLovesRust.roc
 
-    ./roc examples/platform-switching/rocLovesZig.roc
+    ./roc crates/cli_testing_examples/platform-switching/rocLovesZig.roc
 
-    ./roc examples/platform-switching/rocLovesC.roc
+    ./roc crates/cli_testing_examples/platform-switching/rocLovesC.roc
     ```

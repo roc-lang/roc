@@ -57,9 +57,10 @@ members = [
     "crates/wasi-libc-sys",
 ]
 exclude = [
-    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-    "examples",
     "ci/bench-runner",
+    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
+    "crates/cli_testing_examples",
+    "examples",
     # Ignore building these normally. They are only imported by tests.
     # The tests will still correctly build them.
     "crates/cli_utils",
