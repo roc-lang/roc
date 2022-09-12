@@ -406,6 +406,7 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         if !prebuilt {
+            // printing to stderr because we want stdout to be clean for rbt
             eprintln!("🔨 Rebuilding platform...");
         }
 
