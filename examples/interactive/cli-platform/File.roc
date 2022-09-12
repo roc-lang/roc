@@ -1,6 +1,6 @@
 interface File
-    exposes [ReadErr, WriteErr, write, writeUtf8, writeBytes, readUtf8, readBytes]
-    imports [Effect, Task.{ Task }, InternalTask, InternalFile, Path.{ Path }, InternalPath]
+    exposes [ReadErr, WriteErr, write, writeUtf8, writeBytes, readUtf8, readBytes, delete]
+    imports [Task.{ Task }, InternalTask, InternalFile, Path.{ Path }, InternalPath, Effect.{ Effect }]
 
 ReadErr : InternalFile.ReadErr
 
@@ -41,10 +41,7 @@ write = \path, val, fmt ->
 ## To format data before writing it to a file, you can use [File.write] instead.
 writeBytes : Path, List U8 -> Task {} [FileWriteErr Path WriteErr]* [Write [File]*]*
 writeBytes = \path, bytes ->
-    InternalPath.toBytes path
-    |> Effect.fileWriteBytes bytes
-    |> InternalTask.fromEffect
-    |> Task.mapFail \err -> FileWriteErr path err
+    toWriteTask path \pathBytes -> Effect.fileWriteBytes pathBytes bytes
 
 ## Write a [Str] to a file, encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8).
 ##
@@ -56,10 +53,27 @@ writeBytes = \path, bytes ->
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
 writeUtf8 : Path, Str -> Task {} [FileWriteErr Path WriteErr]* [Write [File]*]*
 writeUtf8 = \path, str ->
-    InternalPath.toBytes path
-    |> Effect.fileWriteUtf8 str
-    |> InternalTask.fromEffect
-    |> Task.mapFail \err -> FileWriteErr path err
+    toWriteTask path \bytes -> Effect.fileWriteUtf8 bytes str
+
+## Delete a file from the filesystem.
+##
+##     # Deletes the file named
+##     File.delete (Path.fromStr "myfile.dat") [1, 2, 3]
+##
+## Note that this does not securely erase the file's contents from disk; instead, the operating
+## system marks the space it was occupying as safe to write over in the future. Also, the operating
+## system may not immediately mark the space as free; for example, on Windows it will wait until
+## the last file handle to it is closed, and on UNIX, it will not remove it until the last
+## [hard link](https://en.wikipedia.org/wiki/Hard_link) to it has been deleted.
+##
+## This performs a [`DeleteFile`](https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-deletefile)
+## on Windows and [`unlink`](https://en.wikipedia.org/wiki/Unlink_(Unix)) on UNIX systems.
+##
+## On Windows, this will fail when attempting to delete a readonly file; the file's
+## readonly permission must be disabled before it can be successfully deleted.
+delete : Path -> Task {} [FileWriteErr Path WriteErr]* [Write [File]*]*
+delete = \path ->
+    toWriteTask path \bytes -> Effect.fileDelete bytes
 
 ## Read all the bytes in a file.
 ##
@@ -119,3 +133,10 @@ readUtf8 = \path ->
 #                     Err decodingErr -> Err (FileReadDecodeErr decodingErr)
 #             Err readErr -> Err (FileReadErr readErr)
 #     InternalTask.fromEffect effect
+
+toWriteTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileWriteErr Path err]* [Write [File]*]*
+toWriteTask = \path, toEffect ->
+    InternalPath.toBytes path
+    |> toEffect
+    |> InternalTask.fromEffect
+    |> Task.mapFail \err -> FileWriteErr path err
