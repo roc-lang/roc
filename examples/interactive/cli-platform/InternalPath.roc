@@ -4,6 +4,7 @@ interface InternalPath
         InternalPath,
         wrap,
         unwrap,
+        toBytes,
     ]
     imports []
 
@@ -50,3 +51,13 @@ wrap = @InternalPath
 
 unwrap : InternalPath -> UnwrappedPath
 unwrap = \@InternalPath raw -> raw
+
+## TODO do this in the host, and iterate over the Str
+## bytes when possible instead of always converting to
+## a heap-allocated List.
+toBytes : InternalPath -> List U8
+toBytes = \@InternalPath path ->
+    when path is
+        FromOperatingSystem bytes -> bytes
+        ArbitraryBytes bytes -> bytes
+        FromStr str -> Str.toUtf8 str
