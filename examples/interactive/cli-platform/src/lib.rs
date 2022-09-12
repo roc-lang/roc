@@ -20,7 +20,7 @@ use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8);
+    fn roc_main(args: RocList<RocStr>, output: *mut u8);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -85,10 +85,20 @@ pub extern "C" fn rust_main() -> i32 {
     let layout = Layout::array::<u8>(size).unwrap();
 
     unsafe {
+        use std::borrow::Borrow;
+
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer);
+        let args: RocList<RocStr> = std::env::args_os()
+            .map(|os_string| RocStr::from(os_string.to_string_lossy().borrow()))
+            .collect::<Vec<_>>()
+            .as_slice()
+            .into();
+
+        dbg!(&args);
+
+        roc_main(args, buffer);
 
         let result = call_the_closure(buffer);
 
