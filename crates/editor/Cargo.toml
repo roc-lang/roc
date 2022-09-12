@@ -48,7 +48,7 @@ cgmath = "0.18.0"
 snafu = { version = "0.7.1", features = ["backtraces"] }
 colored = "2.0.0"
 pest = "2.3.1"
-pest_derive = "2.1.0"
+pest_derive = "2.3.1"
 copypasta = "0.8.1"
 palette = "0.6.1"
 confy = { git = 'https://github.com/rust-cli/confy', features = [
