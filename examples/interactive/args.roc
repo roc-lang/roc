@@ -7,12 +7,10 @@ main : List Str -> Task.Task {} [] [Write [Stdout]]
 main = \args ->
     parser =
         Arg.succeed (\mode -> mode)
-        |> Arg.apply (Arg.str { long: "mode", help: Some "the foo flag" })
+        |> Arg.apply (Arg.str { long: "mode", help: Some "the mode flag" })
 
-    when Arg.parse parser args is
+    when Arg.parseFormatted parser args is
         Ok mode ->
             Stdout.line "You chose mode \(mode)"
-        Err (MissingRequiredArg arg) ->
-            Stdout.line """The arg "\(arg)" was not provided!"""
-        Err (WrongType { arg, expected: _ }) ->
-            Stdout.line """The arg "\(arg)" must have a type"""
+        Err helpMenu ->
+            Stdout.line helpMenu
