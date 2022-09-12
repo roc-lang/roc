@@ -35,7 +35,7 @@ test_gen = { path = "../compiler/test_gen" }
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
 tempfile = "3.2.0"
 indoc = "1.0.7"
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 strip-ansi-escapes = "0.1.1"
 
 

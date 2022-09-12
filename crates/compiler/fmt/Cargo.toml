@@ -13,7 +13,7 @@ roc_parse = { path = "../parse" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [dev-dependencies]
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 indoc = "1.0.7"
 roc_test_utils = { path = "../../test_utils" }
 walkdir = "2.3.2"
