@@ -9,6 +9,7 @@ use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
 use roc_std::{RocList, RocResult, RocStr};
+use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::os::raw::c_char;
@@ -85,7 +86,9 @@ pub extern "C" fn rust_main() -> i32 {
     let layout = Layout::array::<u8>(size).unwrap();
 
     // TODO: can we be more efficient about reusing the String's memory for RocStr?
-    let args: RocList<RocStr> = std::env::args().map(|s| RocStr::from(s.as_str())).collect();
+    let args: RocList<RocStr> = std::env::args_os()
+        .map(|s| RocStr::from(s.to_string_lossy().borrow()))
+        .collect();
 
     unsafe {
         // TODO allocate on the stack if it's under a certain size
