@@ -210,11 +210,22 @@ pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_fileReadBytes(path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
-    let path = path_from_roc_path(path);
-    println!("TODO read bytes from {:?}", path);
+pub extern "C" fn roc_fx_fileReadBytes(roc_path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
+    use std::io::Read;
 
-    RocResult::ok(RocList::empty())
+    let mut bytes = Vec::new();
+
+    match File::open(path_from_roc_path(roc_path)) {
+        Ok(mut file) => match file.read_to_end(&mut bytes) {
+            Ok(_bytes_read) => RocResult::ok(RocList::from(bytes.as_slice())),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
 }
 
 #[no_mangle]
