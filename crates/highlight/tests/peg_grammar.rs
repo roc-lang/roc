@@ -881,7 +881,7 @@ test1 =
 
     #[test]
     fn test_cli_echo() {
-        let tokens = tokenize(&example_path("interactive/echo.roc"));
+        let tokens = tokenize(&example_path("cli/echo.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }

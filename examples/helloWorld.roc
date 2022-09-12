@@ -1,5 +1,5 @@
 app "helloWorld"
-    packages { pf: "interactive/cli-platform/main.roc" }
+    packages { pf: "cli/cli-platform/main.roc" }
     imports [pf.Stdout]
     provides [main] to pf
 
