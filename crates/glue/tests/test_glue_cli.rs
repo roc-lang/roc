@@ -124,6 +124,9 @@ mod glue_cli_run {
         list_recursive_union:"list-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool("test") }), inputFiles: ["foo"], job: [] }) }
         "#),
+        multiple_modules:"multiple-modules" => indoc!(r#"
+            combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
+        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {

@@ -65,24 +65,45 @@ impl Types {
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
+        self.is_equivalent_help(RocTypeOrPending::Type(a), RocTypeOrPending::Type(b))
+    }
+
+    fn is_equivalent_help(&self, a: RocTypeOrPending, b: RocTypeOrPending) -> bool {
         use RocType::*;
+
+        let (a, b) = match (a, b) {
+            (RocTypeOrPending::Type(a), RocTypeOrPending::Type(b)) => (a, b),
+            (RocTypeOrPending::Pending, RocTypeOrPending::Pending) => return true,
+            _ => return false,
+        };
 
         match (a, b) {
             (RocStr, RocStr) | (Bool, Bool) | (EmptyTagUnion, EmptyTagUnion) | (Unit, Unit) => true,
             (RocResult(ok_a, err_a), RocResult(ok_b, err_b)) => {
-                self.is_equivalent(self.get_type(*ok_a), self.get_type(*ok_b))
-                    && self.is_equivalent(self.get_type(*err_a), self.get_type(*err_b))
+                self.is_equivalent_help(
+                    self.get_type_or_pending(*ok_a),
+                    self.get_type_or_pending(*ok_b),
+                ) && self.is_equivalent_help(
+                    self.get_type_or_pending(*err_a),
+                    self.get_type_or_pending(*err_b),
+                )
             }
             (Num(num_a), Num(num_b)) => num_a == num_b,
             (RocList(elem_a), RocList(elem_b))
             | (RocSet(elem_a), RocSet(elem_b))
             | (RocBox(elem_a), RocBox(elem_b))
-            | (RecursivePointer(elem_a), RecursivePointer(elem_b)) => {
-                self.is_equivalent(self.get_type(*elem_a), self.get_type(*elem_b))
-            }
+            | (RecursivePointer(elem_a), RecursivePointer(elem_b)) => self.is_equivalent_help(
+                self.get_type_or_pending(*elem_a),
+                self.get_type_or_pending(*elem_b),
+            ),
             (RocDict(key_a, val_a), RocDict(key_b, val_b)) => {
-                self.is_equivalent(self.get_type(*key_a), self.get_type(*key_b))
-                    && self.is_equivalent(self.get_type(*val_a), self.get_type(*val_b))
+                self.is_equivalent_help(
+                    self.get_type_or_pending(*key_a),
+                    self.get_type_or_pending(*key_b),
+                ) && self.is_equivalent_help(
+                    self.get_type_or_pending(*val_a),
+                    self.get_type_or_pending(*val_b),
+                )
             }
             (TagUnion(union_a), TagUnion(union_b)) => {
                 use RocTagUnion::*;
@@ -113,8 +134,10 @@ impl Types {
                         },
                     ) => {
                         tag_name_a == tag_name_b
-                            && self
-                                .is_equivalent(self.get_type(*payload_a), self.get_type(*payload_b))
+                            && self.is_equivalent_help(
+                                self.get_type_or_pending(*payload_a),
+                                self.get_type_or_pending(*payload_b),
+                            )
                     }
                     (Enumeration { tags: tags_a, .. }, Enumeration { tags: tags_b, .. }) => {
                         tags_a == tags_b
@@ -157,9 +180,9 @@ impl Types {
                                 |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                     name_a == name_b
                                         && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
-                                                self.get_type(*id_a),
-                                                self.get_type(*id_b),
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
                                             ),
                                             (None, None) => true,
                                             (None, Some(_)) | (Some(_), None) => false,
@@ -179,9 +202,9 @@ impl Types {
                                 |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                     name_a == name_b
                                         && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
-                                                self.get_type(*id_a),
-                                                self.get_type(*id_b),
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
                                             ),
                                             (None, None) => true,
                                             (None, Some(_)) | (Some(_), None) => false,
@@ -241,7 +264,10 @@ impl Types {
                         .zip(fields_b.iter())
                         .all(|((name_a, id_a), (name_b, id_b))| {
                             name_a == name_b
-                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                                && self.is_equivalent_help(
+                                    self.get_type_or_pending(*id_a),
+                                    self.get_type_or_pending(*id_b),
+                                )
                         })
                 } else {
                     false
@@ -261,7 +287,10 @@ impl Types {
                         .zip(fields_b.iter())
                         .all(|((name_a, id_a), (name_b, id_b))| {
                             name_a == name_b
-                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                                && self.is_equivalent_help(
+                                    self.get_type_or_pending(*id_a),
+                                    self.get_type_or_pending(*id_b),
+                                )
                         })
                 } else {
                     false
@@ -283,10 +312,16 @@ impl Types {
                 // with the same type could have completely different implementations!
                 if name_a == name_b
                     && args_a.len() == args_b.len()
-                    && self.is_equivalent(self.get_type(*ret_a), self.get_type(*ret_b))
+                    && self.is_equivalent_help(
+                        self.get_type_or_pending(*ret_a),
+                        self.get_type_or_pending(*ret_b),
+                    )
                 {
                     args_a.iter().zip(args_b.iter()).all(|(id_a, id_b)| {
-                        self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                        self.is_equivalent_help(
+                            self.get_type_or_pending(*id_a),
+                            self.get_type_or_pending(*id_b),
+                        )
                     })
                 } else {
                     false
@@ -359,6 +394,12 @@ impl Types {
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
+        for (id, existing_type) in self.types.iter().enumerate() {
+            if self.is_equivalent(&typ, existing_type) {
+                return TypeId(id);
+            }
+        }
+
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
@@ -379,7 +420,15 @@ impl Types {
     pub fn get_type(&self, id: TypeId) -> &RocType {
         match self.types.get(id.0) {
             Some(typ) => typ,
-            None => unreachable!(),
+            None => unreachable!("{:?}", id),
+        }
+    }
+
+    fn get_type_or_pending(&self, id: TypeId) -> RocTypeOrPending {
+        match self.types.get(id.0) {
+            Some(typ) => RocTypeOrPending::Type(typ),
+            None if id == TypeId::PENDING => RocTypeOrPending::Pending,
+            None => unreachable!("{:?}", id),
         }
     }
 
@@ -440,6 +489,12 @@ impl Types {
             } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
         }
     }
+}
+
+enum RocTypeOrPending<'a> {
+    Type(&'a RocType),
+    /// A pending recursive pointer
+    Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -653,6 +708,8 @@ impl<'a> Env<'a> {
     }
 
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
+
         let layout = self
             .layout_cache
             .from_var(self.arena, var, self.subs)
