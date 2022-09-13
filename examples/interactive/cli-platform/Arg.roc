@@ -332,7 +332,7 @@ parseHelp = \@Parser parser, args ->
 
 ## Creates a parser for a boolean flag argument.
 ## Flags of value "true" and "false" will be parsed as [True] and [False], respectively.
-## All other values will result in a [WrongType].
+## All other values will result in a `WrongType` error.
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
 bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
