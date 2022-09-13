@@ -6,7 +6,7 @@ app "args"
 main : List Str -> Task.Task {} [] [Write [Stdout]]
 main = \args ->
     parser =
-        Arg.choice [
+        exclaimCmd =
             Arg.succeed (\s -> Exclaim s)
             |> Arg.withParser
                 (
@@ -16,7 +16,9 @@ main = \args ->
                         help: Some "the string to exclaim",
                     }
                 )
-            |> Arg.subCommand "exclaim",
+            |> Arg.subCommand "exclaim"
+
+        greetCmd =
             Arg.succeed (\name -> \greeting -> Greet { name, greeting })
             |> Arg.withParser
                 (
@@ -33,8 +35,9 @@ main = \args ->
                         help: Some "the greeting to use",
                     }
                 )
-            |> Arg.subCommand "greet",
-        ]
+            |> Arg.subCommand "greet"
+
+        Arg.choice [exclaimCmd, greetCmd]
         |> Arg.program { name: "args-example", help: "An example of the CLI platform argument parser" }
 
     when Arg.parseFormatted parser args is
