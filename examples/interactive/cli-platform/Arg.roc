@@ -15,12 +15,19 @@ interface Arg
     ]
     imports []
 
+## A parser for a command-line application.
+## A [NamedParser] is usually built from a [Parser] using [program].
 NamedParser a := {
     name : Str,
     help : OptionStr,
     parser : Parser a,
 }
 
+## Describes how to parse a slice of command-line arguments.
+## [Parser]s can be composed in various ways, including via [withParser] and
+## [subCommand].
+## Once you have a [Parser] that describes your application's entire parsing
+## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
@@ -36,18 +43,24 @@ Parser a := [
     Lazy ({} -> a),
 ]
 
+## Enumerates errors that can occur during parsing a list of command line arguments.
 ParseError a : [
+    ## The program name was not found as the first argument to be parsed.
     ProgramNameNotProvided Str,
+    ## An argument is required, but it was not found.
     MissingRequiredArg Str,
+    ## An argument was found, but it didn't have the expected [Type].
     WrongType
         {
             arg : Str,
             expected : Type,
         },
+    ## A subcommand is required, but it was not found.
     SubCommandNotFound
         {
             choices : List Str,
         },
+    ## A subcommand was found, but it was not the expected one.
     IncorrectSubCommand
         {
             found : Str,
@@ -55,11 +68,14 @@ ParseError a : [
         },
 ]a
 
+## Expected type of an argument, in an argument list being parsed.
+## Describes how a string argument should be interpreted as a certain type.
 Type : [
     Str,
     Bool,
 ]
 
+## Help metadata extracted from a [Parser].
 Help : [
     SubCommands (List { name : Str, help : Help }),
     Config (List Config),
@@ -81,12 +97,19 @@ Config : {
 #     help ?OptionStr,
 # }
 
-succeed : a -> Parser a
-succeed = \val -> @Parser (Succeed val)
-
+## Generates help metadata from a [Parser].
+##
+## This is useful if you would like to use this metadata to generate your own
+## human-readable help or hint menus.
+##
+## A default help menu can be generated with [formatHelp].
 toHelp : Parser * -> Help
 toHelp = \parser ->
     toHelpHelper parser []
+
+## A parser that immediately succeeds with its given input.
+succeed : a -> Parser a
+succeed = \val -> @Parser (Succeed val)
 
 # TODO: check overflows when this annotation is included
 # toHelpHelper : Parser *, List Config -> Help
@@ -237,6 +260,12 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
+## Marks a [Parser] as the entry point for parsing a command-line application,
+## taking the program name and optionally a high-level help message for the
+## application.
+##
+## The produced [NamedParser] can be used to parse arguments via [parse] or
+## [parseFormatted].
 program = \parser, { name, help ? "" } ->
     optHelp =
         if
@@ -248,6 +277,12 @@ program = \parser, { name, help ? "" } ->
 
     @NamedParser { name, help: optHelp, parser }
 
+## Parses a list of command-line arguments with the given parser. The list of
+## arguments is expected to contain the name of the program in the first
+## position.
+##
+## If the arguments do not conform with what is expected by the parser, the
+## first error seen will be returned. 
 # TODO panics in alias analysis when this annotation is included
 # parse : NamedParser a, List Str -> Result a (ParseError*)
 parse = \@NamedParser parser, args ->
@@ -295,6 +330,9 @@ parseHelp = \@Parser parser, args ->
         WithConfig parser2 _config ->
             parseHelp parser2 args
 
+## Creates a parser for a boolean flag argument.
+## Flags of value "true" and "false" will be parsed as [True] and [False], respectively.
+## All other values will result in a [WrongType].
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
 bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
@@ -306,6 +344,7 @@ bool = \{ long, short ? NotProvided, help ? NotProvided } ->
 
     @Parser (Arg { long, short, help, type: Bool } fn)
 
+## Creates a parser for a string flag argument.
 str : _ -> Parser Str # TODO: panics if OptConfig annotated
 str = \{ long, short ? NotProvided, help ? NotProvided } ->
     fn = \args ->
@@ -315,13 +354,30 @@ str = \{ long, short ? NotProvided, help ? NotProvided } ->
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
+## Wraps a given parser as a subcommand parser.
+##
+## When parsing arguments, the subcommand name will be expected to be parsed
+## first, and then the wrapped parser will be applied to the rest of the
+## arguments.
+##
+## To support multiple subcommands, use [choice].
 subCommand : Parser a, Str -> { name : Str, parser : Parser a }
 subCommand = \parser, name -> { name, parser }
 
+## Creates a parser that matches over a list of subcommands.
+##
+## The given list of subcommands is expected to be non-empty, and unique in the
+## subcommand name. These invariants are not enforced today, but may be in the
+## future.
+##
+## During argument parsing, the list of subcommands will be tried in-order. Due
+## to the described invariant, at most one given subcommand will match any
+## argument list.
 choice : List { name : Str, parser : Parser a } -> Parser a
 choice = \subCommands -> @Parser (SubCommand subCommands)
 
 ## Like [parse], runs a parser to completion on a list of arguments.
+##
 ## If the parser fails, a formatted error and help message is returned.
 # TODO: mono panics in the args example if the type annotation is included
 # parseFormatted : NamedParser a, List Str -> Result a Str
@@ -442,6 +498,21 @@ formatError = \err ->
             \t\(fmtChoices)
             """
 
+## Applies one parser over another, mapping parser.
+##
+## `withParser mapper parser` produces a parser that will parse an argument list
+## with `parser` first, then parse the remaining list with `mapper`, and feed
+## the result of `parser` to `mapper`.
+##
+## This provides a way to chain the results of multiple parsers together. For
+## example, to combine the results of two [str] arguments into a record, you
+## could use
+##
+## ```
+## succeed (\host -> \port -> { host, port })
+## |> withParser (str { long: "host" })
+## |> withParser (str { long: "port" })
+## ```
 withParser = \arg1, arg2 -> andMap arg2 arg1
 
 # bool undashed long argument is missing
