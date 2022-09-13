@@ -17,7 +17,7 @@ which includes the Roc compiler and various helpful utilities.
 
     ```sh
     mkdir roc_nightly-darwin_apple_silicon-<VERSION>
-    tar xf roc_nightly-darwin_apple_silicon-<VERSION>
+    tar xf roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz --directory roc_nightly-darwin_apple_silicon-<VERSION>
     ```
 
 1. Install llvm 13:
