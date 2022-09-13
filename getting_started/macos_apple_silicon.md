@@ -16,7 +16,8 @@ which includes the Roc compiler and various helpful utilities.
 1. Untar the archive:
 
     ```sh
-    roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
+    mkdir roc_nightly-darwin_apple_silicon-<VERSION>
+    tar xf roc_nightly-darwin_apple_silicon-<VERSION>
     ```
 
 ## How to install Roc platform dependencies
