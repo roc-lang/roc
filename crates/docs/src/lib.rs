@@ -502,8 +502,6 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             for (index, tag) in tags.iter().enumerate() {
                 if is_multiline {
                     indent(buf, next_indent_level);
-                } else {
-                    buf.push(' ');
                 }
 
                 buf.push_str(tag.name.as_str());
@@ -524,8 +522,6 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 
             if is_multiline {
                 indent(buf, tag_union_indent);
-            } else {
-                buf.push(' ');
             }
 
             buf.push(']');
