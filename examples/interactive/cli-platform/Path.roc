@@ -83,13 +83,13 @@ fromBytes = \bytes ->
 ## have been encoded with the same charset as the operating system's curent locale (which
 ## typically does not change after it is set during installation of the OS), so
 ## this should convert a [Path] to a valid string as long as the path was created
-## with the given [Charset]. (Use [Env.charset] to get the current system charset.)
+## with the given `Charset`. (Use `Env.charset` to get the current system charset.)
 ##
 ## For a conversion to [Str] that is lossy but does not return a [Result], see
 ## [display].
 # toInner : Path -> [Str Str, Bytes (List U8)]
 ## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
-## and converts it to a string using [Str.display].
+## and converts it to a string using `Str.display`.
 ##
 ## This conversion is lossy because the path may contain invalid UTF-8 bytes. If that happens,
 ## any invalid bytes will be replaced with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
@@ -107,8 +107,8 @@ fromBytes = \bytes ->
 ## which means when [display] converts them to a string, the string may include gibberish.
 ## [Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
 ##
-## If you happen to know the [Charset] that was used to encode the path, you can use
-## [toStrUsingCharset] instead of [display].
+## If you happen to know the `Charset` that was used to encode the path, you can use
+## `toStrUsingCharset` instead of [display].
 display : Path -> Str
 display = \path ->
     when InternalPath.unwrap path is
