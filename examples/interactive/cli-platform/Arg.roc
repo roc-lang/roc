@@ -9,6 +9,8 @@ interface Arg
         succeed,
         bool,
         str,
+        subCommand,
+        choice,
 
         withParser,
     ]
