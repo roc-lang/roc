@@ -20,10 +20,11 @@ which includes the Roc compiler and various helpful utilities.
     tar xf roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz --directory roc_nightly-darwin_apple_silicon-<VERSION>
     ```
 
-1. Install llvm 13:
+1. Install llvm 13 and manually symlink the package (note that you'll want to remove this symlink before adding the llvm package, if you need that for another project):
 
     ```sh
     brew install llvm@13
+    ln -s /opt/homebrew/Cellar/llvm@13/13.0.1_1/ /opt/homebrew/opt/llvm
     ```
 
 ## How to install Roc platform dependencies
