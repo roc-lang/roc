@@ -228,7 +228,7 @@ andMap = \@Parser parser, @Parser mapper ->
 
 NamedParser a : {name: Str, parser: Parser a}
 
-named = \name, parser -> {name, parser}
+named = \parser, name -> {name, parser}
 
 # TODO panics in alias analysis when this annotation is included
 #parse : NamedParser a, List Str -> Result a (ParseError*)
@@ -473,7 +473,7 @@ expect
         ["test", "--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parse (named "test" parser) args == Ok "foo: true bar: baz"
+    List.all cases \args -> parse (named parser "test") args == Ok "foo: true bar: baz"
 
 # string and bool parsers build help
 expect
@@ -570,7 +570,7 @@ expect
                  |> withParser (str { long: "url" })),
         ]
 
-    when parse (named "test" parser) ["test", "login", "--pw", "123", "--user", "abc"] is
+    when parse (named parser "test") ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
@@ -589,7 +589,7 @@ expect
                 ])
         ]
 
-    when parse (named "test" parser) ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
+    when parse (named parser "test") ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
