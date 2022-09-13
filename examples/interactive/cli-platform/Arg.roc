@@ -33,7 +33,14 @@ ParseError a : [
     WrongType {
         arg: Str,
         expected: Type,
-    }
+    },
+    SubCommandNotFound {
+        choices: List Str,
+    },
+    IncorrectSubCommand {
+        found: Str,
+        choices: List Str,
+    },
 ]a
 
 Type : [
@@ -226,7 +233,7 @@ parse = \@Parser parser, args ->
                 Err NotFound -> Err (MissingRequiredArg long)
                 Err WrongType -> Err (WrongType { arg: long, expected: type })
         SubCommand cmds ->
-            when List.get args 1 is
+            when List.get args 0 is
                 Ok cmd ->
                     argsRest = (List.split args 1).others
                     state =
@@ -239,9 +246,8 @@ parse = \@Parser parser, args ->
                                 else Continue st
                     when state is
                         Ok result -> result
-                        # TODO fixme
-                        Err {} -> Err (MissingRequiredArg "foo")
-                Err OutOfBounds -> Err (MissingRequiredArg "foo")
+                        Err {} -> Err (IncorrectSubCommand {found: cmd, choices: List.map cmds .name})
+                Err OutOfBounds -> Err (SubCommandNotFound {choices: List.map cmds .name})
 
         Lazy thunk -> Ok (thunk {})
         WithConfig parser2 _config ->
@@ -330,6 +336,8 @@ formatType = \type ->
         Bool -> "bool"
         Str -> "string"
 
+quote = \s -> "\"\(s)\""
+
 formatError : ParseError [] -> Str
 formatError = \err ->
     when err is
@@ -338,6 +346,28 @@ formatError = \err ->
         WrongType { arg, expected } ->
             formattedType = formatType expected
             "The argument `--\(arg)` expects a value of type \(formattedType)!"
+        SubCommandNotFound { choices } ->
+            fmtChoices =
+                (List.map choices quote)
+                |> Str.joinWith ", "
+
+            """
+            A subcommand was expected, but not found!
+            The available subcommands are:
+            \t\(fmtChoices)
+            """
+        IncorrectSubCommand { found, choices } ->
+            fmtFound = quote found
+
+            fmtChoices =
+                (List.map choices quote)
+                |> Str.joinWith ", "
+
+            """
+            The \(fmtFound) subcommand was found, but it's not expected in this context! 
+            The available subcommands are:
+            \t\(fmtChoices)
+            """
 
 apply = \arg1, arg2 -> andMap arg2 arg1
 
@@ -506,3 +536,74 @@ expect
             --file  (string)
             --url  (string)
         """
+
+# subcommand parser
+expect
+    parser =
+        choice [
+            subCommand
+                "login"
+                (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
+                 |> apply (str { long: "user" })
+                 |> apply (str { long: "pw" })),
+            subCommand
+                "publish"
+                (succeed (\file -> \url -> "\(file)\(url)")
+                 |> apply (str { long: "file" })
+                 |> apply (str { long: "url" })),
+        ]
+
+    when parse parser ["login", "--pw", "123", "--user", "abc"] is
+        Ok result -> result == "logging in abc with 123"
+        Err _ -> False
+
+# subcommand of subcommand parser
+expect
+    parser =
+        choice [
+            subCommand
+                "auth"
+                (choice [
+                    subCommand
+                        "login"
+                        (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
+                         |> apply (str { long: "user" })
+                         |> apply (str { long: "pw" })),
+                ])
+        ]
+
+    when parse parser ["auth", "login", "--pw", "123", "--user", "abc"] is
+        Ok result -> result == "logging in abc with 123"
+        Err _ -> False
+
+# subcommand not provided
+expect
+    parser =
+        choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
+
+    when parse parser [] is
+        Ok _ -> True
+        Err e ->
+            err = formatError e
+            err ==
+                """
+                A subcommand was expected, but not found!
+                The available subcommands are:
+                \t"auth", "publish"
+                """
+
+# subcommand doesn't match choices
+expect
+    parser =
+        choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
+
+    when parse parser ["logs"] is
+        Ok _ -> True
+        Err e ->
+            err = formatError e
+            err ==
+                """
+                The "logs" subcommand was found, but it's not expected in this context! 
+                The available subcommands are:
+                \t"auth", "publish"
+                """
