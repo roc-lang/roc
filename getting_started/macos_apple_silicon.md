@@ -20,6 +20,12 @@ which includes the Roc compiler and various helpful utilities.
     tar xf roc_nightly-darwin_apple_silicon-<VERSION>
     ```
 
+1. Install llvm 13:
+
+    ```sh
+    brew install llvm@13
+    ```
+
 ## How to install Roc platform dependencies
 
 In order to compile Roc apps (either in `examples/` or in your own projects),
