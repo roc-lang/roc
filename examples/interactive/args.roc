@@ -6,11 +6,33 @@ app "args"
 main : List Str -> Task.Task {} [] [Write [Stdout]]
 main = \args ->
     parser =
-        Arg.succeed (\mode -> mode)
-        |> Arg.apply (Arg.str { long: "mode", help: Some "the mode flag" })
+        Arg.choice [
+            Arg.subCommand
+                "exclaim"
+                (Arg.succeed (\s -> Exclaim s)
+                 |> Arg.withParser (Arg.str {
+                        long: "string",
+                        short: Some "s",
+                        help: Some "the string to exclaim",
+                    })),
+            Arg.subCommand
+                "greet"
+                (Arg.succeed (\name -> \greeting -> Greet { name, greeting })
+                 |> Arg.withParser (Arg.str {
+                        long: "name",
+                        help: Some "the name of the individual to greet",
+                    })
+                 |> Arg.withParser (Arg.str {
+                        long: "greeting",
+                        short: Some "g",
+                        help: Some "the greeting to use",
+                    }))
+        ]
 
     when Arg.parseFormatted parser args is
-        Ok mode ->
-            Stdout.line "You chose mode \(mode)"
+        Ok (Exclaim s) ->
+            Stdout.line "\(s)!"
+        Ok (Greet {name, greeting}) ->
+            Stdout.line "\(greeting), \(name)"
         Err helpMenu ->
             Stdout.line helpMenu
