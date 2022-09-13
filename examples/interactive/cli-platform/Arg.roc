@@ -10,7 +10,7 @@ interface Arg
         bool,
         str,
 
-        apply,
+        withParser,
     ]
     imports []
 
@@ -369,7 +369,7 @@ formatError = \err ->
             \t\(fmtChoices)
             """
 
-apply = \arg1, arg2 -> andMap arg2 arg1
+withParser = \arg1, arg2 -> andMap arg2 arg1
 
 # bool undashed long argument is missing
 expect
@@ -447,8 +447,8 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> apply (str { long: "foo" })
-        |> apply (str { long: "bar" })
+        |> withParser (str { long: "foo" })
+        |> withParser (str { long: "bar" })
 
     cases = [
         ["--foo", "true", "--bar", "baz"],
@@ -462,9 +462,9 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
-        |> apply (str { long: "foo", help: Some "the foo flag" })
-        |> apply (str { long: "bar", short: Some "B" })
-        |> apply (bool { long: "bool" })
+        |> withParser (str { long: "foo", help: Some "the foo flag" })
+        |> withParser (str { long: "bar", short: Some "B" })
+        |> withParser (bool { long: "bool" })
 
     toHelp parser
     == Config [
@@ -497,10 +497,10 @@ expect
 expect
     parser =
         succeed (\_foo -> \_bar -> \_baz -> \_bool -> "")
-        |> apply (str { long: "foo", help: Some "the foo flag" })
-        |> apply (str { long: "bar", short: Some "B" })
-        |> apply (str { long: "baz", short: Some "z", help: Some "the baz flag" })
-        |> apply (bool { long: "bool" })
+        |> withParser (str { long: "foo", help: Some "the foo flag" })
+        |> withParser (str { long: "bar", short: Some "B" })
+        |> withParser (str { long: "baz", short: Some "z", help: Some "the baz flag" })
+        |> withParser (bool { long: "bool" })
 
     formatHelp parser ==
         """
@@ -517,13 +517,13 @@ expect
             subCommand
                 "login"
                 (succeed (\user -> \pw -> "\(user)\(pw)")
-                 |> apply (str { long: "user" })
-                 |> apply (str { long: "pw" })),
+                 |> withParser (str { long: "user" })
+                 |> withParser (str { long: "pw" })),
             subCommand
                 "publish"
                 (succeed (\file -> \url -> "\(file)\(url)")
-                 |> apply (str { long: "file" })
-                 |> apply (str { long: "url" })),
+                 |> withParser (str { long: "file" })
+                 |> withParser (str { long: "url" })),
         ]
 
     formatHelp parser ==
@@ -544,13 +544,13 @@ expect
             subCommand
                 "login"
                 (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-                 |> apply (str { long: "user" })
-                 |> apply (str { long: "pw" })),
+                 |> withParser (str { long: "user" })
+                 |> withParser (str { long: "pw" })),
             subCommand
                 "publish"
                 (succeed (\file -> \url -> "\(file)\(url)")
-                 |> apply (str { long: "file" })
-                 |> apply (str { long: "url" })),
+                 |> withParser (str { long: "file" })
+                 |> withParser (str { long: "url" })),
         ]
 
     when parse parser ["login", "--pw", "123", "--user", "abc"] is
@@ -567,8 +567,8 @@ expect
                     subCommand
                         "login"
                         (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-                         |> apply (str { long: "user" })
-                         |> apply (str { long: "pw" })),
+                         |> withParser (str { long: "user" })
+                         |> withParser (str { long: "pw" })),
                 ])
         ]
 
