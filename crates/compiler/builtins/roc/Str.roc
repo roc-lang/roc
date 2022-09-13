@@ -308,6 +308,8 @@ replaceEachHelp = \buf, haystack, needle, flower ->
 
         Err NotFound -> Str.concat buf haystack
 
+expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+
 ## Returns the string with the first occurrence of a substring replaced with a replacement.
 ## If the substring is not found, returns `Err NotFound`.
 ##
@@ -320,6 +322,8 @@ replaceFirst = \haystack, needle, flower ->
 
         Err err -> Err err
 
+expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+
 ## Returns the string with the last occurrence of a substring replaced with a replacement.
 ## If the substring is not found, returns `Err NotFound`.
 ##
@@ -331,6 +335,8 @@ replaceLast = \haystack, needle, flower ->
             Ok "\(before)\(flower)\(after)"
 
         Err err -> Err err
+
+expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
