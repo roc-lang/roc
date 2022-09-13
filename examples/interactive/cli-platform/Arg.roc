@@ -147,10 +147,10 @@ andMap = \@Parser parser, @Parser mapper ->
                             |> Result.map fn
 
                     SubCommand cmds ->
-                        (List.map
-                            cmds
-                            \{name, parser: parser2} ->
-                                {name, parser: andMap parser2 (@Parser mapper)})
+                        mapSubParser = \{name, parser: parser2} ->
+                            {name, parser: andMap parser2 (@Parser mapper)}
+
+                        List.map cmds mapSubParser
                         |> SubCommand
 
             Arg config run ->
@@ -186,10 +186,10 @@ andMap = \@Parser parser, @Parser mapper ->
                     SubCommand cmds ->
                         # For each subcommand, first run the subcommand, then
                         # push the result through the arg parser.
-                        (List.map
-                            cmds
-                            \{name, parser: parser2} ->
-                                {name, parser: andMap parser2 (@Parser mapper)})
+                        mapSubParser = \{name, parser: parser2} ->
+                            {name, parser: andMap parser2 (@Parser mapper)}
+
+                        List.map cmds mapSubParser
                         |> SubCommand
 
             Lazy thunk ->
@@ -213,10 +213,10 @@ andMap = \@Parser parser, @Parser mapper ->
                             |> Result.map fn
 
                     SubCommand cmds ->
-                        (List.map
-                            cmds
-                            \{name, parser: parser2} ->
-                                {name, parser: andMap parser2 (@Parser mapper)})
+                        mapSubParser = \{name, parser: parser2} ->
+                            {name, parser: andMap parser2 (@Parser mapper)}
+
+                        List.map cmds mapSubParser
                         |> SubCommand
 
             WithConfig mapper2 config ->
@@ -225,10 +225,10 @@ andMap = \@Parser parser, @Parser mapper ->
                 |> WithConfig config
 
             SubCommand cmds ->
-                (List.map
-                    cmds
-                    \{name, parser: mapper2} ->
-                        {name, parser: andMap (@Parser parser) mapper2})
+                mapSubParser = \{name, parser: mapper2} ->
+                    {name, parser: andMap (@Parser parser) mapper2}
+
+                List.map cmds mapSubParser
                 |> SubCommand
 
 
