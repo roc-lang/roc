@@ -74,11 +74,12 @@ Config : {
     type : Type,
 }
 
-OptConfig : {
-    long : Str,
-    short ?OptionStr,
-    help ?OptionStr,
-}
+# TODO currently unused because using this as an annotation yields panics
+# OptConfig : {
+#     long : Str,
+#     short ?OptionStr,
+#     help ?OptionStr,
+# }
 
 succeed : a -> Parser a
 succeed = \val -> @Parser (Succeed val)
