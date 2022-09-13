@@ -10375,6 +10375,7 @@ All branches in an `if` must have the same type!
      8│               Ok "foo"
      9│ 
     10│           Bad _ ->
+    11│               Ok "foo"
 
     This `u8` value is a:
 
