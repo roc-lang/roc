@@ -285,12 +285,28 @@ substringUnsafe : Str, Nat, Nat -> Str
 ##     Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
 replaceEach : Str, Str, Str -> Result Str [NotFound]*
 replaceEach = \haystack, needle, flower ->
-    when replaceFirst haystack needle flower is
-        Ok progress ->
-            when replaceEach progress needle flower is
-                Ok finished -> finished
-                Err -> progress
-        err -> err
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            # We found at least one needle, so start the buffer off with
+            # `before` followed by the first replacement flower.
+            Str.reserve "" (Str.countUtf8Bytes haystack)
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+            |> Ok
+
+        Err err -> Err err
+
+replaceEachHelp : Str, Str, Str, Str -> Str
+replaceEachHelp = \buf, haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            buf
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+
+        Err NotFound -> Str.concat buf haystack
 
 ## Returns the string with the first occurrence of a substring replaced with a replacement.
 ## If the substring is not found, returns `Err NotFound`.
@@ -300,8 +316,9 @@ replaceFirst : Str, Str, Str -> Result Str [NotFound]*
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
-        err -> err
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
 
 ## Returns the string with the last occurrence of a substring replaced with a replacement.
 ## If the substring is not found, returns `Err NotFound`.
@@ -311,8 +328,9 @@ replaceLast : Str, Str, Str -> Result Str [NotFound]*
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
-        err -> err
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
 
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
