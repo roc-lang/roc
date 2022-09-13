@@ -31,6 +31,7 @@ Parser a := [
 ]
 
 ParseError a : [
+    ProgramNameNotProvided Str,
     MissingRequiredArg Str,
     WrongType {
         arg: Str,
@@ -225,8 +226,15 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-parse : Parser a, List Str -> Result a (ParseError*)
-parse = \@Parser parser, args ->
+parse : Str, Parser a, List Str -> Result a (ParseError*)
+parse = \program, parser, args ->
+    # By convention the first string in the arg list is the program name.
+    if List.isEmpty args
+    then Err (ProgramNameNotProvided program)
+    else parseHelp parser (List.split args 1).others
+
+parseHelp : Parser a, List Str -> Result a (ParseError*)
+parseHelp = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
         Arg {long, type} run ->
@@ -244,7 +252,7 @@ parse = \@Parser parser, args ->
                             (Err {})
                             \st, {name, parser: subParser} ->
                                 if cmd == name
-                                then Break (Ok (parse subParser argsRest))
+                                then Break (Ok (parseHelp subParser argsRest))
                                 else Continue st
                     when state is
                         Ok result -> result
@@ -253,7 +261,7 @@ parse = \@Parser parser, args ->
 
         Lazy thunk -> Ok (thunk {})
         WithConfig parser2 _config ->
-            parse parser2 args
+            parseHelp parser2 args
 
 bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
 bool = \{ long, short ? NotProvided, help ? NotProvided } ->
@@ -283,10 +291,10 @@ choice = \subCommands -> @Parser (SubCommand subCommands)
 
 ## Like [parse], runs a parser to completion on a list of arguments.
 ## If the parser fails, a formatted error and help message is returned.
-parseFormatted : Parser a, List Str -> Result a Str
-parseFormatted = \parser, args ->
+parseFormatted : Str, Parser a, List Str -> Result a Str
+parseFormatted = \program, parser, args ->
     Result.mapErr
-        (parse parser args)
+        (parse program parser args)
         \e ->
             Str.concat (Str.concat (formatHelp parser) "\n\n") (formatError e)
 
@@ -343,6 +351,8 @@ quote = \s -> "\"\(s)\""
 formatError : ParseError [] -> Str
 formatError = \err ->
     when err is
+        ProgramNameNotProvided program ->
+            "The program name \"\(program)\" was not probided as a first argument!"
         MissingRequiredArg arg ->
             "Argument `--\(arg)` is required but was not provided!"
         WrongType { arg, expected } ->
@@ -377,73 +387,73 @@ withParser = \arg1, arg2 -> andMap arg2 arg1
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser ["foo"] == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument without value is missing
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument with value is determined true
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo", "true"] == Ok True
+    parseHelp parser ["--foo", "true"] == Ok True
 
 # bool dashed long argument with value is determined false
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo", "false"] == Ok False
+    parseHelp parser ["--foo", "false"] == Ok False
 
 # bool dashed long argument with value is determined wrong type
 expect
     parser = bool { long: "foo" }
 
-    parse parser ["--foo", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser ["--foo", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
 
 # bool dashed short argument with value is determined true
 expect
     parser = bool { long: "foo", short: Some "F" }
 
-    parse parser ["-F", "true"] == Ok True
+    parseHelp parser ["-F", "true"] == Ok True
 
 # bool dashed short argument with value is determined false
 expect
     parser = bool { long: "foo", short: Some "F" }
 
-    parse parser ["-F", "false"] == Ok False
+    parseHelp parser ["-F", "false"] == Ok False
 
 # bool dashed short argument with value is determined wrong type
 expect
     parser = bool { long: "foo", short: Some "F" }
 
-    parse parser ["-F", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser ["-F", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
 
 # string dashed long argument without value is missing
 expect
     parser = str { long: "foo" }
 
-    parse parser ["--foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
 
 # string dashed long argument with value is determined
 expect
     parser = str { long: "foo" }
 
-    parse parser ["--foo", "itsme"] == Ok "itsme"
+    parseHelp parser ["--foo", "itsme"] == Ok "itsme"
 
 # string dashed short argument without value is missing
 expect
     parser = str { long: "foo", short: Some "F" }
 
-    parse parser ["-F"] == Err (MissingRequiredArg "foo")
+    parseHelp parser ["-F"] == Err (MissingRequiredArg "foo")
 
 # string dashed short argument with value is determined
 expect
     parser = str { long: "foo", short: Some "F" }
 
-    parse parser ["-F", "itsme"] == Ok "itsme"
+    parseHelp parser ["-F", "itsme"] == Ok "itsme"
 
 # two string parsers complete cases
 expect
@@ -453,12 +463,12 @@ expect
         |> withParser (str { long: "bar" })
 
     cases = [
-        ["--foo", "true", "--bar", "baz"],
-        ["--bar", "baz", "--foo", "true"],
-        ["--foo", "true", "--bar", "baz", "--other", "something"],
+        ["test", "--foo", "true", "--bar", "baz"],
+        ["test", "--bar", "baz", "--foo", "true"],
+        ["test", "--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parse parser args == Ok "foo: true bar: baz"
+    List.all cases \args -> parse "test" parser args == Ok "foo: true bar: baz"
 
 # string and bool parsers build help
 expect
@@ -479,7 +489,7 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    when parse parser ["foo"] is
+    when parseHelp parser ["foo"] is
         Ok _ -> False
         Err e ->
             err = formatError e
@@ -489,7 +499,7 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    when parse parser ["--foo", "12"] is
+    when parseHelp parser ["--foo", "12"] is
         Ok _ -> False
         Err e ->
             err = formatError e
@@ -555,7 +565,7 @@ expect
                  |> withParser (str { long: "url" })),
         ]
 
-    when parse parser ["login", "--pw", "123", "--user", "abc"] is
+    when parse "test" parser ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
@@ -574,7 +584,7 @@ expect
                 ])
         ]
 
-    when parse parser ["auth", "login", "--pw", "123", "--user", "abc"] is
+    when parse "test" parser ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
@@ -583,7 +593,7 @@ expect
     parser =
         choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
 
-    when parse parser [] is
+    when parseHelp parser [] is
         Ok _ -> True
         Err e ->
             err = formatError e
@@ -599,7 +609,7 @@ expect
     parser =
         choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
 
-    when parse parser ["logs"] is
+    when parseHelp parser ["logs"] is
         Ok _ -> True
         Err e ->
             err = formatError e
