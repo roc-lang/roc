@@ -300,8 +300,8 @@ str = \{ long, short ? NotProvided, help ? NotProvided } ->
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
-subCommand : Str, Parser a -> {name: Str, parser: Parser a}
-subCommand = \name, parser -> {name, parser}
+subCommand : Parser a, Str -> {name: Str, parser: Parser a}
+subCommand = \parser, name -> {name, parser}
 
 choice : List {name: Str, parser: Parser a} -> Parser a
 choice = \subCommands -> @Parser (SubCommand subCommands)
@@ -570,16 +570,15 @@ expect
 expect
     parser =
         choice [
-            subCommand
-                "login"
-                (succeed (\user -> \pw -> "\(user)\(pw)")
-                 |> withParser (str { long: "user" })
-                 |> withParser (str { long: "pw" })),
-            subCommand
-                "publish"
-                (succeed (\file -> \url -> "\(file)\(url)")
-                 |> withParser (str { long: "file" })
-                 |> withParser (str { long: "url" })),
+            succeed (\user -> \pw -> "\(user)\(pw)")
+            |> withParser (str { long: "user" })
+            |> withParser (str { long: "pw" })
+            |> subCommand "login",
+
+            succeed (\file -> \url -> "\(file)\(url)")
+            |> withParser (str { long: "file" })
+            |> withParser (str { long: "url" })
+            |> subCommand "publish",
         ]
         |> program { name:  "test" }
 
@@ -600,7 +599,7 @@ expect
 # format help menu with program help message
 expect
     parser =
-        choice [ subCommand "login" (succeed ""), ]
+        choice [ subCommand (succeed "") "login", ]
         |> program { name:  "test", help: "a test cli app" }
 
     formatHelp parser ==
@@ -617,16 +616,15 @@ expect
 expect
     parser =
         choice [
-            subCommand
-                "login"
-                (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-                 |> withParser (str { long: "user" })
-                 |> withParser (str { long: "pw" })),
-            subCommand
-                "publish"
-                (succeed (\file -> \url -> "\(file)\(url)")
-                 |> withParser (str { long: "file" })
-                 |> withParser (str { long: "url" })),
+            succeed (\user -> \pw -> "logging in \(user) with \(pw)")
+                |> withParser (str { long: "user" })
+                |> withParser (str { long: "pw" })
+                |> subCommand "login",
+
+            succeed (\file -> \url -> "\(file)\(url)")
+                |> withParser (str { long: "file" })
+                |> withParser (str { long: "url" })
+                |> subCommand "publish"
         ]
         |> program {name: "test" }
 
@@ -638,15 +636,13 @@ expect
 expect
     parser =
         choice [
-            subCommand
-                "auth"
-                (choice [
-                    subCommand
-                        "login"
-                        (succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-                         |> withParser (str { long: "user" })
-                         |> withParser (str { long: "pw" })),
-                ])
+            choice [
+                succeed (\user -> \pw -> "logging in \(user) with \(pw)")
+                |> withParser (str { long: "user" })
+                |> withParser (str { long: "pw" })
+                |> subCommand "login"
+            ]
+            |> subCommand "auth"
         ]
         |> program {name:"test"}
 
@@ -657,7 +653,7 @@ expect
 # subcommand not provided
 expect
     parser =
-        choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
+        choice [ subCommand (succeed "") "auth", subCommand (succeed "") "publish" ]
 
     when parseHelp parser [] is
         Ok _ -> True
@@ -673,7 +669,7 @@ expect
 # subcommand doesn't match choices
 expect
     parser =
-        choice [ subCommand "auth" (succeed ""), subCommand "publish" (succeed "") ]
+        choice [ subCommand (succeed "") "auth", subCommand (succeed "") "publish" ]
 
     when parseHelp parser ["logs"] is
         Ok _ -> True

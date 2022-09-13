@@ -7,39 +7,33 @@ main : List Str -> Task.Task {} [] [Write [Stdout]]
 main = \args ->
     parser =
         Arg.choice [
-            Arg.subCommand
-                "exclaim"
+            Arg.succeed (\s -> Exclaim s)
+            |> Arg.withParser
                 (
-                    Arg.succeed (\s -> Exclaim s)
-                    |> Arg.withParser
-                        (
-                            Arg.str {
-                                long: "string",
-                                short: Some "s",
-                                help: Some "the string to exclaim",
-                            }
-                        )
-                ),
-            Arg.subCommand
-                "greet"
+                    Arg.str {
+                        long: "string",
+                        short: Some "s",
+                        help: Some "the string to exclaim",
+                    }
+                )
+            |> Arg.subCommand "exclaim",
+            Arg.succeed (\name -> \greeting -> Greet { name, greeting })
+            |> Arg.withParser
                 (
-                    Arg.succeed (\name -> \greeting -> Greet { name, greeting })
-                    |> Arg.withParser
-                        (
-                            Arg.str {
-                                long: "name",
-                                help: Some "the name of the individual to greet",
-                            }
-                        )
-                    |> Arg.withParser
-                        (
-                            Arg.str {
-                                long: "greeting",
-                                short: Some "g",
-                                help: Some "the greeting to use",
-                            }
-                        )
-                ),
+                    Arg.str {
+                        long: "name",
+                        help: Some "the name of the individual to greet",
+                    }
+                )
+            |> Arg.withParser
+                (
+                    Arg.str {
+                        long: "greeting",
+                        short: Some "g",
+                        help: Some "the greeting to use",
+                    }
+                )
+            |> Arg.subCommand "greet",
         ]
         |> Arg.program { name: "args-example", help: "An example of the CLI platform argument parser" }
 
