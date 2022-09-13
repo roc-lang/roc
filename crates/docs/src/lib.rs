@@ -29,8 +29,8 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 
     // TODO: get info from a package module; this is all hardcoded for now.
     let mut package = roc_load::docs::Documentation {
-        name: "roc/builtins".to_string(),
-        version: "1.0.0".to_string(),
+        name: "documentation".to_string(),
+        version: "".to_string(),
         docs: "Package introduction or README.".to_string(),
         modules: loaded_modules,
     };
