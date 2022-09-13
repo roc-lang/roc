@@ -29,7 +29,7 @@ roc_tracing = { path = "../../tracing" }
 roc_reporting = { path = "../../reporting" }
 roc_debug_flags = { path = "../debug_flags" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 parking_lot = "0.12"
 crossbeam = "0.8.2"
 

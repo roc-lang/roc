@@ -13,7 +13,7 @@ roc_builtins = {path = "../compiler/builtins"}
 wasi_libc_sys = { path = "../wasi-libc-sys" }
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = {version = "3.11.0", features = ["collections"]}
 console_error_panic_hook = {version = "0.1.7", optional = true}
 futures = {version = "0.3.24", optional = true}
 js-sys = "0.3.56"

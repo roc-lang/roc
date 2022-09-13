@@ -20,5 +20,5 @@ roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
 roc_tracing = { path = "../../tracing" }
 test_mono_macros = { path = "../test_mono_macros" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 indoc = "1.0.7"
