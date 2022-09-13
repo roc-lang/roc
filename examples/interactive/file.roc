@@ -9,9 +9,11 @@ main =
     task =
         cwd <- Env.cwd |> Task.await
         cwdStr = Path.display cwd
+
         _ <- Stdout.line "cwd: \(cwdStr)" |> Task.await
         dirEntries <- Dir.list cwd |> Task.await
         contentsStr = Str.joinWith (List.map dirEntries Path.display) "\n    "
+
         _ <- Stdout.line "Directory contents:\n    \(contentsStr)\n" |> Task.await
         _ <- Stdout.line "Writing a string to out.txt" |> Task.await
         _ <- File.writeUtf8 path "a string!" |> Task.await
