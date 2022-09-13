@@ -466,6 +466,7 @@ expect
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
         |> withParser (str { long: "foo" })
         |> withParser (str { long: "bar" })
+        |> named "test"
 
     cases = [
         ["test", "--foo", "true", "--bar", "baz"],
@@ -473,7 +474,7 @@ expect
         ["test", "--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parse (named parser "test") args == Ok "foo: true bar: baz"
+    List.all cases \args -> parse parser args == Ok "foo: true bar: baz"
 
 # string and bool parsers build help
 expect
@@ -569,8 +570,9 @@ expect
                  |> withParser (str { long: "file" })
                  |> withParser (str { long: "url" })),
         ]
+        |> named "test"
 
-    when parse (named parser "test") ["test", "login", "--pw", "123", "--user", "abc"] is
+    when parse parser ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
@@ -588,8 +590,9 @@ expect
                          |> withParser (str { long: "pw" })),
                 ])
         ]
+        |> named "test"
 
-    when parse (named parser "test") ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
+    when parse parser ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
