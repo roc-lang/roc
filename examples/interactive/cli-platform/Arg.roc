@@ -17,7 +17,13 @@ interface Arg
 Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
+    # TODO: hiding the record behind an alias currently causes a panic
+    SubCommand (List {
+        name: Str,
+        parser: Parser a,
+    }),
 
+    # Constructed during transformations of the above variants
     WithConfig (Parser a) Config,
     Lazy ({} -> a),
 ]
@@ -35,9 +41,10 @@ Type : [
     Bool,
 ]
 
-Help : {
-    configs : List Config,
-}
+Help : [
+    SubCommands (List {name: Str, help: Help }),
+    Config (List Config),
+]
 
 OptionStr : [Some Str, NotProvided]
 
@@ -59,17 +66,24 @@ succeed = \val -> @Parser (Succeed val)
 
 toHelp : Parser * -> Help
 toHelp = \parser ->
-    configs = toHelpHelper parser []
+    toHelpHelper parser []
 
-    { configs }
-
-toHelpHelper : Parser *, List Config -> List Config
+# TODO: check overflows when this annotation is included
+# toHelpHelper : Parser *, List Config -> Help
 toHelpHelper = \@Parser parser, configs ->
     when parser is
-        Succeed _ -> configs
-        Lazy _ -> configs
-        WithConfig innerParser config -> toHelpHelper innerParser (List.append configs config)
-        Arg config _ -> List.append configs config
+        Succeed _ -> Config configs
+        Lazy _ -> Config configs
+        WithConfig innerParser config ->
+            toHelpHelper innerParser (List.append configs config)
+        Arg config _ ->
+            List.append configs config
+            |> Config
+        SubCommand commands ->
+            List.map
+                commands
+                (\{name, parser: innerParser} -> {name, help: (toHelpHelper innerParser [])})
+            |> SubCommands
 
 findOneArg : Str, OptionStr, List Str -> Result Str [NotFound]*
 findOneArg = \long, optShort, args ->
@@ -92,7 +106,7 @@ findOneArg = \long, optShort, args ->
 
         Err NotFound -> Err NotFound
 
-andMap : Parser a, Parser (a -> b) -> Parser b
+#andMap : Parser a, Parser (a -> b) -> Parser b
 andMap = \@Parser parser, @Parser mapper ->
     unwrapped =
         when mapper is
@@ -113,6 +127,13 @@ andMap = \@Parser parser, @Parser mapper ->
                         Arg config \args ->
                             run args
                             |> Result.map fn
+
+                    SubCommand cmds ->
+                        (List.map
+                            cmds
+                            \{name, parser: parser2} ->
+                                {name, parser: andMap parser2 (@Parser mapper)})
+                        |> SubCommand
 
             Arg config run ->
                 when parser is
@@ -144,6 +165,15 @@ andMap = \@Parser parser, @Parser mapper ->
                         @Parser combinedParser
                         |> WithConfig config
 
+                    SubCommand cmds ->
+                        # For each subcommand, first run the subcommand, then
+                        # push the result through the arg parser.
+                        (List.map
+                            cmds
+                            \{name, parser: parser2} ->
+                                {name, parser: andMap parser2 (@Parser mapper)})
+                        |> SubCommand
+
             Lazy thunk ->
                 fn = thunk {}
 
@@ -164,10 +194,25 @@ andMap = \@Parser parser, @Parser mapper ->
                             run args
                             |> Result.map fn
 
+                    SubCommand cmds ->
+                        (List.map
+                            cmds
+                            \{name, parser: parser2} ->
+                                {name, parser: andMap parser2 (@Parser mapper)})
+                        |> SubCommand
+
             WithConfig mapper2 config ->
                 @Parser parser
                 |> andMap mapper2
                 |> WithConfig config
+
+            SubCommand cmds ->
+                (List.map
+                    cmds
+                    \{name, parser: mapper2} ->
+                        {name, parser: andMap (@Parser parser) mapper2})
+                |> SubCommand
+
 
     @Parser unwrapped
 
@@ -180,6 +225,23 @@ parse = \@Parser parser, args ->
                 Ok val -> Ok val
                 Err NotFound -> Err (MissingRequiredArg long)
                 Err WrongType -> Err (WrongType { arg: long, expected: type })
+        SubCommand cmds ->
+            when List.get args 1 is
+                Ok cmd ->
+                    argsRest = (List.split args 1).others
+                    state =
+                        List.walkUntil
+                            cmds
+                            (Err {})
+                            \st, {name, parser: subParser} ->
+                                if cmd == name
+                                then Break (Ok (parse subParser argsRest))
+                                else Continue st
+                    when state is
+                        Ok result -> result
+                        # TODO fixme
+                        Err {} -> Err (MissingRequiredArg "foo")
+                Err OutOfBounds -> Err (MissingRequiredArg "foo")
 
         Lazy thunk -> Ok (thunk {})
         WithConfig parser2 _config ->
@@ -205,6 +267,12 @@ str = \{ long, short ? NotProvided, help ? NotProvided } ->
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
+subCommand : Str, Parser a -> {name: Str, parser: Parser a}
+subCommand = \name, parser -> {name, parser}
+
+choice : List {name: Str, parser: Parser a} -> Parser a
+choice = \subCommands -> @Parser (SubCommand subCommands)
+
 ## Like [parse], runs a parser to completion on a list of arguments.
 ## If the parser fails, a formatted error and help message is returned.
 parseFormatted : Parser a, List Str -> Result a Str
@@ -216,10 +284,32 @@ parseFormatted = \parser, args ->
 
 formatHelp : Parser a -> Str
 formatHelp = \parser ->
-    Str.joinWith (List.map (toHelp parser).configs formatConfig) "\n"
+    formatHelpHelp 0 (toHelp parser)
 
-formatConfig : Config -> Str
-formatConfig = \{long, short, help, type} ->
+indent : Nat -> Str
+indent = \n -> Str.repeat " " n
+
+# formatHelpHelp : Nat, Help -> Str <- TODO: layout-gen panics when the following annotation is applied!
+formatHelpHelp = \n, help ->
+    when help is
+        SubCommands cmds ->
+            Str.joinWith
+                (List.map cmds \subCmd -> formatSubCommand n subCmd)
+                "\n\n"
+        Config configs ->
+            Str.joinWith (List.map configs \c -> formatConfig n c) "\n"
+
+formatSubCommand = \n, {name, help} ->
+    indented = indent n
+
+    fmtHelp = formatHelpHelp (n + 4) help
+
+    "\(indented)\(name)\n\(fmtHelp)"
+
+formatConfig : Nat, Config -> Str
+formatConfig = \n, {long, short, help, type} ->
+    indented = indent n
+
     formattedShort =
         when short is
             NotProvided -> ""
@@ -232,7 +322,7 @@ formatConfig = \{long, short, help, type} ->
             NotProvided -> ""
             Some h -> "    \(h)"
 
-    "--\(long)\(formattedShort)\(formattedHelp)  (\(formattedType))"
+    "\(indented)--\(long)\(formattedShort)\(formattedHelp)  (\(formattedType))"
 
 formatType : Type -> Str
 formatType = \type ->
@@ -347,13 +437,11 @@ expect
         |> apply (bool { long: "bool" })
 
     toHelp parser
-    == {
-        configs: [
-            { long: "foo", short: NotProvided, help: Some "the foo flag", type: Str },
-            { long: "bar", short: Some "B", help: NotProvided, type: Str },
-            { long: "bool", short: NotProvided, help: NotProvided, type: Bool },
-        ],
-    }
+    == Config [
+        { long: "foo", short: NotProvided, help: Some "the foo flag", type: Str },
+        { long: "bar", short: Some "B", help: NotProvided, type: Str },
+        { long: "bool", short: NotProvided, help: NotProvided, type: Bool },
+    ]
 
 # format argument is missing
 expect
@@ -375,7 +463,7 @@ expect
             err = formatError e
             err == "The argument `--foo` expects a value of type bool!"
 
-# format help menu
+# format help menu with only args
 expect
     parser =
         succeed (\_foo -> \_bar -> \_baz -> \_bool -> "")
@@ -390,4 +478,31 @@ expect
         --bar, -B  (string)
         --baz, -z    the baz flag  (string)
         --bool  (bool)
+        """
+
+# format help menu with subcommands
+expect
+    parser =
+        choice [
+            subCommand
+                "login"
+                (succeed (\user -> \pw -> "\(user)\(pw)")
+                 |> apply (str { long: "user" })
+                 |> apply (str { long: "pw" })),
+            subCommand
+                "publish"
+                (succeed (\file -> \url -> "\(file)\(url)")
+                 |> apply (str { long: "file" })
+                 |> apply (str { long: "url" })),
+        ]
+
+    formatHelp parser ==
+        """
+        login
+            --user  (string)
+            --pw  (string)
+
+        publish
+            --file  (string)
+            --url  (string)
         """
