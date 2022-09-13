@@ -304,17 +304,34 @@ parseFormatted = \@NamedParser parser, args ->
     Result.mapErr
         (parse (@NamedParser parser) args)
         \e ->
-            Str.concat (Str.concat (formatHelp parser.parser) "\n\n") (formatError e)
-
-formatHelp : Parser a -> Str
-formatHelp = \parser ->
-    formatHelpHelp 0 (toHelp parser)
+            Str.concat (Str.concat (formatHelp (@NamedParser parser)) "\n\n") (formatError e)
 
 indent : Nat -> Str
 indent = \n -> Str.repeat " " n
 
-# formatHelpHelp : Nat, Help -> Str <- TODO: layout-gen panics when the following annotation is applied!
-formatHelpHelp = \n, help ->
+indentLevel : Nat
+indentLevel = 4
+
+# formatHelp : NamedParser a -> Str
+formatHelp = \@NamedParser {name, parser} ->
+    cmdHelp = toHelp parser
+
+    fmtCmdHeading =
+        when cmdHelp is
+            SubCommands _ -> "COMMANDS:"
+            Config _ -> "OPTIONS:"
+
+    fmtCmdHelp = formatCmdHelp indentLevel cmdHelp
+
+    """
+    \(name)
+
+    \(fmtCmdHeading)
+    \(fmtCmdHelp)
+    """
+
+# formatCmdHelp : Nat, Help -> Str <- TODO: layout-gen panics when the following annotation is applied!
+formatCmdHelp = \n, help ->
     when help is
         SubCommands cmds ->
             Str.joinWith
@@ -326,7 +343,7 @@ formatHelpHelp = \n, help ->
 formatSubCommand = \n, {name, help} ->
     indented = indent n
 
-    fmtHelp = formatHelpHelp (n + 4) help
+    fmtHelp = formatCmdHelp (n + indentLevel) help
 
     "\(indented)\(name)\n\(fmtHelp)"
 
@@ -521,13 +538,17 @@ expect
         |> withParser (str { long: "bar", short: Some "B" })
         |> withParser (str { long: "baz", short: Some "z", help: Some "the baz flag" })
         |> withParser (bool { long: "bool" })
+        |> named "test"
 
     formatHelp parser ==
         """
-        --foo    the foo flag  (string)
-        --bar, -B  (string)
-        --baz, -z    the baz flag  (string)
-        --bool  (bool)
+        test
+
+        OPTIONS:
+            --foo    the foo flag  (string)
+            --bar, -B  (string)
+            --baz, -z    the baz flag  (string)
+            --bool  (bool)
         """
 
 # format help menu with subcommands
@@ -545,16 +566,20 @@ expect
                  |> withParser (str { long: "file" })
                  |> withParser (str { long: "url" })),
         ]
+        |> named "test"
 
     formatHelp parser ==
         """
-        login
-            --user  (string)
-            --pw  (string)
+        test
 
-        publish
-            --file  (string)
-            --url  (string)
+        COMMANDS:
+            login
+                --user  (string)
+                --pw  (string)
+
+            publish
+                --file  (string)
+                --url  (string)
         """
 
 # subcommand parser
