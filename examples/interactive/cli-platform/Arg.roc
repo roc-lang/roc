@@ -226,13 +226,13 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-NamedParser a : {name: Str, parser: Parser a}
+NamedParser a := {name: Str, parser: Parser a}
 
-named = \parser, name -> {name, parser}
+named = \parser, name -> @NamedParser {name, parser}
 
 # TODO panics in alias analysis when this annotation is included
 #parse : NamedParser a, List Str -> Result a (ParseError*)
-parse = \parser, args ->
+parse = \@NamedParser parser, args ->
     # By convention the first string in the arg list is the program name.
     if List.isEmpty args
     then Err (ProgramNameNotProvided parser.name)
@@ -297,9 +297,9 @@ choice = \subCommands -> @Parser (SubCommand subCommands)
 ## Like [parse], runs a parser to completion on a list of arguments.
 ## If the parser fails, a formatted error and help message is returned.
 parseFormatted : NamedParser a, List Str -> Result a Str
-parseFormatted = \parser, args ->
+parseFormatted = \@NamedParser parser, args ->
     Result.mapErr
-        (parse parser args)
+        (parse (@NamedParser parser) args)
         \e ->
             Str.concat (Str.concat (formatHelp parser.parser) "\n\n") (formatError e)
 
@@ -466,15 +466,14 @@ expect
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
         |> withParser (str { long: "foo" })
         |> withParser (str { long: "bar" })
-        |> named "test"
 
     cases = [
-        ["test", "--foo", "true", "--bar", "baz"],
-        ["test", "--bar", "baz", "--foo", "true"],
-        ["test", "--foo", "true", "--bar", "baz", "--other", "something"],
+        ["--foo", "true", "--bar", "baz"],
+        ["--bar", "baz", "--foo", "true"],
+        ["--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parse parser args == Ok "foo: true bar: baz"
+    List.all cases \args -> parseHelp parser args == Ok "foo: true bar: baz"
 
 # string and bool parsers build help
 expect
