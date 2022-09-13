@@ -1,6 +1,7 @@
 interface Arg
     exposes [
         Parser,
+        NamedParser,
 
         parse,
         toHelp,
@@ -13,8 +14,11 @@ interface Arg
         choice,
 
         withParser,
+        named,
     ]
     imports []
+
+NamedParser a := {name: Str, parser: Parser a}
 
 Parser a := [
     Succeed a,
@@ -226,8 +230,6 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-NamedParser a := {name: Str, parser: Parser a}
-
 named = \parser, name -> @NamedParser {name, parser}
 
 # TODO panics in alias analysis when this annotation is included
@@ -296,7 +298,8 @@ choice = \subCommands -> @Parser (SubCommand subCommands)
 
 ## Like [parse], runs a parser to completion on a list of arguments.
 ## If the parser fails, a formatted error and help message is returned.
-parseFormatted : NamedParser a, List Str -> Result a Str
+# TODO: mono panics in the args example if the type annotation is included
+#parseFormatted : NamedParser a, List Str -> Result a Str
 parseFormatted = \@NamedParser parser, args ->
     Result.mapErr
         (parse (@NamedParser parser) args)

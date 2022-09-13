@@ -28,6 +28,7 @@ main = \args ->
                         help: Some "the greeting to use",
                     }))
         ]
+        |> Arg.named "args-example"
 
     when Arg.parseFormatted parser args is
         Ok (Exclaim s) ->
