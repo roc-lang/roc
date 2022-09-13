@@ -406,6 +406,9 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         if !prebuilt {
+            // Printing to stderr because we want stdout to contain only the output of the roc program.
+            // We are aware of the trade-offs.
+            // `cargo run` follows the same approach
             eprintln!("🔨 Rebuilding platform...");
         }
 
