@@ -14,11 +14,15 @@ interface Arg
         choice,
 
         withParser,
-        named,
+        program,
     ]
     imports []
 
-NamedParser a := {name: Str, parser: Parser a}
+NamedParser a := {
+    name: Str,
+    help: OptionStr,
+    parser: Parser a,
+}
 
 Parser a := [
     Succeed a,
@@ -230,7 +234,13 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-named = \parser, name -> @NamedParser {name, parser}
+program = \parser, { name, help ? "" } ->
+    optHelp =
+        if Str.isEmpty help
+        then NotProvided
+        else Some help
+
+    @NamedParser {name, help: optHelp, parser}
 
 # TODO panics in alias analysis when this annotation is included
 #parse : NamedParser a, List Str -> Result a (ParseError*)
@@ -313,7 +323,12 @@ indentLevel : Nat
 indentLevel = 4
 
 # formatHelp : NamedParser a -> Str
-formatHelp = \@NamedParser {name, parser} ->
+formatHelp = \@NamedParser {name, help, parser} ->
+    fmtHelp =
+        when help is
+            Some helpStr -> "\n\(helpStr)"
+            NotProvided -> ""
+
     cmdHelp = toHelp parser
 
     fmtCmdHeading =
@@ -324,7 +339,7 @@ formatHelp = \@NamedParser {name, parser} ->
     fmtCmdHelp = formatCmdHelp indentLevel cmdHelp
 
     """
-    \(name)
+    \(name)\(fmtHelp)
 
     \(fmtCmdHeading)
     \(fmtCmdHelp)
@@ -376,8 +391,8 @@ quote = \s -> "\"\(s)\""
 formatError : ParseError [] -> Str
 formatError = \err ->
     when err is
-        ProgramNameNotProvided program ->
-            "The program name \"\(program)\" was not probided as a first argument!"
+        ProgramNameNotProvided programName ->
+            "The program name \"\(programName)\" was not probided as a first argument!"
         MissingRequiredArg arg ->
             "Argument `--\(arg)` is required but was not provided!"
         WrongType { arg, expected } ->
@@ -538,7 +553,7 @@ expect
         |> withParser (str { long: "bar", short: Some "B" })
         |> withParser (str { long: "baz", short: Some "z", help: Some "the baz flag" })
         |> withParser (bool { long: "bool" })
-        |> named "test"
+        |> program {name: "test" }
 
     formatHelp parser ==
         """
@@ -566,7 +581,7 @@ expect
                  |> withParser (str { long: "file" })
                  |> withParser (str { long: "url" })),
         ]
-        |> named "test"
+        |> program { name:  "test" }
 
     formatHelp parser ==
         """
@@ -580,6 +595,22 @@ expect
             publish
                 --file  (string)
                 --url  (string)
+        """
+
+# format help menu with program help message
+expect
+    parser =
+        choice [ subCommand "login" (succeed ""), ]
+        |> program { name:  "test", help: "a test cli app" }
+
+    formatHelp parser ==
+        """
+        test
+        a test cli app
+
+        COMMANDS:
+            login
+
         """
 
 # subcommand parser
@@ -597,7 +628,7 @@ expect
                  |> withParser (str { long: "file" })
                  |> withParser (str { long: "url" })),
         ]
-        |> named "test"
+        |> program {name: "test" }
 
     when parse parser ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
@@ -617,7 +648,7 @@ expect
                          |> withParser (str { long: "pw" })),
                 ])
         ]
-        |> named "test"
+        |> program {name:"test"}
 
     when parse parser ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"

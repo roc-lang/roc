@@ -28,7 +28,7 @@ main = \args ->
                         help: Some "the greeting to use",
                     }))
         ]
-        |> Arg.named "args-example"
+        |> Arg.program {name: "args-example", help: "an example of the CLI platform argument parser"}
 
     when Arg.parseFormatted parser args is
         Ok (Exclaim s) ->
