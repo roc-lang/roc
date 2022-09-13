@@ -210,11 +210,76 @@ pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_fileReadBytes(path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
-    let path = path_from_roc_path(path);
-    println!("TODO read bytes from {:?}", path);
+pub extern "C" fn roc_fx_fileReadBytes(roc_path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
+    use std::io::Read;
 
-    RocResult::ok(RocList::empty())
+    let mut bytes = Vec::new();
+
+    match File::open(path_from_roc_path(roc_path)) {
+        Ok(mut file) => match file.read_to_end(&mut bytes) {
+            Ok(_bytes_read) => RocResult::ok(RocList::from(bytes.as_slice())),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileDelete(roc_path: &RocList<u8>) -> RocResult<(), ReadErr> {
+    match std::fs::remove_file(path_from_roc_path(roc_path)) {
+        Ok(()) => RocResult::ok(()),
+        Err(_) => {
+            todo!("Report a file write error");
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_cwd() -> RocList<u8> {
+    // TODO instead, call getcwd on UNIX and GetCurrentDirectory on Windows
+    match std::env::current_dir() {
+        Ok(path_buf) => os_str_to_roc_path(path_buf.into_os_string().as_os_str()),
+        Err(_) => {
+            // Default to empty path
+            RocList::empty()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_dirList(
+    // TODO: this RocResult should use Dir.WriteErr - but right now it's File.WriteErr
+    // because glue doesn't have Dir.WriteErr yet.
+    roc_path: &RocList<u8>,
+) -> RocResult<RocList<RocList<u8>>, WriteErr> {
+    println!("Dir.list...");
+    match std::fs::read_dir(path_from_roc_path(roc_path)) {
+        Ok(dir_entries) => RocResult::ok(
+            dir_entries
+                .map(|opt_dir_entry| match opt_dir_entry {
+                    Ok(entry) => os_str_to_roc_path(entry.path().into_os_string().as_os_str()),
+                    Err(_) => {
+                        todo!("handle dir_entry path didn't resolve")
+                    }
+                })
+                .collect::<RocList<RocList<u8>>>(),
+        ),
+        Err(_) => {
+            todo!("handle Dir.list error");
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+/// TODO convert from EncodeWide to RocPath on Windows
+fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    RocList::from(os_str.as_bytes())
 }
 
 #[no_mangle]
