@@ -132,7 +132,6 @@ readUtf8 = \path ->
 #                     Err decodingErr -> Err (FileReadDecodeErr decodingErr)
 #             Err readErr -> Err (FileReadErr readErr)
 #     InternalTask.fromEffect effect
-
 toWriteTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileWriteErr Path err]* [Write [File]*]*
 toWriteTask = \path, toEffect ->
     InternalPath.toBytes path

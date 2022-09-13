@@ -5,7 +5,6 @@ interface FileMetadata
 # Design note: this is an opaque type rather than a type alias so that
 # we can add new operating system info if new OS releases introduce them,
 # as a backwards-compatible change.
-
 FileMetadata := {
     bytes : U64,
     type : [File, Dir, Symlink],
@@ -27,9 +26,7 @@ mode = \@FileMetadata info -> info.mode
 
 # TODO need to create a Time module and return something like Time.Utc here.
 # lastModified : FileMetadata -> Utc
-
 # TODO need to create a Time module and return something like Time.Utc here.
 # lastAccessed : FileMetadata -> Utc
-
 # TODO need to create a Time module and return something like Time.Utc here.
 # created : FileMetadata -> Utc
