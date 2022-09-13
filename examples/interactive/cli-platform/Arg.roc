@@ -226,12 +226,17 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-parse : Str, Parser a, List Str -> Result a (ParseError*)
-parse = \program, parser, args ->
+NamedParser a : {name: Str, parser: Parser a}
+
+named = \name, parser -> {name, parser}
+
+# TODO panics in alias analysis when this annotation is included
+#parse : NamedParser a, List Str -> Result a (ParseError*)
+parse = \parser, args ->
     # By convention the first string in the arg list is the program name.
     if List.isEmpty args
-    then Err (ProgramNameNotProvided program)
-    else parseHelp parser (List.split args 1).others
+    then Err (ProgramNameNotProvided parser.name)
+    else parseHelp parser.parser (List.split args 1).others
 
 parseHelp : Parser a, List Str -> Result a (ParseError*)
 parseHelp = \@Parser parser, args ->
@@ -291,12 +296,12 @@ choice = \subCommands -> @Parser (SubCommand subCommands)
 
 ## Like [parse], runs a parser to completion on a list of arguments.
 ## If the parser fails, a formatted error and help message is returned.
-parseFormatted : Str, Parser a, List Str -> Result a Str
-parseFormatted = \program, parser, args ->
+parseFormatted : NamedParser a, List Str -> Result a Str
+parseFormatted = \parser, args ->
     Result.mapErr
-        (parse program parser args)
+        (parse parser args)
         \e ->
-            Str.concat (Str.concat (formatHelp parser) "\n\n") (formatError e)
+            Str.concat (Str.concat (formatHelp parser.parser) "\n\n") (formatError e)
 
 formatHelp : Parser a -> Str
 formatHelp = \parser ->
@@ -468,7 +473,7 @@ expect
         ["test", "--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parse "test" parser args == Ok "foo: true bar: baz"
+    List.all cases \args -> parse (named "test" parser) args == Ok "foo: true bar: baz"
 
 # string and bool parsers build help
 expect
@@ -565,7 +570,7 @@ expect
                  |> withParser (str { long: "url" })),
         ]
 
-    when parse "test" parser ["test", "login", "--pw", "123", "--user", "abc"] is
+    when parse (named "test" parser) ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
@@ -584,7 +589,7 @@ expect
                 ])
         ]
 
-    when parse "test" parser ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
+    when parse (named "test" parser) ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
         Err _ -> False
 
