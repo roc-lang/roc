@@ -41,7 +41,11 @@ const repl = {
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default('/repl/roc_repl_wasm_bg.wasm').then((instance) => {
+roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
+  repl.elemHistory.querySelector('#loading-message').remove();
+  repl.elemSourceInput.disabled = false;
+  repl.elemSourceInput.placeholder =
+    "Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)";
   repl.compiler = instance;
 });
 
