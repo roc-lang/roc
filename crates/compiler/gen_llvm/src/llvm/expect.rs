@@ -935,7 +935,8 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
                 bd.build_int_add(offset, elements_width, "new_offset")
             } else {
-                let elements_start_offset = offset;
+                // We cloned the elements into the extra_offset address.
+                let elements_start_offset = cursors.extra_offset.into();
 
                 let element_type = basic_type_from_layout(env, elem);
                 let elements = bd.build_pointer_cast(
