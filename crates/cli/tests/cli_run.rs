@@ -495,8 +495,8 @@ mod cli_run {
             filename: "args.roc",
             executable_filename: "args",
             stdin: &[],
-            arguments: &[Arg::PlainText("greet"), Arg::PlainText("--name"), Arg::PlainText("test"), Arg::PlainText("-g"), Arg::PlainText("hello")],
-            expected_ending: "hello, test\n",
+            arguments: &[Arg::PlainText("log"), Arg::PlainText("-b"), Arg::PlainText("3"), Arg::PlainText("--num"), Arg::PlainText("81")],
+            expected_ending: "4\n",
             use_valgrind: false,
         },
         effects:"interactive" => Example {

@@ -6,46 +6,56 @@ app "args"
 main : List Str -> Task.Task {} [] [Write [Stdout]]
 main = \args ->
     parser =
-        exclaimCmd =
-            Arg.succeed (\s -> Exclaim s)
+        divCmd =
+            Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
             |> Arg.withParser
                 (
-                    Arg.str {
-                        long: "string",
-                        short: "s",
-                        help: "the string to exclaim",
+                    Arg.i64 {
+                        long: "dividend",
+                        short: "n",
+                        help: "the number to divide; corresponds to a numerator",
                     }
                 )
-            |> Arg.subCommand "exclaim"
+            |> Arg.withParser
+                (
+                    Arg.i64 {
+                        long: "divisor",
+                        short: "d",
+                        help: "the number to divide by; corresponds to a denominator",
+                    }
+                )
+            |> Arg.subCommand "div"
 
-        greetCmd =
-            Arg.succeed (\name -> \greeting -> Greet { name, greeting })
+        logCmd =
+            Arg.succeed (\base -> \num -> Log (Num.toF64 base) (Num.toF64 num))
             |> Arg.withParser
                 (
-                    Arg.str {
-                        long: "name",
-                        help: "the name of the individual to greet",
+                    Arg.i64 {
+                        long: "base",
+                        short: "b",
+                        help: "base of the logarithm",
                     }
                 )
             |> Arg.withParser
                 (
-                    Arg.str {
-                        long: "greeting",
-                        short: "g",
-                        help: "the greeting to use",
+                    Arg.i64 {
+                        long: "num",
+                        help: "the number to take the logarithm of",
                     }
                 )
-            |> Arg.subCommand "greet"
+            |> Arg.subCommand "log"
 
-        Arg.choice [exclaimCmd, greetCmd]
-        |> Arg.program { name: "args-example", help: "An example of the CLI platform argument parser" }
+        Arg.choice [divCmd, logCmd]
+        |> Arg.program { name: "args-example", help: "A calculator example of the CLI platform argument parser" }
 
     when Arg.parseFormatted parser args is
-        Ok (Exclaim s) ->
-            Stdout.line "\(s)!"
-
-        Ok (Greet { name, greeting }) ->
-            Stdout.line "\(greeting), \(name)"
-
+        Ok cmd -> runCmd cmd |> Num.toStr |> Stdout.line
         Err helpMenu ->
             Stdout.line helpMenu
+
+runCmd = \cmd ->
+    when cmd is
+        Div n d -> n / d
+        Log b n ->
+            # log_b(n) = log_x(n) / log_x(b) for all x
+            runCmd (Div (Num.log n) (Num.log b))
