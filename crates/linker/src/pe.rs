@@ -599,14 +599,4 @@ mod test {
 
         assert_eq!(new_sections, names.as_slice());
     }
-
-    //    fn actually_do_the_thing() {
-    //        let data = include_bytes!("/home/folkertdev/roc/roc/examples/double/simple.exe");
-    //
-    //        let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    //
-    //        let path = Path::new("/home/folkertdev/roc/roc/examples/double/modified.exe");
-    //
-    //        let _mmap = Preprocessor::preprocess(path, data, &new_sections);
-    //    }
 }
