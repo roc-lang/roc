@@ -1,3 +1,7 @@
+procedure Bool.2 ():
+    let Bool.11 : Int1 = true;
+    ret Bool.11;
+
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.258 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.258;
@@ -8,37 +12,37 @@ procedure Num.21 (#Attr.2, #Attr.3):
 
 procedure Test.6 (Test.8, #Attr.12):
     let Test.4 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.22 : I64 = CallByName Num.19 Test.8 Test.4;
-    ret Test.22;
+    let Test.21 : I64 = CallByName Num.19 Test.8 Test.4;
+    ret Test.21;
 
 procedure Test.7 (Test.9, #Attr.12):
     let Test.5 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.20 : I64 = CallByName Num.21 Test.9 Test.5;
-    ret Test.20;
+    let Test.19 : I64 = CallByName Num.21 Test.9 Test.5;
+    ret Test.19;
 
 procedure Test.0 ():
     let Test.4 : I64 = 1i64;
     let Test.5 : I64 = 2i64;
-    let Test.12 : I64 = 42i64;
-    joinpoint Test.19 Test.13:
-        let Test.14 : U8 = GetTagId Test.13;
-        joinpoint Test.15 Test.11:
-            ret Test.11;
+    let Test.11 : I64 = 42i64;
+    joinpoint Test.18 Test.12:
+        let Test.13 : U8 = GetTagId Test.12;
+        joinpoint Test.14 Test.10:
+            ret Test.10;
         in
-        switch Test.14:
+        switch Test.13:
             case 0:
-                let Test.16 : I64 = CallByName Test.6 Test.12 Test.13;
-                jump Test.15 Test.16;
+                let Test.15 : I64 = CallByName Test.6 Test.11 Test.12;
+                jump Test.14 Test.15;
         
             default:
-                let Test.17 : I64 = CallByName Test.7 Test.12 Test.13;
-                jump Test.15 Test.17;
+                let Test.16 : I64 = CallByName Test.7 Test.11 Test.12;
+                jump Test.14 Test.16;
         
     in
-    let Test.21 : Int1 = true;
-    if Test.21 then
+    let Test.20 : Int1 = CallByName Bool.2;
+    if Test.20 then
         let Test.6 : [C I64, C I64] = TagId(0) Test.4;
-        jump Test.19 Test.6;
+        jump Test.18 Test.6;
     else
         let Test.7 : [C I64, C I64] = TagId(1) Test.5;
-        jump Test.19 Test.7;
+        jump Test.18 Test.7;

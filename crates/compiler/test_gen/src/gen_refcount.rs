@@ -483,7 +483,7 @@ fn boxed_str_dec() {
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 b = Box.box s
 
-                if False then
+                if Bool.false then
                     ReturnTheBox b
                 else
                     DeallocateEverything

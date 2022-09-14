@@ -3800,7 +3800,7 @@ fn condition_polymorphic_num_becomes_float() {
     assert_evals_to!(
         indoc!(
             r#"
-            x = if True then 2 else 3
+            x = if Bool.true then 2 else 3
             x * 5f32
             "#
         ),
