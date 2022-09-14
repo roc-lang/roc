@@ -18,7 +18,7 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, UnionLayout};
 
-use super::build::{load_roc_value, FunctionSpec};
+use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 pub struct PointerToRefcount<'ctx> {
@@ -515,6 +515,12 @@ fn call_help<'a, 'ctx, 'env>(
     call_mode: CallMode<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    let value = cast_if_necessary_for_opaque_recursive_pointers(
+        env.builder,
+        value,
+        function.get_params()[0].get_type(),
+    );
+
     let call = match call_mode {
         CallMode::Inc(inc_amount) => {
             env.builder
