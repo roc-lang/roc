@@ -74,8 +74,8 @@ setBlack = \tree ->
 isRed : Tree a b -> Bool
 isRed = \tree ->
     when tree is
-        Node Red _ _ _ _ -> True
-        _ -> False
+        Node Red _ _ _ _ -> Bool.true
+        _ -> Bool.false
 
 ins : Tree I64 Bool, I64, Bool -> Tree I64 Bool
 ins = \tree, kx, vx ->
@@ -93,13 +93,13 @@ ins = \tree, kx, vx ->
             when Num.compare kx ky is
                 LT ->
                     when isRed a is
-                        True -> balanceLeft (ins a kx vx) ky vy b
-                        False -> Node Black (ins a kx vx) ky vy b
+                        Bool.true -> balanceLeft (ins a kx vx) ky vy b
+                        Bool.false -> Node Black (ins a kx vx) ky vy b
 
                 GT ->
                     when isRed b is
-                        True -> balanceRight a ky vy (ins b kx vx)
-                        False -> Node Black a ky vy (ins b kx vx)
+                        Bool.true -> balanceRight a ky vy (ins b kx vx)
+                        Bool.false -> Node Black a ky vy (ins b kx vx)
 
                 EQ ->
                     Node Black a kx vx b
@@ -137,8 +137,8 @@ balanceRight = \l, k, v, r ->
 isBlack : Color -> Bool
 isBlack = \c ->
     when c is
-        Black -> True
-        Red -> False
+        Black -> Bool.true
+        Red -> Bool.false
 
 Del a b : [Del (Tree a b) Bool]
 
@@ -155,10 +155,10 @@ makeBlack : Map -> Del I64 Bool
 makeBlack = \t ->
     when t is
         Node Red l k v r ->
-            Del (Node Black l k v r) False
+            Del (Node Black l k v r) Bool.false
 
         _ ->
-            Del t True
+            Del t Bool.true
 
 rebalanceLeft = \c, l, k, v, r ->
     when l is
@@ -166,7 +166,7 @@ rebalanceLeft = \c, l, k, v, r ->
             Del (balanceLeft (setRed l) k v r) (isBlack c)
 
         Node Red lx kx vx rx ->
-            Del (Node Black lx kx vx (balanceLeft (setRed rx) k v r)) False
+            Del (Node Black lx kx vx (balanceLeft (setRed rx) k v r)) Bool.false
 
         _ ->
             boom "unreachable"
@@ -177,7 +177,7 @@ rebalanceRight = \c, l, k, v, r ->
             Del (balanceRight l k v (setRed r)) (isBlack c)
 
         Node Red lx kx vx rx ->
-            Del (Node Black (balanceRight l k v (setRed lx)) kx vx rx) False
+            Del (Node Black (balanceRight l k v (setRed lx)) kx vx rx) Bool.false
 
         _ ->
             boom "unreachable"
@@ -187,24 +187,24 @@ delMin = \t ->
         Node Black Leaf k v r ->
             when r is
                 Leaf ->
-                    Delmin (Del Leaf True) k v
+                    Delmin (Del Leaf Bool.true) k v
 
                 _ ->
-                    Delmin (Del (setBlack r) False) k v
+                    Delmin (Del (setBlack r) Bool.false) k v
 
         Node Red Leaf k v r ->
-            Delmin (Del r False) k v
+            Delmin (Del r Bool.false) k v
 
         Node c l k v r ->
             when delMin l is
-                Delmin (Del lx True) kx vx ->
+                Delmin (Del lx Bool.true) kx vx ->
                     Delmin (rebalanceRight c lx k v r) kx vx
 
-                Delmin (Del lx False) kx vx ->
-                    Delmin (Del (Node c lx k v r) False) kx vx
+                Delmin (Del lx Bool.false) kx vx ->
+                    Delmin (Del (Node c lx k v r) Bool.false) kx vx
 
         Leaf ->
-            Delmin (Del t False) 0 False
+            Delmin (Del t Bool.false) 0 Bool.false
 
 delete : Tree I64 Bool, I64 -> Tree I64 Bool
 delete = \t, k ->
@@ -216,32 +216,32 @@ del : Tree I64 Bool, I64 -> Del I64 Bool
 del = \t, k ->
     when t is
         Leaf ->
-            Del Leaf False
+            Del Leaf Bool.false
 
         Node cx lx kx vx rx ->
             if (k < kx) then
                 when del lx k is
-                    Del ly True ->
+                    Del ly Bool.true ->
                         rebalanceRight cx ly kx vx rx
 
-                    Del ly False ->
-                        Del (Node cx ly kx vx rx) False
+                    Del ly Bool.false ->
+                        Del (Node cx ly kx vx rx) Bool.false
             else if (k > kx) then
                 when del rx k is
-                    Del ry True ->
+                    Del ry Bool.true ->
                         rebalanceLeft cx lx kx vx ry
 
-                    Del ry False ->
-                        Del (Node cx lx kx vx ry) False
+                    Del ry Bool.false ->
+                        Del (Node cx lx kx vx ry) Bool.false
             else
                 when rx is
                     Leaf ->
-                        if isBlack cx then makeBlack lx else Del lx False
+                        if isBlack cx then makeBlack lx else Del lx Bool.false
 
                     Node _ _ _ _ _ ->
                         when delMin rx is
-                            Delmin (Del ry True) ky vy ->
+                            Delmin (Del ry Bool.true) ky vy ->
                                 rebalanceLeft cx lx ky vy ry
 
-                            Delmin (Del ry False) ky vy ->
-                                Del (Node cx lx ky vy ry) False
+                            Delmin (Del ry Bool.false) ky vy ->
+                                Del (Node cx lx ky vy ry) Bool.false

@@ -18,8 +18,8 @@ main =
 showBool : Bool -> Str
 showBool = \b ->
     when b is
-        True -> "True"
-        False -> "False"
+        Bool.true -> "true"
+        Bool.talse -> "false"
 
 test1 : Bool
 test1 =

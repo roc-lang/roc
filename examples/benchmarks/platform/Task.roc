@@ -67,12 +67,12 @@ getInt =
         Effect.getInt
         \{ isError, value } ->
             when isError is
-                True ->
+                Bool.true ->
                     # when errorCode is
                     #    # A -> Task.fail InvalidCharacter
                     #    # B -> Task.fail IOError
                     #    _ ->
                     Task.succeed -1
 
-                False ->
+                Bool.false ->
                     Task.succeed value
