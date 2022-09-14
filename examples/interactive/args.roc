@@ -12,8 +12,8 @@ main = \args ->
                 (
                     Arg.str {
                         long: "string",
-                        short: Some "s",
-                        help: Some "the string to exclaim",
+                        short: "s",
+                        help: "the string to exclaim",
                     }
                 )
             |> Arg.subCommand "exclaim"
@@ -24,15 +24,15 @@ main = \args ->
                 (
                     Arg.str {
                         long: "name",
-                        help: Some "the name of the individual to greet",
+                        help: "the name of the individual to greet",
                     }
                 )
             |> Arg.withParser
                 (
                     Arg.str {
                         long: "greeting",
-                        short: Some "g",
-                        help: Some "the greeting to use",
+                        short: "g",
+                        help: "the greeting to use",
                     }
                 )
             |> Arg.subCommand "greet"

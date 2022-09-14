@@ -19,7 +19,7 @@ interface Arg
 ## A [NamedParser] is usually built from a [Parser] using [program].
 NamedParser a := {
     name : Str,
-    help : OptionStr,
+    help : Str,
     parser : Parser a,
 }
 
@@ -81,21 +81,12 @@ Help : [
     Config (List Config),
 ]
 
-OptionStr : [Some Str, NotProvided]
-
 Config : {
     long : Str,
-    short : OptionStr,
-    help : OptionStr,
+    short : Str,
+    help : Str,
     type : Type,
 }
-
-# TODO currently unused because using this as an annotation yields panics
-# OptConfig : {
-#     long : Str,
-#     short ?OptionStr,
-#     help ?OptionStr,
-# }
 
 ## Generates help metadata from a [Parser].
 ##
@@ -130,15 +121,13 @@ toHelpHelper = \@Parser parser, configs ->
                 (\{ name, parser: innerParser } -> { name, help: toHelpHelper innerParser [] })
             |> SubCommands
 
-findOneArg : Str, OptionStr, List Str -> Result Str [NotFound]*
-findOneArg = \long, optShort, args ->
+findOneArg : Str, Str, List Str -> Result Str [NotFound]*
+findOneArg = \long, short, args ->
     argMatches = \arg ->
         if arg == "--\(long)" then
             True
         else
-            when optShort is
-                Some short -> arg == "-\(short)"
-                NotProvided -> False
+            Bool.not (Str.isEmpty short) && arg == "-\(short)"
 
     # TODO allow = as well, etc.
     result = List.findFirstIndex args argMatches
@@ -267,22 +256,14 @@ andMap = \@Parser parser, @Parser mapper ->
 ## The produced [NamedParser] can be used to parse arguments via [parse] or
 ## [parseFormatted].
 program = \parser, { name, help ? "" } ->
-    optHelp =
-        if
-            Str.isEmpty help
-        then
-            NotProvided
-        else
-            Some help
-
-    @NamedParser { name, help: optHelp, parser }
+    @NamedParser { name, help, parser }
 
 ## Parses a list of command-line arguments with the given parser. The list of
 ## arguments is expected to contain the name of the program in the first
 ## position.
 ##
 ## If the arguments do not conform with what is expected by the parser, the
-## first error seen will be returned. 
+## first error seen will be returned.
 # TODO panics in alias analysis when this annotation is included
 # parse : NamedParser a, List Str -> Result a (ParseError*)
 parse = \@NamedParser parser, args ->
@@ -333,8 +314,8 @@ parseHelp = \@Parser parser, args ->
 ## Creates a parser for a boolean flag argument.
 ## Flags of value "true" and "false" will be parsed as [True] and [False], respectively.
 ## All other values will result in a `WrongType` error.
-bool : _ -> Parser Bool # TODO: panics if OptConfig annotated
-bool = \{ long, short ? NotProvided, help ? NotProvided } ->
+bool : _ -> Parser Bool # TODO: panics if parameter annotation given
+bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
@@ -345,8 +326,8 @@ bool = \{ long, short ? NotProvided, help ? NotProvided } ->
     @Parser (Arg { long, short, help, type: Bool } fn)
 
 ## Creates a parser for a string flag argument.
-str : _ -> Parser Str # TODO: panics if OptConfig annotated
-str = \{ long, short ? NotProvided, help ? NotProvided } ->
+str : _ -> Parser Str # TODO: panics if parameter annotation given
+str = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
@@ -393,12 +374,12 @@ indent = \n -> Str.repeat " " n
 indentLevel : Nat
 indentLevel = 4
 
+mapNonEmptyStr = \s, f -> if Str.isEmpty s then s else f s
+
 # formatHelp : NamedParser a -> Str
 formatHelp = \@NamedParser { name, help, parser } ->
     fmtHelp =
-        when help is
-            Some helpStr -> "\n\(helpStr)"
-            NotProvided -> ""
+        mapNonEmptyStr help \helpStr -> "\n\(helpStr)"
 
     cmdHelp = toHelp parser
 
@@ -439,16 +420,12 @@ formatConfig = \n, { long, short, help, type } ->
     indented = indent n
 
     formattedShort =
-        when short is
-            NotProvided -> ""
-            Some s -> ", -\(s)"
+        mapNonEmptyStr short \s -> ", -\(s)"
 
     formattedType = formatType type
 
     formattedHelp =
-        when help is
-            NotProvided -> ""
-            Some h -> "    \(h)"
+        mapNonEmptyStr help \h -> "    \(h)"
 
     "\(indented)--\(long)\(formattedShort)\(formattedHelp)  (\(formattedType))"
 
@@ -547,19 +524,19 @@ expect
 
 # bool dashed short argument with value is determined true
 expect
-    parser = bool { long: "foo", short: Some "F" }
+    parser = bool { long: "foo", short: "F" }
 
     parseHelp parser ["-F", "true"] == Ok True
 
 # bool dashed short argument with value is determined false
 expect
-    parser = bool { long: "foo", short: Some "F" }
+    parser = bool { long: "foo", short: "F" }
 
     parseHelp parser ["-F", "false"] == Ok False
 
 # bool dashed short argument with value is determined wrong type
 expect
-    parser = bool { long: "foo", short: Some "F" }
+    parser = bool { long: "foo", short: "F" }
 
     parseHelp parser ["-F", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
 
@@ -577,13 +554,13 @@ expect
 
 # string dashed short argument without value is missing
 expect
-    parser = str { long: "foo", short: Some "F" }
+    parser = str { long: "foo", short: "F" }
 
     parseHelp parser ["-F"] == Err (MissingRequiredArg "foo")
 
 # string dashed short argument with value is determined
 expect
-    parser = str { long: "foo", short: Some "F" }
+    parser = str { long: "foo", short: "F" }
 
     parseHelp parser ["-F", "itsme"] == Ok "itsme"
 
@@ -606,15 +583,15 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
-        |> withParser (str { long: "foo", help: Some "the foo flag" })
-        |> withParser (str { long: "bar", short: Some "B" })
+        |> withParser (str { long: "foo", help: "the foo flag" })
+        |> withParser (str { long: "bar", short: "B" })
         |> withParser (bool { long: "bool" })
 
     toHelp parser
     == Config [
-        { long: "foo", short: NotProvided, help: Some "the foo flag", type: Str },
-        { long: "bar", short: Some "B", help: NotProvided, type: Str },
-        { long: "bool", short: NotProvided, help: NotProvided, type: Bool },
+        { long: "foo", short: "", help: "the foo flag", type: Str },
+        { long: "bar", short: "B", help: "", type: Str },
+        { long: "bool", short: "", help: "", type: Bool },
     ]
 
 # format argument is missing
@@ -643,9 +620,9 @@ expect
 expect
     parser =
         succeed (\_foo -> \_bar -> \_baz -> \_bool -> "")
-        |> withParser (str { long: "foo", help: Some "the foo flag" })
-        |> withParser (str { long: "bar", short: Some "B" })
-        |> withParser (str { long: "baz", short: Some "z", help: Some "the baz flag" })
+        |> withParser (str { long: "foo", help: "the foo flag" })
+        |> withParser (str { long: "bar", short: "B" })
+        |> withParser (str { long: "baz", short: "z", help: "the baz flag" })
         |> withParser (bool { long: "bool" })
         |> program { name: "test" }
 
