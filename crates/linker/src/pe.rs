@@ -1,12 +1,14 @@
 use std::{path::Path, time::Instant};
 
-use memmap2::Mmap;
+use memmap2::{Mmap, MmapMut};
 use object::{
-    pe::{ImageImportDescriptor, ImageNtHeaders64, ImageThunkData64},
+    pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
     read::pe::ImportTable,
 };
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
+
+use crate::load_struct_inplace_mut;
 
 #[allow(dead_code)]
 pub(crate) fn preprocess_windows(
@@ -190,12 +192,183 @@ fn remove_dummy_dll_import_table(
     }
 }
 
+#[allow(dead_code)]
+struct Preprocessor<'a> {
+    data: &'a [u8],
+    result: MmapMut,
+    extra_sections: &'a [[u8; 8]],
+    header_offset: u64,
+    section_count_offset: u64,
+    section_table_offset: u64,
+    old_section_count: usize,
+    new_section_count: usize,
+    old_headers_size: usize,
+    new_headers_size: usize,
+}
+
+impl<'a> Preprocessor<'a> {
+    const SECTION_HEADER_WIDTH: usize = std::mem::size_of::<ImageSectionHeader>();
+
+    #[allow(dead_code)]
+    fn preprocess(output_path: &Path, data: &'a [u8], extra_sections: &'a [[u8; 8]]) -> MmapMut {
+        let mut this = Self::new(output_path, data, extra_sections);
+        this.copy();
+        this.fix();
+
+        this.result
+    }
+
+    fn new(output_path: &Path, data: &'a [u8], extra_sections: &'a [[u8; 8]]) -> Self {
+        use object::pe;
+        use object::read::pe::ImageNtHeaders;
+        use object::LittleEndian as LE;
+
+        let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
+        let mut offset = dos_header.nt_headers_offset().into();
+        let header_offset = offset;
+        let (nt_headers, _data_directories) =
+            ImageNtHeaders64::parse(data, &mut offset).unwrap_or_else(|e| internal_error!("{e}"));
+        let section_table_offset = offset;
+        let sections = nt_headers
+            .sections(data, offset)
+            .unwrap_or_else(|e| internal_error!("{e}"));
+
+        // size of the headers as reported in the optinal header.
+        // All sections should start after this point
+        let old_headers_size = nt_headers.optional_header.size_of_headers.get(LE) as usize;
+        let file_alignment = nt_headers.optional_header.file_alignment.get(LE) as usize;
+        let additional_alignments = ((extra_sections.len() * Self::SECTION_HEADER_WIDTH) as f64
+            / file_alignment as f64)
+            .ceil() as usize;
+        let new_headers_size = old_headers_size + additional_alignments * file_alignment;
+
+        let additional_length = new_headers_size - old_headers_size;
+
+        let result = mmap_mut(output_path, data.len() + additional_length);
+
+        Self {
+            data,
+            extra_sections,
+            header_offset,
+            section_count_offset: header_offset + 4 + 2,
+            section_table_offset,
+            old_section_count: sections.len(),
+            new_section_count: sections.len() + extra_sections.len(),
+            result,
+            old_headers_size,
+            new_headers_size,
+        }
+    }
+
+    fn copy(&mut self) {
+        // start of the first new section
+        let new_sections_start = self.section_table_offset as usize
+            + self.old_section_count as usize * Self::SECTION_HEADER_WIDTH;
+
+        // copy the headers up to and including the current section table entries
+        // (but omitting the terminating NULL section table entry)
+        self.result[..new_sections_start].copy_from_slice(&self.data[0..new_sections_start]);
+
+        // update the header with the new number of sections. From what I can gather, this number of
+        // sections is usually ignored, and section table entry of all NULL fields is used to know when
+        // the section table ends. But the rust `object` crate does use this number, and it seems like
+        // a good idea to keep the header data accurate.
+        self.result[self.section_count_offset as usize..][..2]
+            .copy_from_slice(&(self.new_section_count as u16).to_le_bytes());
+
+        // copy the rest of the headers
+        let rest_of_headers = self.old_headers_size - new_sections_start;
+        let new_sections_width = self.extra_sections.len() * Self::SECTION_HEADER_WIDTH;
+        self.result[new_sections_start + new_sections_width..][..rest_of_headers]
+            .copy_from_slice(&self.data[new_sections_start..][..rest_of_headers]);
+
+        // copy all of the actual (post-header) data
+        self.result[self.new_headers_size..].copy_from_slice(&self.data[self.old_headers_size..]);
+    }
+
+    fn write_dummy_sections(&mut self) {
+        // start of the first new section
+        let new_sections_start = self.section_table_offset as usize
+            + self.old_section_count as usize * Self::SECTION_HEADER_WIDTH;
+
+        for (i, name) in self.extra_sections.iter().enumerate() {
+            let header = ImageSectionHeader {
+                name: *name,
+                virtual_size: Default::default(),
+                virtual_address: Default::default(),
+                size_of_raw_data: Default::default(),
+                pointer_to_raw_data: Default::default(),
+                pointer_to_relocations: Default::default(),
+                pointer_to_linenumbers: Default::default(),
+                number_of_relocations: Default::default(),
+                number_of_linenumbers: Default::default(),
+                characteristics: Default::default(),
+            };
+
+            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
+                unsafe { std::mem::transmute(header) };
+
+            self.result[new_sections_start + i * header_array.len()..][..header_array.len()]
+                .copy_from_slice(&header_array);
+        }
+    }
+
+    fn fix(&mut self) {
+        use object::LittleEndian as LE;
+
+        self.write_dummy_sections();
+
+        // update the size of the headers
+        let nt_headers =
+            load_struct_inplace_mut::<ImageNtHeaders64>(&mut self.result, self.header_offset as _);
+        nt_headers
+            .optional_header
+            .size_of_headers
+            .set(LE, self.new_headers_size as u32);
+
+        // update the section file offsets
+        let shift = self.new_headers_size - self.old_headers_size;
+        let mut offset = self.section_table_offset as usize;
+        loop {
+            let header =
+                load_struct_inplace_mut::<object::pe::ImageSectionHeader>(&mut self.result, offset);
+
+            let old = header.pointer_to_raw_data.get(LE);
+            header.pointer_to_raw_data.set(LE, old + shift as u32);
+
+            // stop when we hit the NULL section
+            if header.name == [0; 8] {
+                break;
+            }
+
+            offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
+        }
+    }
+}
+
+fn mmap_mut(path: &Path, length: usize) -> MmapMut {
+    let out_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+    out_file
+        .set_len(length as u64)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
+}
+
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
+    use std::ops::Deref;
+
     use object::read::pe::PeFile64;
-    use object::Object;
+    use object::{pe, Object};
 
     use super::*;
 
@@ -353,5 +526,82 @@ mod test {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn find_number_of_sections() {
+        use object::pe;
+
+        let dos_header = pe::ImageDosHeader::parse(PE_DYNHOST).unwrap();
+        let offset = dos_header.nt_headers_offset();
+
+        let number_of_sections_offset = offset + 4 + 2;
+
+        let actual = u16::from_le_bytes(
+            PE_DYNHOST[number_of_sections_offset as usize..][..2]
+                .try_into()
+                .unwrap(),
+        );
+
+        assert_eq!(actual, 7)
+    }
+
+    #[test]
+    fn increase_number_of_sections() {
+        use object::read::pe::ImageNtHeaders;
+
+        let dos_header = pe::ImageDosHeader::parse(PE_DYNHOST).unwrap();
+        let mut offset = dos_header.nt_headers_offset().into();
+        let header_offset = offset;
+        let number_of_sections_offset = header_offset + 4 + 2;
+
+        let sections_len_old = u16::from_le_bytes(
+            PE_DYNHOST[number_of_sections_offset as usize..][..2]
+                .try_into()
+                .unwrap(),
+        );
+
+        let new_sections = [*b"placehol", *b"aaaabbbb"];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.exe");
+
+        let mmap = Preprocessor::preprocess(&path, PE_DYNHOST, &new_sections);
+
+        let data = mmap.deref();
+
+        let sections_len_new = u16::from_le_bytes(
+            data[number_of_sections_offset as usize..][..2]
+                .try_into()
+                .unwrap(),
+        );
+
+        assert_eq!(
+            sections_len_old + new_sections.len() as u16,
+            sections_len_new
+        );
+
+        let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
+        let sections = nt_headers.sections(data, offset).unwrap();
+
+        let names: Vec<_> = sections
+            .iter()
+            .map(|h| h.name)
+            .skip(sections_len_old as usize)
+            .take(new_sections.len())
+            .collect();
+
+        assert_eq!(new_sections, names.as_slice());
+    }
+
+    #[test]
+    fn actually_do_the_thing() {
+        let data = include_bytes!("/home/folkertdev/roc/roc/examples/double/simple.exe");
+
+        let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
+
+        let path = Path::new("/home/folkertdev/roc/roc/examples/double/modified.exe");
+
+        let _mmap = Preprocessor::preprocess(path, data, &new_sections);
     }
 }
