@@ -317,7 +317,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[],
+                        &[LINKER_FLAG, "legacy"],
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
@@ -330,7 +330,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[OPTIMIZE_FLAG],
+                        &[LINKER_FLAG, "legacy", OPTIMIZE_FLAG],
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
@@ -338,7 +338,7 @@ mod cli_run {
 
                     // Also check with the legacy linker.
 
-                    if TEST_LEGACY_LINKER {
+                    /*if TEST_LEGACY_LINKER {
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,
@@ -348,7 +348,7 @@ mod cli_run {
                             example.expected_ending,
                             example.use_valgrind,
                         );
-                    }
+                    }*/
                 }
             )*
 
