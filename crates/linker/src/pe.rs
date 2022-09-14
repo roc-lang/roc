@@ -192,6 +192,12 @@ fn remove_dummy_dll_import_table(
     }
 }
 
+/// Preprocess the host's .exe to make space for extra sections
+///
+/// We will later take code and data sections from the app and concatenate them with this
+/// preprocessed host. That means we need to do some bookkeeping: add extra entries to the
+/// section table, update the header with the new section count, and (because we added data)
+/// update existing section headers to point to a different (shifted) location in the file
 #[allow(dead_code)]
 struct Preprocessor<'a> {
     data: &'a [u8],
