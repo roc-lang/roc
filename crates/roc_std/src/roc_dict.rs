@@ -140,6 +140,16 @@ impl<K, V> RocDictItem<K, V> {
     }
 }
 
+impl<K,V> Drop for RocDictItem<K, V> {
+    fn drop(&mut self) {
+        if align_of::<K>() >= align_of::<V>() {
+            unsafe { ManuallyDrop::drop(&mut self.key_first) }
+        } else {
+            unsafe { ManuallyDrop::drop(&mut self.value_first) }
+        }
+    }
+}
+
 impl<K: PartialEq, V: PartialEq> PartialEq for RocDictItem<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.key() == other.key() && self.value() == other.value()
