@@ -1,5 +1,5 @@
 interface Task
-    exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop]
+    exposes [Task, succeed, fail, await, map, mapFail, onFail, attempt, forever, loop]
     imports [Effect, InternalTask]
 
 Task ok err fx : InternalTask.Task ok err fx
@@ -33,15 +33,11 @@ loop = \state, step ->
     Effect.loop state looper
     |> InternalTask.fromEffect
 
-succeed : val -> Task val * *
-succeed = \val ->
-    Effect.always (Ok val)
-    |> InternalTask.fromEffect
+succeed : ok -> Task ok * *
+succeed = \ok -> InternalTask.succeed ok
 
 fail : err -> Task * err *
-fail = \val ->
-    Effect.always (Err val)
-    |> InternalTask.fromEffect
+fail = \err -> InternalTask.fail err
 
 attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
 attempt = \task, transform ->
@@ -82,7 +78,18 @@ map = \task, transform ->
         (InternalTask.toEffect task)
         \result ->
             when result is
-                Ok a -> Task.succeed (transform a) |> InternalTask.toEffect
+                Ok ok -> Task.succeed (transform ok) |> InternalTask.toEffect
                 Err err -> Task.fail err |> InternalTask.toEffect
+
+    InternalTask.fromEffect effect
+
+mapFail : Task ok a fx, (a -> b) -> Task ok b fx
+mapFail = \task, transform ->
+    effect = Effect.after
+        (InternalTask.toEffect task)
+        \result ->
+            when result is
+                Ok ok -> Task.succeed ok |> InternalTask.toEffect
+                Err err -> Task.fail (transform err) |> InternalTask.toEffect
 
     InternalTask.fromEffect effect

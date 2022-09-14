@@ -21,3 +21,11 @@ jobs:
 
       - name: execute tests with --release
         run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test --locked --release
+        
+      - name: upload args binary for inspection
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+           name: failing_args_binary
+           path: examples/interactive/args
+           retention-days: 4

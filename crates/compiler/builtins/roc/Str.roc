@@ -33,6 +33,9 @@ interface Str
         toU8,
         toI8,
         toScalars,
+        replaceEach,
+        replaceFirst,
+        replaceLast,
         splitFirst,
         splitLast,
         walkUtf8WithIndex,
@@ -275,6 +278,65 @@ countUtf8Bytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string with each occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
+replaceEach : Str, Str, Str -> Result Str [NotFound]*
+replaceEach = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            # We found at least one needle, so start the buffer off with
+            # `before` followed by the first replacement flower.
+            Str.reserve "" (Str.countUtf8Bytes haystack)
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+            |> Ok
+
+        Err err -> Err err
+
+replaceEachHelp : Str, Str, Str, Str -> Str
+replaceEachHelp = \buf, haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            buf
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+
+        Err NotFound -> Str.concat buf haystack
+
+expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+
+## Returns the string with the first occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
+replaceFirst : Str, Str, Str -> Result Str [NotFound]*
+replaceFirst = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+
+## Returns the string with the last occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
+replaceLast : Str, Str, Str -> Result Str [NotFound]*
+replaceLast = \haystack, needle, flower ->
+    when splitLast haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.

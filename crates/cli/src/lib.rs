@@ -54,7 +54,7 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
-pub const FLAG_PRECOMPILED: &str = "precompiled-host";
+pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -104,9 +104,9 @@ pub fn build_app<'a>() -> Command<'a> {
         .possible_values(["surgical", "legacy"])
         .required(false);
 
-    let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
-        .long(FLAG_PRECOMPILED)
-        .help("Assume the host has been precompiled and skip recompiling the host\n(This is enabled by default when using `roc build` with a --target other than `--target host`.)")
+    let flag_prebuilt = Arg::new(FLAG_PREBUILT)
+        .long(FLAG_PREBUILT)
+        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target <current machine>`.)")
         .possible_values(["true", "false"])
         .required(false);
 
@@ -143,7 +143,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(flag_wasm_stack_size_kb.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
@@ -182,7 +182,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -204,7 +204,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
@@ -217,7 +217,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
@@ -283,7 +283,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .arg(flag_debug)
         .arg(flag_time)
         .arg(flag_linker)
-        .arg(flag_precompiled)
+        .arg(flag_prebuilt)
         .arg(roc_file_to_run.required(false))
         .arg(args_for_app);
 
@@ -499,11 +499,11 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
-        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    let prebuilt = if matches.is_present(FLAG_PREBUILT) {
+        matches.value_of(FLAG_PREBUILT) == Some("true")
     } else {
-        // When compiling for a different target, default to assuming a precompiled host.
-        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // When compiling for a different target, default to assuming a prebuilt platform.
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the current machine.
         // We make an exception for Wasm, because cross-compiling is the norm in that case.
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
@@ -547,7 +547,7 @@ pub fn build(
         emit_timings,
         link_type,
         linking_strategy,
-        precompiled,
+        prebuilt,
         threading,
         wasm_dev_stack_bytes,
         build_ordering,

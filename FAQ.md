@@ -309,56 +309,83 @@ Here are some more details about the downsides as I see them.
 
 ### Currying and the `|>` operator
 
-In Roc, this code produces `"Hello, World!"`
+In Roc, both of these expressions evaluate to `"Hello, World!"`
 
-```elm
-"Hello, World"
-    |> Str.concat "!"
+```elixir
+Str.concat "Hello, " "World!"
 ```
 
-This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument to the function
-after it. For functions where both arguments have the same type, but it's obvious which argument goes where (e.g.
-`Str.concat "Hello, " "World!"`, `List.concat [1, 2] [3, 4]`), this works out well. Another example would
-be `|> Num.sub 1`, which subtracts 1 from whatever came before the `|>`.
+```elixir
+"Hello, "
+|> Str.concat "World!"
+```
 
-For this reason, "pipeline-friendliness" in Roc means that the first argument to each function is typically
-the one that's most likely to be built up using a pipeline. For example, `List.map`:
+In curried languages with a `|>` operator, the first expression still returns `"Hello, World!"` but the second one returns `"World!Hello, "`. This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument, whereas in curried languages, `|>` uses it as the _last_ argument.
 
-```elm
+(For example, this is how `|>` works in both [F#](https://docs.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators) and in [Elm](https://package.elm-lang.org/packages/elm/core/1.0.5/Basics#|%3E), both of which are curried languages. In contrast, Roc's `|>` design uses the same argument ordering as [Elixir](https://hexdocs.pm/elixir/1.14.0/Kernel.html#%7C%3E/2) and [Gleam](https://gleam.run/book/tour/functions.html#pipe-operator), neither of which is a curried language.)
+
+This comes up in other situations as well. For example, consider subtraction and division:
+
+```elixir
+someNumber
+|> Num.div 2
+```
+
+```elixir
+someNumber
+|> Num.sub 1
+```
+
+What do you expect these expressions to do?
+
+In Roc, the first  divides `someNumber` by 2 and the second one subtracts 1 from `someNumber`.  In languages where `|>` uses the other argument ordering, the first example instead takes 2 and divides it by `someNumber`, while the second takes 1 and subtracts `someNumber` from it. This was a pain point I ran into with curried languages, and I was pleasantly surprised that changing the argument ordering in `|>` addressed the pain point.
+
+This style has a second benefit when it comes to higher-order functions. Consider these two examples:
+
+```elixir
+answer = List.map numbers \num ->
+    someFunction
+        "some argument"
+        anotherArg
+        someOtherArg
+```
+
+```elixir
 numbers
-    |> List.map Num.abs
+|> List.map Num.abs
 ```
 
-This argument ordering convention also often makes it possible to pass anonymous functions to higher-order
-functions without needing parentheses, like so:
+In Roc, `List.map` takes a list and then a function. Because of the way `|>` works in Roc, `numbers |> List.map Num.abs` passes `numbers` as the first argument to `List.map`, and `Num.abs` as the second argument. So both of these examples work fine.
 
-```elm
-List.map numbers \num -> Num.abs (num - 1)
+In a curried language, these two examples couldn't both be valid. In order for `|> List.map Num.abs` to work in a curried language (where `|>` works the other way), `List.map` would have to take its arguments in the opposite order: the function first and the list second.
+
+This means the first example would have to change from this...
+
+```elixir
+answer = List.map numbers \num ->
+    someFunction
+        "some argument"
+        anotherArg
+        someOtherArg
 ```
 
-(If the arguments were reversed, this would be `List.map (\num -> Num.abs (num - 1)) numbers` and the
-extra parentheses would be required.)
+...to this:
 
-Neither of these benefits is compatible with the argument ordering currying encourages. Currying encourages
-`List.map` to take the `List` as its second argument instead of the first, so that you can partially apply it
-like `(List.map Num.abs)`; if Roc introduced currying but kept the order of `List.map` the same way it is today,
-then partially applying `List.map` (e.g. `(List.map numbers)`) would be much less useful than if the arguments
-were swapped - but that in turn would make it less useful with `|>` and would require parentheses when passing
-it an anonymous function.
+```elixir
+answer =
+    List.map
+        (\num ->
+            someFunction
+                "some argument"
+                anotherArg
+                someOtherArg
+        )
+        numbers
+```
 
-This is a fundamental design tension. One argument order works well with `|>` (at least the way it works in Roc
-today) and with passing anonymous functions to higher-order functions, and the other works well with currying.
-It's impossible to have both.
+This was also a pain point I'd encountered in curried languages. I prefer the way the former example reads, but that style doesn't work with the argument order that currying encourages for higher-order functions like `List.map`. (Prior to using curried languages, I'd used [CoffeeScript](https://coffeescript.org/) in a functional style with [`_.map`](https://underscorejs.org/#map), and was disappointed to realize that I could no longer use the enjoyable style of `answer = _.map numbers (num) -> …` as I had before. In Roc, this style works.)
 
-Of note, one possible design is to have currying while also having `|>` pass the _last_ argument instead of the first.
-This is what Elm does, and it makes pipeline-friendliness and curry-friendliness the same thing. However, it also
-means that either `|> Str.concat "!"` would add the `"!"` to the front of the string, or else `Str.concat`'s
-arguments would have to be flipped - meaning that `Str.concat "Hello, World" "!"` would evaluate to `"!Hello, World"`.
-
-The only way to have `Str.concat` work the way it does in Roc today (where both pipelines and non-pipeline calling
-do what you'd want them to) is to order function arguments in a way that is not conducive to currying. This design
-tension only exists if there's currying in the language; without it, you can order arguments for pipeline-friendliness
-without concern.
+As a historical note, these stylistic benefits (of `|> Num.sub 1` working as expected, and being able to write `List.map numbers \num ->`) were not among the original reasons Roc did not have currying. These benefits were discovered after the decision had already been made that Roc would not be a curried language, and they served to reinforce after the fact that the decision was the right one for Roc given the language's goals.
 
 ### Currying and learning curve
 

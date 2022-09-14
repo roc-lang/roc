@@ -1243,6 +1243,9 @@ define_builtins! {
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
+        50 STR_REPLACE_EACH: "replaceEach"
+        51 STR_REPLACE_FIRST: "replaceFirst"
+        52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

@@ -3,7 +3,7 @@ app "type-error"
     imports [pf.Stdout.{ line }, pf.Task.{ await }]
     provides [main] to pf
 
-main =
+main = \_args ->
     _ <- await (line "a")
     _ <- await (line "b")
     _ <- await (line "c")

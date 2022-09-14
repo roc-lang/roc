@@ -220,7 +220,7 @@ impl<'a> Formattable for ValueDef<'a> {
                     }
                 } else {
                     buf.spaces(1);
-                    buf.push_str(":");
+                    buf.push(':');
                     buf.spaces(1);
                     loc_annotation.format_with_options(
                         buf,
