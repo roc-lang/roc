@@ -20,7 +20,7 @@ roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_std = { path = "../roc_std" }
 ven_pretty = { path = "../vendor/pretty" }
 distance = "0.4.0"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 
 [dev-dependencies]
 roc_constrain = { path = "../compiler/constrain" }

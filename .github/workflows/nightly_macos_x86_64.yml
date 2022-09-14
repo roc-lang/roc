@@ -12,7 +12,7 @@ jobs:
   test-build-upload:
     name: build, test, package and upload nightly release
     runs-on: [macos-12]
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v3
 

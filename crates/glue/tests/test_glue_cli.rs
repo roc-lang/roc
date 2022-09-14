@@ -122,7 +122,7 @@ mod glue_cli_run {
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
         list_recursive_union:"list-recursive-union" => indoc!(r#"
-            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool("test") }), inputFiles: ["foo"], job: [] }) }
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
         "#),
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }

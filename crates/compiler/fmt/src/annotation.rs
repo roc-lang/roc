@@ -340,8 +340,10 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     Newlines::No
                 };
 
-                buf.newline();
-                buf.indent(indent);
+                if !buf.ends_with_newline() {
+                    buf.newline();
+                    buf.indent(indent);
+                }
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, next_newlines, indent)
             }
@@ -519,7 +521,12 @@ impl<'a> Formattable for Tag<'a> {
 
                     for arg in *args {
                         buf.newline();
-                        arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                        arg.value.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::No,
+                            arg_indent,
+                        );
                     }
                 } else {
                     for arg in *args {

@@ -1,9 +1,9 @@
 platform "cli"
-    requires {} { main : Task {} [] * }
+    requires {} { main : List Str -> Task {} [] * }
     exposes []
     packages {}
     imports [Task.{ Task }, InternalTask, Effect.{ Effect }]
     provides [mainForHost]
 
-mainForHost : Effect (Result {} []) as Fx
-mainForHost = InternalTask.toEffect main
+mainForHost : List Str -> Effect (Result {} []) as Fx
+mainForHost = \args -> InternalTask.toEffect (main args)

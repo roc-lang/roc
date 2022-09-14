@@ -9,6 +9,7 @@ use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
 use roc_std::{RocList, RocResult, RocStr};
+use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::os::raw::c_char;
@@ -20,7 +21,7 @@ use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8);
+    fn roc_main(output: *mut u8, args: *const RocList<RocStr>);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -84,11 +85,16 @@ pub extern "C" fn rust_main() -> i32 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    let args: RocList<RocStr> = std::env::args_os()
+        .map(|s| RocStr::from(s.to_string_lossy().borrow()))
+        .collect();
+
     unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer);
+        roc_main(buffer, &args);
 
         let result = call_the_closure(buffer);
 

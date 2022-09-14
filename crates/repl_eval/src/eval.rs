@@ -656,7 +656,15 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
                 }
-                _ => unreachable!("any other content would have a different layout"),
+                Content::RecursionVar { structure, ..} => {
+                    match env.subs.get_content_without_compacting(*structure) {
+                        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                            (rec_var, tags)
+                        }
+                        content => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(content, env.subs)),
+                    }
+                }
+                _ => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(raw_content, env.subs)),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 
