@@ -120,7 +120,7 @@ fn eq_bool_tag() {
                 true : Bool
                 true = Bool.true
 
-                true == Bool.rue
+                true == Bool.true
                 "#
         ),
         true,
