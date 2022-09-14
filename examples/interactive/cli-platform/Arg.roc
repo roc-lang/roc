@@ -8,6 +8,7 @@ interface Arg
         succeed,
         bool,
         str,
+        i64,
         subCommand,
         choice,
         withParser,
@@ -73,6 +74,7 @@ ParseError a : [
 Type : [
     Str,
     Bool,
+    I64,
 ]
 
 ## Help metadata extracted from a [Parser].
@@ -335,6 +337,18 @@ str = \{ long, short ? "", help ? "" } ->
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
+## Creates a parser for a 64-bit signed integer ([I64]).
+i64 : _ -> Parser I64 # TODO: panics if parameter annotation given
+i64 = \{ long, short ? "", help ? "" } ->
+    fn = \args ->
+        when findOneArg long short args is
+            Err NotFound -> Err NotFound
+            Ok foundArg ->
+                Str.toI64 foundArg
+                |> Result.mapErr \_ -> WrongType
+
+    @Parser (Arg { long, short, help, type: I64 } fn)
+
 ## Wraps a given parser as a subcommand parser.
 ##
 ## When parsing arguments, the subcommand name will be expected to be parsed
@@ -434,6 +448,7 @@ formatType = \type ->
     when type is
         Bool -> "bool"
         Str -> "string"
+        I64 -> "i64"
 
 quote = \s -> "\"\(s)\""
 
@@ -563,6 +578,36 @@ expect
     parser = str { long: "foo", short: "F" }
 
     parseHelp parser ["-F", "itsme"] == Ok "itsme"
+
+# i64 dashed long argument without value is missing
+expect
+    parser = i64 { long: "foo" }
+
+    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
+
+# i64 dashed long argument with value is determined positive
+expect
+    parser = i64 { long: "foo" }
+
+    parseHelp parser ["--foo", "1234"] == Ok 1234
+
+# i64 dashed long argument with value is determined negative
+expect
+    parser = i64 { long: "foo" }
+
+    parseHelp parser ["--foo", "-1234"] == Ok -1234
+
+# i64 dashed short argument without value is missing
+expect
+    parser = i64 { long: "foo", short: "F" }
+
+    parseHelp parser ["-F"] == Err (MissingRequiredArg "foo")
+
+# i64 dashed short argument with value is determined
+expect
+    parser = i64 { long: "foo", short: "F" }
+
+    parseHelp parser ["-F", "1234"] == Ok 1234
 
 # two string parsers complete cases
 expect
