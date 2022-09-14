@@ -724,11 +724,7 @@ pub fn constrain_expr(
 
             let branches_region = {
                 debug_assert!(!branches.is_empty());
-                Region::span_across(
-                    &loc_cond.region,
-                    // &branches.first().unwrap().region(),
-                    &branches.last().unwrap().pattern_region(),
-                )
+                Region::span_across(&loc_cond.region, &branches.last().unwrap().value.region)
             };
 
             let branch_expr_reason =
