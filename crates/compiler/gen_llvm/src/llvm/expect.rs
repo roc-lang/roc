@@ -219,7 +219,9 @@ fn build_clone<'a, 'ctx, 'env>(
             when_recursive,
         ),
 
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+        // Since we will never actually display functions (and hence lambda sets), we can just pass
+        // back the nullptr.
+        Layout::LambdaSet(_) => env.ptr_int().const_zero(),
 
         Layout::Union(union_layout) => {
             if layout.safe_to_memcpy(env.layout_interner) {
