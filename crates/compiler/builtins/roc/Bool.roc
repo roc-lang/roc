@@ -1,8 +1,14 @@
 interface Bool
-    exposes [Bool, and, or, not, isEq, isNotEq]
+    exposes [Bool, true, false, and, or, not, isEq, isNotEq]
     imports []
 
-Bool : [True, False]
+Bool := [True, False]
+
+true : Bool
+true = @Bool True
+
+false : Bool
+false = @Bool False
 
 ## Returns `True` when given `True` and `True`, and `False` when either argument is `False`.
 ##
