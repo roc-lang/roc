@@ -20,7 +20,7 @@ jobs:
           clean: "true"
 
       - name: execute tests with --release
-        run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test -j 1 --locked --release -p roc_cli --test cli_run
+        run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test --locked --release
         
       - name: upload args binary for inspection
         if: always()

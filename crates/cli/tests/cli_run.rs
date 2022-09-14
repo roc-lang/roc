@@ -290,6 +290,9 @@ mod cli_run {
                         }
                     }
 
+                    // workaround for surgical linker issue, see PR #3990
+                    let mut custom_flags : Vec<&str> = vec![];
+
                     match example.executable_filename {
                         "form" | "hello-gui" | "breakout" | "ruby" => {
                             // Since these require things the build system often doesn't have
@@ -309,6 +312,9 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
+                        "args" => {
+                            custom_flags = vec![LINKER_FLAG, "legacy"];
+                        }
                         _ => {}
                     }
 
@@ -317,12 +323,13 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[LINKER_FLAG, "legacy"],
+                        &custom_flags,
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
                     );
 
+                    custom_flags.push(OPTIMIZE_FLAG);
                     // This is mostly because the false interpreter is still very slow -
                     // 25s for the cli tests is just not acceptable during development!
                     #[cfg(not(debug_assertions))]
@@ -330,7 +337,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[LINKER_FLAG, "legacy", OPTIMIZE_FLAG],
+                        &custom_flags,
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
@@ -338,7 +345,7 @@ mod cli_run {
 
                     // Also check with the legacy linker.
 
-                    /*if TEST_LEGACY_LINKER {
+                    if TEST_LEGACY_LINKER {
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,
@@ -348,7 +355,7 @@ mod cli_run {
                             example.expected_ending,
                             example.use_valgrind,
                         );
-                    }*/
+                    }
                 }
             )*
 
