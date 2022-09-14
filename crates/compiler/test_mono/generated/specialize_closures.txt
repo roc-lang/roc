@@ -1,6 +1,6 @@
 procedure Bool.2 ():
-    let Bool.11 : Int1 = true;
-    ret Bool.11;
+    let Bool.12 : Int1 = true;
+    ret Bool.12;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.258 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
@@ -42,6 +42,7 @@ procedure Test.8 (Test.10, #Attr.12):
 procedure Test.0 ():
     let Test.4 : I64 = 1i64;
     let Test.5 : I64 = 2i64;
+    let Test.6 : Int1 = CallByName Bool.2;
     joinpoint Test.20 Test.12:
         let Test.13 : I64 = 42i64;
         let Test.11 : I64 = CallByName Test.1 Test.12 Test.13;
