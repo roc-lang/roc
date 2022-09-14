@@ -3,8 +3,8 @@ app "http-get"
     imports [pf.Http, pf.Task, pf.Stdin, pf.Stdout]
     provides [main] to pf
 
-main : Task.Task {} [] [Read [Stdin], Write [Stdout], Network [Http]]
-main =
+main : List Str -> Task.Task {} [] [Read [Stdin], Write [Stdout], Network [Http]]
+main = \_args ->
     _ <- Task.await (Stdout.line "Please enter a URL to fetch")
 
     url <- Task.await Stdin.line
