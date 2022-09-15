@@ -199,12 +199,11 @@ fn remove_dummy_dll_import_table(
 /// section table, update the header with the new section count, and (because we added data)
 /// update existing section headers to point to a different (shifted) location in the file
 #[allow(dead_code)]
-struct Preprocessor<'a> {
-    data: &'a [u8],
-    result: MmapMut,
-    extra_sections: &'a [[u8; 8]],
-    extra_sections_start: usize,
+struct Preprocessor {
     header_offset: u64,
+    additional_length: usize,
+    extra_sections_start: usize,
+    extra_sections_width: usize,
     section_count_offset: u64,
     section_table_offset: u64,
     old_section_count: usize,
@@ -213,19 +212,21 @@ struct Preprocessor<'a> {
     new_headers_size: usize,
 }
 
-impl<'a> Preprocessor<'a> {
+impl Preprocessor {
     const SECTION_HEADER_WIDTH: usize = std::mem::size_of::<ImageSectionHeader>();
 
     #[allow(dead_code)]
-    fn preprocess(output_path: &Path, data: &'a [u8], extra_sections: &'a [[u8; 8]]) -> MmapMut {
-        let mut this = Self::new(output_path, data, extra_sections);
-        this.copy();
-        this.fix();
+    fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
+        let this = Self::new(data, extra_sections);
+        let mut result = mmap_mut(output_path, data.len() + this.additional_length);
 
-        this.result
+        this.copy(&mut result, data);
+        this.fix(&mut result, extra_sections);
+
+        result
     }
 
-    fn new(output_path: &Path, data: &'a [u8], extra_sections: &'a [[u8; 8]]) -> Self {
+    fn new(data: &[u8], extra_sections: &[[u8; 8]]) -> Self {
         use object::pe;
         use object::read::pe::ImageNtHeaders;
         use object::LittleEndian as LE;
@@ -240,66 +241,62 @@ impl<'a> Preprocessor<'a> {
             .sections(data, offset)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        // size of the headers as reported in the optinal header.
-        // All sections should start after this point
+        // recalculate the size of the headers. The size of the headers must be rounded up to the
+        // next multiple of `file_alignment`.
         let old_headers_size = nt_headers.optional_header.size_of_headers.get(LE) as usize;
         let file_alignment = nt_headers.optional_header.file_alignment.get(LE) as usize;
-        let additional_alignments = ((extra_sections.len() * Self::SECTION_HEADER_WIDTH) as f64
-            / file_alignment as f64)
-            .ceil() as usize;
-        let new_headers_size = old_headers_size + additional_alignments * file_alignment;
+        let extra_sections_width = extra_sections.len() * Self::SECTION_HEADER_WIDTH;
+
+        // in a better world `extra_sections_width.div_ceil(file_alignment)` would be stable
+        // check on https://github.com/rust-lang/rust/issues/88581 some time in the future
+        let extra_alignments = (extra_sections_width + file_alignment - 1) / file_alignment;
+        let new_headers_size = old_headers_size + extra_alignments * file_alignment;
 
         let additional_length = new_headers_size - old_headers_size;
 
-        let result = mmap_mut(output_path, data.len() + additional_length);
-
-        // start of the first new section
-        let extra_sections_start =
-            section_table_offset as usize + sections.len() as usize * Self::SECTION_HEADER_WIDTH;
-
         Self {
-            data,
-            extra_sections,
-            extra_sections_start,
+            extra_sections_start: section_table_offset as usize
+                + sections.len() as usize * Self::SECTION_HEADER_WIDTH,
+            extra_sections_width,
+            additional_length,
             header_offset,
+            // the section count is stored 6 bytes into the header
             section_count_offset: header_offset + 4 + 2,
             section_table_offset,
             old_section_count: sections.len(),
             new_section_count: sections.len() + extra_sections.len(),
-            result,
             old_headers_size,
             new_headers_size,
         }
     }
 
-    fn copy(&mut self) {
+    fn copy(&self, result: &mut MmapMut, data: &[u8]) {
         let extra_sections_start = self.extra_sections_start;
 
         // copy the headers up to and including the current section table entries
         // (but omitting the terminating NULL section table entry)
-        self.result[..extra_sections_start].copy_from_slice(&self.data[..extra_sections_start]);
+        result[..extra_sections_start].copy_from_slice(&data[..extra_sections_start]);
 
         // update the header with the new number of sections. From what I can gather, this number of
         // sections is usually ignored, and section table entry of all NULL fields is used to know when
         // the section table ends. But the rust `object` crate does use this number, and it seems like
         // a good idea to keep the header data accurate.
-        self.result[self.section_count_offset as usize..][..2]
+        result[self.section_count_offset as usize..][..2]
             .copy_from_slice(&(self.new_section_count as u16).to_le_bytes());
 
         // copy the rest of the headers
         let rest_of_headers = self.old_headers_size - extra_sections_start;
-        let new_sections_width = self.extra_sections.len() * Self::SECTION_HEADER_WIDTH;
-        self.result[extra_sections_start + new_sections_width..][..rest_of_headers]
-            .copy_from_slice(&self.data[extra_sections_start..][..rest_of_headers]);
+        result[extra_sections_start + self.extra_sections_width..][..rest_of_headers]
+            .copy_from_slice(&data[extra_sections_start..][..rest_of_headers]);
 
         // copy all of the actual (post-header) data
-        self.result[self.new_headers_size..].copy_from_slice(&self.data[self.old_headers_size..]);
+        result[self.new_headers_size..].copy_from_slice(&data[self.old_headers_size..]);
     }
 
-    fn write_dummy_sections(&mut self) {
+    fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
         // start of the first new section
 
-        for (i, name) in self.extra_sections.iter().enumerate() {
+        for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
                 virtual_size: Default::default(),
@@ -316,15 +313,15 @@ impl<'a> Preprocessor<'a> {
             let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
                 unsafe { std::mem::transmute(header) };
 
-            self.result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
+            result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
                 .copy_from_slice(&header_array);
         }
     }
 
-    fn fix(&mut self) {
+    fn fix(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
         use object::LittleEndian as LE;
 
-        self.write_dummy_sections();
+        self.write_dummy_sections(result, extra_sections);
 
         // update the size of the headers
         //
@@ -339,7 +336,7 @@ impl<'a> Preprocessor<'a> {
         //
         // we added extra bytes to the headers, so this value must be updated
         let nt_headers =
-            load_struct_inplace_mut::<ImageNtHeaders64>(&mut self.result, self.header_offset as _);
+            load_struct_inplace_mut::<ImageNtHeaders64>(result, self.header_offset as _);
         nt_headers
             .optional_header
             .size_of_headers
@@ -362,8 +359,7 @@ impl<'a> Preprocessor<'a> {
         let shift = self.new_headers_size - self.old_headers_size;
         let mut offset = self.section_table_offset as usize;
         loop {
-            let header =
-                load_struct_inplace_mut::<object::pe::ImageSectionHeader>(&mut self.result, offset);
+            let header = load_struct_inplace_mut::<object::pe::ImageSectionHeader>(result, offset);
 
             let old = header.pointer_to_raw_data.get(LE);
             header.pointer_to_raw_data.set(LE, old + shift as u32);
