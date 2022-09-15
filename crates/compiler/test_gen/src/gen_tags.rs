@@ -1963,3 +1963,30 @@ fn tag_union_let_generalization() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn fit_recursive_union_in_struct_into_recursive_pointer() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            NonEmpty := [
+                First Str,
+                Next { item: Str, rest: NonEmpty },
+            ]
+
+            nonEmpty =
+                a = "abcdefgh"
+                b = @NonEmpty (First "ijkl")
+                c = Next { item: a, rest: b }
+                @NonEmpty c
+
+            when nonEmpty is
+                @NonEmpty (Next r) -> r.item
+                _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("abcdefgh"),
+        RocStr
+    );
+}
