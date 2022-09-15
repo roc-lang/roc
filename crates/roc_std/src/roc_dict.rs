@@ -140,7 +140,7 @@ impl<K, V> RocDictItem<K, V> {
     }
 }
 
-impl<K,V> Drop for RocDictItem<K, V> {
+impl<K, V> Drop for RocDictItem<K, V> {
     fn drop(&mut self) {
         if align_of::<K>() >= align_of::<V>() {
             unsafe { ManuallyDrop::drop(&mut self.key_first) }
@@ -158,18 +158,20 @@ impl<K: PartialEq, V: PartialEq> PartialEq for RocDictItem<K, V> {
 
 impl<K: PartialOrd, V: PartialOrd> PartialOrd for RocDictItem<K, V> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.key()
-            .partial_cmp(other.key())
-            .map(|key_cmp| match self.value().partial_cmp(other.value()) {
+        self.key().partial_cmp(other.key()).map(|key_cmp| {
+            match self.value().partial_cmp(other.value()) {
                 Some(value_cmp) => key_cmp.then(value_cmp),
                 None => key_cmp,
-            })
+            }
+        })
     }
 }
 
 impl<K: Ord, V: Ord> Ord for RocDictItem<K, V> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.key().cmp(other.key()).then(self.value().cmp(other.value()))
+        self.key()
+            .cmp(other.key())
+            .then(self.value().cmp(other.value()))
     }
 }
 
