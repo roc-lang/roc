@@ -7559,7 +7559,7 @@ where
             } else {
                 [None]
             })
-            .filter_map(std::convert::identity);
+            .flatten();
 
         for (variable, left) in needed_specializations_of_left {
             add_needed_external(procs, env, variable, LambdaName::no_niche(right));
