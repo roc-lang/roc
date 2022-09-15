@@ -1,15 +1,38 @@
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
+void alloc_panic(size_t size);
 
-void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
-                  unsigned int alignment) {
-  return realloc(ptr, new_size);
+void *roc_alloc(size_t size, unsigned int alignment) {
+  void *result = malloc(size);
+
+  if (result == NULL) {
+    if(size == 0) { // <-  malloc is allowed to 'succeed' with NULL iff size == 0.
+        return NULL;
+    }
+    // Otherwise, it is an indication of failure.
+    alloc_panic(size);
+  }
+
+  return result;}
+
+void *roc_realloc(void *ptr, size_t new_size, size_t old_size, unsigned int alignment) {
+  void *result = realloc(ptr, new_size);
+
+  if (result == NULL) {
+    if(new_size == 0) { // <-  realloc is allowed to 'succeed' with NULL iff size == 0.
+        return NULL;
+    }
+    // Otherwise, it is an indication of failure.
+    alloc_panic(new_size);
+  }
+
+  return result;
 }
 
 void roc_dealloc(void* ptr, unsigned int alignment) { free(ptr); }
@@ -19,6 +42,14 @@ void roc_panic(void* ptr, unsigned int alignment) {
   fprintf(stderr,
           "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
   exit(0);
+}
+
+void alloc_panic(size_t size) {
+    char msg[100];
+    sprintf(msg, "Memory allocation failed. Could not allocate %llu bytes",
+            (unsigned long long)size);
+
+    roc_panic(msg, 0);
 }
 
 void* roc_memcpy(void* dest, const void* src, size_t n) {
