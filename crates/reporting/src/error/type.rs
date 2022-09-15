@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_exhaustive::CtorName;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
