@@ -327,6 +327,17 @@ impl<'a> Preprocessor<'a> {
         self.write_dummy_sections();
 
         // update the size of the headers
+        //
+        // Time/Date		Wed Sep 14 16:04:36 2022
+        // Magic			020b	(PE32+)
+        // MajorLinkerVersion	14
+        // MinorLinkerVersion	0
+        // ...
+        // SizeOfImage		    00067000
+        // SizeOfHeaders		00000400
+        // ...
+        //
+        // we added extra bytes to the headers, so this value must be updated
         let nt_headers =
             load_struct_inplace_mut::<ImageNtHeaders64>(&mut self.result, self.header_offset as _);
         nt_headers
@@ -335,6 +346,19 @@ impl<'a> Preprocessor<'a> {
             .set(LE, self.new_headers_size as u32);
 
         // update the section file offsets
+        //
+        // Sections:
+        // Idx Name          Size      VMA               LMA               File off  Algn
+        //   0 .text         00054d96  0000000140001000  0000000140001000  00000400  2**4
+        //                   CONTENTS, ALLOC, LOAD, READONLY, CODE
+        //   1 .rdata        00008630  0000000140056000  0000000140056000  00055200  2**4
+        //                   CONTENTS, ALLOC, LOAD, READONLY, DATA
+        //   2 .data         00000200  000000014005f000  000000014005f000  0005da00  2**4
+        //                   CONTENTS, ALLOC, LOAD, DATA
+        //   3 .pdata        0000228c  0000000140061000  0000000140061000  0005dc00  2**2
+        //
+        // The file offset of the sections has changed (we inserted some bytes) and this value must
+        // now be updated to point to the correct place in the file
         let shift = self.new_headers_size - self.old_headers_size;
         let mut offset = self.section_table_offset as usize;
         loop {
