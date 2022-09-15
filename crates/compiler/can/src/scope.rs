@@ -690,8 +690,6 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("False"),
-                Ident::from("True"),
                 Ident::from("Str"),
                 Ident::from("List"),
                 Ident::from("Ok"),
@@ -715,8 +713,6 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("False"),
-                Ident::from("True"),
                 Ident::from("Str"),
                 Ident::from("List"),
                 Ident::from("Ok"),
