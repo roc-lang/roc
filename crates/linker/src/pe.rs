@@ -203,6 +203,7 @@ struct Preprocessor<'a> {
     data: &'a [u8],
     result: MmapMut,
     extra_sections: &'a [[u8; 8]],
+    extra_sections_start: usize,
     header_offset: u64,
     section_count_offset: u64,
     section_table_offset: u64,
@@ -252,9 +253,14 @@ impl<'a> Preprocessor<'a> {
 
         let result = mmap_mut(output_path, data.len() + additional_length);
 
+        // start of the first new section
+        let extra_sections_start =
+            section_table_offset as usize + sections.len() as usize * Self::SECTION_HEADER_WIDTH;
+
         Self {
             data,
             extra_sections,
+            extra_sections_start,
             header_offset,
             section_count_offset: header_offset + 4 + 2,
             section_table_offset,
@@ -267,13 +273,11 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn copy(&mut self) {
-        // start of the first new section
-        let new_sections_start = self.section_table_offset as usize
-            + self.old_section_count as usize * Self::SECTION_HEADER_WIDTH;
+        let extra_sections_start = self.extra_sections_start;
 
         // copy the headers up to and including the current section table entries
         // (but omitting the terminating NULL section table entry)
-        self.result[..new_sections_start].copy_from_slice(&self.data[0..new_sections_start]);
+        self.result[..extra_sections_start].copy_from_slice(&self.data[..extra_sections_start]);
 
         // update the header with the new number of sections. From what I can gather, this number of
         // sections is usually ignored, and section table entry of all NULL fields is used to know when
@@ -283,10 +287,10 @@ impl<'a> Preprocessor<'a> {
             .copy_from_slice(&(self.new_section_count as u16).to_le_bytes());
 
         // copy the rest of the headers
-        let rest_of_headers = self.old_headers_size - new_sections_start;
+        let rest_of_headers = self.old_headers_size - extra_sections_start;
         let new_sections_width = self.extra_sections.len() * Self::SECTION_HEADER_WIDTH;
-        self.result[new_sections_start + new_sections_width..][..rest_of_headers]
-            .copy_from_slice(&self.data[new_sections_start..][..rest_of_headers]);
+        self.result[extra_sections_start + new_sections_width..][..rest_of_headers]
+            .copy_from_slice(&self.data[extra_sections_start..][..rest_of_headers]);
 
         // copy all of the actual (post-header) data
         self.result[self.new_headers_size..].copy_from_slice(&self.data[self.old_headers_size..]);
@@ -294,8 +298,6 @@ impl<'a> Preprocessor<'a> {
 
     fn write_dummy_sections(&mut self) {
         // start of the first new section
-        let new_sections_start = self.section_table_offset as usize
-            + self.old_section_count as usize * Self::SECTION_HEADER_WIDTH;
 
         for (i, name) in self.extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
@@ -314,7 +316,7 @@ impl<'a> Preprocessor<'a> {
             let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
                 unsafe { std::mem::transmute(header) };
 
-            self.result[new_sections_start + i * header_array.len()..][..header_array.len()]
+            self.result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
                 .copy_from_slice(&header_array);
         }
     }
