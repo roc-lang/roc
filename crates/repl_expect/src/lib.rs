@@ -893,4 +893,45 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn arg_parser() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface A exposes [] imports []
+
+                makeForcer : {} -> (Str -> U8)
+                makeForcer = \{} -> \_ -> 2u8
+
+                expect
+                    forcer = makeForcer {}
+
+                    case = ""
+
+                    forcer case == 5u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      forcer = makeForcer {}
+                 8│>
+                 9│>      case = ""
+                10│>
+                11│>      forcer case == 5u8
+
+                When it failed, these variables had these values:
+
+                forcer : Str -> U8
+                forcer = <function>
+
+                case : Str
+                case = ""
+                "#
+            ),
+        );
+    }
 }
