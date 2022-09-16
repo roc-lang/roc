@@ -2181,7 +2181,7 @@ pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
     let content = subs.get_content_without_compacting(var);
     matches!(
         content,
-        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+        RangedNumber(NumAtLeastEitherSign(..) | NumAtLeastSigned(..)),
     )
 }
 
