@@ -338,7 +338,17 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
             .map(|pattern| pattern.reify(subs))
             .collect();
 
-        if matches!(guard, Guard::HasGuard) || is_useful(checked_rows.clone(), next_row.clone()) {
+        let is_useful = {
+            is_inhabited_row(&next_row)
+                && (
+                    // Anything inhabited with a guard is necessary
+                    matches!(guard, Guard::HasGuard)
+                    // Make sure that the row doesn't match something we already covered
+                        || is_useful(checked_rows.clone(), next_row.clone())
+                )
+        };
+
+        if is_useful {
             checked_rows.push(next_row);
         } else {
             redundancies.push(redundant_mark);
@@ -355,6 +365,27 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
         redundancies,
         errors,
     }
+}
+
+fn is_inhabited_row(patterns: &[Pattern]) -> bool {
+    patterns.iter().any(is_inhabited_pattern)
+}
+
+fn is_inhabited_pattern(pat: &Pattern) -> bool {
+    let mut stack = vec![pat];
+    while let Some(pat) = stack.pop() {
+        match pat {
+            Pattern::Anything => {}
+            Pattern::Literal(_) => {}
+            Pattern::Ctor(union, id, pats) => {
+                if !union.alternatives.iter().any(|alt| alt.tag_id == *id) {
+                    return false;
+                }
+                stack.extend(pats);
+            }
+        }
+    }
+    true
 }
 
 /// Returns true iff the given type is inhabited by at least one value.

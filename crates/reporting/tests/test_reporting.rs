@@ -10548,4 +10548,30 @@ All branches in an `if` must have the same type!
     @r###"
     "###
     );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    
+    The 2nd pattern is redundant:
+    
+    6│      when x is
+    7│          Ok {} -> ""
+    8│          Err _ -> ""
+                ^^^^^
+    
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
 }
