@@ -3,7 +3,8 @@ use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{
-    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
+    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RedundantReason, RenderAs, TagId,
+    Union,
 };
 use roc_module::ident::{TagIdIntType, TagName};
 use roc_module::symbol::ModuleId;
@@ -338,25 +339,29 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
             .map(|pattern| pattern.reify(subs))
             .collect();
 
-        let is_useful = {
-            is_inhabited_row(&next_row)
-                && (
-                    // Anything inhabited with a guard is necessary
-                    matches!(guard, Guard::HasGuard)
-                    // Make sure that the row doesn't match something we already covered
-                        || is_useful(checked_rows.clone(), next_row.clone())
-                )
+        let is_redundant = if !is_inhabited_row(&next_row) {
+            Some(RedundantReason::Uninhabited)
+        } else if !(matches!(guard, Guard::HasGuard)
+            || is_useful(checked_rows.clone(), next_row.clone()))
+        {
+            Some(RedundantReason::PreviouslyCovered)
+        } else {
+            None
         };
 
-        if is_useful {
-            checked_rows.push(next_row);
-        } else {
-            redundancies.push(redundant_mark);
-            errors.push(Error::Redundant {
-                overall_region,
-                branch_region: region,
-                index: HumanIndex::zero_based(checked_rows.len()),
-            });
+        match is_redundant {
+            None => {
+                checked_rows.push(next_row);
+            }
+            Some(reason) => {
+                redundancies.push(redundant_mark);
+                errors.push(Error::Redundant {
+                    overall_region,
+                    branch_region: region,
+                    index: HumanIndex::zero_based(checked_rows.len()),
+                    reason,
+                });
+            }
         }
     }
 

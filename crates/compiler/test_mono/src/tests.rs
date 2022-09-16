@@ -1936,3 +1936,16 @@ fn num_width_gt_u8_layout_as_float() {
         "#
     )
 }
+
+#[mono_test]
+fn match_on_result_with_uninhabited_error_branch() {
+    indoc!(
+        r#"
+        x : Result Str []
+        x = Ok "abc"
+
+        when x is
+            Ok s -> s
+        "#
+    )
+}

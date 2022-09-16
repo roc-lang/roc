@@ -3889,6 +3889,7 @@ fn exhaustive_problem<'a>(
             overall_region,
             branch_region,
             index,
+            reason: _,
         } => {
             let doc = alloc.stack([
                 alloc.concat([

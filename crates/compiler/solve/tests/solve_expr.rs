@@ -7775,4 +7775,20 @@ mod solve_expr {
             "{}",
         );
     }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_branch() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                when x is
+                    Ok s -> s
+                "#
+            ),
+            "",
+        );
+    }
 }

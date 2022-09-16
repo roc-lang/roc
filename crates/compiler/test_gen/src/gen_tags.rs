@@ -1064,12 +1064,8 @@ fn result_never() {
                 res : Result I64 []
                 res = Ok 4
 
-                # we should provide this in the stdlib
-                never : [] -> a
-
                 when res is
                     Ok v -> v
-                    Err empty -> never empty
                 #"
         ),
         4,
@@ -1987,6 +1983,24 @@ fn fit_recursive_union_in_struct_into_recursive_pointer() {
             "#
         ),
         RocStr::from("abcdefgh"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn match_on_result_with_uninhabited_error_branch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result Str []
+            x = Ok "abc"
+
+            when x is
+                Ok s -> s
+            "#
+        ),
+        RocStr::from("abc"),
         RocStr
     );
 }
