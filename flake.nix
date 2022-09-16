@@ -128,5 +128,7 @@
         };
 
         formatter = pkgs.nixpkgs-fmt;
+
+        packages.default = import ./. { inherit pkgs; };
       });
 }
