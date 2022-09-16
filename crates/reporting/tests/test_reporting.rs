@@ -10534,4 +10534,18 @@ All branches in an `if` must have the same type!
      Maybe you wanted to use a `Result`?
      "###
     );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+            "#
+        ),
+    @r###"
+    "###
+    );
 }
