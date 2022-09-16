@@ -1927,3 +1927,12 @@ fn issue_3669() {
         "#
     )
 }
+
+#[mono_test]
+fn num_width_gt_u8_layout_as_float() {
+    indoc!(
+        r#"
+        1 / 200
+        "#
+    )
+}
