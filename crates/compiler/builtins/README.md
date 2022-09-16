@@ -6,7 +6,7 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 Edit the appropriate `roc/*.roc` file with your new implementation. All normal rules for writing Roc code apply. Be sure to add a declaration, definition, some documentation and add it to the exposes list it in the module head.
 
-Next, look towards the bottom of the  `compiler/builtins/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
+Next, look towards the bottom of the  `compiler/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
 
 For each of the builtin modules, there is a file in `compiler/test_gen/src/` like `gen_num.rs`, `gen_str.rs` etc. Add new tests for the module you are changing to the appropriate file here. You can look at the existing test cases for examples and inspiration.
 
