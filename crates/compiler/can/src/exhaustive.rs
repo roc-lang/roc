@@ -405,7 +405,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                     return false;
                 }
             },
-            Content::Alias(name, _, var, _) if name.module_id() == ModuleId::NUM => {},
+            Content::Alias(name, _, _, _) if name.module_id() == ModuleId::NUM => {},
             Content::Alias(_, _, var, _) => stack.push(*var),
             Content::RangedNumber(_) => {}
             Content::Error => {}
