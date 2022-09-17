@@ -15,7 +15,7 @@ fn synthetic_image_export_directory(
 
     let address_of_functions = start;
 
-    // by convention, names start at index, so we add one "padding" name
+    // by convention, names start at index 1, so we add one "padding" name
     let number_of_functions = custom_names.len() as u32 + 1;
 
     let address_of_names = address_of_functions + 4 * number_of_functions;
@@ -72,7 +72,7 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
     // here we pre-calculate the virtual address where the name bytes will be stored
     // The address hence points to a place in the .edata section. Such exports are
     // called "forwarders". Because there is no actual definition, these exports don't
-    // show up when calling the `object` crate's .exports method.
+    // show up when calling the `object` crate's .exports() method.
     let mut next_name_start =
         directory.address_of_name_ordinals.get(LE) + custom_names.len() as u32 * 2;
 
