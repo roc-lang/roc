@@ -484,7 +484,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
 name = "cli_utils"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "criterion",
@@ -3291,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "roc_ast"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "roc_cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "clap 3.2.20",
@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "roc_code_markup"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "palette",
