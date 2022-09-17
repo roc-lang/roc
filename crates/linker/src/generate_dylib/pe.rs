@@ -73,6 +73,10 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
     // The address hence points to a place in the .edata section. Such exports are
     // called "forwarders". Because there is no actual definition, these exports don't
     // show up when calling the `object` crate's .exports() method.
+    //
+    // It may turn out that we should actually not make our symbols forwarders. We can do this by
+    // adding a .text section with some NULL bytes before the .rdata section, and having the
+    // symbols point into this meaningless .text section.
     let mut next_name_start =
         directory.address_of_name_ordinals.get(LE) + custom_names.len() as u32 * 2;
 
