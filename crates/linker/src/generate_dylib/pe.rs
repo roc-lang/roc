@@ -120,16 +120,17 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
     let mut out_data = Vec::new();
     let mut writer = object::write::pe::Writer::new(true, 8, 8, &mut out_data);
 
-    // fairly randomly chosen. Not sure if this is relevant
-    let virtual_address = 0x138;
-
-    let exports = synthetic_export_dir(virtual_address, custom_names);
-
     // Reserve file ranges and virtual addresses.
     writer.reserve_dos_header_and_stub();
 
     // we will have one header: the export directory
     writer.reserve_nt_headers(1);
+
+    writer.reserve_section_headers(1);
+
+    let virtual_address = writer.reserved_len();
+
+    let exports = synthetic_export_dir(virtual_address, custom_names);
 
     writer.set_data_directory(
         pe::IMAGE_DIRECTORY_ENTRY_EXPORT,
@@ -137,11 +138,13 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
         exports.len() as _,
     );
 
-    writer.reserve_section_headers(1);
+    // it's fine if this changes, this is just here to catch any accidental changes
+    debug_assert_eq!(virtual_address, 0x138);
 
     // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
-        let characteristics = 0x40000040;
+        // not sure if that 0x40 is important, I took it from a .dll that zig produced
+        let characteristics = object::pe::IMAGE_SCN_MEM_READ | 0x40;
         let range = writer.reserve_section(
             *b".rdata\0\0",
             characteristics,
@@ -150,6 +153,8 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
             // size_of_raw_data
             exports.len() as u32,
         );
+
+        debug_assert_eq!(virtual_address, range.virtual_address);
 
         (range.file_offset, exports)
     };
