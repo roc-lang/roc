@@ -89,20 +89,20 @@ impl DynamicRelocationsPe {
         Ok(None)
     }
 
-    /// Appends the functions (e.g. mainForHost) that the host needs from the app
+    /// Append metadata for the functions (e.g. mainForHost) that the host needs from the app
     fn append_roc_imports(
         &mut self,
         import_table: &ImportTable,
-        descriptor: &ImageImportDescriptor,
+        roc_dll_descriptor: &ImageImportDescriptor,
     ) -> object::read::Result<()> {
         use object::LittleEndian as LE;
 
         // offset of first thunk from the start of the section
         let thunk_start_offset =
-            descriptor.original_first_thunk.get(LE) - self.section_virtual_address;
+            roc_dll_descriptor.original_first_thunk.get(LE) - self.section_virtual_address;
         let mut thunk_offset = 0;
 
-        let mut thunks = import_table.thunks(descriptor.original_first_thunk.get(LE))?;
+        let mut thunks = import_table.thunks(roc_dll_descriptor.original_first_thunk.get(LE))?;
         while let Some(thunk_data) = thunks.next::<ImageNtHeaders64>()? {
             use object::read::pe::ImageThunkData;
 
@@ -111,7 +111,7 @@ impl DynamicRelocationsPe {
             let name = String::from_utf8_lossy(name).to_string();
 
             let offset_in_file = self.section_offset_in_file + thunk_start_offset + thunk_offset;
-            let virtual_address = descriptor.original_first_thunk.get(LE) + thunk_offset;
+            let virtual_address = roc_dll_descriptor.original_first_thunk.get(LE) + thunk_offset;
 
             self.name_by_virtual_address
                 .insert(virtual_address, name.clone());
