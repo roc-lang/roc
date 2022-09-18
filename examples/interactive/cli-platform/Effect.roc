@@ -2,6 +2,7 @@ hosted Effect
     exposes [
         Effect,
         after,
+        args,
         map,
         always,
         forever,
@@ -29,6 +30,11 @@ fileWriteUtf8 : List U8, Str -> Effect (Result {} InternalFile.WriteErr)
 fileDelete : List U8 -> Effect (Result {} InternalFile.WriteErr)
 fileReadBytes : List U8 -> Effect (Result (List U8) InternalFile.ReadErr)
 dirList : List U8 -> Effect (Result (List (List U8)) InternalDir.ReadErr)
+envDict : Effect (Dict Str Str)
+
+# If we encounter a Unicode error in any of the args, it will be replaced with
+# the Unicode replacement char where necessary.
+args : Effect (List Str)
 
 cwd : Effect (List U8)
 

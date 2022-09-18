@@ -60,13 +60,15 @@ cwd =
 #     Effect.envVar var
 #     |> InternalTask.fromEffect
 
-# ## Reads all the process's environment variables into a [Dict].
-# ##
-# ## If any key or value is invalid Unicode, the task fails with `NonUnicodeEnv`.
-# ## The `NonUnicodeEnv` tag contains the same [Dict] of environment variables that # ## a success would have produced, except with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
-# ## (`�`) replacing any parts of keys or values that are invalid Unicode.
-# dict : Task (Dict Str Str) [NonUnicodeEnv (Dict Str Str)]* [Env]*
-# dict = InternalTask.fromEffect Effect.envDict
+## Reads all the process's environment variables into a [Dict].
+##
+## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+## (`�`) will be used in place of any parts of keys or values that are invalid Unicode.
+dict : Task (Dict Str Str) * [Env]*
+dict =
+    Effect.envDict
+    |> Effect.map Ok
+    |> InternalTask.fromEffect
 
 # ## Walks over the process's environment variables as key-value arguments to the walking function.
 # ##
@@ -82,12 +84,18 @@ cwd =
 # ##     #
 # ##     #     """
 # ##
-# ## If any key or value is invalid Unicode, the task fails with `NonUnicodeEnv` and the accumulated
-# ## walking state up to the point where the invalid Unicode was encountered.
+# ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+# ## (`�`) will be used in place of any parts of keys or values that are invalid Unicode.
 # walk : state, (state, Str, Str -> state) -> Task state [NonUnicodeEnv state]* [Env]*
 # walk = \state, walker ->
 #     Effect.envWalk state walker
 #     |> InternalTask.fromEffect
+
+# TODO could potentially offer something like walkNonUnicode which takes (state, Result Str Str, Result Str Str) so it
+# tells you when there's invalid Unicode. This is both faster than (and would give you more accurate info than)
+# using regular `walk` and searching for the presence of the replacement character in the resulting
+# strings. However, it's unclear whether anyone would use it. What would the use case be? Reporting
+# an error that the provided command-line args weren't valid Unicode? Does that still happen these days?
 
 # TODO need to figure out clear rules for how to convert from camelCase to SCREAMING_SNAKE_CASE.
 # Note that all the env vars decoded in this way become effectively *required* vars, since if any

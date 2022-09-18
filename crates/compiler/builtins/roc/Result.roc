@@ -1,5 +1,5 @@
 interface Result
-    exposes [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
+    exposes [Result, isOk, isErr, map, mapErr, try, onErr, withDefault, unwrapOk, unwrapErr]
     imports [Bool.{ Bool }]
 
 ## The result of an operation that could fail: either the operation went

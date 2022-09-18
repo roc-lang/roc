@@ -1,20 +1,11 @@
 interface InternalProgram
-    exposes [InternalProgram, noArgs, withNonUnicodeArgs, toEffect]
-    imports [InternalTask.{ Task }, InternalProgram.{ InternalProgram }]
+    exposes [InternalProgram, fromEffect, toEffect]
+    imports []
 
-InternalProgram := List U8 -> Effect (Result {} [])
+InternalProgram := Effect U8
 
-noArgs : Task {} [] * -> InternalProgram
-noArgs = \task ->
-    # TODO give the host a different variant, so it doesn't bother translating args to RocStr
-    @InternalProgram \_ -> InternalTask.toEffect task
+fromEffect : Effect U8 -> InternalProgram
+fromEffect = @InternalProgram
 
-withNonUnicodeArgs : (List (List U8) -> Task {} [] *) -> InternalProgram
-withNonUnicodeArgs = \toTask ->
-    @InternalProgram \bytes -> InternalTask.toEffect (toTask bytes)
-
-toEffect : InternalProgram, List U8 -> Effect U8
-toEffect = \InternalProgram @fn, args ->
-    when fn args is
-        Ok exitCode -> exitCode
-        Err _ -> 0 # TODO this can never happen!
+toEffect : InternalProgram -> Effect U8
+toEffect = \InternalProgram @effect -> effect
