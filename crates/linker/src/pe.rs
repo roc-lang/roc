@@ -4,6 +4,7 @@ use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
     read::pe::ImportTable,
+    LittleEndian as LE,
 };
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
@@ -58,6 +59,10 @@ struct DynamicRelocationsPe {
     #[allow(dead_code)]
     imports_offset_in_file: u32,
 
+    /// Offset in the file of the data directories
+    #[allow(dead_code)]
+    data_directories_offset_in_file: u32,
+
     /// The dummy .dll is the `dummy_import_index`th import of the host .exe
     #[allow(dead_code)]
     dummy_import_index: u32,
@@ -71,8 +76,6 @@ impl DynamicRelocationsPe {
     fn find_roc_dummy_dll(
         import_table: &ImportTable,
     ) -> object::read::Result<Option<(ImageImportDescriptor, u32)>> {
-        use object::LittleEndian as LE;
-
         let mut index = 0;
         let mut it = import_table.descriptors()?;
         while let Some(descriptor) = it.next()? {
@@ -95,8 +98,6 @@ impl DynamicRelocationsPe {
         import_table: &ImportTable,
         roc_dll_descriptor: &ImageImportDescriptor,
     ) -> object::read::Result<()> {
-        use object::LittleEndian as LE;
-
         // offset of first thunk from the start of the section
         let thunk_start_offset =
             roc_dll_descriptor.original_first_thunk.get(LE) - self.section_virtual_address;
@@ -127,10 +128,12 @@ impl DynamicRelocationsPe {
     fn new_help(data: &[u8]) -> object::read::Result<Self> {
         use object::pe;
         use object::read::pe::ImageNtHeaders;
-        use object::LittleEndian as LE;
 
         let dos_header = pe::ImageDosHeader::parse(data)?;
         let mut offset = dos_header.nt_headers_offset().into();
+        let data_directories_offset_in_file =
+            offset as u32 + std::mem::size_of::<ImageNtHeaders64>() as u32;
+
         let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
         let sections = nt_headers.sections(data, offset)?;
 
@@ -169,6 +172,7 @@ impl DynamicRelocationsPe {
             section_virtual_address: section_va,
             section_offset_in_file: offset_in_file,
             imports_offset_in_file,
+            data_directories_offset_in_file,
             dummy_import_index,
         };
 
@@ -181,15 +185,33 @@ impl DynamicRelocationsPe {
 #[allow(dead_code)]
 fn remove_dummy_dll_import_table(
     data: &mut [u8],
+    data_directories_offset_in_file: u32,
     imports_offset_in_file: u32,
     dummy_import_index: u32,
 ) {
+    use object::pe;
+
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
+    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
     let start = imports_offset_in_file as usize + W * dummy_import_index as usize;
     for b in data[start..][..W].iter_mut() {
         *b = 0;
     }
+
+    // in the data directories, update the length of the imports (there is one fewer now)
+    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+        data,
+        data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
+                * std::mem::size_of::<pe::ImageDataDirectory>(),
+    );
+
+    let current = dir.size.get(LE);
+    dir.size.set(
+        LE,
+        current - std::mem::size_of::<pe::ImageImportDescriptor>() as u32,
+    );
 }
 
 /// Preprocess the host's .exe to make space for extra sections
@@ -229,7 +251,6 @@ impl Preprocessor {
     fn new(data: &[u8], extra_sections: &[[u8; 8]]) -> Self {
         use object::pe;
         use object::read::pe::ImageNtHeaders;
-        use object::LittleEndian as LE;
 
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
         let mut offset = dos_header.nt_headers_offset().into();
@@ -319,8 +340,6 @@ impl Preprocessor {
     }
 
     fn fix(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
-        use object::LittleEndian as LE;
-
         self.write_dummy_sections(result, extra_sections);
 
         // update the size of the headers
@@ -396,7 +415,7 @@ mod test {
     use std::ops::Deref;
 
     use object::read::pe::PeFile64;
-    use object::{pe, Object};
+    use object::{pe, LittleEndian as LE, Object, U32};
 
     use indoc::indoc;
 
@@ -535,17 +554,38 @@ mod test {
 
     #[test]
     fn remove_dummy_dll_import() {
+        let object = PeFile64::parse(PE_DYNHOST).unwrap();
+        let before = object
+            .data_directories()
+            .get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT)
+            .unwrap()
+            .size
+            .get(LE);
+
         let dynamic_relocations = DynamicRelocationsPe::new(PE_DYNHOST);
         let mut data = PE_DYNHOST.to_vec();
 
         remove_dummy_dll_import_table(
             &mut data,
+            dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
 
         // parse and check that it's really gone
-        let object = object::File::parse(data.as_slice()).unwrap();
+        let object = PeFile64::parse(data.as_slice()).unwrap();
+
+        let after = object
+            .data_directories()
+            .get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT)
+            .unwrap()
+            .size
+            .get(LE);
+
+        assert_eq!(
+            before - after,
+            std::mem::size_of::<pe::ImageImportDescriptor>() as _
+        );
 
         assert_eq!(
             object
@@ -576,7 +616,11 @@ mod test {
         assert_eq!(actual, 7)
     }
 
-    fn increase_number_of_sections_help(input_data: &[u8], output_file: &Path) {
+    fn increase_number_of_sections_help(
+        input_data: &[u8],
+        new_sections: &[[u8; 8]],
+        output_file: &Path,
+    ) {
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(input_data).unwrap();
@@ -590,9 +634,7 @@ mod test {
                 .unwrap(),
         );
 
-        let new_sections = [*b"placehol", *b"aaaabbbb"];
-
-        let mmap = Preprocessor::preprocess(output_file, input_data, &new_sections);
+        let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
 
         let data = mmap.deref();
 
@@ -625,7 +667,9 @@ mod test {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.exe");
 
-        increase_number_of_sections_help(PE_DYNHOST, &path);
+        let new_sections = [*b"placehol", *b"aaaabbbb"];
+
+        increase_number_of_sections_help(PE_DYNHOST, &new_sections, &path);
     }
 
     #[test]
