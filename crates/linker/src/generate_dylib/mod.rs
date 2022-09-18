@@ -3,6 +3,9 @@ use target_lexicon::Triple;
 mod elf64;
 mod pe;
 
+#[cfg(test)]
+pub(crate) use pe::synthetic_dll;
+
 pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(custom_names),
