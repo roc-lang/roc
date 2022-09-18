@@ -81,7 +81,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() -> u8 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -96,18 +96,15 @@ pub extern "C" fn rust_main() -> i32 {
 
         roc_main(buffer, &args);
 
-        let result = call_the_closure(buffer);
+        let exit_code = call_the_closure(buffer);
 
         std::alloc::dealloc(buffer, layout);
 
-        result
-    };
-
-    // Exit code
-    0
+        exit_code
+    }
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe fn call_the_closure(closure_data_ptr: *const u8) -> u8 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;
@@ -121,6 +118,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 
     std::alloc::dealloc(buffer, layout);
 
+    // TODO return the u8 exit code returned by the Fx closure
     0
 }
 
