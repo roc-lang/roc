@@ -33,14 +33,19 @@ mainTask =
         Stdout.line "I read the file back. Its contents: \"\(contents)\""
 
     Task.attempt task \result ->
-        msg = when result is
-            Err (FileWriteErr _ PermissionDenied) -> Err "PermissionDenied"
-            Err (FileWriteErr _ Unsupported) -> Err "Unsupported"
-            Err (FileWriteErr _ (Unrecognized _ other)) -> Err other
-            Err (FileReadErr _ _) -> Err "Error reading file"
-            Err _ -> Err "Uh oh, there was an error!"
-            Ok _ -> Ok "Successfully wrote a string to out.txt"
+        when result is
+            Ok {} ->
+                Stdout.line "Successfully wrote a string to out.txt"
+                |> Task.map \{} -> 0 # exit status
 
-        when msg is
-            Ok ok -> Task.await (Stdout.line ok) \{} -> Task.succeed 0
-            Err err -> Task.await (Stderr.line err) \{} -> Task.succeed 1
+            Err err ->
+                msg =
+                    when err is
+                        FileWriteErr _ PermissionDenied -> "PermissionDenied"
+                        FileWriteErr _ Unsupported -> "Unsupported"
+                        FileWriteErr _ (Unrecognized _ other) -> other
+                        FileReadErr _ _ -> "Error reading file"
+                        _ -> "Uh oh, there was an error!"
+
+                Stderr.line msg
+                |> Task.map \{} -> 1 # exit status
