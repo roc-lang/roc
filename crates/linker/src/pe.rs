@@ -504,6 +504,7 @@ mod test {
 
     use std::ops::Deref;
 
+    use object::pe::{ImageFileHeader, ImageOptionalHeader64};
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object, U32};
 
@@ -1004,8 +1005,12 @@ mod test {
         // this is cheating a little bit: these bytes are copied from the `app.obj`
         // we could get them out programatically of course.
         let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
+        let app_bytes_virtual_width = 0x200; // round up to section alignment
 
-        let mut app = mmap_mut(&dir.join("app.exe"), dynhost_bytes.len() + app_bytes.len());
+        let mut app = mmap_mut(
+            &dir.join("app.exe"),
+            dynhost_bytes.len() + app_bytes_virtual_width,
+        );
 
         app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
         app[dynhost_bytes.len()..][..app_bytes.len()].copy_from_slice(app_bytes);
@@ -1023,6 +1028,10 @@ mod test {
 
         let file = PeFile64::parse(app.deref()).unwrap();
         let text_section = file.sections().next().unwrap();
+
+        let optional_header_offset = file.dos_header().nt_headers_offset() as usize
+            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<ImageFileHeader>();
 
         // end of the code section as an offset into the file
         let code_section_end =
@@ -1057,10 +1066,10 @@ mod test {
 
             let header = ImageSectionHeader {
                 name: *b".text1\0\0", // unclear whether we can/should call this text
-                virtual_size: U32::new(LE, 0),
-                virtual_address: U32::new(LE, 0x9000),
-                size_of_raw_data: U32::new(LE, 0), // round up to alignment
-                pointer_to_raw_data: U32::new(LE, app.len() as u32),
+                virtual_size: U32::new(LE, 6),
+                virtual_address: U32::new(LE, 0xb000),
+                size_of_raw_data: U32::new(LE, 0x200), // round up to alignment
+                pointer_to_raw_data: U32::new(LE, dynhost_bytes.len() as u32),
                 pointer_to_relocations: Default::default(),
                 pointer_to_linenumbers: Default::default(),
                 number_of_relocations: Default::default(),
@@ -1074,6 +1083,21 @@ mod test {
             let extra_sections_start = 624;
             app[extra_sections_start..][..header_array.len()].copy_from_slice(&header_array);
         }
+
+        {
+            let optional_header =
+                load_struct_inplace_mut::<ImageOptionalHeader64>(&mut app, optional_header_offset);
+
+            optional_header
+                .size_of_code
+                .set(LE, optional_header.size_of_code.get(LE) + 0x200);
+
+            optional_header
+                .size_of_image
+                .set(LE, optional_header.size_of_image.get(LE) + 0x1000);
+        }
+
+        println!("{:x?}", app.len());
     }
 
     #[test]
