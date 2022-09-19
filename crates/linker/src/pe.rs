@@ -2,11 +2,8 @@ use std::{ops::Range, path::Path, time::Instant};
 
 use memmap2::{Mmap, MmapMut};
 use object::{
-    pe::{
-        ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
-        ImageThunkData64,
-    },
-    read::pe::{ImportTable, PeFile64},
+    pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
+    read::pe::ImportTable,
     LittleEndian as LE,
 };
 use roc_collections::MutMap;
@@ -501,6 +498,7 @@ fn redirect_dummy_dll_functions(
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 struct AppSections {
     text_file_range: Range<usize>,
@@ -509,13 +507,7 @@ struct AppSections {
 }
 
 impl AppSections {
-    fn from_file(path: &Path) -> Self {
-        let file = std::fs::File::open(path).unwrap();
-        let app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
-
-        Self::from_data(&*app)
-    }
-
+    #[allow(dead_code)]
     fn from_data(data: &[u8]) -> Self {
         use object::{Object, ObjectSection};
 
@@ -569,6 +561,7 @@ struct HeaderMetadata {
 }
 
 /// NOTE: the numbers must be rounded up to the section and file alignment respectively
+#[allow(dead_code)]
 fn update_optional_header(
     data: &mut [u8],
     optional_header_offset: usize,
@@ -589,6 +582,7 @@ fn update_optional_header(
         .set(LE, optional_header.size_of_image.get(LE) + file_bytes_added);
 }
 
+#[allow(dead_code)]
 fn write_app_text_section_header(
     data: &mut [u8],
     section_header_start: usize,
@@ -627,9 +621,9 @@ mod test {
 
     use std::ops::Deref;
 
-    use object::pe::{ImageFileHeader, ImageOptionalHeader64};
+    use object::pe::ImageFileHeader;
     use object::read::pe::PeFile64;
-    use object::{pe, LittleEndian as LE, Object, U32};
+    use object::{pe, LittleEndian as LE, Object};
 
     use indoc::indoc;
 
@@ -1130,10 +1124,10 @@ mod test {
         let app_bytes = &app_obj[app_obj_sections.text_file_range];
 
         // hardcoded for now, should come from the precompiled metadata in the future
-
         let image_base: u64 = 0x140000000;
         let file_alignment = 0x200;
         let section_alignment = 0x1000;
+        let last_host_section_index = 5;
 
         let app_bytes_virtual_width = next_multiple_of(app_bytes.len(), file_alignment);
 
@@ -1144,22 +1138,14 @@ mod test {
             dynhost_bytes.len() + app_bytes_virtual_width,
         );
 
+        // copying over all of the dynhost.exe bytes
         app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
+
+        // copying in the app bytes (so we must make sure the app text section includes these bytes)
         app[dynhost_bytes.len()..][..app_bytes.len()].copy_from_slice(app_bytes);
 
-        let dynamic_relocations = DynamicRelocationsPe::new(&app);
-
-        // Here we manually add the app.obj assembly to the host's .text section
-        // We can "just" do this because the space reserved for this section is bigger
-        // than what is actually used (because PE rounds up sections to a big alignment,
-        // here 0x200)
-        //
-        // So, we append the bytes at the end of the current .text section, redirect the call
-        // to `magic` to the virtual address of the .text section (so right before the new
-        // assembly bytes that we added) and then update the length of the .text section
-
         let file = PeFile64::parse(app.deref()).unwrap();
-        let last_host_section = file.sections().nth(5).unwrap();
+        let last_host_section = file.sections().nth(last_host_section_index).unwrap();
 
         let optional_header_offset = file.dos_header().nt_headers_offset() as usize
             + std::mem::size_of::<u32>()
@@ -1171,6 +1157,7 @@ mod test {
                 section_alignment as usize,
             ) as u64;
 
+        let dynamic_relocations = DynamicRelocationsPe::new(&app);
         redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[app_code_section_va]);
 
         remove_dummy_dll_import_table(
@@ -1179,6 +1166,7 @@ mod test {
             dynamic_relocations.imports_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
+
         let section_header_start = 624;
         let section_file_offset = dynhost_bytes.len();
         let virtual_size = app_bytes.len() as u32;
