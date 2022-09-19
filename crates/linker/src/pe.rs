@@ -408,6 +408,96 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
     unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
+#[allow(dead_code)]
+fn redirect_dummy_dll_functions(
+    app: &mut [u8],
+    dynamic_relocations: &DynamicRelocationsPe,
+    function_definition_vas: &[u64],
+) {
+    // The host executable contains indirect calls to functions that the host should provide
+    //
+    //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
+    //     140001062:	89 c3                	mov    ebx,eax
+    //     140001064:	b1 21                	mov    cl,0x21
+    //
+    // This `call` is an indirect call (see https://www.felixcloutier.com/x86/call, our call starts
+    // with 0xe8, so it is relative) In other words, at runtime the program will go to 0x1400037f0,
+    // read a pointer-sized value there, and jump to that location.
+    //
+    // The 0x1400037f0 virtual address is located in the .rdata section
+    //
+    //     Sections:
+    //     Idx Name          Size      VMA               LMA               File off  Algn
+    //       0 .text         0000169a  0000000140001000  0000000140001000  00000600  2**4
+    //                       CONTENTS, ALLOC, LOAD, READONLY, CODE
+    //       1 .rdata        00000ba8  0000000140003000  0000000140003000  00001e00  2**4
+    //                       CONTENTS, ALLOC, LOAD, READONLY, DATA
+    //
+    // Our task is then to put a valid function pointer at 0x1400037f0. The value should be a
+    // virtual address pointing at the start of a function (which must be located in an executable
+    // section)
+    //
+    // sources:
+    //
+    // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
+
+    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+    let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
+        + W * dynamic_relocations.dummy_import_index as usize;
+
+    let dummy_import_desc =
+        load_struct_inplace_mut::<ImageImportDescriptor>(app, dummy_import_desc_start);
+
+    // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
+    //
+    // > Once an imported value has been resolved, the pointer to it is stored in the FirstThunk array.
+    // > It can then be used at runtime to address imported values.
+    //
+    // There is also an OriginalFirstThunk array, which we don't use.
+    //
+    // The `dummy_thunks_address` is the 0x1400037f0 of our example. In and of itself that is no good though,
+    // this is a virtual address, we need a file offset
+    let dummy_thunks_address_va = dummy_import_desc.first_thunk;
+    let dummy_thunks_address = dummy_thunks_address_va.get(LE);
+
+    let data: &[u8] = app;
+
+    let dos_header = object::pe::ImageDosHeader::parse(data).unwrap();
+    let mut offset = dos_header.nt_headers_offset().into();
+
+    use object::read::pe::ImageNtHeaders;
+    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
+    let sections = nt_headers.sections(data, offset).unwrap();
+
+    // so we look at what section this virtual address is in
+    let (section_va, offset_in_file) = sections
+        .iter()
+        .find_map(|section| {
+            section.pe_data_containing(data, dummy_thunks_address).map(
+                |(_section_data, section_va)| (section_va, section.pointer_to_raw_data.get(LE)),
+            )
+        })
+        .expect("Invalid thunk virtual address");
+
+    // and get the offset in the file of 0x1400037f0
+    let thunks_start_offset = (dummy_thunks_address - section_va + offset_in_file) as usize;
+
+    for (i, target) in function_definition_vas.iter().enumerate() {
+        // addresses are 64-bit values
+        let address_bytes = &mut app[thunks_start_offset + i * 8..][..8];
+
+        // the array of addresses is null-terminated; make sure we haven't reached the end
+        let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
+        if current == 0 {
+            internal_error!("invalid state: fewer thunks than function addresses");
+        }
+
+        // update the address to a function VA
+        address_bytes.copy_from_slice(&target.to_le_bytes());
+    }
+}
+
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
@@ -415,7 +505,7 @@ mod test {
     use std::ops::Deref;
 
     use object::read::pe::PeFile64;
-    use object::{pe, LittleEndian as LE, Object, U32};
+    use object::{pe, LittleEndian as LE, Object};
 
     use indoc::indoc;
 
@@ -672,42 +762,42 @@ mod test {
         increase_number_of_sections_help(PE_DYNHOST, &new_sections, &path);
     }
 
-    #[test]
-    fn preprocess_zig_host() {
+    fn link_zig_host_and_app_help(dir: &Path) {
+        use object::ObjectSection;
+
         let host_zig = indoc!(
             r#"
-            extern fn double(u8) u8;
+            const std = @import("std");
 
-            pub fn main() u8 {
-                return double(42);
+            extern fn magic() callconv(.C) u64;
+
+            pub fn main() !void {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("Hello, {}!\n", .{magic()});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            export fn double(n: u8) u8 {
-                return n + n;
+            export fn magic() u64 {
+                return 42;
             }
             "#
         );
 
         let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
 
-        let dir = tempfile::tempdir().unwrap();
-        let dir = dir.path();
-
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
         std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
 
-        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["double".into()]);
+        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["magic".into()]);
         std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
 
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
                 "build-exe",
-                "-fPIE",
                 "libapp.obj",
                 "host.zig",
                 "-lc",
@@ -727,9 +817,6 @@ mod test {
 
             panic!("zig build-exe failed");
         }
-
-        let data = std::fs::read(dir.join("host.exe")).unwrap();
-        increase_number_of_sections_help(&data, &dir.join("dynhost.exe"));
 
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
@@ -752,5 +839,81 @@ mod test {
 
             panic!("zig build-obj failed");
         }
+
+        let mut app = std::fs::read(dir.join("host.exe")).unwrap();
+        let dynamic_relocations = DynamicRelocationsPe::new(&app);
+
+        // Here we manually add the app.obj assembly to the host's .text section
+        // We can "just" do this because the space reserved for this section is bigger
+        // than what is actually used (because PE rounds up sections to a big alignment,
+        // here 0x200)
+        //
+        // So, we append the bytes at the end of the current .text section, redirect the call
+        // to `magic` to the virtual address of the .text section (so right before the new
+        // assembly bytes that we added) and then update the length of the .text section
+
+        let file = PeFile64::parse(app.as_slice()).unwrap();
+        let text_section = file.sections().next().unwrap();
+
+        // end of the code section as an offset into the file
+        let code_section_end =
+            (text_section.file_range().unwrap().0 + text_section.size()) as usize;
+
+        // the virtual address of the end of the text section
+        let code_section_end_virtual = text_section.address() + text_section.size();
+
+        // this is cheating a little bit: these bytes are copied from the `app.obj`
+        // we could get them out programatically of course.
+        let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
+
+        // put our new code into the existing .text section
+        app[code_section_end..][..app_bytes.len()].copy_from_slice(app_bytes);
+
+        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[code_section_end_virtual]);
+
+        remove_dummy_dll_import_table(
+            &mut app,
+            dynamic_relocations.data_directories_offset_in_file,
+            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.dummy_import_index,
+        );
+
+        // again, a constant that we could get programatically
+        let section_table_offset = 384;
+
+        // update the size of the .text section (which is the first section header)
+        let p = load_struct_inplace_mut::<ImageSectionHeader>(&mut app, section_table_offset);
+        p.virtual_size
+            .set(LE, p.virtual_size.get(LE) + app_bytes.len() as u32);
+
+        std::fs::write(dir.join("hostapp.exe"), app).unwrap()
+    }
+
+    #[ignore]
+    #[test]
+    fn link_zig_host_and_app_wine() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+
+        link_zig_host_and_app_help(dir);
+
+        let output = std::process::Command::new("wine")
+            .current_dir(dir)
+            .args(&["hostapp.exe"])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("wine failed");
+        }
+
+        let output = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!("Hello, 42!\n", output);
     }
 }
