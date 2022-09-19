@@ -327,12 +327,15 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
     let mut redundancies = vec![];
     let mut errors = vec![];
 
-    for SketchedRow {
-        patterns,
-        guard,
-        region,
-        redundant_mark,
-    } in rows.into_iter()
+    for (
+        row_number,
+        SketchedRow {
+            patterns,
+            guard,
+            region,
+            redundant_mark,
+        },
+    ) in rows.into_iter().enumerate()
     {
         let next_row: Vec<Pattern> = patterns
             .into_iter()
@@ -358,7 +361,7 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
                 errors.push(Error::Redundant {
                     overall_region,
                     branch_region: region,
-                    index: HumanIndex::zero_based(checked_rows.len()),
+                    index: HumanIndex::zero_based(row_number),
                     reason,
                 });
             }

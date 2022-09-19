@@ -10652,7 +10652,7 @@ All branches in an `if` must have the same type!
 
     ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd pattern is redundant:
+    The 3rd pattern is redundant:
 
     6│      when x is
     7│          Ok (Ok {}) -> ""
