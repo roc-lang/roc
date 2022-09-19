@@ -8,7 +8,7 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
@@ -21,7 +21,7 @@ use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8, args: *const RocList<RocStr>);
+    fn roc_main(output: *mut u8);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -85,16 +85,11 @@ pub extern "C" fn rust_main() -> u8 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
-    // TODO: can we be more efficient about reusing the String's memory for RocStr?
-    let args: RocList<RocStr> = std::env::args_os()
-        .map(|s| RocStr::from(s.to_string_lossy().borrow()))
-        .collect();
-
     unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer, &args);
+        roc_main(buffer);
 
         let exit_code = call_the_closure(buffer);
 
@@ -120,6 +115,27 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> u8 {
 
     // TODO return the u8 exit code returned by the Fx closure
     0
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_envDict() -> RocDict<RocStr, RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::vars_os()
+        .map(|(key, val)| {
+            (
+                RocStr::from(key.to_string_lossy().borrow()),
+                RocStr::from(val.to_string_lossy().borrow()),
+            )
+        })
+        .collect()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_args() -> RocList<RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::args_os()
+        .map(|os_str| RocStr::from(os_str.to_string_lossy().borrow()))
+        .collect()
 }
 
 #[no_mangle]
