@@ -936,161 +936,6 @@ mod test {
             panic!("zig build-exe failed");
         }
 
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-obj",
-                "app.zig",
-                "-target",
-                "x86_64-windows-gnu",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
-
-        if !output.status.success() {
-            use std::io::Write;
-
-            std::io::stdout().write_all(&output.stdout).unwrap();
-            std::io::stderr().write_all(&output.stderr).unwrap();
-
-            panic!("zig build-obj failed");
-        }
-
-        let mut app = std::fs::read(dir.join("host.exe")).unwrap();
-        let dynamic_relocations = DynamicRelocationsPe::new(&app);
-
-        // Here we manually add the app.obj assembly to the host's .text section
-        // We can "just" do this because the space reserved for this section is bigger
-        // than what is actually used (because PE rounds up sections to a big alignment,
-        // here 0x200)
-        //
-        // So, we append the bytes at the end of the current .text section, redirect the call
-        // to `magic` to the virtual address of the .text section (so right before the new
-        // assembly bytes that we added) and then update the length of the .text section
-
-        let file = PeFile64::parse(app.as_slice()).unwrap();
-        let text_section = file.sections().next().unwrap();
-
-        // end of the code section as an offset into the file
-        let code_section_end =
-            (text_section.file_range().unwrap().0 + text_section.size()) as usize;
-
-        // the virtual address of the end of the text section
-        let code_section_end_virtual = text_section.address() + text_section.size();
-
-        // this is cheating a little bit: these bytes are copied from the `app.obj`
-        // we could get them out programatically of course.
-        let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
-
-        // put our new code into the existing .text section
-        app[code_section_end..][..app_bytes.len()].copy_from_slice(app_bytes);
-
-        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[code_section_end_virtual]);
-
-        remove_dummy_dll_import_table(
-            &mut app,
-            dynamic_relocations.data_directories_offset_in_file,
-            dynamic_relocations.imports_offset_in_file,
-            dynamic_relocations.dummy_import_index,
-        );
-
-        // again, a constant that we could get programatically
-        let section_table_offset = 384;
-
-        // update the size of the .text section (which is the first section header)
-        let p = load_struct_inplace_mut::<ImageSectionHeader>(&mut app, section_table_offset);
-        p.virtual_size
-            .set(LE, p.virtual_size.get(LE) + app_bytes.len() as u32);
-
-        std::fs::write(dir.join("hostapp.exe"), app).unwrap()
-    }
-
-    #[ignore]
-    #[test]
-    fn link_zig_host_and_app_wine() {
-        let dir = tempfile::tempdir().unwrap();
-        let dir = dir.path();
-
-        link_zig_host_and_app_help(dir);
-
-        let output = std::process::Command::new("wine")
-            .current_dir(dir)
-            .args(&["hostapp.exe"])
-            .output()
-            .unwrap();
-
-        if !output.status.success() {
-            use std::io::Write;
-
-            std::io::stdout().write_all(&output.stdout).unwrap();
-            std::io::stderr().write_all(&output.stderr).unwrap();
-
-            panic!("wine failed");
-        }
-
-        let output = String::from_utf8_lossy(&output.stdout);
-
-        assert_eq!("Hello, 42!\n", output);
-    }
-
-    fn foobar_help(dir: &Path) {
-        use object::ObjectSection;
-
-        let host_zig = indoc!(
-            r#"
-            const std = @import("std");
-
-            extern fn magic() callconv(.C) u64;
-
-            pub fn main() !void {
-                const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello, {}!\n", .{magic()});
-            }
-            "#
-        );
-
-        let app_zig = indoc!(
-            r#"
-            export fn magic() u64 {
-                return 42;
-            }
-            "#
-        );
-
-        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
-
-        std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
-        std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
-
-        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["magic".into()]);
-        std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
-
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-exe",
-                "libapp.obj",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
-
-        if !output.status.success() {
-            use std::io::Write;
-
-            std::io::stdout().write_all(&output.stdout).unwrap();
-            std::io::stderr().write_all(&output.stderr).unwrap();
-
-            panic!("zig build-exe failed");
-        }
-
         let data = std::fs::read(dir.join("host.exe")).unwrap();
         let new_sections = [*b".text\0\0\0"];
         increase_number_of_sections_help(&data, &new_sections, &dir.join("dynhost.exe"));
@@ -1193,12 +1038,12 @@ mod test {
     }
 
     #[test]
-    fn foobar() {
-        // let dir = tempfile::tempdir().unwrap();
-        // let dir = dir.path();
-        let dir = Path::new("/tmp/wlink");
+    #[ignore]
+    fn link_zig_host_and_app_wine() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
 
-        foobar_help(dir);
+        link_zig_host_and_app_help(dir);
 
         let output = std::process::Command::new("wine")
             .current_dir(dir)
