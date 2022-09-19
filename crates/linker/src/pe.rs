@@ -505,7 +505,7 @@ mod test {
     use std::ops::Deref;
 
     use object::read::pe::PeFile64;
-    use object::{pe, LittleEndian as LE, Object};
+    use object::{pe, LittleEndian as LE, Object, U32};
 
     use indoc::indoc;
 
@@ -1044,6 +1044,30 @@ mod test {
         let p = load_struct_inplace_mut::<ImageSectionHeader>(&mut app, section_table_offset);
         p.virtual_size
             .set(LE, p.virtual_size.get(LE) + app_bytes.len() as u32);
+
+        {
+            let characteristics =
+                pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE;
+
+            let header = ImageSectionHeader {
+                name: *b".text1\0\0", // unclear whether we can/should call this text
+                virtual_size: U32::new(LE, app_bytes.len() as u32),
+                virtual_address: U32::new(LE, 0x9000),
+                size_of_raw_data: U32::new(LE, 0), // round up to alignment
+                pointer_to_raw_data: U32::new(LE, app.len() as u32),
+                pointer_to_relocations: Default::default(),
+                pointer_to_linenumbers: Default::default(),
+                number_of_relocations: Default::default(),
+                number_of_linenumbers: Default::default(),
+                characteristics: U32::new(LE, characteristics),
+            };
+
+            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
+                unsafe { std::mem::transmute(header) };
+
+            let extra_sections_start = 624;
+            app[extra_sections_start..][..header_array.len()].copy_from_slice(&header_array);
+        }
 
         std::fs::write(dir.join("hostapp.exe"), app).unwrap()
     }
