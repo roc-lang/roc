@@ -1,0 +1,7 @@
+procedure Test.0 ():
+    let Test.5 : Str = "abc";
+    let Test.1 : [C [], C Str] = TagId(1) Test.5;
+    let Test.3 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
+    inc Test.3;
+    dec Test.1;
+    ret Test.3;

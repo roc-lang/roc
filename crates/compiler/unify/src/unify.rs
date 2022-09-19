@@ -104,6 +104,25 @@ bitflags! {
         /// specialization algorithm is running. This has implications for the unification of
         /// unspecialized lambda sets; see [`unify_unspecialized_lambdas`].
         const LAMBDA_SET_SPECIALIZATION = Mode::EQ.bits | (1 << 2);
+        /// Like [`Mode::EQ`], but permits extension of tag union types by other tag unions that
+        /// are uninhabited. This is relevant for the unification strategy of branch and condition
+        /// types, where we would like
+        ///
+        /// x : Result Str []
+        /// when x is
+        ///     Ok x -> x
+        ///
+        /// to typecheck, because [Ok Str][] = [Ok Str, Result []][] (up to isomorphism).
+        ///
+        /// Traditionally, such types do not unify because the right-hand side is seen to have a
+        /// `Result` constructor, but for branches, that constructor is not material.
+        ///
+        /// Note that such a unification is sound, precisely because `Result` is uninhabited!
+        ///
+        /// NOTE: when run in this mode, it is expected that
+        ///   - the BRANCH TYPE is passed on the LEFT
+        ///   - the CONDITION TYPE is passed on the RIGHT
+        const EQ_WITH_EXTENSION_BY_UNINHABITED_TYPES = Mode::EQ.bits | (1 << 3);
     }
 }
 
@@ -121,6 +140,11 @@ impl Mode {
     fn is_lambda_set_specialization(&self) -> bool {
         debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
         self.contains(Mode::LAMBDA_SET_SPECIALIZATION)
+    }
+
+    fn permit_extension_by_uninhabited_types(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::EQ_WITH_EXTENSION_BY_UNINHABITED_TYPES)
     }
 
     fn as_eq(self) -> Self {
@@ -2077,6 +2101,25 @@ enum Rec {
     Both(Variable, Variable),
 }
 
+/// Checks if an extension type `ext1` should be permitted to grow by the `candidate_type`, if it
+/// uninhabited. Only relevant for [Mode::EQ_WITH_EXTENSION_BY_UNINHABITED_TYPES].
+///
+/// Per the expect invariant of the mode, the tag union extension to grow should be `ext1`, and the
+/// candidate uninhabited type should be `candidate_type`.
+fn should_extend_ext_with_uninhabited_type(
+    subs: &Subs,
+    mode: Mode,
+    ext1: Variable,
+    candidate_type: Variable,
+) -> bool {
+    mode.permit_extension_by_uninhabited_types()
+        && matches!(
+            subs.get_content_without_compacting(ext1),
+            Content::Structure(FlatType::EmptyTagUnion)
+        )
+        && !subs.is_inhabited(candidate_type)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unify_tag_unions<M: MetaCollector>(
     env: &mut Env,
@@ -2148,10 +2191,25 @@ fn unify_tag_unions<M: MetaCollector>(
 
             shared_tags_outcome
         } else {
-            let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
-            let flat_type = FlatType::TagUnion(unique_tags2, ext2);
-            let sub_record = fresh(env, pool, ctx, Structure(flat_type));
-            let ext_outcome = unify_pool(env, pool, ext1, sub_record, ctx.mode);
+            let extra_tags_in_2 = {
+                let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
+                let flat_type = FlatType::TagUnion(unique_tags2, ext2);
+                fresh(env, pool, ctx, Structure(flat_type))
+            };
+
+            // SPECIAL-CASE: if we are permitted to grow empty extensions with uninhabited types,
+            // patch `ext1` to grow accordingly.
+            if should_extend_ext_with_uninhabited_type(env.subs, ctx.mode, ext1, extra_tags_in_2) {
+                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
+                let mut new_desc = ctx.first_desc;
+                new_desc.content = new_union;
+                env.subs.set(ctx.first, new_desc);
+
+                ext1 = new_ext;
+            }
+
+            let ext_outcome = unify_pool(env, pool, ext1, extra_tags_in_2, ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2163,7 +2221,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                sub_record,
+                extra_tags_in_2,
                 recursion_var,
             );
 

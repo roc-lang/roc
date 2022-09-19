@@ -4275,7 +4275,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[Empty, Foo Bar I64]",
+            "[Empty, Foo [Bar] I64]",
         );
     }
 
@@ -7788,7 +7788,7 @@ mod solve_expr {
                     Ok s -> s
                 "#
             ),
-            "",
+            "Str",
         );
     }
 }
