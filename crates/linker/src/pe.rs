@@ -999,7 +999,17 @@ mod test {
             panic!("zig build-obj failed");
         }
 
-        let mut app = std::fs::read(dir.join("dynhost.exe")).unwrap();
+        let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
+
+        // this is cheating a little bit: these bytes are copied from the `app.obj`
+        // we could get them out programatically of course.
+        let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
+
+        let mut app = mmap_mut(&dir.join("app.exe"), dynhost_bytes.len() + app_bytes.len());
+
+        app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
+        app[dynhost_bytes.len()..][..app_bytes.len()].copy_from_slice(app_bytes);
+
         let dynamic_relocations = DynamicRelocationsPe::new(&app);
 
         // Here we manually add the app.obj assembly to the host's .text section
@@ -1011,7 +1021,7 @@ mod test {
         // to `magic` to the virtual address of the .text section (so right before the new
         // assembly bytes that we added) and then update the length of the .text section
 
-        let file = PeFile64::parse(app.as_slice()).unwrap();
+        let file = PeFile64::parse(app.deref()).unwrap();
         let text_section = file.sections().next().unwrap();
 
         // end of the code section as an offset into the file
@@ -1020,10 +1030,6 @@ mod test {
 
         // the virtual address of the end of the text section
         let code_section_end_virtual = text_section.address() + text_section.size();
-
-        // this is cheating a little bit: these bytes are copied from the `app.obj`
-        // we could get them out programatically of course.
-        let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
 
         // put our new code into the existing .text section
         app[code_section_end..][..app_bytes.len()].copy_from_slice(app_bytes);
@@ -1051,7 +1057,7 @@ mod test {
 
             let header = ImageSectionHeader {
                 name: *b".text1\0\0", // unclear whether we can/should call this text
-                virtual_size: U32::new(LE, app_bytes.len() as u32),
+                virtual_size: U32::new(LE, 0),
                 virtual_address: U32::new(LE, 0x9000),
                 size_of_raw_data: U32::new(LE, 0), // round up to alignment
                 pointer_to_raw_data: U32::new(LE, app.len() as u32),
@@ -1068,8 +1074,6 @@ mod test {
             let extra_sections_start = 624;
             app[extra_sections_start..][..header_array.len()].copy_from_slice(&header_array);
         }
-
-        std::fs::write(dir.join("hostapp.exe"), app).unwrap()
     }
 
     #[test]
@@ -1082,7 +1086,7 @@ mod test {
 
         let output = std::process::Command::new("wine")
             .current_dir(dir)
-            .args(&["hostapp.exe"])
+            .args(&["app.exe"])
             .output()
             .unwrap();
 
