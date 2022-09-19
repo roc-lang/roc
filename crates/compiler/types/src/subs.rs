@@ -5444,12 +5444,16 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                     }
                 }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
-                    let mut has_no_tags = true;
+                    let mut is_uninhabited = true;
+                    // If any tag is inhabited, the union is inhabited!
                     for (_tag, vars) in tags.unsorted_iterator(subs, *ext) {
-                        has_no_tags = false;
-                        stack.extend(vars);
+                        // Sadly we must recurse here...
+                        let this_tag_is_inhabited = vars.iter().all(|v| is_inhabited(subs, *v));
+                        if this_tag_is_inhabited {
+                            is_uninhabited = false;
+                        }
                     }
-                    if has_no_tags {
+                    if is_uninhabited {
                         return false;
                     }
                 }

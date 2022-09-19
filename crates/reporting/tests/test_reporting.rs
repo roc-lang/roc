@@ -10545,7 +10545,57 @@ All branches in an `if` must have the same type!
                 Ok {} -> ""
             "#
         ),
+    // no problem!
     @r###"
+    "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive_nested,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Ok B) -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
+        branch_patterns_missing_nested_case,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] {}) {}
+
+            when x is
+                Ok (Ok A) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    TODO
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
+        branch_patterns_missing_nested_case_with_trivially_exhausted_variant,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+            "#
+        ),
+    @r###"
+    TODO
     "###
     );
 
@@ -10570,6 +10620,46 @@ All branches in an `if` must have the same type!
     8│          Err _ -> ""
                 ^^^^^
     
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched_nested,
+        indoc!(
+            r#"
+            x : Result (Result {} []) []
+
+            when x is
+                Ok (Ok {}) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    6│       when x is
+    7│           Ok (Ok {}) -> ""
+    8│>          Ok (Err _) -> ""
+    9│           Err _ -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    6│      when x is
+    7│          Ok (Ok {}) -> ""
+    8│          Ok (Err _) -> ""
+    9│          Err _ -> ""
+                ^^^^^
+
     Any value of this shape will be handled by a previous pattern, so this
     one should be removed.
     "###
