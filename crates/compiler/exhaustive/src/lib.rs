@@ -92,14 +92,12 @@ pub enum Error {
         overall_region: Region,
         branch_region: Region,
         index: HumanIndex,
-        reason: RedundantReason,
     },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RedundantReason {
-    PreviouslyCovered,
-    Uninhabited,
+    Unmatchable {
+        overall_region: Region,
+        branch_region: Region,
+        index: HumanIndex,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -10611,17 +10611,17 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
-    
-    The 2nd pattern is redundant:
-    
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
     6│      when x is
     7│          Ok {} -> ""
     8│          Err _ -> ""
                 ^^^^^
-    
-    Any value of this shape will be handled by a previous pattern, so this
-    one should be removed.
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
     "###
     );
 
@@ -10638,21 +10638,21 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd pattern is redundant:
+    The 2nd pattern will never be matched:
 
     6│       when x is
     7│           Ok (Ok {}) -> ""
     8│>          Ok (Err _) -> ""
     9│           Err _ -> ""
 
-    Any value of this shape will be handled by a previous pattern, so this
-    one should be removed.
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
 
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
 
-    The 3rd pattern is redundant:
+    The 3rd pattern will never be matched:
 
     6│      when x is
     7│          Ok (Ok {}) -> ""
@@ -10660,8 +10660,8 @@ All branches in an `if` must have the same type!
     9│          Err _ -> ""
                 ^^^^^
 
-    Any value of this shape will be handled by a previous pattern, so this
-    one should be removed.
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
     "###
     );
 }

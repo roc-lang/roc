@@ -3889,7 +3889,6 @@ fn exhaustive_problem<'a>(
             overall_region,
             branch_region,
             index,
-            reason: _,
         } => {
             let doc = alloc.stack([
                 alloc.concat([
@@ -3910,6 +3909,34 @@ fn exhaustive_problem<'a>(
             Report {
                 filename,
                 title: "REDUNDANT PATTERN".to_string(),
+                doc,
+                severity: Severity::Warning,
+            }
+        }
+        Unmatchable {
+            overall_region,
+            branch_region,
+            index,
+        } => {
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" pattern will never be matched:"),
+                ]),
+                alloc.region_with_subregion(
+                    lines.convert_region(overall_region),
+                    lines.convert_region(branch_region),
+                ),
+                alloc.reflow(
+                    "It's impossible to create a value of this shape, \
+                so this pattern can be safely removed!",
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "UNMATCHABLE PATTERN".to_string(),
                 doc,
                 severity: Severity::Warning,
             }

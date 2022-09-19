@@ -3,15 +3,11 @@ use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{
-    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RedundantReason, RenderAs, TagId,
-    Union,
+    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
 };
 use roc_module::ident::{TagIdIntType, TagName};
-use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{
-    Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
-};
+use roc_types::subs::{Content, FlatType, RedundantMark, Subs, SubsFmtContent, Variable};
 use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
@@ -342,28 +338,31 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
             .map(|pattern| pattern.reify(subs))
             .collect();
 
-        let is_redundant = if !is_inhabited_row(&next_row) {
-            Some(RedundantReason::Uninhabited)
+        let redundant_err = if !is_inhabited_row(&next_row) {
+            Some(Error::Unmatchable {
+                overall_region,
+                branch_region: region,
+                index: HumanIndex::zero_based(row_number),
+            })
         } else if !(matches!(guard, Guard::HasGuard)
             || is_useful(checked_rows.clone(), next_row.clone()))
         {
-            Some(RedundantReason::PreviouslyCovered)
+            Some(Error::Redundant {
+                overall_region,
+                branch_region: region,
+                index: HumanIndex::zero_based(row_number),
+            })
         } else {
             None
         };
 
-        match is_redundant {
+        match redundant_err {
             None => {
                 checked_rows.push(next_row);
             }
-            Some(reason) => {
+            Some(err) => {
                 redundancies.push(redundant_mark);
-                errors.push(Error::Redundant {
-                    overall_region,
-                    branch_region: region,
-                    index: HumanIndex::zero_based(row_number),
-                    reason,
-                });
+                errors.push(err);
             }
         }
     }
