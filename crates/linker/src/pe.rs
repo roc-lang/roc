@@ -674,7 +674,7 @@ mod test {
 
         assert_eq!(
             before - after,
-            std::mem::size_of::<pe::ImageImportDescriptor>() as _
+            std::mem::size_of::<pe::ImageImportDescriptor>() as u32
         );
 
         assert_eq!(
