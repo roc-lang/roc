@@ -35,7 +35,6 @@ impl<K, V> RocDict<K, V> {
 }
 
 impl<K: Hash, V> RocDict<K, V> {
-    #[allow(unused)]
     pub fn from_iter<I: Iterator<Item = (K, V)>>(src: I) -> Self {
         let mut ret = Self::with_capacity(src.size_hint().0);
 
@@ -50,6 +49,12 @@ impl<K: Hash, V> RocDict<K, V> {
 
     unsafe fn insert_unchecked(&mut self, _key: K, _val: V) {
         todo!();
+    }
+}
+
+impl<'a, K: Hash, V> FromIterator<(K, V)> for RocDict<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(into_iter: T) -> Self {
+        RocDict::from_iter(into_iter.into_iter())
     }
 }
 
