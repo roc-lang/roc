@@ -1,10 +1,22 @@
 app "file-io"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stderr, pf.Task, pf.File, pf.Path, pf.Env, pf.Dir]
+    imports [
+        pf.Program.{ Program },
+        pf.Stdout,
+        pf.Stderr,
+        pf.Task.{ Task },
+        pf.File,
+        pf.Path,
+        pf.Env,
+        pf.Dir,
+    ]
     provides [main] to pf
 
-main : Task.Task {} [] [Write [File, Stdout, Stderr], Read [File], Env]
-main =
+main : Program
+main = Program.noArgs mainTask
+
+mainTask : Task U8 [] [Write [File, Stdout, Stderr], Read [File], Env]
+mainTask =
     path = Path.fromStr "out.txt"
     task =
         cwd <- Env.cwd |> Task.await
@@ -21,10 +33,14 @@ main =
         Stdout.line "I read the file back. Its contents: \"\(contents)\""
 
     Task.attempt task \result ->
-        when result is
-            Err (FileWriteErr _ PermissionDenied) -> Stderr.line "Err: PermissionDenied"
-            Err (FileWriteErr _ Unsupported) -> Stderr.line "Err: Unsupported"
-            Err (FileWriteErr _ (Unrecognized _ other)) -> Stderr.line "Err: \(other)"
-            Err (FileReadErr _ _) -> Stderr.line "Error reading file"
-            Err _ -> Stderr.line "Uh oh, there was an error!"
-            Ok _ -> Stdout.line "Successfully wrote a string to out.txt"
+        msg = when result is
+            Err (FileWriteErr _ PermissionDenied) -> Err "PermissionDenied"
+            Err (FileWriteErr _ Unsupported) -> Err "Unsupported"
+            Err (FileWriteErr _ (Unrecognized _ other)) -> Err other
+            Err (FileReadErr _ _) -> Err "Error reading file"
+            Err _ -> Err "Uh oh, there was an error!"
+            Ok _ -> Ok "Successfully wrote a string to out.txt"
+
+        when msg is
+            Ok ok -> Task.await (Stdout.line ok) \{} -> Task.succeed 0
+            Err err -> Task.await (Stderr.line err) \{} -> Task.succeed 1

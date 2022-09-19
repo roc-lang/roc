@@ -1,6 +1,6 @@
 interface Program
-    exposes [Program, noArgs, withArgs, withNonUnicodeArgs]
-    imports [Task.{ Task }, InternalProgram.{ InternalProgram }]
+    exposes [Program, noArgs, withArgs, quick, withEnv]
+    imports [Task.{ Task }, InternalProgram.{ InternalProgram }, InternalTask, Effect]
 
 ## A [command-line interface](https://en.wikipedia.org/wiki/Command-line_interface) program.
 Program : InternalProgram

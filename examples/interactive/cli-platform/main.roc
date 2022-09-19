@@ -5,5 +5,5 @@ platform "cli"
     imports [Effect.{ Effect }, InternalProgram.{ InternalProgram }]
     provides [mainForHost]
 
-mainForHost : List Str -> Effect U8 as Fx
-mainForHost = \args -> InternalProgram.toEffect main args
+mainForHost : Effect U8 as Fx
+mainForHost = InternalProgram.toEffect main

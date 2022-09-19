@@ -1,5 +1,5 @@
 interface Env
-    exposes [cwd]
+    exposes [cwd, dict]
     imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask]
 
 ## Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)

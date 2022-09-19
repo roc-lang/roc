@@ -8,6 +8,7 @@ hosted Effect
         forever,
         loop,
         dirList,
+        envDict,
         cwd,
         stdoutLine,
         stderrLine,
