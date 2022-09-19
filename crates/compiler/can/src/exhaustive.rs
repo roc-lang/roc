@@ -159,7 +159,16 @@ fn index_var(
                 }
                 FlatType::EmptyRecord => {
                     debug_assert!(matches!(ctor, IndexCtor::Record));
-                    return vec![];
+                    // If there are optional record fields we don't unify them, but we need to
+                    // cover them. Since optional fields correspond to "any" patterns, we can pass
+                    // through arbitrary types.
+                    let num_fields = match render_as {
+                        RenderAs::Record(fields) => fields.len(),
+                        _ => internal_error!(
+                            "record constructors must always be rendered as records"
+                        ),
+                    };
+                    return std::iter::repeat(Variable::NULL).take(num_fields).collect();
                 }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")
