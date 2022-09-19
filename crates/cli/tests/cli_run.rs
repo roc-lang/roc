@@ -16,11 +16,14 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use once_cell::sync::Lazy;
+    use parking_lot::{Mutex, RwLock};
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::sync::Once;
     use strum::IntoEnumIterator;
     use strum_macros::EnumIter;
 
@@ -31,8 +34,19 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    use std::sync::Once;
     static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
+    static POPULATED_EXAMPLE_LOCKS: Once = Once::new();
+
+    use std::collections::HashMap;
+    static EXAMPLE_PLATFORM_LOCKS: Lazy<RwLock<HashMap<PathBuf, Mutex<()>>>> =
+        once_cell::sync::Lazy::new(|| RwLock::new(HashMap::default()));
+
+    fn populate_example_locks(examples: impl Iterator<Item = PathBuf>) {
+        let mut locks = EXAMPLE_PLATFORM_LOCKS.write();
+        for example in examples {
+            locks.insert(example, Default::default());
+        }
+    }
 
     #[derive(Debug, EnumIter)]
     enum CliMode {
@@ -270,12 +284,19 @@ mod cli_run {
     /// add a test for it here!
     macro_rules! examples {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
+            static EXAMPLE_NAMES: &[&str] = &[$($name,)+];
+
             $(
                 #[test]
                 #[allow(non_snake_case)]
                 fn $test_name() {
+                    POPULATED_EXAMPLE_LOCKS.call_once( || {
+                        populate_example_locks(EXAMPLE_NAMES.iter().map(|name| examples_dir(name)))
+                    });
+
                     let dir_name = $name;
                     let example = $example;
+                    let example_dir = examples_dir(dir_name);
                     let file_name = example_file(dir_name, example.filename);
 
                     let mut app_args: Vec<String> = vec![];
@@ -317,6 +338,17 @@ mod cli_run {
                         }
                         _ => {}
                     }
+
+                    // To avoid concurrent examples tests overwriting produced host binaries, lock
+                    // on the example's directory, so that only one example per directory runs at a
+                    // time.
+                    // NOTE: we are assuming that each example corresponds to one platform, under
+                    // the subdirectory. This is not necessarily true, and moreover is too
+                    // restrictive. To increase throughput we only need to lock the produced host
+                    // file, however, it is not trivial to recover what that file is today (without
+                    // enumerating all examples and their platforms).
+                    let locks = EXAMPLE_PLATFORM_LOCKS.read();
+                    let _example_guard = locks.get(&example_dir).unwrap().lock();
 
                     // Check with and without optimizations
                     check_output_with_stdin(

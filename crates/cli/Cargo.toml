@@ -101,6 +101,8 @@ criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
 strum = "0.24.0"
 strum_macros = "0.24"
+once_cell = "1.14.0"
+parking_lot = "0.12"
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]
