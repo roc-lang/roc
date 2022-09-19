@@ -393,64 +393,6 @@ fn is_inhabited_pattern(pat: &Pattern) -> bool {
     true
 }
 
-/// Returns true iff the given type is inhabited by at least one value.
-fn is_inhabited(subs: &Subs, var: Variable) -> bool {
-    let mut stack = vec![var];
-    while let Some(var) = stack.pop() {
-        match subs.get_content_without_compacting(var) {
-            Content::FlexVar(_)
-            | Content::RigidVar(_)
-            | Content::FlexAbleVar(_, _)
-            | Content::RigidAbleVar(_, _)
-            // We don't need to look into recursion vars here, because if they show up in this
-            // position, they *must* belong to an inhabited type. That's because
-            //   - if the recursion var was inferred from a value, then we know there is a value of
-            //     the given type.
-            //   - if the recursion var comes from an explicit annotation, then it must be an a tag
-            //     union of the form `Rec : [ R1 Rec, R2 Rec, ..., Rn Rec ]`. However, such annotations
-            //     are determined as illegal and reported during canonicalization, because you
-            //     cannot have a tag union without a non-recursive variant.
-            | Content::RecursionVar { .. } => {}
-            Content::LambdaSet(_) => {}
-            Content::Structure(structure) => match structure {
-                FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
-                FlatType::Func(args, _, ret) => {
-                    stack.extend(subs.get_subs_slice(*args));
-                    stack.push(*ret);
-                }
-                FlatType::Record(fields, ext) => {
-                    if let Ok(iter) = fields.unsorted_iterator(subs, *ext) {
-                        let field_vars = iter.map(|(_, field)| *field.as_inner());
-                        stack.extend(field_vars)
-                    }
-                }
-                FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
-                    let mut has_no_tags = true;
-                    for (_tag, vars) in tags.unsorted_iterator(subs, *ext) {
-                        has_no_tags = false;
-                        stack.extend(vars);
-                    }
-                    if has_no_tags {
-                        return false;
-                    }
-                }
-                FlatType::FunctionOrTagUnion(_, _, _) => {}
-                FlatType::Erroneous(_) => {}
-                FlatType::EmptyRecord => {}
-                FlatType::EmptyTagUnion => {
-                    return false;
-                }
-            },
-            Content::Alias(name, _, _, _) if name.module_id() == ModuleId::NUM => {},
-            Content::Alias(_, _, var, _) => stack.push(*var),
-            Content::RangedNumber(_) => {}
-            Content::Error => {}
-        }
-    }
-
-    true
-}
-
 fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, TagId) {
     let content = subs.get_content_without_compacting(whole_var);
 
@@ -482,7 +424,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
             let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag.into_iter());
 
             for (index, (tag, args)) in alternatives_iter.enumerate() {
-                let is_inhabited = args.iter().all(|v| is_inhabited(subs, *v));
+                let is_inhabited = args.iter().all(|v| subs.is_inhabited(*v));
 
                 if !is_inhabited {
                     // This constructor is not material; we don't need to match over it!
