@@ -3813,6 +3813,7 @@ dependencies = [
  "bumpalo",
  "clap 3.2.20",
  "iced-x86",
+ "indoc",
  "mach_object",
  "memmap2 0.5.7",
  "object 0.29.0",
