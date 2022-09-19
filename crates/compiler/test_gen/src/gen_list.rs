@@ -262,8 +262,9 @@ fn list_map_try_ok() {
         r#"
             List.mapTry [1, 2, 3] \elem -> Ok elem
         "#,
-        RocResult::ok(RocList::<i64>::from_slice(&[1, 2, 3])),
-        RocResult<RocList<i64>, ()>
+        // Result I64 [] is unwrapped to just I64
+        RocList::<i64>::from_slice(&[1, 2, 3]),
+        RocList<i64>
     );
     assert_evals_to!(
         // Transformation
@@ -273,12 +274,13 @@ fn list_map_try_ok() {
 
                 Ok "\(str)!"
         "#,
-        RocResult::ok(RocList::<RocStr>::from_slice(&[
+        // Result Str [] is unwrapped to just Str
+        RocList::<RocStr>::from_slice(&[
             RocStr::from("2!"),
             RocStr::from("4!"),
             RocStr::from("6!"),
-        ])),
-        RocResult<RocList<RocStr>, ()>
+        ]),
+        RocList<RocStr>
     );
 }
 

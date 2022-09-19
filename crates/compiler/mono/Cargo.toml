@@ -27,3 +27,4 @@ ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.11.0", features = ["collections"] }
 hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
 static_assertions = "1.1.0"
+bitvec = "1.0.1"

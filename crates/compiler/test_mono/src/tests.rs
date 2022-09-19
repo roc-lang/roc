@@ -1949,3 +1949,16 @@ fn match_on_result_with_uninhabited_error_branch() {
         "#
     )
 }
+
+#[mono_test]
+fn unreachable_void_constructor() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        x : []
+
+        main = if True then Ok x else Err "abc" 
+        "#
+    )
+}
