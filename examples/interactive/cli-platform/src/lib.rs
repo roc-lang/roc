@@ -139,6 +139,15 @@ pub extern "C" fn roc_fx_args() -> RocList<RocStr> {
 }
 
 #[no_mangle]
+pub extern "C" fn roc_fx_envVar(roc_str: &RocStr) -> RocResult<RocStr, ()> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    match std::env::var_os(roc_str.as_str()) {
+        Some(os_str) => RocResult::ok(RocStr::from(os_str.to_string_lossy().borrow())),
+        None => RocResult::err(()),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn roc_fx_stdinLine() -> RocStr {
     use std::io::{self, BufRead};
 

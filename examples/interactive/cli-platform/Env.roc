@@ -1,5 +1,5 @@
 interface Env
-    exposes [cwd, dict]
+    exposes [cwd, dict, var]
     imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask]
 
 ## Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
@@ -24,15 +24,16 @@ cwd =
 # exePath : Task Path [ExePathUnavailable]* [Env]*
 # exePath = InternalTask.fromEffect Effect.setCwd
 
-# ## Reads the given environment variable.
-# ##
-# ## If the value is invalid Unicode, returns `VarInvalidUnicode` and
-# ## a [Str] representing the invalid value with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
-# ## (`�`) replacing the invalid parts.
-# var : Str -> Task Str [VarNotFound, VarInvalidUnicode Str]* [Env]*
-# var = \var ->
-#     Effect.envVar var
-#     |> InternalTask.fromEffect
+## Reads the given environment variable.
+##
+## If the value is invalid Unicode, the invalid parts will be replaced with the
+## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+## (`�`).
+var : Str -> Task Str [VarNotFound]* [Env]*
+var = \name ->
+    Effect.envVar name
+    |> Effect.map (\result -> Result.mapErr result \{} -> VarNotFound)
+    |> InternalTask.fromEffect
 
 # ## Reads the given environment variable and attempts to decode it.
 # ##
