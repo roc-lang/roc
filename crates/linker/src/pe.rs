@@ -1,9 +1,12 @@
-use std::{path::Path, time::Instant};
+use std::{ops::Range, path::Path, time::Instant};
 
 use memmap2::{Mmap, MmapMut};
 use object::{
-    pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
-    read::pe::ImportTable,
+    pe::{
+        ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
+        ImageThunkData64,
+    },
+    read::pe::{ImportTable, PeFile64},
     LittleEndian as LE,
 };
 use roc_collections::MutMap;
@@ -270,7 +273,7 @@ impl Preprocessor {
 
         // in a better world `extra_sections_width.div_ceil(file_alignment)` would be stable
         // check on https://github.com/rust-lang/rust/issues/88581 some time in the future
-        let extra_alignments = (extra_sections_width + file_alignment - 1) / file_alignment;
+        let extra_alignments = div_ceil(extra_sections_width, file_alignment);
         let new_headers_size = old_headers_size + extra_alignments * file_alignment;
 
         let additional_length = new_headers_size - old_headers_size;
@@ -496,6 +499,126 @@ fn redirect_dummy_dll_functions(
         // update the address to a function VA
         address_bytes.copy_from_slice(&target.to_le_bytes());
     }
+}
+
+#[derive(Debug, Default)]
+struct AppSections {
+    text_file_range: Range<usize>,
+    #[allow(dead_code)]
+    data_file_range: Range<usize>,
+}
+
+impl AppSections {
+    fn from_file(path: &Path) -> Self {
+        let file = std::fs::File::open(path).unwrap();
+        let app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        Self::from_data(&*app)
+    }
+
+    fn from_data(data: &[u8]) -> Self {
+        use object::{Object, ObjectSection};
+
+        let file = object::File::parse(data).unwrap();
+
+        let mut this = Self::default();
+
+        for section in file.sections() {
+            match section.name() {
+                Ok(".text") => {
+                    let (start, length) = section.file_range().unwrap();
+                    this.text_file_range = start as usize..(start + length) as usize
+                }
+                Ok(".data") => {
+                    let (start, length) = section.file_range().unwrap();
+                    this.data_file_range = start as usize..(start + length) as usize
+                }
+                _ => { /* ignore */ }
+            }
+        }
+
+        this
+    }
+}
+
+// check on https://github.com/rust-lang/rust/issues/88581 some time in the future
+#[allow(dead_code)]
+pub const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
+    match lhs % rhs {
+        0 => lhs,
+        r => lhs + (rhs - r),
+    }
+}
+
+pub const fn div_ceil(lhs: usize, rhs: usize) -> usize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if r > 0 && rhs > 0 {
+        d + 1
+    } else {
+        d
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct HeaderMetadata {
+    image_base: u64,
+    file_alignment: usize,
+    section_alignment: usize,
+}
+
+/// NOTE: the numbers must be rounded up to the section and file alignment respectively
+fn update_optional_header(
+    data: &mut [u8],
+    optional_header_offset: usize,
+    code_bytes_added: u32,
+    file_bytes_added: u32,
+) {
+    use object::pe::ImageOptionalHeader64;
+
+    let optional_header =
+        load_struct_inplace_mut::<ImageOptionalHeader64>(data, optional_header_offset);
+
+    optional_header
+        .size_of_code
+        .set(LE, optional_header.size_of_code.get(LE) + code_bytes_added);
+
+    optional_header
+        .size_of_image
+        .set(LE, optional_header.size_of_image.get(LE) + file_bytes_added);
+}
+
+fn write_app_text_section_header(
+    data: &mut [u8],
+    section_header_start: usize,
+    section_file_offset: usize,
+    virtual_size: u32,
+    virtual_address: u32,
+    size_of_raw_data: u32,
+) {
+    use object::{pe, U32};
+
+    let characteristics =
+        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE;
+
+    let header = ImageSectionHeader {
+        name: *b".text1\0\0", // unclear whether we can/should call this text
+        virtual_size: U32::new(LE, virtual_size),
+        virtual_address: U32::new(LE, virtual_address),
+        size_of_raw_data: U32::new(LE, size_of_raw_data),
+        pointer_to_raw_data: U32::new(LE, section_file_offset as u32),
+        pointer_to_relocations: Default::default(),
+        pointer_to_linenumbers: Default::default(),
+        number_of_relocations: Default::default(),
+        number_of_linenumbers: Default::default(),
+        characteristics: U32::new(LE, characteristics),
+    };
+
+    let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
+        unsafe { std::mem::transmute(header) };
+
+    data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
 #[cfg(test)]
@@ -1000,12 +1123,21 @@ mod test {
             panic!("zig build-obj failed");
         }
 
-        let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
+        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
+        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        // this is cheating a little bit: these bytes are copied from the `app.obj`
-        // we could get them out programatically of course.
-        let app_bytes: &[u8] = &[0xb8, 0x2a, 0, 0, 0, 0xc3];
-        let app_bytes_virtual_width = 0x200; // round up to section alignment
+        let app_obj_sections = AppSections::from_data(&*app_obj);
+        let app_bytes = &app_obj[app_obj_sections.text_file_range];
+
+        // hardcoded for now, should come from the precompiled metadata in the future
+
+        let image_base: u64 = 0x140000000;
+        let file_alignment = 0x200;
+        let section_alignment = 0x1000;
+
+        let app_bytes_virtual_width = next_multiple_of(app_bytes.len(), file_alignment);
+
+        let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
         let mut app = mmap_mut(
             &dir.join("app.exe"),
@@ -1027,23 +1159,19 @@ mod test {
         // assembly bytes that we added) and then update the length of the .text section
 
         let file = PeFile64::parse(app.deref()).unwrap();
-        let text_section = file.sections().next().unwrap();
+        let last_host_section = file.sections().nth(5).unwrap();
 
         let optional_header_offset = file.dos_header().nt_headers_offset() as usize
             + std::mem::size_of::<u32>()
             + std::mem::size_of::<ImageFileHeader>();
 
-        // end of the code section as an offset into the file
-        let code_section_end =
-            (text_section.file_range().unwrap().0 + text_section.size()) as usize;
+        let app_code_section_va = last_host_section.address()
+            + next_multiple_of(
+                last_host_section.size() as usize,
+                section_alignment as usize,
+            ) as u64;
 
-        // the virtual address of the end of the text section
-        let code_section_end_virtual = text_section.address() + text_section.size();
-
-        // put our new code into the existing .text section
-        app[code_section_end..][..app_bytes.len()].copy_from_slice(app_bytes);
-
-        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[code_section_end_virtual]);
+        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[app_code_section_va]);
 
         remove_dummy_dll_import_table(
             &mut app,
@@ -1051,53 +1179,29 @@ mod test {
             dynamic_relocations.imports_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
+        let section_header_start = 624;
+        let section_file_offset = dynhost_bytes.len();
+        let virtual_size = app_bytes.len() as u32;
+        let virtual_address = (app_code_section_va - image_base) as u32;
+        let size_of_raw_data = app_bytes_virtual_width as u32;
+        write_app_text_section_header(
+            &mut app,
+            section_header_start,
+            section_file_offset,
+            virtual_size,
+            virtual_address,
+            size_of_raw_data,
+        );
 
-        // again, a constant that we could get programatically
-        let section_table_offset = 384;
+        let code_bytes_added = next_multiple_of(app_bytes.len() as usize, section_alignment);
+        let file_bytes_added = next_multiple_of(app_bytes.len() as usize, file_alignment);
 
-        // update the size of the .text section (which is the first section header)
-        let p = load_struct_inplace_mut::<ImageSectionHeader>(&mut app, section_table_offset);
-        p.virtual_size
-            .set(LE, p.virtual_size.get(LE) + app_bytes.len() as u32);
-
-        {
-            let characteristics =
-                pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE;
-
-            let header = ImageSectionHeader {
-                name: *b".text1\0\0", // unclear whether we can/should call this text
-                virtual_size: U32::new(LE, 6),
-                virtual_address: U32::new(LE, 0xb000),
-                size_of_raw_data: U32::new(LE, 0x200), // round up to alignment
-                pointer_to_raw_data: U32::new(LE, dynhost_bytes.len() as u32),
-                pointer_to_relocations: Default::default(),
-                pointer_to_linenumbers: Default::default(),
-                number_of_relocations: Default::default(),
-                number_of_linenumbers: Default::default(),
-                characteristics: U32::new(LE, characteristics),
-            };
-
-            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-                unsafe { std::mem::transmute(header) };
-
-            let extra_sections_start = 624;
-            app[extra_sections_start..][..header_array.len()].copy_from_slice(&header_array);
-        }
-
-        {
-            let optional_header =
-                load_struct_inplace_mut::<ImageOptionalHeader64>(&mut app, optional_header_offset);
-
-            optional_header
-                .size_of_code
-                .set(LE, optional_header.size_of_code.get(LE) + 0x200);
-
-            optional_header
-                .size_of_image
-                .set(LE, optional_header.size_of_image.get(LE) + 0x1000);
-        }
-
-        println!("{:x?}", app.len());
+        update_optional_header(
+            &mut app,
+            optional_header_offset,
+            code_bytes_added as u32,
+            file_bytes_added as u32,
+        );
     }
 
     #[test]
