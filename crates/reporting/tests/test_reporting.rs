@@ -10534,4 +10534,134 @@ All branches in an `if` must have the same type!
      Maybe you wanted to use a `Result`?
      "###
     );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive_nested,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Ok B) -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
+        branch_patterns_missing_nested_case,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] {}) {}
+
+            when x is
+                Ok (Ok A) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    TODO
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
+        branch_patterns_missing_nested_case_with_trivially_exhausted_variant,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+            "#
+        ),
+    @r###"
+    TODO
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok {} -> ""
+    8│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched_nested,
+        indoc!(
+            r#"
+            x : Result (Result {} []) []
+
+            when x is
+                Ok (Ok {}) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│       when x is
+    7│           Ok (Ok {}) -> ""
+    8│>          Ok (Err _) -> ""
+    9│           Err _ -> ""
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok (Ok {}) -> ""
+    8│          Ok (Err _) -> ""
+    9│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+    "###
+    );
 }

@@ -323,27 +323,47 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
     let mut redundancies = vec![];
     let mut errors = vec![];
 
-    for SketchedRow {
-        patterns,
-        guard,
-        region,
-        redundant_mark,
-    } in rows.into_iter()
+    for (
+        row_number,
+        SketchedRow {
+            patterns,
+            guard,
+            region,
+            redundant_mark,
+        },
+    ) in rows.into_iter().enumerate()
     {
         let next_row: Vec<Pattern> = patterns
             .into_iter()
             .map(|pattern| pattern.reify(subs))
             .collect();
 
-        if matches!(guard, Guard::HasGuard) || is_useful(checked_rows.clone(), next_row.clone()) {
-            checked_rows.push(next_row);
-        } else {
-            redundancies.push(redundant_mark);
-            errors.push(Error::Redundant {
+        let redundant_err = if !is_inhabited_row(&next_row) {
+            Some(Error::Unmatchable {
                 overall_region,
                 branch_region: region,
-                index: HumanIndex::zero_based(checked_rows.len()),
-            });
+                index: HumanIndex::zero_based(row_number),
+            })
+        } else if !(matches!(guard, Guard::HasGuard)
+            || is_useful(checked_rows.clone(), next_row.clone()))
+        {
+            Some(Error::Redundant {
+                overall_region,
+                branch_region: region,
+                index: HumanIndex::zero_based(row_number),
+            })
+        } else {
+            None
+        };
+
+        match redundant_err {
+            None => {
+                checked_rows.push(next_row);
+            }
+            Some(err) => {
+                redundancies.push(redundant_mark);
+                errors.push(err);
+            }
         }
     }
 
@@ -352,6 +372,27 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary 
         redundancies,
         errors,
     }
+}
+
+fn is_inhabited_row(patterns: &[Pattern]) -> bool {
+    patterns.iter().any(is_inhabited_pattern)
+}
+
+fn is_inhabited_pattern(pat: &Pattern) -> bool {
+    let mut stack = vec![pat];
+    while let Some(pat) = stack.pop() {
+        match pat {
+            Pattern::Anything => {}
+            Pattern::Literal(_) => {}
+            Pattern::Ctor(union, id, pats) => {
+                if !union.alternatives.iter().any(|alt| alt.tag_id == *id) {
+                    return false;
+                }
+                stack.extend(pats);
+            }
+        }
+    }
+    true
 }
 
 fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, TagId) {
@@ -385,6 +426,13 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
             let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag.into_iter());
 
             for (index, (tag, args)) in alternatives_iter.enumerate() {
+                let is_inhabited = args.iter().all(|v| subs.is_inhabited(*v));
+
+                if !is_inhabited {
+                    // This constructor is not material; we don't need to match over it!
+                    continue;
+                }
+
                 let tag_id = TagId(index as TagIdIntType);
                 if this_tag == &tag {
                     my_tag_id = tag_id;
