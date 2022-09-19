@@ -2177,11 +2177,11 @@ pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
 
 #[inline(always)]
 pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
-    use {roc_types::num::IntLitWidth::*, Content::*, NumericRange::*};
+    use {Content::*, NumericRange::*};
     let content = subs.get_content_without_compacting(var);
     matches!(
         content,
-        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+        RangedNumber(NumAtLeastEitherSign(..) | NumAtLeastSigned(..)),
     )
 }
 

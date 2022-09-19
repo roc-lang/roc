@@ -1,0 +1,9 @@
+procedure Num.37 (#Attr.2, #Attr.3):
+    let Num.257 : Float64 = lowlevel NumDivFrac #Attr.2 #Attr.3;
+    ret Num.257;
+
+procedure Test.0 ():
+    let Test.2 : Float64 = 1f64;
+    let Test.3 : Float64 = 200f64;
+    let Test.1 : Float64 = CallByName Num.37 Test.2 Test.3;
+    ret Test.1;

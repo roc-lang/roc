@@ -384,7 +384,7 @@ fn render_expect_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.expectations.get(&failure_region) {
-        None => panic!("region not in list of expects"),
+        None => panic!("region {failure_region:?} not in list of expects"),
         Some(current) => current,
     };
     let subs = arena.alloc(&mut data.subs);

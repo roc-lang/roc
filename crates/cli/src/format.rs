@@ -100,11 +100,11 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
 
             let mut before_file = file.clone();
             before_file.set_extension("roc-format-failed-ast-before");
-            std::fs::write(&before_file, &format!("{:#?}\n", ast)).unwrap();
+            std::fs::write(&before_file, &format!("{:#?}\n", ast_normalized)).unwrap();
 
             let mut after_file = file.clone();
             after_file.set_extension("roc-format-failed-ast-after");
-            std::fs::write(&after_file, &format!("{:#?}\n", reparsed_ast)).unwrap();
+            std::fs::write(&after_file, &format!("{:#?}\n", reparsed_ast_normalized)).unwrap();
 
             internal_error!(
                 "Formatting bug; formatting didn't reparse as the same tree\n\n\

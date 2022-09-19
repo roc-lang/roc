@@ -14,7 +14,11 @@ fn synthetic_image_export_directory(
     let start = virtual_address + directory_size + name.len() as u32 + 1;
 
     let address_of_functions = start;
-    let address_of_names = address_of_functions + 4 * custom_names.len() as u32;
+
+    // by convention, names start at index 1, so we add one "padding" name
+    let number_of_functions = custom_names.len() as u32 + 1;
+
+    let address_of_names = address_of_functions + 4 * number_of_functions;
     let address_of_name_ordinals = address_of_names + 4 * custom_names.len() as u32;
 
     pe::ImageExportDirectory {
@@ -24,7 +28,7 @@ fn synthetic_image_export_directory(
         minor_version: U16::new(LE, 0),
         name: U32::new(LE, virtual_address + directory_size),
         base: U32::new(LE, 0),
-        number_of_functions: U32::new(LE, custom_names.len() as u32),
+        number_of_functions: U32::new(LE, number_of_functions),
         number_of_names: U32::new(LE, custom_names.len() as u32),
         address_of_functions: U32::new(LE, address_of_functions),
         address_of_names: U32::new(LE, address_of_names),
@@ -50,14 +54,41 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
 
     let n = custom_names.len();
 
+    debug_assert_eq!(
+        directory.address_of_functions.get(LE) - virtual_address,
+        vec.len() as u32
+    );
+
     // Unsure what this one does; it does not seem important for our purposes
     //
     // Export Address Table -- Ordinal Base 0
     //  [   1] +base[   1] 1020 Export RVA
     //  [   2] +base[   2] d030 Export RVA
-    for _ in custom_names {
-        vec.extend(42u32.to_le_bytes());
+
+    // pad with 4 bytes to have the first actual index start at 1.
+    // Having this table be 1-indexed seems to be convention
+    vec.extend(0u32.to_le_bytes());
+
+    // here we pre-calculate the virtual address where the name bytes will be stored
+    // The address hence points to a place in the .edata section. Such exports are
+    // called "forwarders". Because there is no actual definition, these exports don't
+    // show up when calling the `object` crate's .exports() method.
+    //
+    // It may turn out that we should actually not make our symbols forwarders. We can do this by
+    // adding a .text section with some NULL bytes before the .rdata section, and having the
+    // symbols point into this meaningless .text section.
+    let mut next_name_start =
+        directory.address_of_name_ordinals.get(LE) + custom_names.len() as u32 * 2;
+
+    for name in custom_names.iter() {
+        vec.extend(next_name_start.to_le_bytes());
+        next_name_start += name.len() as u32 + 1; // null-terminated
     }
+
+    debug_assert_eq!(
+        directory.address_of_names.get(LE) - virtual_address,
+        vec.len() as u32
+    );
 
     // Maps the index to a name
     //
@@ -70,9 +101,14 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
         acc += name.len() as u32 + 1;
     }
 
-    // the ordinals, which just map to the index in our case
-    for (i, _) in custom_names.iter().enumerate() {
-        vec.extend((i as u16).to_le_bytes());
+    debug_assert_eq!(
+        directory.address_of_name_ordinals.get(LE) - virtual_address,
+        vec.len() as u32
+    );
+
+    // the ordinals, which map to the index plus 1 to the ordinals start at 1
+    for i in 0..custom_names.len() {
+        vec.extend((i as u16 + 1).to_le_bytes());
     }
 
     // write out the names of the symbols, as null-terminated strings
@@ -88,16 +124,17 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
     let mut out_data = Vec::new();
     let mut writer = object::write::pe::Writer::new(true, 8, 8, &mut out_data);
 
-    // fairly randomly chosen. Not sure if this is relevant
-    let virtual_address = 0x138;
-
-    let exports = synthetic_export_dir(virtual_address, custom_names);
-
     // Reserve file ranges and virtual addresses.
     writer.reserve_dos_header_and_stub();
 
     // we will have one header: the export directory
     writer.reserve_nt_headers(1);
+
+    writer.reserve_section_headers(1);
+
+    let virtual_address = writer.reserved_len();
+
+    let exports = synthetic_export_dir(virtual_address, custom_names);
 
     writer.set_data_directory(
         pe::IMAGE_DIRECTORY_ENTRY_EXPORT,
@@ -105,11 +142,13 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
         exports.len() as _,
     );
 
-    writer.reserve_section_headers(1);
+    // it's fine if this changes, this is just here to catch any accidental changes
+    debug_assert_eq!(virtual_address, 0x138);
 
     // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
-        let characteristics = 0x40000040;
+        // not sure if that 0x40 is important, I took it from a .dll that zig produced
+        let characteristics = object::pe::IMAGE_SCN_MEM_READ | 0x40;
         let range = writer.reserve_section(
             *b".rdata\0\0",
             characteristics,
@@ -118,6 +157,8 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
             // size_of_raw_data
             exports.len() as u32,
         );
+
+        debug_assert_eq!(virtual_address, range.virtual_address);
 
         (range.file_offset, exports)
     };
