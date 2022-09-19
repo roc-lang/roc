@@ -5,6 +5,16 @@ use core::{
     mem::{align_of, ManuallyDrop},
 };
 
+/// At the moment, Roc's Dict is just an association list. It's lookups O(n) but
+/// we haven't grown such big programs that it's a problem yet!
+///
+/// We do some things in this data structure that only make sense because the
+/// memory is managed in Roc:
+///
+/// 1. We don't implement an `IntoIterator` that iterates over owned values,
+///    since Roc owns the memory, not rust.
+/// 2. We use a union for `RocDictItem` instead of just a struct. See the
+///    comment on that data structure for why.
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RocDict<K, V>(RocList<RocDictItem<K, V>>);
 
@@ -102,6 +112,26 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
     }
 }
 
+/// Roc is constructing these values according to its memory layout rules.
+/// Specifically:
+///
+/// 1. fields with the highest alignment go first
+/// 2. then fields are sorted alphabetically
+///
+/// Taken together, these mean that if we have a value with higher alignment
+/// than the key, it'll be first in memory. Otherwise, the key will be first.
+/// Fortunately, the total amount of memory doesn't change, so we can use a
+/// union and disambiguate by examining the alignment of the key and value.
+///
+/// However, note that this only makes sense while we're storing KV pairs
+/// contiguously in memory. If we separate them at some point, we'll need to
+/// change this implementation drastically!
+#[derive(Eq)]
+union RocDictItem<K, V> {
+    key_first: ManuallyDrop<KeyFirst<K, V>>,
+    value_first: ManuallyDrop<ValueFirst<K, V>>,
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 struct KeyFirst<K, V> {
@@ -114,12 +144,6 @@ struct KeyFirst<K, V> {
 struct ValueFirst<K, V> {
     value: V,
     key: K,
-}
-
-#[derive(Eq)]
-union RocDictItem<K, V> {
-    key_first: ManuallyDrop<KeyFirst<K, V>>,
-    value_first: ManuallyDrop<ValueFirst<K, V>>,
 }
 
 impl<K, V> RocDictItem<K, V> {
