@@ -1480,7 +1480,7 @@ fn solve(
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, sketched_rows, context);
+                    } = check(subs, real_var, sketched_rows, context);
 
                     // Store information about whether the "when" is exhaustive, and
                     // which (if any) of its branches are redundant. Codegen may use

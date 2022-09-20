@@ -10567,7 +10567,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
         branch_patterns_missing_nested_case,
         indoc!(
             r#"
@@ -10575,16 +10574,29 @@ All branches in an `if` must have the same type!
 
             when x is
                 Ok (Ok A) -> ""
+                Ok (Err _) -> ""
                 Err _ -> ""
             "#
         ),
     @r###"
-    TODO
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+    8│>          Ok (Err _) -> ""
+    9│>          Err _ -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
     "###
     );
 
     test_report!(
-        #[ignore = "TODO https://github.com/roc-lang/roc/issues/4068"]
         branch_patterns_missing_nested_case_with_trivially_exhausted_variant,
         indoc!(
             r#"
@@ -10595,7 +10607,18 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
-    TODO
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
     "###
     );
 
