@@ -412,7 +412,7 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
 fn redirect_dummy_dll_functions(
     app: &mut [u8],
     dynamic_relocations: &DynamicRelocationsPe,
-    function_definition_vas: &[u64],
+    function_definition_vas: &[(String, u64)],
 ) {
     // The host executable contains indirect calls to functions that the host should provide
     //
@@ -461,6 +461,20 @@ fn redirect_dummy_dll_functions(
     let dummy_thunks_address_va = dummy_import_desc.first_thunk;
     let dummy_thunks_address = dummy_thunks_address_va.get(LE);
 
+    use object::Object;
+    let object = object::read::pe::PeFile64::parse(&*app).unwrap();
+    let imports: Vec<_> = object
+        .imports()
+        .unwrap()
+        .iter()
+        .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+        .map(|import| {
+            std::str::from_utf8(import.name())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+
     let data: &[u8] = app;
 
     let dos_header = object::pe::ImageDosHeader::parse(data).unwrap();
@@ -483,22 +497,29 @@ fn redirect_dummy_dll_functions(
     // and get the offset in the file of 0x1400037f0
     let thunks_start_offset = (dummy_thunks_address - section_va + offset_in_file) as usize;
 
-    for (i, target) in function_definition_vas.iter().enumerate() {
-        // addresses are 64-bit values
-        let address_bytes = &mut app[thunks_start_offset + i * 8..][..8];
+    let mut targets = function_definition_vas.iter();
+    'outer: for (i, name) in imports.iter().enumerate() {
+        for (target_name, target_va) in targets.by_ref() {
+            if name == target_name {
+                // addresses are 64-bit values
+                let address_bytes = &mut app[thunks_start_offset + i * 8..][..8];
 
-        // the array of addresses is null-terminated; make sure we haven't reached the end
-        let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
-        if current == 0 {
-            internal_error!("invalid state: fewer thunks than function addresses");
+                // the array of addresses is null-terminated; make sure we haven't reached the end
+                let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
+                if current == 0 {
+                    internal_error!("invalid state: fewer thunks than function addresses");
+                }
+
+                // update the address to a function VA
+                address_bytes.copy_from_slice(&target_va.to_le_bytes());
+
+                continue 'outer;
+            }
         }
-
-        // update the address to a function VA
-        address_bytes.copy_from_slice(&target.to_le_bytes());
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum SectionKind {
     Text,
     // Data,
@@ -516,11 +537,19 @@ struct Section {
     kind: SectionKind,
 }
 
+#[derive(Debug)]
+struct AppSymbol {
+    name: String,
+    section_index: SectionIndex,
+    section_kind: SectionKind,
+    offset_in_section: usize,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 struct AppSections {
     sections: Vec<Section>,
-    symbols: Vec<(SectionIndex, usize)>,
+    symbols: Vec<AppSymbol>,
 }
 
 impl AppSections {
@@ -532,8 +561,14 @@ impl AppSections {
 
         let mut sections = Vec::new();
 
+        let mut section_starts = MutMap::default();
+
+        let mut text_bytes = 0;
+        let mut rdata_bytes = 0;
+
         for (i, section) in file.sections().enumerate() {
-            let index = SectionIndex(i);
+            // one-indexed. fun
+            let index = SectionIndex(i + 1);
 
             let kind = match section.name() {
                 Ok(".text") => SectionKind::Text,
@@ -545,6 +580,17 @@ impl AppSections {
 
             let (start, length) = section.file_range().unwrap();
             let file_range = start as usize..(start + length) as usize;
+
+            match kind {
+                SectionKind::Text => {
+                    section_starts.insert(index, (kind, text_bytes));
+                    text_bytes += length;
+                }
+                SectionKind::ReadOnlyData => {
+                    section_starts.insert(index, (kind, rdata_bytes));
+                    rdata_bytes += length;
+                }
+            }
 
             let section = Section {
                 index,
@@ -562,7 +608,16 @@ impl AppSections {
 
             if symbol.name_bytes().unwrap_or_default().starts_with(b"roc") {
                 if let object::SymbolSection::Section(index) = symbol.section() {
-                    symbols.push((index, symbol.address() as usize))
+                    let (kind, offset_in_host_section) = section_starts[&index];
+
+                    let symbol = AppSymbol {
+                        name: symbol.name().unwrap_or_default().to_string(),
+                        section_index: index,
+                        section_kind: kind,
+                        offset_in_section: (offset_in_host_section + symbol.address()) as usize,
+                    };
+
+                    symbols.push(symbol);
                 }
             }
         }
@@ -963,23 +1018,30 @@ mod test {
             r#"
             const std = @import("std");
 
-            extern fn roc_magic() callconv(.C) u64;
-
+            extern const roc_one: u64;
             extern const roc_three: u64;
+
+            extern fn roc_magic1() callconv(.C) u64;
+            extern fn roc_magic2() callconv(.C) u8;
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello, {} {}!\n", .{roc_magic(), roc_three});
+                try stdout.print("Hello, {} {} {} {}!\n", .{roc_magic1(), roc_magic2(), roc_one, roc_three});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
+            export const roc_one: u64 = 1;
             export const roc_three: u64 = 3;
 
-            export fn roc_magic() u64 {
+            export fn roc_magic1() u64 {
                 return 42;
+            }
+
+            export fn roc_magic2() u8 {
+                return 32;
             }
             "#
         );
@@ -989,10 +1051,42 @@ mod test {
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
         std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
 
-        let dylib_bytes =
-            crate::generate_dylib::synthetic_dll(&["roc_magic".into(), "roc_three".into()]);
+        // we need to compile the app first
+        let output = std::process::Command::new(&zig)
+            .current_dir(dir)
+            .args(&[
+                "build-obj",
+                "app.zig",
+                "-target",
+                "x86_64-windows-gnu",
+                "--strip",
+                "-OReleaseFast",
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("zig build-obj failed");
+        }
+
+        // open our app object; we'll copy sections from it later
+        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
+        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let app_obj_sections = AppSections::from_data(&*app_obj);
+        let mut symbols = app_obj_sections.symbols;
+
+        // make the dummy dylib based on the app object
+        let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
+        let dylib_bytes = crate::generate_dylib::synthetic_dll(&names);
         std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
 
+        // now we can compile the host (it uses libapp.obj, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
@@ -1021,38 +1115,11 @@ mod test {
         let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
         increase_number_of_sections_help(&data, &new_sections, &dir.join("dynhost.exe"));
 
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-obj",
-                "app.zig",
-                "-target",
-                "x86_64-windows-gnu",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
-
-        if !output.status.success() {
-            use std::io::Write;
-
-            std::io::stdout().write_all(&output.stdout).unwrap();
-            std::io::stderr().write_all(&output.stderr).unwrap();
-
-            panic!("zig build-obj failed");
-        }
-
         // hardcoded for now, should come from the precompiled metadata in the future
         let image_base: u64 = 0x140000000;
         let file_alignment = 0x200;
         let section_alignment = 0x1000;
         let last_host_section_index = 5;
-
-        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
-        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
-
-        let app_obj_sections = AppSections::from_data(&*app_obj);
 
         let app_sections_size: usize = app_obj_sections
             .sections
@@ -1083,21 +1150,6 @@ mod test {
                 section_alignment as usize,
             ) as u64;
 
-        let hacks = image_base | 0xc000;
-        let dynamic_relocations = DynamicRelocationsPe::new(&app);
-        redirect_dummy_dll_functions(
-            &mut app,
-            &dynamic_relocations,
-            &[app_code_section_va, hacks],
-        );
-
-        remove_dummy_dll_import_table(
-            &mut app,
-            dynamic_relocations.data_directories_offset_in_file,
-            dynamic_relocations.imports_offset_in_file,
-            dynamic_relocations.dummy_import_index,
-        );
-
         let mut section_header_start = 624;
         let mut section_file_offset = dynhost_bytes.len();
         let mut virtual_address = (app_code_section_va - image_base) as u32;
@@ -1106,15 +1158,26 @@ mod test {
         let mut data_bytes_added = 0;
         let mut file_bytes_added = 0;
 
-        for section in app_obj_sections.sections {
-            let app_bytes = &app_obj[section.file_range];
+        for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
+            let length: usize = app_obj_sections
+                .sections
+                .iter()
+                .filter(|s| s.kind == kind)
+                .map(|s| s.file_range.end - s.file_range.start)
+                .sum();
 
-            let virtual_size = app_bytes.len() as u32;
-            let size_of_raw_data = next_multiple_of(app_bytes.len(), file_alignment) as u32;
+            for symbol in symbols.iter_mut() {
+                if symbol.section_kind == kind {
+                    symbol.offset_in_section += image_base as usize + virtual_address as usize;
+                }
+            }
 
-            file_bytes_added += next_multiple_of(app_bytes.len(), section_alignment) as u32;
+            let virtual_size = length as u32;
+            let size_of_raw_data = next_multiple_of(length, file_alignment) as u32;
 
-            match section.kind {
+            file_bytes_added += next_multiple_of(length, section_alignment) as u32;
+
+            match kind {
                 SectionKind::Text => {
                     code_bytes_added += size_of_raw_data;
 
@@ -1141,11 +1204,17 @@ mod test {
                 }
             }
 
-            app[section_file_offset..][..app_bytes.len()].copy_from_slice(app_bytes);
+            let mut offset = section_file_offset;
+            let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+            for section in it {
+                let slice = &app_obj[section.file_range.start..section.file_range.end];
+                app[offset..][..slice.len()].copy_from_slice(slice);
+                offset += slice.len();
+            }
 
-            section_header_start += 40;
+            section_header_start += std::mem::size_of::<ImageSectionHeader>();
             section_file_offset += size_of_raw_data as usize;
-            virtual_address += next_multiple_of(app_bytes.len(), section_alignment) as u32;
+            virtual_address += next_multiple_of(length, section_alignment) as u32;
         }
 
         update_optional_header(
@@ -1182,6 +1251,6 @@ mod test {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello, 42 3!\n", output);
+        assert_eq!("Hello, 42 32 1 3!\n", output);
     }
 }
