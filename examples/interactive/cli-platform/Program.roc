@@ -62,7 +62,6 @@ noArgs = \task ->
         |> Effect.map \result ->
             when result is
                 Ok (@ExitCode u8) -> u8
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
 
     InternalProgram.fromEffect effect
 
@@ -83,7 +82,6 @@ withArgs = \toTask ->
         |> Effect.map \result ->
             when result is
                 Ok (@ExitCode u8) -> u8
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
 
     InternalProgram.fromEffect effect
 
@@ -108,7 +106,6 @@ withEnv = \toTask ->
         |> Effect.map \result ->
             when result is
                 Ok (@ExitCode code) -> code
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
 
     InternalProgram.fromEffect effect
 
