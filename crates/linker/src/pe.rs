@@ -4,7 +4,7 @@ use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
     read::pe::ImportTable,
-    LittleEndian as LE,
+    LittleEndian as LE, SectionIndex,
 };
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
@@ -498,14 +498,29 @@ fn redirect_dummy_dll_functions(
     }
 }
 
+#[derive(Debug)]
+enum SectionKind {
+    Text,
+    // Data,
+    ReadOnlyData,
+}
+
+#[derive(Debug)]
+struct Section {
+    /// Section index in the app object
+    index: SectionIndex,
+
+    /// File range of the section (in the app object)
+    file_range: Range<usize>,
+
+    kind: SectionKind,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 struct AppSections {
-    text_file_range: Range<usize>,
-    #[allow(dead_code)]
-    data_file_range: Range<usize>,
-    #[allow(dead_code)]
-    rdata_file_range: Range<usize>,
+    sections: Vec<Section>,
+    symbols: Vec<(SectionIndex, usize)>,
 }
 
 impl AppSections {
@@ -515,27 +530,44 @@ impl AppSections {
 
         let file = object::File::parse(data).unwrap();
 
-        let mut this = Self::default();
+        let mut sections = Vec::new();
 
-        for section in file.sections() {
-            match section.name() {
-                Ok(".text") => {
-                    let (start, length) = section.file_range().unwrap();
-                    this.text_file_range = start as usize..(start + length) as usize
+        for (i, section) in file.sections().enumerate() {
+            let index = SectionIndex(i);
+
+            let kind = match section.name() {
+                Ok(".text") => SectionKind::Text,
+                // Ok(".data") => SectionKind::Data,
+                Ok(".rdata") => SectionKind::ReadOnlyData,
+
+                _ => continue,
+            };
+
+            let (start, length) = section.file_range().unwrap();
+            let file_range = start as usize..(start + length) as usize;
+
+            let section = Section {
+                index,
+                file_range,
+                kind,
+            };
+
+            sections.push(section);
+        }
+
+        let mut symbols = Vec::new();
+
+        for symbol in file.symbols() {
+            use object::ObjectSymbol;
+
+            if symbol.name_bytes().unwrap_or_default().starts_with(b"roc") {
+                if let object::SymbolSection::Section(index) = symbol.section() {
+                    symbols.push((index, symbol.address() as usize))
                 }
-                Ok(".data") => {
-                    let (start, length) = section.file_range().unwrap();
-                    this.data_file_range = start as usize..(start + length) as usize
-                }
-                Ok(".rdata") => {
-                    let (start, length) = section.file_range().unwrap();
-                    this.rdata_file_range = start as usize..(start + length) as usize
-                }
-                _ => { /* ignore */ }
             }
         }
 
-        this
+        AppSections { sections, symbols }
     }
 }
 
@@ -931,22 +963,22 @@ mod test {
             r#"
             const std = @import("std");
 
-            extern fn magic() callconv(.C) u64;
+            extern fn roc_magic() callconv(.C) u64;
 
-            extern const three: u64;
+            extern const roc_three: u64;
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello, {} {}!\n", .{magic(), three});
+                try stdout.print("Hello, {} {}!\n", .{roc_magic(), roc_three});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            export const three: u64 = 3;
+            export const roc_three: u64 = 3;
 
-            export fn magic() u64 {
+            export fn roc_magic() u64 {
                 return 42;
             }
             "#
@@ -957,7 +989,8 @@ mod test {
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
         std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
 
-        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["magic".into(), "three".into()]);
+        let dylib_bytes =
+            crate::generate_dylib::synthetic_dll(&["roc_magic".into(), "roc_three".into()]);
         std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
 
         let output = std::process::Command::new(&zig)
@@ -1010,28 +1043,28 @@ mod test {
             panic!("zig build-obj failed");
         }
 
-        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
-        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
-
-        let app_obj_sections = AppSections::from_data(&*app_obj);
-
-        let app_text_bytes = &app_obj[app_obj_sections.text_file_range];
-        let app_rdata_bytes = &app_obj[app_obj_sections.rdata_file_range];
-
         // hardcoded for now, should come from the precompiled metadata in the future
         let image_base: u64 = 0x140000000;
         let file_alignment = 0x200;
         let section_alignment = 0x1000;
         let last_host_section_index = 5;
 
-        let app_text_virtual_width = next_multiple_of(app_text_bytes.len(), file_alignment);
-        let app_rdata_virtual_width = next_multiple_of(app_rdata_bytes.len(), file_alignment);
+        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
+        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let app_obj_sections = AppSections::from_data(&*app_obj);
+
+        let app_sections_size: usize = app_obj_sections
+            .sections
+            .iter()
+            .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
+            .sum();
 
         let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
         let mut app = mmap_mut(
             &dir.join("app.exe"),
-            dynhost_bytes.len() + app_text_virtual_width + app_rdata_virtual_width,
+            dynhost_bytes.len() + app_sections_size,
         );
 
         // copying over all of the dynhost.exe bytes
@@ -1065,46 +1098,55 @@ mod test {
             dynamic_relocations.dummy_import_index,
         );
 
-        // APP TEXT
-        let section_header_start = 624;
-        let section_file_offset = dynhost_bytes.len();
-        let virtual_size = app_text_bytes.len() as u32;
-        let virtual_address = (app_code_section_va - image_base) as u32;
-        let size_of_raw_data = app_text_virtual_width as u32;
-        write_app_text_section_header(
-            &mut app,
-            section_header_start,
-            section_file_offset,
-            virtual_size,
-            virtual_address,
-            size_of_raw_data,
-        );
+        let mut section_header_start = 624;
+        let mut section_file_offset = dynhost_bytes.len();
+        let mut virtual_address = (app_code_section_va - image_base) as u32;
 
-        // copying in the app bytes (so we must make sure the app text section includes these bytes)
-        app[section_file_offset..][..app_text_bytes.len()].copy_from_slice(app_text_bytes);
+        let mut code_bytes_added = 0;
+        let mut data_bytes_added = 0;
+        let mut file_bytes_added = 0;
 
-        // APP RDATA
-        let section_header_start = 624 + 40;
-        let section_file_offset = dynhost_bytes.len() + app_text_virtual_width;
-        let virtual_size = app_rdata_bytes.len() as u32;
-        let virtual_address = (app_code_section_va - image_base + 0x1000) as u32;
-        let size_of_raw_data = app_text_virtual_width as u32;
-        write_app_rdata_section_header(
-            &mut app,
-            section_header_start,
-            section_file_offset,
-            virtual_size,
-            virtual_address,
-            size_of_raw_data,
-        );
+        for section in app_obj_sections.sections {
+            let app_bytes = &app_obj[section.file_range];
 
-        // copying in the app bytes (so we must make sure the app text section includes these bytes)
-        app[section_file_offset..][..app_rdata_bytes.len()].copy_from_slice(app_rdata_bytes);
+            let virtual_size = app_bytes.len() as u32;
+            let size_of_raw_data = next_multiple_of(app_bytes.len(), file_alignment) as u32;
 
-        let code_bytes_added = next_multiple_of(app_text_bytes.len() as usize, file_alignment);
-        let data_bytes_added = next_multiple_of(app_rdata_bytes.len() as usize, file_alignment);
-        let file_bytes_added = next_multiple_of(app_text_bytes.len() as usize, section_alignment)
-            + next_multiple_of(app_rdata_bytes.len() as usize, section_alignment);
+            file_bytes_added += next_multiple_of(app_bytes.len(), section_alignment) as u32;
+
+            match section.kind {
+                SectionKind::Text => {
+                    code_bytes_added += size_of_raw_data;
+
+                    write_app_text_section_header(
+                        &mut app,
+                        section_header_start,
+                        section_file_offset,
+                        virtual_size,
+                        virtual_address,
+                        size_of_raw_data,
+                    );
+                }
+                SectionKind::ReadOnlyData => {
+                    data_bytes_added += size_of_raw_data;
+
+                    write_app_rdata_section_header(
+                        &mut app,
+                        section_header_start,
+                        section_file_offset,
+                        virtual_size,
+                        virtual_address,
+                        size_of_raw_data,
+                    );
+                }
+            }
+
+            app[section_file_offset..][..app_bytes.len()].copy_from_slice(app_bytes);
+
+            section_header_start += 40;
+            section_file_offset += size_of_raw_data as usize;
+            virtual_address += next_multiple_of(app_bytes.len(), section_alignment) as u32;
+        }
 
         update_optional_header(
             &mut app,
