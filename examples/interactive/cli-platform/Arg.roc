@@ -127,7 +127,7 @@ findOneArg : Str, Str, List Str -> Result Str [NotFound]*
 findOneArg = \long, short, args ->
     argMatches = \arg ->
         if arg == "--\(long)" then
-            True
+            Bool.true
         else
             Bool.not (Str.isEmpty short) && arg == "-\(short)"
 
@@ -314,15 +314,15 @@ parseHelp = \@Parser parser, args ->
             parseHelp parser2 args
 
 ## Creates a parser for a boolean flag argument.
-## Flags of value "true" and "false" will be parsed as [True] and [False], respectively.
+## Flags of value "true" and "false" will be parsed as [Bool.true] and [Bool.false], respectively.
 ## All other values will result in a `WrongType` error.
 bool : _ -> Parser Bool # TODO: panics if parameter annotation given
 bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
-            Ok "true" -> Ok True
-            Ok "false" -> Ok False
+            Ok "true" -> Ok Bool.true
+            Ok "false" -> Ok Bool.false
             Ok _ -> Err WrongType
 
     @Parser (Arg { long, short, help, type: Bool } fn)
@@ -523,13 +523,13 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo", "true"] == Ok True
+    parseHelp parser ["--foo", "true"] == Ok Bool.true
 
 # bool dashed long argument with value is determined false
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo", "false"] == Ok False
+    parseHelp parser ["--foo", "false"] == Ok Bool.false
 
 # bool dashed long argument with value is determined wrong type
 expect
@@ -541,13 +541,13 @@ expect
 expect
     parser = bool { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "true"] == Ok True
+    parseHelp parser ["-F", "true"] == Ok Bool.true
 
 # bool dashed short argument with value is determined false
 expect
     parser = bool { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "false"] == Ok False
+    parseHelp parser ["-F", "false"] == Ok Bool.false
 
 # bool dashed short argument with value is determined wrong type
 expect
@@ -644,7 +644,7 @@ expect
     parser = bool { long: "foo" }
 
     when parseHelp parser ["foo"] is
-        Ok _ -> False
+        Ok _ -> Bool.false
         Err e ->
             err = formatError e
 
@@ -655,7 +655,7 @@ expect
     parser = bool { long: "foo" }
 
     when parseHelp parser ["--foo", "12"] is
-        Ok _ -> False
+        Ok _ -> Bool.false
         Err e ->
             err = formatError e
 
@@ -747,7 +747,7 @@ expect
 
     when parse parser ["test", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
-        Err _ -> False
+        Err _ -> Bool.false
 
 # subcommand of subcommand parser
 expect
@@ -765,7 +765,7 @@ expect
 
     when parse parser ["test", "auth", "login", "--pw", "123", "--user", "abc"] is
         Ok result -> result == "logging in abc with 123"
-        Err _ -> False
+        Err _ -> Bool.false
 
 # subcommand not provided
 expect
@@ -773,7 +773,7 @@ expect
         choice [subCommand (succeed "") "auth", subCommand (succeed "") "publish"]
 
     when parseHelp parser [] is
-        Ok _ -> True
+        Ok _ -> Bool.true
         Err e ->
             err = formatError e
 
@@ -791,7 +791,7 @@ expect
         choice [subCommand (succeed "") "auth", subCommand (succeed "") "publish"]
 
     when parseHelp parser ["logs"] is
-        Ok _ -> True
+        Ok _ -> Bool.true
         Err e ->
             err = formatError e
 
