@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v3
+          
+      - name: write version to file
+        run: ./ci/write_version.sh
 
       - name: Install zig
         run: |
@@ -49,9 +52,6 @@ jobs:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
         run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
-          
-      - name: write version to file
-        run: ./ci/write_version.sh
         
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
