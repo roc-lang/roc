@@ -6556,9 +6556,21 @@ fn from_can_when<'a>(
     let it = opt_branches
         .into_iter()
         .filter_map(|(pattern, opt_guard, can_expr)| {
-            if pattern.is_voided() {
-                return None;
-            }
+            // If the pattern has a void layout we can drop it; however, we must still perform the
+            // work of building the body, because that may contain specializations we must
+            // discover for use elsewhere. See
+            //   `unreachable_branch_is_eliminated_but_produces_lambda_specializations` in test_mono
+            // for an example.
+            let should_eliminate_branch = pattern.is_voided();
+
+            // If we're going to eliminate the branch, we need to take a snapshot of the symbol
+            // specializations before we enter the branch, because any new specializations that
+            // will be added in the branch body will never need to be resolved!
+            let specialization_symbol_snapshot = if should_eliminate_branch {
+                Some(std::mem::take(&mut procs.symbol_specializations))
+            } else {
+                None
+            };
 
             let branch_stmt = match join_point {
                 None => from_can(env, expr_var, can_expr, procs, layout_cache),
@@ -6572,7 +6584,7 @@ fn from_can_when<'a>(
             };
 
             use crate::decision_tree::Guard;
-            if let Some(loc_expr) = opt_guard {
+            let result = if let Some(loc_expr) = opt_guard {
                 let id = JoinPointId(env.unique_symbol());
                 let symbol = env.unique_symbol();
                 let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
@@ -6587,7 +6599,7 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                Some((
+                (
                     pattern.clone(),
                     Guard::Guard {
                         id,
@@ -6595,9 +6607,16 @@ fn from_can_when<'a>(
                         stmt: guard_stmt,
                     },
                     branch_stmt,
-                ))
+                )
             } else {
-                Some((pattern, Guard::NoGuard, branch_stmt))
+                (pattern, Guard::NoGuard, branch_stmt)
+            };
+
+            if should_eliminate_branch {
+                procs.symbol_specializations = specialization_symbol_snapshot.unwrap();
+                None
+            } else {
+                Some(result)
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
