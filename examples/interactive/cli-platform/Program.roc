@@ -59,9 +59,7 @@ noArgs : Task ExitCode [] * -> Program
 noArgs = \task ->
     effect =
         InternalTask.toEffect task
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode u8) -> u8
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
@@ -79,9 +77,7 @@ withArgs = \toTask ->
     effect = Effect.after Effect.args \args ->
         toTask args
         |> InternalTask.toEffect
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode u8) -> u8
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
@@ -103,9 +99,7 @@ withEnv = \toTask ->
 
         toTask args dict
         |> InternalTask.toEffect
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode code) -> code
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
