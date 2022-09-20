@@ -758,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     List
-                    True
+                    Err
                     Box
-                    Str
                 "#
             ),
         );
