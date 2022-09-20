@@ -3340,6 +3340,7 @@ dependencies = [
 name = "roc_alias_analysis"
 version = "0.0.1"
 dependencies = [
+ "bumpalo",
  "morphic_lib",
  "roc_collections",
  "roc_debug_flags",

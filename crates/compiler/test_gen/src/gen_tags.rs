@@ -2004,3 +2004,28 @@ fn match_on_result_with_uninhabited_error_branch() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4077() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input : [FromProjectSource, FromJob Job]
+
+            Job : [Job { inputs : List Input }]
+
+            job : { inputs : List Input } -> Job
+            job = \config -> Job config
+
+            main = 
+                when job { inputs: [] } is
+                    _ -> "OKAY"
+            "#
+        ),
+        RocStr::from("OKAY"),
+        RocStr
+    );
+}

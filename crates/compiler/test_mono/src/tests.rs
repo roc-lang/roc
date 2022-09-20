@@ -2000,3 +2000,23 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_4077() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Input : [FromProjectSource, FromJob Job]
+
+        Job : [Job { inputs : List Input }]
+
+        job : { inputs : List Input } -> Job
+        job = \config -> Job config
+
+        main = 
+            when job { inputs: [FromProjectSource] } is
+                _ -> "OKAY"
+        "#
+    )
+}

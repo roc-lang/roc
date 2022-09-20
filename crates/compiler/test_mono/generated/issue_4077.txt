@@ -1,0 +1,12 @@
+procedure : `#UserApp.job` [<rnnu>C List [C *self, C ]]
+procedure = `#UserApp.job` (`#UserApp.config`: List [<rnu><null>, C List *self]):
+    let `#UserApp.13` : [<rnnu>C List [C *self, C ]] = TagId(0) `#UserApp.config`;
+    ret `#UserApp.13`;
+
+procedure : `#UserApp.main` Str
+procedure = `#UserApp.main` ():
+    let `#UserApp.15` : [<rnu><null>, C List *self] = TagId(1) ;
+    let `#UserApp.14` : List [<rnu><null>, C List *self] = Array [`#UserApp.15`];
+    let `#UserApp.10` : [<rnnu>C List [C *self, C ]] = CallByName `#UserApp.job` `#UserApp.14`;
+    let `#UserApp.11` : Str = "OKAY";
+    ret `#UserApp.11`;
