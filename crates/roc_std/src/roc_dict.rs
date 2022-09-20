@@ -5,7 +5,7 @@ use core::{
     mem::{align_of, ManuallyDrop},
 };
 
-/// At the moment, Roc's Dict is just an association list. It's lookups O(n) but
+/// At the moment, Roc's Dict is just an association list. Its lookups are O(n) but
 /// we haven't grown such big programs that it's a problem yet!
 ///
 /// We do some things in this data structure that only make sense because the
