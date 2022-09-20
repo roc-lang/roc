@@ -11,9 +11,9 @@ use core::{
 /// We do some things in this data structure that only make sense because the
 /// memory is managed in Roc:
 ///
-/// 1. We don't implement an `IntoIterator` that iterates over owned values,
+/// 1. We don't implement an [`IntoIterator`] that iterates over owned values,
 ///    since Roc owns the memory, not rust.
-/// 2. We use a union for `RocDictItem` instead of just a struct. See the
+/// 2. We use a union for [`RocDictItem`] instead of just a struct. See the
 ///    comment on that data structure for why.
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RocDict<K, V>(RocList<RocDictItem<K, V>>);
