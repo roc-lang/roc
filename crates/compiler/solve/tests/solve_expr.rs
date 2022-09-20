@@ -7823,4 +7823,23 @@ mod solve_expr {
             "Result Str [] -> Str",
         );
     }
+
+    #[test]
+    fn issue_4077() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [job] to "./platform"
+
+                Input : [FromProjectSource, FromJob Job]
+
+                Job : [Job { inputs : List Input }]
+
+                job : { inputs : List Input } -> Job
+                job = \config -> Job config
+                "#
+            ),
+            "{ inputs : List Input } -> Job",
+        );
+    }
 }
