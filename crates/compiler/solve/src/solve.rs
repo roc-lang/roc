@@ -1357,14 +1357,17 @@ fn solve(
 
                 let snapshot = subs.snapshot();
                 let unify_cond_and_patterns_outcome = {
-                    // When unifying the cond type with what the branches expect, allow the
+                    // When unifying the cond type with what the branches expect, we'll want the
                     // branches to gain constructors that are uninabited; that way, we can permit
                     // unification of things like
                     //   [Ok Str] ~ [Ok Str, Result []]
                     // which we want here, because `Result []` need not be matched - it is
                     // impossible to construct!
-                    let mode = Mode::EQ_WITH_EXTENSION_BY_UNINHABITED_TYPES;
-                    unify(&mut UEnv::new(subs), branches_var, real_var, mode)
+                    //
+                    // The order of variables is important here - to do such a unification, the
+                    // unifier expects the branch variable on the left, and the condition variable
+                    // (containing uninhabited variants to grow by) on the right.
+                    unify(&mut UEnv::new(subs), branches_var, real_var, Mode::EQ)
                 };
 
                 let should_check_exhaustiveness;
