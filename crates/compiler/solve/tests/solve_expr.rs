@@ -7791,4 +7791,36 @@ mod solve_expr {
             "Str",
         );
     }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                Ok str = x
+
+                str
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str [] -> Str
+                x = \Ok s -> s
+
+                x
+                "#
+            ),
+            "Result Str [] -> Str",
+        );
+    }
 }
