@@ -6,6 +6,7 @@ use core::{
 };
 
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct RocDict<K, V>(RocList<RocDictItem<K, V>>);
 
 impl<K, V> RocDict<K, V> {
