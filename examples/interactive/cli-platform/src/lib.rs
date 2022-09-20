@@ -180,14 +180,6 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
 //     (255, 255)
 // }
 
-type Fail = Foo;
-
-#[repr(C)]
-pub struct Foo {
-    data: u8,
-    tag: u8,
-}
-
 // #[no_mangle]
 // pub extern "C" fn roc_fx_fileWriteUtf8(roc_path: &RocList<u8>, roc_string: &RocStr) -> Fail {
 //     write_slice2(roc_path, roc_string.as_str().as_bytes())
