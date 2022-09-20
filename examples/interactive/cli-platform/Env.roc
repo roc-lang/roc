@@ -19,11 +19,9 @@ cwd =
 # ## to this directory.
 # setCwd : Path -> Task {} [InvalidCwd]* [Env]*
 # setCwd = InternalTask.fromEffect Effect.setCwd
-
 # ## Gets the path to the currently-running executable.
 # exePath : Task Path [ExePathUnavailable]* [Env]*
 # exePath = InternalTask.fromEffect Effect.setCwd
-
 ## Reads the given environment variable.
 ##
 ## If the value is invalid Unicode, the invalid parts will be replaced with the
@@ -60,7 +58,6 @@ var = \name ->
 # decode = \var ->
 #     Effect.envVar var
 #     |> InternalTask.fromEffect
-
 ## Reads all the process's environment variables into a [Dict].
 ##
 ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
@@ -91,13 +88,11 @@ dict =
 # walk = \state, walker ->
 #     Effect.envWalk state walker
 #     |> InternalTask.fromEffect
-
 # TODO could potentially offer something like walkNonUnicode which takes (state, Result Str Str, Result Str Str) so it
 # tells you when there's invalid Unicode. This is both faster than (and would give you more accurate info than)
 # using regular `walk` and searching for the presence of the replacement character in the resulting
 # strings. However, it's unclear whether anyone would use it. What would the use case be? Reporting
 # an error that the provided command-line args weren't valid Unicode? Does that still happen these days?
-
 # TODO need to figure out clear rules for how to convert from camelCase to SCREAMING_SNAKE_CASE.
 # Note that all the env vars decoded in this way become effectively *required* vars, since if any
 # of them are missing, decoding will fail. For this reason, it might make sense to use this to
