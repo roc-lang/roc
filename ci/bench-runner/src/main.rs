@@ -227,7 +227,7 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
 }
 
 fn check_if_bench_executables_changed() -> bool {
-    let bench_folder_str = "/crates/cli_testing_examples/benchmarks/";
+    let bench_folder_str = "/examples/benchmarks/";
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
