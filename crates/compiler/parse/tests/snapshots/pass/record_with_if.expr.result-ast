@@ -1,28 +1,29 @@
 Record(
     [
-        @1-26 RequiredValue(
+        @1-31 RequiredValue(
             @1-2 "x",
             [],
-            @5-26 If(
+            @5-31 If(
                 [
                     (
-                        @8-12 Tag(
-                            "True",
-                        ),
-                        @18-19 Num(
+                        @8-17 Var {
+                            module_name: "Bool",
+                            ident: "true",
+                        },
+                        @23-24 Num(
                             "1",
                         ),
                     ),
                 ],
-                @25-26 Num(
+                @30-31 Num(
                     "2",
                 ),
             ),
         ),
-        @28-32 RequiredValue(
-            @28-29 "y",
+        @33-37 RequiredValue(
+            @33-34 "y",
             [],
-            @31-32 Num(
+            @36-37 Num(
                 "3",
             ),
         ),
