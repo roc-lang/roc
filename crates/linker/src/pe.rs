@@ -933,16 +933,18 @@ mod test {
 
             extern fn magic() callconv(.C) u64;
 
+            extern const three: u64;
+
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello, {}!\n", .{magic()});
+                try stdout.print("Hello, {} {}!\n", .{magic(), three});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            export const THREE: u64 = 3;
+            export const three: u64 = 3;
 
             export fn magic() u64 {
                 return 42;
@@ -955,7 +957,7 @@ mod test {
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
         std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
 
-        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["magic".into()]);
+        let dylib_bytes = crate::generate_dylib::synthetic_dll(&["magic".into(), "three".into()]);
         std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
 
         let output = std::process::Command::new(&zig)
@@ -1048,8 +1050,13 @@ mod test {
                 section_alignment as usize,
             ) as u64;
 
+        let hacks = image_base | 0xc000;
         let dynamic_relocations = DynamicRelocationsPe::new(&app);
-        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &[app_code_section_va]);
+        redirect_dummy_dll_functions(
+            &mut app,
+            &dynamic_relocations,
+            &[app_code_section_va, hacks],
+        );
 
         remove_dummy_dll_import_table(
             &mut app,
@@ -1133,6 +1140,6 @@ mod test {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello, 42!\n", output);
+        assert_eq!("Hello, 42 3!\n", output);
     }
 }
