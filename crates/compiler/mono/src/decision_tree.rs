@@ -4,6 +4,7 @@ use crate::ir::{
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -577,6 +578,8 @@ fn test_at_path<'a>(
                     arguments: arguments.to_vec(),
                 },
 
+                Voided { .. } => internal_error!("unreachable"),
+
                 OpaqueUnwrap { opaque, argument } => {
                     let union = Union {
                         render_as: RenderAs::Tag,
@@ -875,6 +878,7 @@ fn to_relevant_branch_help<'a>(
                 _ => None,
             }
         }
+        Voided { .. } => internal_error!("unreachable"),
         StrLiteral(string) => match test {
             IsStr(test_str) if string == *test_str => {
                 start.extend(end);
@@ -1018,6 +1022,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
+
+        Voided { .. } => internal_error!("unreachable"),
     }
 }
 

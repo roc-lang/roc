@@ -393,11 +393,11 @@ contains = \list, needle ->
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
 walk = \list, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
     walkHelp = \currentState, element -> Continue (func currentState element)
 
     when List.iterate list state walkHelp is
         Continue newState -> newState
-        Break void -> List.unreachable void
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -1006,6 +1006,3 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
-
-## useful for typechecking guaranteed-unreachable cases
-unreachable : [] -> a

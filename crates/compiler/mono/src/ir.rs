@@ -5731,7 +5731,7 @@ fn convert_tag_union<'a>(
             "The `[]` type has no constructors, source var {:?}",
             variant_var
         ),
-        Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
+        Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
@@ -5780,6 +5780,41 @@ fn convert_tag_union<'a>(
 
             let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
+        }
+        NewtypeByVoid {
+            data_tag_arguments: field_layouts,
+            data_tag_name,
+            ..
+        } => {
+            let dataful_tag = data_tag_name.expect_tag();
+
+            if dataful_tag != tag_name {
+                // this tag is not represented, and hence will never be reached, at runtime.
+                Stmt::RuntimeError("voided tag constructor is unreachable")
+            } else {
+                let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
+
+                let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
+                field_symbols.extend(field_symbols_temp.iter().map(|r| r.1));
+                let field_symbols = field_symbols.into_bump_slice();
+
+                // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+                let layout = layout_cache
+                    .from_var(env.arena, variant_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                // even though this was originally a Tag, we treat it as a Struct from now on
+                let stmt = if let [only_field] = field_symbols {
+                    let mut hole = hole.clone();
+                    substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+                    hole
+                } else {
+                    Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
+                };
+
+                let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
+                assign_to_symbols(env, procs, layout_cache, iter, stmt)
+            }
         }
         Wrapped(variant) => {
             let (tag_id, _) = variant.tag_name_to_id(&tag_name);
@@ -6520,7 +6555,23 @@ fn from_can_when<'a>(
     let arena = env.arena;
     let it = opt_branches
         .into_iter()
-        .map(|(pattern, opt_guard, can_expr)| {
+        .filter_map(|(pattern, opt_guard, can_expr)| {
+            // If the pattern has a void layout we can drop it; however, we must still perform the
+            // work of building the body, because that may contain specializations we must
+            // discover for use elsewhere. See
+            //   `unreachable_branch_is_eliminated_but_produces_lambda_specializations` in test_mono
+            // for an example.
+            let should_eliminate_branch = pattern.is_voided();
+
+            // If we're going to eliminate the branch, we need to take a snapshot of the symbol
+            // specializations before we enter the branch, because any new specializations that
+            // will be added in the branch body will never need to be resolved!
+            let specialization_symbol_snapshot = if should_eliminate_branch {
+                Some(std::mem::take(&mut procs.symbol_specializations))
+            } else {
+                None
+            };
+
             let branch_stmt = match join_point {
                 None => from_can(env, expr_var, can_expr, procs, layout_cache),
                 Some(id) => {
@@ -6533,7 +6584,7 @@ fn from_can_when<'a>(
             };
 
             use crate::decision_tree::Guard;
-            if let Some(loc_expr) = opt_guard {
+            let result = if let Some(loc_expr) = opt_guard {
                 let id = JoinPointId(env.unique_symbol());
                 let symbol = env.unique_symbol();
                 let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
@@ -6559,6 +6610,13 @@ fn from_can_when<'a>(
                 )
             } else {
                 (pattern, Guard::NoGuard, branch_stmt)
+            };
+
+            if should_eliminate_branch {
+                procs.symbol_specializations = specialization_symbol_snapshot.unwrap();
+                None
+            } else {
+                Some(result)
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
@@ -7085,6 +7143,10 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+        Voided { .. } => {
+            return StorePattern::NotProductive(stmt);
+        }
+
         OpaqueUnwrap { argument, .. } => {
             let (pattern, _layout) = &**argument;
             return store_pattern_help(env, procs, layout_cache, pattern, outer_symbol, stmt);
@@ -8676,10 +8738,54 @@ pub enum Pattern<'a> {
         layout: UnionLayout<'a>,
         union: roc_exhaustive::Union,
     },
+    Voided {
+        tag_name: TagName,
+    },
     OpaqueUnwrap {
         opaque: Symbol,
         argument: Box<(Pattern<'a>, Layout<'a>)>,
     },
+}
+
+impl<'a> Pattern<'a> {
+    /// This pattern contains a pattern match on Void (i.e. [], the empty tag union)
+    /// such branches are not reachable at runtime
+    pub fn is_voided(&self) -> bool {
+        let mut stack: std::vec::Vec<&Pattern> = vec![self];
+
+        while let Some(pattern) = stack.pop() {
+            match pattern {
+                Pattern::Identifier(_)
+                | Pattern::Underscore
+                | Pattern::IntLiteral(_, _)
+                | Pattern::FloatLiteral(_, _)
+                | Pattern::DecimalLiteral(_)
+                | Pattern::BitLiteral { .. }
+                | Pattern::EnumLiteral { .. }
+                | Pattern::StrLiteral(_) => { /* terminal */ }
+                Pattern::RecordDestructure(destructs, _) => {
+                    for destruct in destructs {
+                        match &destruct.typ {
+                            DestructType::Required(_) => { /* do nothing */ }
+                            DestructType::Guard(pattern) => {
+                                stack.push(pattern);
+                            }
+                        }
+                    }
+                }
+                Pattern::NewtypeDestructure { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, _)| t))
+                }
+                Pattern::Voided { .. } => return true,
+                Pattern::AppliedTag { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, _)| t))
+                }
+                Pattern::OpaqueUnwrap { argument, .. } => stack.push(&argument.0),
+            }
+        }
+
+        false
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -8808,7 +8914,7 @@ fn from_can_pattern_help<'a>(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
                 ),
-                Unit | UnitWithArguments => Pattern::EnumLiteral {
+                Unit => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {
@@ -8907,6 +9013,57 @@ fn from_can_pattern_help<'a>(
                         arguments: mono_args,
                     }
                 }
+                NewtypeByVoid {
+                    data_tag_arguments,
+                    data_tag_name,
+                    ..
+                } => {
+                    let data_tag_name = data_tag_name.expect_tag();
+
+                    if tag_name != &data_tag_name {
+                        // this tag is not represented at runtime
+                        Pattern::Voided {
+                            tag_name: tag_name.clone(),
+                        }
+                    } else {
+                        let mut arguments = arguments.clone();
+
+                        arguments.sort_by(|arg1, arg2| {
+                            let size1 = layout_cache
+                                .from_var(env.arena, arg1.0, env.subs)
+                                .map(|x| x.alignment_bytes(&layout_cache.interner, env.target_info))
+                                .unwrap_or(0);
+
+                            let size2 = layout_cache
+                                .from_var(env.arena, arg2.0, env.subs)
+                                .map(|x| x.alignment_bytes(&layout_cache.interner, env.target_info))
+                                .unwrap_or(0);
+
+                            size2.cmp(&size1)
+                        });
+
+                        let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                        let it = arguments.iter().zip(data_tag_arguments.iter());
+                        for ((_, loc_pat), layout) in it {
+                            mono_args.push((
+                                from_can_pattern_help(
+                                    env,
+                                    procs,
+                                    layout_cache,
+                                    &loc_pat.value,
+                                    assignments,
+                                )?,
+                                *layout,
+                            ));
+                        }
+
+                        Pattern::NewtypeDestructure {
+                            tag_name: tag_name.clone(),
+                            arguments: mono_args,
+                        }
+                    }
+                }
+
                 Wrapped(variant) => {
                     let (tag_id, argument_layouts) = variant.tag_name_to_id(tag_name);
                     let number_of_tags = variant.number_of_tags();

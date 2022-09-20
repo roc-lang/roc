@@ -3895,6 +3895,7 @@ dependencies = [
 name = "roc_mono"
 version = "0.0.1"
 dependencies = [
+ "bitvec 1.0.1",
  "bumpalo",
  "hashbrown 0.12.3",
  "roc_builtins",

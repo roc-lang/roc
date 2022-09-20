@@ -88,7 +88,8 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    const size = @intCast(usize, roc__mainForHost_size());
+    // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
+    const size = std.math.max(@intCast(usize, roc__mainForHost_size()), 8);
     const raw_output = roc_alloc(@intCast(usize, size), @alignOf(u64)).?;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -120,7 +121,8 @@ fn to_seconds(tms: std.os.timespec) f64 {
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const allocator = std.heap.page_allocator;
 
-    const size = roc__mainForHost_1__Fx_result_size();
+    // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
+    const size = std.math.max(roc__mainForHost_1__Fx_result_size(), 8);
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
