@@ -166,7 +166,7 @@ short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
 
-- The first def assigns the name `main` to the expression `Stdout.line "I have \(numDefs) definitions."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
+- The first def assigns the name `main` to the expression `Stdout.line "There are \(total) animals."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 
