@@ -1,10 +1,10 @@
 app "args"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Task, pf.Arg]
+    imports [pf.Stdout, pf.Arg, pf.Program.{ Program }]
     provides [main] to pf
 
-main : List Str -> Task.Task {} [] [Write [Stdout]]
-main = \args ->
+main : Program
+main = Program.withArgs \args ->
     parser =
         divCmd =
             Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
@@ -49,9 +49,15 @@ main = \args ->
         |> Arg.program { name: "args-example", help: "A calculator example of the CLI platform argument parser" }
 
     when Arg.parseFormatted parser args is
-        Ok cmd -> runCmd cmd |> Num.toStr |> Stdout.line
+        Ok cmd ->
+            runCmd cmd
+            |> Num.toStr
+            |> Stdout.line
+            |> Program.exit 0
+
         Err helpMenu ->
             Stdout.line helpMenu
+            |> Program.exit 1
 
 runCmd = \cmd ->
     when cmd is

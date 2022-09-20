@@ -523,7 +523,7 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        args:"interactive" => Example {
+        cli_args:"interactive" => Example {
             filename: "args.roc",
             executable_filename: "args",
             stdin: &[],
@@ -539,7 +539,7 @@ mod cli_run {
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
-        // tea:"tea" => Example {
+        // tui_tea:"tea" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "tea-example",
         //     stdin: &[],
@@ -547,7 +547,7 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"interactive" => Example {
+        cli_form:"interactive" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
@@ -999,23 +999,50 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
 
-                Nothing is named `d` in this scope.
+                Something is off with the type annotation of the main required symbol:
 
-                10│      _ <- await (line d)
-                                          ^
+                2│      requires {} { main : InternalProgram }
+                                             ^^^^^^^^^^^^^^^
 
-                Did you mean one of these?
+                This #UserApp.main value is a:
 
-                    U8
-                    Ok
-                    I8
-                    F64
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But the type annotation on main says it should be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+
+
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
+
+                This 1st argument to toEffect has an unexpected type:
+
+                9│  mainForHost = InternalProgram.toEffect main
+                                                           ^^^^
+
+                This #UserApp.main value is a:
+
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But toEffect needs its 1st argument to be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                1 error and 0 warnings found in <ignored for test> ms."#
+                2 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }
