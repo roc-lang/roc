@@ -497,6 +497,7 @@ fn redirect_dummy_dll_functions(
     // and get the offset in the file of 0x1400037f0
     let thunks_start_offset = (dummy_thunks_address - section_va + offset_in_file) as usize;
 
+    // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
     let mut targets = function_definition_vas.iter();
     'outer: for (i, name) in imports.iter().enumerate() {
         for (target_name, target_va) in targets.by_ref() {
@@ -526,21 +527,19 @@ enum SectionKind {
     ReadOnlyData,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Section {
-    /// Section index in the app object
-    index: SectionIndex,
-
     /// File range of the section (in the app object)
     file_range: Range<usize>,
 
     kind: SectionKind,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct AppSymbol {
     name: String,
-    section_index: SectionIndex,
     section_kind: SectionKind,
     offset_in_section: usize,
 }
@@ -567,9 +566,6 @@ impl AppSections {
         let mut rdata_bytes = 0;
 
         for (i, section) in file.sections().enumerate() {
-            // one-indexed. fun
-            let index = SectionIndex(i + 1);
-
             let kind = match section.name() {
                 Ok(".text") => SectionKind::Text,
                 // Ok(".data") => SectionKind::Data,
@@ -580,6 +576,9 @@ impl AppSections {
 
             let (start, length) = section.file_range().unwrap();
             let file_range = start as usize..(start + length) as usize;
+
+            // sections are one-indexed...
+            let index = SectionIndex(i + 1);
 
             match kind {
                 SectionKind::Text => {
@@ -592,11 +591,7 @@ impl AppSections {
                 }
             }
 
-            let section = Section {
-                index,
-                file_range,
-                kind,
-            };
+            let section = Section { file_range, kind };
 
             sections.push(section);
         }
@@ -612,7 +607,6 @@ impl AppSections {
 
                     let symbol = AppSymbol {
                         name: symbol.name().unwrap_or_default().to_string(),
-                        section_index: index,
                         section_kind: kind,
                         offset_in_section: (offset_in_host_section + symbol.address()) as usize,
                     };
