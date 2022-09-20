@@ -1218,10 +1218,51 @@ mod test {
             file_bytes_added as u32,
             data_bytes_added as u32,
         );
+
+        let dynamic_relocations = DynamicRelocationsPe::new(&app);
+        let symbols: Vec<_> = symbols
+            .into_iter()
+            .map(|s| (s.name, s.offset_in_section as u64))
+            .collect();
+        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &symbols);
+
+        remove_dummy_dll_import_table(
+            &mut app,
+            dynamic_relocations.data_directories_offset_in_file,
+            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.dummy_import_index,
+        );
     }
 
+    #[cfg(windows)]
     #[test]
+    fn link_zig_host_and_app_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+
+        link_zig_host_and_app_help(dir);
+
+        let output = std::process::Command::new("app.exe")
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("app.exe failed");
+        }
+
+        let output = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!("Hello, 42 32 1 3!\n", output);
+    }
+
     #[ignore]
+    #[test]
     fn link_zig_host_and_app_wine() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
