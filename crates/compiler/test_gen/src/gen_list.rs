@@ -3006,8 +3006,10 @@ fn list_find_empty_layout() {
             List.findFirst [] \_ -> True
             "#
         ),
-        RocResult::err(()),
-        RocResult<(), ()>
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
     );
 
     assert_evals_to!(
@@ -3016,8 +3018,10 @@ fn list_find_empty_layout() {
             List.findLast [] \_ -> True
             "#
         ),
-        RocResult::err(()),
-        RocResult<(), ()>
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
     );
 }
 
