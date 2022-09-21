@@ -676,53 +676,21 @@ fn update_optional_header(
 }
 
 #[allow(dead_code)]
-fn write_app_text_section_header(
+#[allow(clippy::too_many_arguments)]
+fn write_section_header(
     data: &mut [u8],
+    name: [u8; 8],
+    characteristics: u32,
     section_header_start: usize,
     section_file_offset: usize,
     virtual_size: u32,
     virtual_address: u32,
     size_of_raw_data: u32,
 ) {
-    use object::{pe, U32};
-
-    let characteristics =
-        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE;
+    use object::U32;
 
     let header = ImageSectionHeader {
-        name: *b".text1\0\0", // unclear whether we can/should call this text
-        virtual_size: U32::new(LE, virtual_size),
-        virtual_address: U32::new(LE, virtual_address),
-        size_of_raw_data: U32::new(LE, size_of_raw_data),
-        pointer_to_raw_data: U32::new(LE, section_file_offset as u32),
-        pointer_to_relocations: Default::default(),
-        pointer_to_linenumbers: Default::default(),
-        number_of_relocations: Default::default(),
-        number_of_linenumbers: Default::default(),
-        characteristics: U32::new(LE, characteristics),
-    };
-
-    let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-        unsafe { std::mem::transmute(header) };
-
-    data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
-}
-
-#[allow(dead_code)]
-fn write_app_rdata_section_header(
-    data: &mut [u8],
-    section_header_start: usize,
-    section_file_offset: usize,
-    virtual_size: u32,
-    virtual_address: u32,
-    size_of_raw_data: u32,
-) {
-    use object::{pe, U32};
-
-    let characteristics = pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA;
-
-    let header = ImageSectionHeader {
-        name: *b".rdata1\0",
+        name,
         virtual_size: U32::new(LE, virtual_size),
         virtual_address: U32::new(LE, virtual_address),
         size_of_raw_data: U32::new(LE, size_of_raw_data),
@@ -1175,8 +1143,10 @@ mod test {
                 SectionKind::Text => {
                     code_bytes_added += size_of_raw_data;
 
-                    write_app_text_section_header(
+                    write_section_header(
                         &mut app,
+                        *b".text1\0\0",
+                        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE,
                         section_header_start,
                         section_file_offset,
                         virtual_size,
@@ -1187,8 +1157,10 @@ mod test {
                 SectionKind::ReadOnlyData => {
                     data_bytes_added += size_of_raw_data;
 
-                    write_app_rdata_section_header(
+                    write_section_header(
                         &mut app,
+                        *b".rdata1\0",
+                        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
                         section_header_start,
                         section_file_offset,
                         virtual_size,
