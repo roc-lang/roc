@@ -1128,6 +1128,7 @@ mod test {
                 .map(|s| s.file_range.end - s.file_range.start)
                 .sum();
 
+            // offset_in_section now becomes a proper virtual address
             for symbol in symbols.iter_mut() {
                 if symbol.section_kind == kind {
                     symbol.offset_in_section += image_base as usize + virtual_address as usize;
@@ -1136,8 +1137,6 @@ mod test {
 
             let virtual_size = length as u32;
             let size_of_raw_data = next_multiple_of(length, file_alignment) as u32;
-
-            file_bytes_added += next_multiple_of(length, section_alignment) as u32;
 
             match kind {
                 SectionKind::Text => {
@@ -1181,6 +1180,7 @@ mod test {
             section_header_start += std::mem::size_of::<ImageSectionHeader>();
             section_file_offset += size_of_raw_data as usize;
             virtual_address += next_multiple_of(length, section_alignment) as u32;
+            file_bytes_added += next_multiple_of(length, section_alignment) as u32;
         }
 
         update_optional_header(
