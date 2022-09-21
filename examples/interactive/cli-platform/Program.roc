@@ -59,10 +59,7 @@ noArgs : Task ExitCode [] * -> Program
 noArgs = \task ->
     effect =
         InternalTask.toEffect task
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode u8) -> u8
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
@@ -80,10 +77,7 @@ withArgs = \toTask ->
     effect = Effect.after Effect.args \args ->
         toTask args
         |> InternalTask.toEffect
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode u8) -> u8
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
@@ -105,10 +99,7 @@ withEnv = \toTask ->
 
         toTask args dict
         |> InternalTask.toEffect
-        |> Effect.map \result ->
-            when result is
-                Ok (@ExitCode code) -> code
-                Err _ -> 0 # TODO this is unreachable! Remove it after https://github.com/roc-lang/roc/issues/4054 lands
+        |> Effect.map \Ok (@ExitCode u8) -> u8
 
     InternalProgram.fromEffect effect
 
