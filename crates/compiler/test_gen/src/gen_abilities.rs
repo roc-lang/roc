@@ -272,21 +272,21 @@ fn decode() {
             r#"
             app "test" provides [myU8] to "./platform"
 
-            DecodeError : [TooShort, Leftover (List U8)]
+            MDecodeError : [TooShort, Leftover (List U8)]
 
-            Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
 
-            Decoding has
-                decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+            MDecoding has
+                decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
 
-            DecoderFormatting has
-                u8 : Decoder U8 fmt | fmt has DecoderFormatting
+            MDecoderFormatting has
+                u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
 
-            decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
-            decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+            decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
-            fromBytes : List U8, fmt -> Result val DecodeError
-                        | fmt has DecoderFormatting, val has Decoding
+            fromBytes : List U8, fmt -> Result val MDecodeError
+                        | fmt has MDecoderFormatting, val has MDecoding
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
@@ -296,17 +296,17 @@ fn decode() {
                             else Err (Leftover rest)
 
 
-            Linear := {} has [DecoderFormatting {u8}]
+            Linear := {} has [MDecoderFormatting {u8}]
 
-            u8 = @Decoder \lst, @Linear {} ->
+            u8 = @MDecoder \lst, @Linear {} ->
                     when List.first lst is
                         Ok n -> { result: Ok n, rest: List.dropFirst lst }
                         Err _ -> { result: Err TooShort, rest: [] }
 
-            MyU8 := U8 has [Decoding {decoder}]
+            MyU8 := U8 has [MDecoding {decoder}]
 
-            # impl Decoding for MyU8
-            decoder = @Decoder \lst, fmt ->
+            # impl MDecoding for MyU8
+            decoder = @MDecoder \lst, fmt ->
                 { result, rest } = decodeWith lst u8 fmt
                 { result: Result.map result (\n -> @MyU8 n), rest }
 
@@ -743,7 +743,7 @@ fn decode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Decode.{ Decoding }, Json]
+                imports [Json]
                 provides [main] to "./platform"
 
             MyNum := U8 has [Decoding {decoder: myDecoder}]
@@ -774,7 +774,7 @@ fn decode_use_stdlib_json_list() {
         indoc!(
             r#"
             app "test"
-                imports [Decode.{ Decoding }, Json]
+                imports [Json]
                 provides [main] to "./platform"
 
             MyNumList := List U8 has [Decoding {decoder: myDecoder}]
@@ -817,7 +817,7 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Decode, Json] provides [main] to "./platform"
+                app "test" imports [Json] provides [main] to "./platform"
 
                 main =
                     when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.fromUtf8 is
@@ -838,7 +838,7 @@ mod decode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Decode, Json] provides [main] to "./platform"
+                        app "test" imports [Json] provides [main] to "./platform"
 
                         main =
                             when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
@@ -876,7 +876,7 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Decode, Json] provides [main] to "./platform"
+                app "test" imports [Json] provides [main] to "./platform"
 
                 main =
                     when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
@@ -896,7 +896,7 @@ fn decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
@@ -915,7 +915,7 @@ fn encode_then_decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
@@ -935,7 +935,7 @@ fn encode_then_decode_list_of_lists_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
@@ -957,7 +957,7 @@ fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
@@ -979,7 +979,7 @@ fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.fromUtf8 is
@@ -1001,7 +1001,7 @@ fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
@@ -1023,7 +1023,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
@@ -1046,7 +1046,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
@@ -1067,7 +1067,7 @@ fn decode_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "{}" |> Decode.fromBytes Json.fromUtf8 is
@@ -1090,7 +1090,7 @@ fn decode_record_of_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.fromUtf8 is

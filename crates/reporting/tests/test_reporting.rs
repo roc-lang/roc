@@ -10186,7 +10186,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_function,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A a := a -> a has [Decode.Decoding]
             "#
@@ -10209,7 +10209,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_non_decoding_opaque,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Decode.Decoding]
 
@@ -10235,7 +10235,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_other_has_decoding,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Decode.Decoding]
 
@@ -10249,7 +10249,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [MyNat] to "./platform"
+            app "test" imports [] provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] has [Decode.Decoding]
             "#
@@ -10261,7 +10261,7 @@ All branches in an `if` must have the same type!
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
                 myDecoder : Decoder (a -> a) fmt | fmt has DecoderFormatting
@@ -10291,7 +10291,7 @@ All branches in an `if` must have the same type!
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             A := {}
 
@@ -10475,7 +10475,7 @@ All branches in an `if` must have the same type!
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
@@ -10505,7 +10505,7 @@ All branches in an `if` must have the same type!
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
              main =
                  myDecoder : Decoder {x : Str, y ? Str} fmt | fmt has DecoderFormatting

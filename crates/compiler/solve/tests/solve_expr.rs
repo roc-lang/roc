@@ -6392,21 +6392,21 @@ mod solve_expr {
                 r#"
                 app "test" provides [myU8] to "./platform"
 
-                DecodeError : [TooShort, Leftover (List U8)]
+                MDecodeError : [TooShort, Leftover (List U8)]
 
-                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
 
-                Decoding has
-                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+                MDecoding has
+                    decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
 
-                DecoderFormatting has
-                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+                MDecoderFormatting has
+                    u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
 
-                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
-                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+                decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+                decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
-                fromBytes : List U8, fmt -> Result val DecodeError
-                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes : List U8, fmt -> Result val MDecodeError
+                            | fmt has MDecoderFormatting, val has MDecoding
                 fromBytes = \lst, fmt ->
                     when decodeWith lst decoder fmt is
                         { result, rest } ->
@@ -6415,17 +6415,17 @@ mod solve_expr {
                                 Err e -> Err e
 
 
-                Linear := {} has [DecoderFormatting {u8}]
+                Linear := {} has [MDecoderFormatting {u8}]
 
-                u8 = @Decoder \lst, @Linear {} ->
+                u8 = @MDecoder \lst, @Linear {} ->
                 #^^{-1}
                         when List.first lst is
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8 has [Decoding {decoder}]
+                MyU8 := U8 has [MDecoding {decoder}]
 
-                decoder = @Decoder \lst, fmt ->
+                decoder = @MDecoder \lst, fmt ->
                 #^^^^^^^{-1}
                     when decodeWith lst u8 fmt is
                         { result, rest } ->
@@ -6436,11 +6436,11 @@ mod solve_expr {
                 #^^^^{-1}
                 "#
             ),
-            @r#"
-            Linear#u8(11) : Decoder U8 Linear
-            MyU8#decoder(12) : Decoder MyU8 fmt | fmt has DecoderFormatting
-            myU8 : Result MyU8 DecodeError
-            "#
+            @r###"
+        Linear#u8(11) : MDecoder U8 Linear
+        MyU8#decoder(12) : MDecoder MyU8 fmt | fmt has MDecoderFormatting
+        myU8 : Result MyU8 MDecodeError
+        "###
         )
     }
 
