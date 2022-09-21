@@ -275,6 +275,7 @@ mod cli_run {
             );
         }
     }
+
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -297,16 +298,19 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "form" | "hello-gui" | "breakout" | "ruby" | "swiftui" => {
+                        "form" | "hello-gui" | "breakout" | "ruby" => {
                             // Since these require things the build system often doesn't have
                             // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                             // we do `roc build` on them but don't run them.
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
                             return;
                         }
-                        "rocLovesSwift" => {
+                        "swiftui" | "rocLovesSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
+                                return;
+                            } else {
+                                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
                                 return;
                             }
                         }
