@@ -1746,7 +1746,7 @@ impl Subs {
                 Symbol::BOOL_BOOL,
                 AliasVariables::default(),
                 Variable::BOOL_ENUM,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
 

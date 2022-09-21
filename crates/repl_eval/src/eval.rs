@@ -125,6 +125,9 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(name, _, real_var, kind) => {
+                if *name == Symbol::BOOL_BOOL {
+                    return (newtype_containers, alias_content, content);
+                }
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. For example,
                 //   T : { a : Str }

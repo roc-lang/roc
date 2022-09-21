@@ -1,3 +1,7 @@
+procedure Bool.2 ():
+    let Bool.12 : Int1 = true;
+    ret Bool.12;
+
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.258 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.258;
@@ -7,47 +11,47 @@ procedure Num.21 (#Attr.2, #Attr.3):
     ret Num.257;
 
 procedure Test.1 (Test.2, Test.3):
-    let Test.17 : U8 = GetTagId Test.2;
-    joinpoint Test.18 Test.16:
-        ret Test.16;
+    let Test.15 : U8 = GetTagId Test.2;
+    joinpoint Test.16 Test.14:
+        ret Test.14;
     in
-    switch Test.17:
+    switch Test.15:
         case 0:
-            let Test.19 : I64 = CallByName Test.7 Test.3 Test.2;
-            jump Test.18 Test.19;
+            let Test.17 : I64 = CallByName Test.7 Test.3 Test.2;
+            jump Test.16 Test.17;
     
         default:
-            let Test.20 : I64 = CallByName Test.8 Test.3 Test.2;
-            jump Test.18 Test.20;
+            let Test.18 : I64 = CallByName Test.8 Test.3 Test.2;
+            jump Test.16 Test.18;
     
 
-procedure Test.7 (Test.10, #Attr.12):
+procedure Test.7 (Test.9, #Attr.12):
     let Test.4 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.26 : I64 = CallByName Num.19 Test.10 Test.4;
-    ret Test.26;
+    let Test.24 : I64 = CallByName Num.19 Test.9 Test.4;
+    ret Test.24;
 
-procedure Test.8 (Test.11, #Attr.12):
+procedure Test.8 (Test.10, #Attr.12):
     let Test.6 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.5 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     if Test.6 then
-        let Test.24 : I64 = CallByName Num.21 Test.11 Test.5;
-        ret Test.24;
+        let Test.22 : I64 = CallByName Num.21 Test.10 Test.5;
+        ret Test.22;
     else
-        ret Test.11;
+        ret Test.10;
 
 procedure Test.0 ():
     let Test.4 : I64 = 1i64;
     let Test.5 : I64 = 2i64;
-    let Test.6 : Int1 = true;
-    joinpoint Test.22 Test.14:
-        let Test.15 : I64 = 42i64;
-        let Test.13 : I64 = CallByName Test.1 Test.14 Test.15;
-        ret Test.13;
+    let Test.6 : Int1 = CallByName Bool.2;
+    joinpoint Test.20 Test.12:
+        let Test.13 : I64 = 42i64;
+        let Test.11 : I64 = CallByName Test.1 Test.12 Test.13;
+        ret Test.11;
     in
-    let Test.25 : Int1 = true;
-    if Test.25 then
+    let Test.23 : Int1 = CallByName Bool.2;
+    if Test.23 then
         let Test.7 : [C I64, C I64 Int1] = TagId(0) Test.4;
-        jump Test.22 Test.7;
+        jump Test.20 Test.7;
     else
         let Test.8 : [C I64, C I64 Int1] = TagId(1) Test.5 Test.6;
-        jump Test.22 Test.8;
+        jump Test.20 Test.8;

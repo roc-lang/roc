@@ -131,19 +131,19 @@ encodeCharacters = \a, b, c, d ->
 isValidChar : U8 -> Bool
 isValidChar = \c ->
     if isAlphaNum c then
-        True
+        Bool.true
     else
         when c is
             43 ->
                 # '+'
-                True
+                Bool.true
 
             47 ->
                 # '/'
-                True
+                Bool.true
 
             _ ->
-                False
+                Bool.false
 
 isAlphaNum : U8 -> Bool
 isAlphaNum = \key ->

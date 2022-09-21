@@ -309,7 +309,7 @@ fn f64_record2_literal() {
 //         indoc!(
 //             r#"
 //                record : { a : Bool, b : Bool, c : Bool, d : Bool }
-//                record = { a: True, b: True, c : True, d : Bool }
+//                record = { a: Bool.true, b: Bool.true, c : Bool.true, d : Bool }
 
 //                record
 //             "#
@@ -366,7 +366,7 @@ fn bool_literal() {
         indoc!(
             r#"
                 x : Bool
-                x = True
+                x = Bool.true
 
                 x
                 "#
@@ -894,7 +894,9 @@ fn booleans_in_record() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_record() {
     assert_evals_to!(
-        indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),
+        indoc!(
+            "{ c: 32, b: if Bool.true then Red else if Bool.true then Green else Blue, a: 1 == 1 }"
+        ),
         (32i64, true, 2u8),
         (i64, bool, u8)
     );

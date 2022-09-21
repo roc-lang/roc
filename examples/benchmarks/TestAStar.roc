@@ -17,9 +17,12 @@ main =
 #                 Task.putLine "No test \(ns)"
 showBool : Bool -> Str
 showBool = \b ->
-    when b is
-        True -> "True"
-        False -> "False"
+    if
+        b
+    then
+        "True"
+    else
+        "False"
 
 test1 : Bool
 test1 =

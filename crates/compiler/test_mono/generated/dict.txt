@@ -1,14 +1,14 @@
 procedure Dict.1 ():
-    let Dict.102 : List {[], []} = Array [];
-    ret Dict.102;
+    let Dict.100 : List {[], []} = Array [];
+    ret Dict.100;
 
-procedure Dict.7 (Dict.96):
-    let Dict.101 : U64 = CallByName List.6 Dict.96;
-    ret Dict.101;
+procedure Dict.7 (Dict.94):
+    let Dict.99 : U64 = CallByName List.6 Dict.94;
+    ret Dict.99;
 
 procedure List.6 (#Attr.2):
-    let List.385 : U64 = lowlevel ListLen #Attr.2;
-    ret List.385;
+    let List.381 : U64 = lowlevel ListLen #Attr.2;
+    ret List.381;
 
 procedure Test.0 ():
     let Test.2 : List {[], []} = CallByName Dict.1;
