@@ -22,9 +22,9 @@ pub enum BadPattern {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShadowKind {
     Variable,
-    Alias,
-    Opaque,
-    Ability,
+    Alias(Symbol),
+    Opaque(Symbol),
+    Ability(Symbol),
 }
 
 /// Problems that can occur in the course of canonicalization.

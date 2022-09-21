@@ -6198,18 +6198,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
 
     ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
 
@@ -6241,18 +6236,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
 
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
@@ -7435,18 +7425,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
     "###
     );
 
@@ -10708,6 +10693,28 @@ All branches in an `if` must have the same type!
 
     It's impossible to create a value of this shape, so this pattern can
     be safely removed!
+    "###
+    );
+
+    test_report!(
+        custom_type_conflicts_with_builtin,
+        indoc!(
+            r#"
+            Nat := [ S Nat, Z ]
+
+            ""
+            "#
+        ),
+    @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This opaque type has the same name as a builtin:
+
+    4│      Nat := [ S Nat, Z ]
+            ^^^^^^^^^^^^^^^^^^^
+
+    All builtin opaque types are in scope by default, so I need this
+    opaque type to have a different name!
     "###
     );
 }

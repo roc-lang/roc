@@ -284,14 +284,14 @@ impl Scope {
         &mut self,
         ident: &Ident,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+    ) -> Result<Symbol, (Symbol, Region, Loc<Ident>)> {
         match self.introduce_help(ident.as_str(), region) {
-            Err((_, original_region)) => {
+            Err((symbol, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
                 };
-                Err((original_region, shadow))
+                Err((symbol, original_region, shadow))
             }
             Ok(symbol) => Ok(symbol),
         }
