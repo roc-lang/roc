@@ -1,9 +1,10 @@
-Proposal: Abilities in Roc
+# Proposal: Abilities in Roc
 This design idea addresses a variety of problems in Roc at once. It also unlocks some very exciting benefits that I didn't expect at the outset! It's a significant addition to the language, but it also means two other language features can be removed, and numbers can get a lot simpler.
 
 
 Thankfully it's a nonbreaking change for most Roc code, and in the few places where it actually is a breaking change, the fix should consist only of shifting a handful of characters around. Still, it feels like a big change because of all the implications it brings. Here we go!
-Background
+
+## Background
 Elm has a few specially constrained type variables: number, comparable, appendable, and the lesser-known compappend. Roc does not have these; it has no appendable or compappend equivalent, and instead of number and comparable it has:
 
 
@@ -12,7 +13,8 @@ Elm has a few specially constrained type variables: number, comparable, appendab
 
 
 There are a few known problems with this design, as well as some missed opportunities.
-Problem 1: Nonsense numbers type-check
+
+### Problem 1: Nonsense numbers type-check
 Right now in Roc, the following type-checks:
 
 
@@ -36,7 +38,8 @@ Do we add an extra special type constraint just for Num to detect this during th
 
 
 None of these potential solutions have ever felt great to me.
-Problem 2: Custom number types can't use arithmetic operators
+
+### Problem 2: Custom number types can't use arithmetic operators
 Roc's ordinary numbers should be enough for most use cases, but there are nice packages like elm-units which can prevent really expensive errors by raising compile-time errors for mismatched units...at the cost of having to sacrifice normal arithmetic operators. You can't use + on your unit-ful numbers, because + in Roc desugars to Num.add, not (for example) Quantity.add.
 
 
@@ -44,9 +47,11 @@ Also, if 128-bit integers aren't big enough, because the numbers you're working 
 
 
 This might not sound like a big problem (e.g. people deal with it in Java land), but in domains where you want to use custom numeric types, not having this is (so I've heard) a significant incentive to use plain numbers instead of more helpful data types.
-Problem 3: Decoders are still hard to learn
+
+### Problem 3: Decoders are still hard to learn
 Roc is currently no different from Elm in this regard. I only recently realized that the design I'm about to describe can also address this problem, but I was very excited to discover that!
-Problem 4: Custom collection equality
+
+### Problem 4: Custom collection equality
 Let's suppose I'm creating a custom data structure: a dictionary, possibly backed by a hash map or a tree. We'll ignore the internal structure of the storage field for now, but the basic technique we'd use would be a private tag wrapper to make an opaque type:
 
 
@@ -67,7 +72,8 @@ This feels like a significantly bigger problem in Roc than it is in Elm, because
 
 
 This is one of the most serious problems on this list. Not for the short term, but for the long term.
-Problem 5: How to specify functionlessness in documentation
+
+### Problem 5: How to specify functionlessness in documentation
 In Roc's current design, certain types have a functionless constraint. For example, in Bool.isEq : 'val, 'val -> Bool,  the type variable 'val means "a type that contains no functions, which we are naming val here."
 
 
@@ -81,7 +87,8 @@ There's also a related problem with how to display it in documentation. If I hav
 
 
 This is definitely solvable, but once again I can't name any solutions I love.
-Problem 6: No nice way to specify editor-specific code
+
+### Problem 6: No nice way to specify editor-specific code
 One of the goals for Roc is to have packages ship with editor integrations.
 
 
@@ -92,7 +99,8 @@ The question is how I should specify the rendering function for Dict. There isn'
 
 
 As with the Num * problem, there are various ways to solve this using the current language primitives, but I haven't found any that seem really nice.
-Problem 7: Record-of-function passing
+
+### Problem 7: Record-of-function passing
 This is a minor problem, but worth noting briefly.
 
 
@@ -106,7 +114,8 @@ In Roc, you can achieve this same level of reuse by passing around a record of f
 
 
 Is the amount of overhead we're talking about here a big deal? Maybe, maybe not, depending on the use case. This is definitely a niche situation, but nevertheless a missed opportunity for some amount of speed compared to what other languages can do.
-Proposal: Abilities
+
+## Proposal: Abilities
 This proposal is about a new language feature called "abilities," which addresses all of these problems in a nice way, while also making some other things possible in the language.
 
 
@@ -133,7 +142,8 @@ That where number has Num part is saying that whatever type gets used in place o
 
 
 All of those numeric abilities would be builtins, but you could also define your own custom abilities. Like Rust traits today (that is, Rust 1.56), abilities would not be higher-kinded. The explicit plan would be that they would never be higher-kinded, so it would never be possible to make a Functor or Monad ability.
-Number Literals
+
+### Number Literals
 Abilities can require other abilities. For example, to have the Int ability, you also need to have the Num ability. This means that has Int is strictly more constraining than has Num, which in turn means that we can change the type of number literals to be "an unbound variable that has the Num ability," similarly to what Haskell does.
 
 
@@ -192,7 +202,8 @@ x = 5
 
 
 Since you can add abilities to your own custom types (as we'll see later), this means you can add Num to your own custom number types (as well as Int or Frac) and then use them with all the usual arithmetic operators. This solves Problem #2.
-Functionless Constraints
+
+### Functionless Constraints
 Here's how the type of Bool.isEq would change from the current world (using the functionless constraint with the ' syntax) to an Abilities world:
 
 
@@ -220,7 +231,8 @@ If Hash doesn't require Eq for some reason (although it probably should), then D
 
 
 In the Abilities world, Roc no longer needs the concept of the functionless constraint, and it can be removed from the language. Abilities can cover all those use cases.
-Default Abilities
+
+### Default Abilities
 One of the many things I like about Elm is that I can make anonymous records and tuples have them Just Work with the == operator. In contrast, in Rust I have to name the struct and then add #[deriving(Eq)] to it if I want == to work on it.
 
 
@@ -241,7 +253,8 @@ Eq and Hash work like they do in Rust, although as previously noted, I think Has
 
 
 As for Encode and Decode...to put it mildly, they are exciting.
-Encode and Decode
+
+### Encode and Decode
 serde is among the most widely used Rust crates in the world - maybe the absolute most. It's for serializing and deserializing; hence, serde.
 
 
@@ -279,12 +292,14 @@ Other nice things about this design:
 
 
 I haven't looked into the details of what the exact design of this system would be, but at a glance it seems like based on the design of abilities and the design of serde, it should work out. (There may always be unexpected issues though!)
-Adding Abilities to a Type
+
+## Adding Abilities to a Type
 So we've talked about default abilities, and how various builtins would use them. What about custom types? How would I make an actual Dict type with its own definition of equality?
 
 
 To do that, we need to talk about a change to the language that was originally motivated by abilities, but which ultimately seems like a good change even if abilities weren't a thing.
-Newtypes
+
+### Newtypes
 Let's suppose Roc no longer has private tags, but does have this syntax:
 
 
@@ -334,7 +349,8 @@ type Quantity count units = Quantity count
 
 
 Even considered completely separately from Abilities, this "newtypes" design seems like a better design than private tags.
-Newtypes and Abilities
+
+### Newtypes and Abilities
 Another advantage the newtypes design has over private tags is that it offers a natural place to declare what abilities a type has.
 
 
@@ -369,7 +385,8 @@ In this Eq { isEq, isNotEq } declaration, I'm saying that isEq and isNotEq are f
 
 Now that I've specified this, when I use == on two Dict values, this isEq function will get run instead of the default == implementation. This solves Problem #3!
 I can also write something like has Num and provide the relevant functions to obtain a unit-ful number type - which solves Problem #2.
-Default Abilities for Newtypes
+
+### Default Abilities for Newtypes
 By default, if I don't use the has keyword when defining a newtype, Roc will give the type all the default builtin abilities it's eligible to have - so for example, it would get Eq and Hash by default unless it contains a function, in which case it's not eligible.
 
 
@@ -399,7 +416,8 @@ Dict k v has only
 
 
 I can immediately see exactly what abilities this type has. The same is true if I used has custom or omitted the has clause entirely. API diffs can use this same representation, with a diff like +Eq -Sort to show which abilities were added or removed.
-Encode and Hash
+
+### Encode and Hash
 I'm not sure if we actually need separate Hash and Encode abilities. At a high level, hashing is essentially encoding a value as an integer. Since all default types will get Encode anyway, maybe all we need is to have "hashers" be implemented as Encoders. This would mean there's one less default ability in the mix, which would be a nice simplification.
 
 
@@ -407,7 +425,8 @@ However, I'm not sure what the differences are between Rust's Hash trait and Has
 
 
 It might look surprising at first for a Dict implemented as a hash map to require that its keys have Encode, but I don't think that's a significant downside. 
-Encode and toStr
+
+### Encode and toStr
 Similarly,  anyone could write a `toStr`function that works on any type that has Encode, by using an Encoder which encodes strings.
 
 
@@ -418,7 +437,8 @@ Knowing that there's a 100% chance that would happen eventually, it seems like i
 
 
 One benefit to having something like Encode.str available in the language is that it can be nice for logging - e.g. when sending tracing information to a server that only programmers will ever see, not users. That's the only situation where I've ever personally missed the old Elm toString.
-Defining New Abilities
+
+## Defining New Abilities
 Here's how I might have defined Eq if it weren't already a builtin ability:
 
 
@@ -448,7 +468,8 @@ The compiler knew to do that substitution with val because of val has Eq in the 
 
 
 For this reason, if you are defining a function on Eq (such as isEq), and you have more than one type variable which has Eq, the result is a compiler error. This would be like trying to have more than one Self in Rust!
-Abilities that depend on other abilities
+
+### Abilities that depend on other abilities
 I mentioned earlier that in order to have either Int or Frac, a type must also have the Num ability. You can add those constraints after the has keyword, like so:
 
 
@@ -456,7 +477,8 @@ Int has Num, { …functions go here as normal… }
 
 
 Now whenever someone wants to make a newtype which has Int, that newtype must also explicitly specify that it has Num - otherwise, they'll get a compiler error. Similarly, any function which requires that an argument has Num will also accept any type that has Int.
-Defining abilities for existing types after the fact
+
+### Defining abilities for existing types after the fact
 It's conceivable that defining a new ability could support adding that ability to existing types. For example, maybe I make a new ability called Foo, and I want all numbers to have Foo.
 
 
@@ -488,7 +510,8 @@ From this point, even if both authors coordinate, the only way to permit the aut
 
 
 All of this makes me think that "if you want a type to have the ability you're defining, you should coordinate with that author" is the best policy to encourage, and in that world, the feature makes no sense except perhaps in the very specific case of builtin types (which necessarily can't depend on packages). Since there are a (small) finite number of those, it seems plausible that the ability author can do one-off special-case workarounds for those instead of needing a separate language feature.
-Abilities for Editor-Specific Code
+
+### Abilities for Editor-Specific Code
 I don't know exactly what the API for editor plugins should be yet, but they do have some characteristics that are important:
    * Making or modifying editor plugins should be so easy, basically everyone does it. This means that code for editor plugins should be written in normal Roc, and the API should have a shallow learning curve.
    * Editor plugins should ship with packages (or even just modules within a local project), but should have no impact on runtime performance of those modules/packages. So it's located there, but can't affect the surrounding code.
@@ -505,7 +528,8 @@ Abilities offer a nice way to address all of these.
 
 
 In this way, abilities solve problem #6.
-Avoiding the Classification Trap
+
+### Avoiding the Classification Trap
 Although I think custom user-defined abilities are worth having in the language because they address Problem #7, I hope they are used rarely in practice.
 
 
