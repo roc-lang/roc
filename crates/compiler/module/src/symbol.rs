@@ -790,7 +790,9 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
-                    $ident_id:literal $ident_const:ident: $ident_name:literal $($imported:ident)?
+                    $ident_id:literal $ident_const:ident: $ident_name:literal
+                    $(is_apply_type=$is_apply_type:literal)?
+                    $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
             }
         )+
@@ -941,23 +943,39 @@ macro_rules! define_builtins {
                 )*
             )+
 
-            /// The default idents that should be in scope,
+            /// The default `Apply` types that should be in scope,
             /// and what symbols they should resolve to.
             ///
-            /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> VecMap<Ident, (Symbol, Region)> {
+            /// This is for type aliases that don't have a concrete Roc representation and as such
+            /// we hide their implementation, like `Str` and `List`.
+            pub fn apply_types_in_scope() -> VecMap<Ident, (Symbol, Region)> {
                 let mut scope = VecMap::default();
 
                 $(
                     $(
                         $(
-                            // TODO is there a cleaner way to do this?
-                            // The goal is to make sure that we only
-                            // actually import things into scope if
-                            // they are tagged as "imported" in define_builtins!
-                            let $imported = true;
+                            if $is_apply_type {
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
+                            }
+                        )?
+                    )*
+                )+
 
-                            if $imported {
+                scope
+            }
+
+            /// Symbols that should be added to the default scope, for hints as suggestions of
+            /// names you might want to use.
+            ///
+            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
+            /// really we should be extracting tag names from candidate type aliases in scope.
+            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
+                let mut scope = VecMap::default();
+
+                $(
+                    $(
+                        $(
+                            if $in_scope_for_hints {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
@@ -1197,7 +1215,7 @@ define_builtins! {
         8 BOOL_NEQ: "isNotEq"
     }
     5 STR: "Str" => {
-        0 STR_STR: "Str" imported // the Str.Str type alias
+        0 STR_STR: "Str" is_apply_type=true // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
@@ -1252,7 +1270,7 @@ define_builtins! {
         52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
-        0 LIST_LIST: "List" imported // the List.List type alias
+        0 LIST_LIST: "List" is_apply_type=true // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
         3 LIST_SET: "set"
@@ -1330,10 +1348,8 @@ define_builtins! {
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
-                                   // NB: not strictly needed; used for finding tag names in error suggestions
-        2 RESULT_ERR: "Err" imported // Result.Result a e = [Ok a, Err e]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
@@ -1383,7 +1399,7 @@ define_builtins! {
         15 SET_CAPACITY: "capacity"
     }
     10 BOX: "Box" => {
-        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        0 BOX_BOX_TYPE: "Box" is_apply_type=true // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
