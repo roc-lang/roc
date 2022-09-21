@@ -36,52 +36,6 @@ fn synthetic_image_export_directory(
     }
 }
 
-fn synthetic_import_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8> {
-    use object::U32;
-
-    const W: usize = std::mem::size_of::<pe::ImageImportDescriptor>();
-
-    let mut vec = vec![0; 2 * W];
-
-    let name = "host.exe";
-
-    // write the .dll name, null-terminated
-    vec.extend(name.as_bytes());
-    vec.push(0);
-
-    let mut name_addresses = Vec::with_capacity(custom_names.len());
-
-    for name in custom_names {
-        name_addresses.push(virtual_address as u64 + vec.len() as u64);
-
-        let hint = 0u16;
-        vec.extend(&hint.to_le_bytes());
-        vec.extend(name.as_bytes());
-        vec.push(0);
-    }
-
-    let first_thunk = virtual_address + vec.len() as u32;
-
-    for name_address in name_addresses {
-        vec.extend(&name_address.to_le_bytes())
-    }
-
-    let descriptor = pe::ImageImportDescriptor {
-        original_first_thunk: U32::new(LE, first_thunk),
-        time_date_stamp: U32::new(LE, 0),
-        forwarder_chain: U32::new(LE, 0),
-        name: U32::new(LE, virtual_address + 2 * W as u32),
-        first_thunk: U32::new(LE, first_thunk),
-    };
-
-    unsafe {
-        let ptr = vec.as_mut_ptr();
-        std::ptr::write_unaligned(ptr as *mut pe::ImageImportDescriptor, descriptor);
-    }
-
-    vec
-}
-
 fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8> {
     let mut vec = vec![0; std::mem::size_of::<pe::ImageExportDirectory>()];
 
@@ -188,39 +142,25 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
         exports.len() as _,
     );
 
-    let virtual_address = writer.reserved_len() + exports.len() as u32;
-
-    // let imports = synthetic_import_dir(virtual_address, &["roc_alloc".to_string()]);
-    let imports: Vec<u8> = Vec::new();
-
-    //    // there is also IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT which may be helpful?
-    //    writer.set_data_directory(
-    //        pe::IMAGE_DIRECTORY_ENTRY_IMPORT,
-    //        virtual_address,
-    //        imports.len() as _,
-    //    );
-
     // it's fine if this changes, this is just here to catch any accidental changes
-    // debug_assert_eq!(virtual_address, 0x138);
+    debug_assert_eq!(virtual_address, 0x138);
 
-    let mut data = exports;
-    data.extend(imports);
-
-    // we store the import & export directory in a .rdata section
+    // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
-        let characteristics = object::pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA;
+        // not sure if that 0x40 is important, I took it from a .dll that zig produced
+        let characteristics = object::pe::IMAGE_SCN_MEM_READ | 0x40;
         let range = writer.reserve_section(
             *b".rdata\0\0",
             characteristics,
             // virtual size
-            data.len() as u32,
+            exports.len() as u32,
             // size_of_raw_data
-            data.len() as u32,
+            exports.len() as u32,
         );
 
-        // debug_assert_eq!(virtual_address, range.virtual_address);
+        debug_assert_eq!(virtual_address, range.virtual_address);
 
-        (range.file_offset, data)
+        (range.file_offset, exports)
     };
 
     // Start writing.
