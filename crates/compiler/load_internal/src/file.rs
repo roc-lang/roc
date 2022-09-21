@@ -2013,7 +2013,7 @@ fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header.imported_modules.insert(module, Region::zero());
 
     let types = Symbol::builtin_types_in_scope(module)
-        .into_iter()
+        .iter()
         .map(|(name, info)| (Ident::from(*name), *info));
     header.exposed_imports.extend(types);
 }
@@ -2126,7 +2126,7 @@ fn update<'a>(
                 extend_header_with_builtin(&mut header, ModuleId::NUM);
             }
 
-            if header.module_id != ModuleId::BOOL {
+            if ![ModuleId::BOOL].contains(&header.module_id) {
                 extend_header_with_builtin(&mut header, ModuleId::BOOL);
             }
 
