@@ -31,7 +31,8 @@ pub enum ShadowKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
     UnusedDef(Symbol, Region),
-    UnusedImport(ModuleId, Region),
+    UnusedImport(Symbol, Region),
+    UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument

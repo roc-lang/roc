@@ -10719,6 +10719,27 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        unused_value_import,
+        indoc!(
+            r#"
+            app "test" imports [List.{ concat }] provides [main] to "./platform"
+
+            main = ""
+            "#
+        ),
+    @r###"
+    ── UNUSED IMPORT ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    `List.concat` is not used in this module.
+
+    1│  app "test" imports [List.{ concat }] provides [main] to "./platform"
+                                   ^^^^^^
+
+    Since `List.concat` isn't used, you don't need to import it.
+    "###
+    );
+
+    test_report!(
         unnecessary_builtin_module_import,
         indoc!(
             r#"

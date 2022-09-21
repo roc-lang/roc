@@ -87,7 +87,24 @@ pub fn can_problem<'b>(
             title = UNUSED_DEF.to_string();
             severity = Severity::Warning;
         }
-        Problem::UnusedImport(module_id, region) => {
+        Problem::UnusedImport(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" is not used in this module."),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Since "),
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" isn't used, you don't need to import it."),
+                ]),
+            ]);
+
+            title = UNUSED_IMPORT.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("Nothing from "),

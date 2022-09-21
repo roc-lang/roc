@@ -1984,13 +1984,16 @@ fn report_unused_imported_modules<'a>(
     constrained_module: &ConstrainedModule,
 ) {
     let mut unused_imported_modules = constrained_module.imported_modules.clone();
+    let mut unused_imports = constrained_module.module.exposed_imports.clone();
 
     for symbol in constrained_module.module.referenced_values.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(&symbol);
     }
 
     for symbol in constrained_module.module.referenced_types.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(&symbol);
     }
 
     let existing = match state.module_cache.can_problems.entry(module_id) {
@@ -2000,8 +2003,14 @@ fn report_unused_imported_modules<'a>(
 
     for (unused, region) in unused_imported_modules.drain() {
         if !unused.is_builtin() {
-            existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+            existing.push(roc_problem::can::Problem::UnusedModuleImport(
+                unused, region,
+            ));
         }
+    }
+
+    for (unused, region) in unused_imports.drain() {
+        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
     }
 }
 
@@ -3539,7 +3548,7 @@ fn send_header<'a>(
         }
     };
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
@@ -3611,7 +3620,11 @@ fn send_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -3750,7 +3763,7 @@ fn send_header_two<'a>(
     let declared_name: ModuleName = "".into();
     let mut symbols_from_requires = Vec::with_capacity(requires.len());
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
 
@@ -3835,7 +3848,11 @@ fn send_header_two<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -4657,7 +4674,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Ident>) {
+fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -4665,7 +4682,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {
@@ -4680,7 +4697,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {
