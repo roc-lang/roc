@@ -4,7 +4,7 @@ use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
     read::pe::ImportTable,
-    LittleEndian as LE, RelocationTarget, SectionIndex,
+    LittleEndian as LE, RelocationTarget, SectionIndex, SymbolIndex,
 };
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
@@ -15,13 +15,14 @@ use crate::load_struct_inplace_mut;
 pub(crate) fn preprocess_windows(
     exec_filename: &str,
     _metadata_filename: &str,
-    _out_filename: &str,
+    out_filename: &str,
     _shared_lib: &Path,
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
+
     let exec_file = std::fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let exec_data = &*exec_mmap;
@@ -34,11 +35,20 @@ pub(crate) fn preprocess_windows(
 
     let _exec_parsing_duration = exec_parsing_start.elapsed();
 
-    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
-
-    println!("{:#x?}", dynamic_relocations);
+    let data = std::fs::read(exec_filename).unwrap();
+    let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
+    increase_number_of_sections_help(&data, &new_sections, Path::new(out_filename));
 
     Ok(())
+}
+
+pub(crate) fn surgery_pe(
+    _verbose: bool,
+    // md: &metadata::Metadata,
+    exec_mmap: &mut MmapMut,
+    _offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
+    app_obj: object::File,
+) {
 }
 
 #[derive(Debug)]
@@ -529,11 +539,19 @@ enum SectionKind {
 
 #[allow(dead_code)]
 #[derive(Debug)]
+struct AppRelocation {
+    offset_in_section: u64,
+    address: u64,
+    relocation: object::Relocation,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
 struct Section {
     /// File range of the section (in the app object)
     file_range: Range<usize>,
     kind: SectionKind,
-    relocations: MutMap<String, (u64, object::Relocation)>,
+    relocations: MutMap<String, AppRelocation>,
 }
 
 #[allow(dead_code)]
@@ -581,12 +599,19 @@ impl AppSections {
                     RelocationTarget::Symbol(symbol_index) => {
                         use object::ObjectSymbol;
 
-                        let name = file
-                            .symbol_by_index(symbol_index)
-                            .and_then(|s| s.name())
-                            .unwrap_or_default();
+                        let symbol = file.symbol_by_index(symbol_index);
 
-                        relocations.insert(name.to_string(), (offset_in_section, relocation));
+                        let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
+                        let name = symbol.and_then(|s| s.name()).unwrap_or_default();
+
+                        relocations.insert(
+                            name.to_string(),
+                            AppRelocation {
+                                offset_in_section,
+                                address,
+                                relocation,
+                            },
+                        );
                     }
                     _ => todo!(),
                 }
@@ -728,6 +753,52 @@ fn write_section_header(
         unsafe { std::mem::transmute(header) };
 
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
+}
+
+fn increase_number_of_sections_help(
+    input_data: &[u8],
+    new_sections: &[[u8; 8]],
+    output_file: &Path,
+) {
+    use object::read::pe::ImageNtHeaders;
+
+    let dos_header = object::pe::ImageDosHeader::parse(input_data).unwrap();
+    let mut offset = dos_header.nt_headers_offset().into();
+    let header_offset = offset;
+    let number_of_sections_offset = header_offset + 4 + 2;
+
+    let sections_len_old = u16::from_le_bytes(
+        input_data[number_of_sections_offset as usize..][..2]
+            .try_into()
+            .unwrap(),
+    );
+
+    let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
+
+    let data = &*mmap;
+
+    let sections_len_new = u16::from_le_bytes(
+        data[number_of_sections_offset as usize..][..2]
+            .try_into()
+            .unwrap(),
+    );
+
+    assert_eq!(
+        sections_len_old + new_sections.len() as u16,
+        sections_len_new
+    );
+
+    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
+    let sections = nt_headers.sections(data, offset).unwrap();
+
+    let names: Vec<_> = sections
+        .iter()
+        .map(|h| h.name)
+        .skip(sections_len_old as usize)
+        .take(new_sections.len())
+        .collect();
+
+    assert_eq!(new_sections, names.as_slice());
 }
 
 #[cfg(test)]
@@ -937,52 +1008,6 @@ mod test {
         );
 
         assert_eq!(actual, 7)
-    }
-
-    fn increase_number_of_sections_help(
-        input_data: &[u8],
-        new_sections: &[[u8; 8]],
-        output_file: &Path,
-    ) {
-        use object::read::pe::ImageNtHeaders;
-
-        let dos_header = pe::ImageDosHeader::parse(input_data).unwrap();
-        let mut offset = dos_header.nt_headers_offset().into();
-        let header_offset = offset;
-        let number_of_sections_offset = header_offset + 4 + 2;
-
-        let sections_len_old = u16::from_le_bytes(
-            input_data[number_of_sections_offset as usize..][..2]
-                .try_into()
-                .unwrap(),
-        );
-
-        let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
-
-        let data = mmap.deref();
-
-        let sections_len_new = u16::from_le_bytes(
-            data[number_of_sections_offset as usize..][..2]
-                .try_into()
-                .unwrap(),
-        );
-
-        assert_eq!(
-            sections_len_old + new_sections.len() as u16,
-            sections_len_new
-        );
-
-        let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
-        let sections = nt_headers.sections(data, offset).unwrap();
-
-        let names: Vec<_> = sections
-            .iter()
-            .map(|h| h.name)
-            .skip(sections_len_old as usize)
-            .take(new_sections.len())
-            .collect();
-
-        assert_eq!(new_sections, names.as_slice());
     }
 
     #[test]
@@ -1221,8 +1246,14 @@ mod test {
                 let slice = &app_obj[section.file_range.start..section.file_range.end];
                 app[offset..][..slice.len()].copy_from_slice(slice);
 
-                for (name, (offset_in_section, relocation)) in section.relocations.iter() {
+                for (name, app_relocation) in section.relocations.iter() {
                     let destination = exports[name];
+
+                    let AppRelocation {
+                        offset_in_section,
+                        relocation,
+                        ..
+                    } = app_relocation;
 
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
@@ -1325,5 +1356,241 @@ mod test {
         let output = String::from_utf8_lossy(&output.stdout);
 
         assert_eq!("Hello, 234567 32 1 3!\n", output);
+    }
+
+    fn link_roc_host_and_app_help(dir: &Path) {
+        use object::ObjectSection;
+
+        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+        // open our app object; we'll copy sections from it later
+        let file = std::fs::File::open(dir.join("app.obj")).unwrap();
+        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let app_obj_sections = AppSections::from_data(&*app_obj);
+        let mut symbols = app_obj_sections.symbols;
+
+        let app_obj_file = object::File::parse(&*app_obj).unwrap();
+
+        // make the dummy dylib based on the app object
+        let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
+        let dylib_bytes = crate::generate_dylib::synthetic_dll(&names);
+        std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
+
+        // hardcoded for now, should come from the precompiled metadata in the future
+        let image_base: u64 = 0x140000000;
+        let file_alignment = 0x200;
+        let section_alignment = 0x1000;
+        let last_host_section_index = 5;
+
+        let app_sections_size: usize = app_obj_sections
+            .sections
+            .iter()
+            .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
+            .sum();
+
+        let dynhost_bytes = std::fs::read(dir.join("preprocessedhost")).unwrap();
+
+        let mut app = mmap_mut(
+            &dir.join("app.exe"),
+            dynhost_bytes.len() + app_sections_size,
+        );
+
+        // copying over all of the dynhost.exe bytes
+        app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
+
+        let file = PeFile64::parse(app.deref()).unwrap();
+        let last_host_section = file.sections().nth(last_host_section_index).unwrap();
+
+        let exports: MutMap<String, i64> = file
+            .exports()
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                (
+                    String::from_utf8(e.name().to_vec()).unwrap(),
+                    (e.address() - image_base) as i64,
+                )
+            })
+            .collect();
+
+        let optional_header_offset = file.dos_header().nt_headers_offset() as usize
+            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<ImageFileHeader>();
+
+        let app_code_section_va = last_host_section.address()
+            + next_multiple_of(
+                last_host_section.size() as usize,
+                section_alignment as usize,
+            ) as u64;
+
+        let mut section_header_start = 624;
+        let mut section_file_offset = dynhost_bytes.len();
+        let mut virtual_address = (app_code_section_va - image_base) as u32;
+
+        let mut code_bytes_added = 0;
+        let mut data_bytes_added = 0;
+        let mut file_bytes_added = 0;
+
+        for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
+            let length: usize = app_obj_sections
+                .sections
+                .iter()
+                .filter(|s| s.kind == kind)
+                .map(|s| s.file_range.end - s.file_range.start)
+                .sum();
+
+            // offset_in_section now becomes a proper virtual address
+            for symbol in symbols.iter_mut() {
+                if symbol.section_kind == kind {
+                    symbol.offset_in_section += image_base as usize + virtual_address as usize;
+                }
+            }
+
+            let virtual_size = length as u32;
+            let size_of_raw_data = next_multiple_of(length, file_alignment) as u32;
+
+            match kind {
+                SectionKind::Text => {
+                    code_bytes_added += size_of_raw_data;
+
+                    write_section_header(
+                        &mut app,
+                        *b".text1\0\0",
+                        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE,
+                        section_header_start,
+                        section_file_offset,
+                        virtual_size,
+                        virtual_address,
+                        size_of_raw_data,
+                    );
+                }
+                SectionKind::ReadOnlyData => {
+                    data_bytes_added += size_of_raw_data;
+
+                    write_section_header(
+                        &mut app,
+                        *b".rdata1\0",
+                        pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
+                        section_header_start,
+                        section_file_offset,
+                        virtual_size,
+                        virtual_address,
+                        size_of_raw_data,
+                    );
+                }
+            }
+
+            let mut offset = section_file_offset;
+            let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+            for section in it {
+                let slice = &app_obj[section.file_range.start..section.file_range.end];
+                app[offset..][..slice.len()].copy_from_slice(slice);
+
+                for (name, app_relocation) in section.relocations.iter() {
+                    let AppRelocation {
+                        offset_in_section,
+                        relocation,
+                        address,
+                    } = app_relocation;
+
+                    match exports.get(name) {
+                        Some(destination) => {
+                            match relocation.kind() {
+                                object::RelocationKind::Relative => {
+                                    // we implicitly only do 32-bit relocations
+                                    debug_assert_eq!(relocation.size(), 32);
+
+                                    let delta = destination
+                                        - virtual_address as i64
+                                        - *offset_in_section as i64
+                                        + relocation.addend();
+
+                                    app[offset + *offset_in_section as usize..][..4]
+                                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                                }
+                                _ => todo!(),
+                            }
+                        }
+                        None => {
+                            match relocation.kind() {
+                                object::RelocationKind::Relative => {
+                                    // we implicitly only do 32-bit relocations
+                                    debug_assert_eq!(relocation.size(), 32);
+
+                                    let delta = *address as i64 - *offset_in_section as i64
+                                        + relocation.addend();
+
+                                    app[offset + *offset_in_section as usize..][..4]
+                                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                                }
+                                _ => todo!(),
+                            }
+                        }
+                    }
+                }
+
+                offset += slice.len();
+            }
+
+            section_header_start += std::mem::size_of::<ImageSectionHeader>();
+            section_file_offset += size_of_raw_data as usize;
+            virtual_address += next_multiple_of(length, section_alignment) as u32;
+            file_bytes_added += next_multiple_of(length, section_alignment) as u32;
+        }
+
+        update_optional_header(
+            &mut app,
+            optional_header_offset,
+            code_bytes_added as u32,
+            file_bytes_added as u32,
+            data_bytes_added as u32,
+        );
+
+        let dynamic_relocations = DynamicRelocationsPe::new(&app);
+        let symbols: Vec<_> = symbols
+            .into_iter()
+            .map(|s| (s.name, s.offset_in_section as u64))
+            .collect();
+        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &symbols);
+
+        remove_dummy_dll_import_table(
+            &mut app,
+            dynamic_relocations.data_directories_offset_in_file,
+            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.dummy_import_index,
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn link_roc_host_and_app_wine() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let dir = Path::new("/home/folkertdev/roc/roc/examples/double");
+
+        link_roc_host_and_app_help(dir);
+
+        let output = std::process::Command::new("wine")
+            .current_dir(dir)
+            .args(&["app.exe"])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("wine failed");
+        }
+
+        let output = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            "roc__mainForHost_size: 1!\nroc__mainForHost_size: 16!\n",
+            output
+        );
     }
 }
