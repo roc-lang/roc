@@ -10717,4 +10717,32 @@ All branches in an `if` must have the same type!
     opaque type to have a different name!
     "###
     );
+
+    test_report!(
+        unnecessary_builtin_module_import,
+        indoc!(
+            r#"
+            app "test" imports [Str] provides [main] to "./platform"
+
+            main = Str.concat "" ""
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        unnecessary_builtin_type_import,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{ DecodeError }] provides [main, E] to "./platform"
+
+            E : DecodeError
+
+            main = ""
+            "#
+        ),
+    @r###"
+    "###
+    );
 }
