@@ -3499,7 +3499,6 @@ name = "roc_code_markup"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "itertools 0.10.5",
  "palette",
  "roc_ast",
  "roc_module",
