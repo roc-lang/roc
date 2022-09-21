@@ -9082,7 +9082,7 @@ All branches in an `if` must have the same type!
         function_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             main = Encode.toEncoder \x -> x
             "#
@@ -9108,7 +9108,7 @@ All branches in an `if` must have the same type!
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             A := {}
             main = Encode.toEncoder { x: @A {} }
@@ -9293,7 +9293,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ Encoding }]
+                imports []
                 provides [A, myEncoder] to "./platform"
 
             A := U8 has [ Encoding {toEncoder ? myEncoder} ]
@@ -9482,7 +9482,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_function,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A a := a -> a has [Encode.Encoding]
             "#
@@ -9505,7 +9505,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_non_encoding_alias,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Encode.Encoding]
 
@@ -9531,7 +9531,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_other_has_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Encode.Encoding]
 
@@ -9545,7 +9545,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [MyNat] to "./platform"
+            app "test" imports [] provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] has [Encode.Encoding]
             "#
