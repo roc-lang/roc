@@ -1988,12 +1988,12 @@ fn report_unused_imported_modules<'a>(
 
     for symbol in constrained_module.module.referenced_values.iter() {
         unused_imported_modules.remove(&symbol.module_id());
-        unused_imports.remove(&symbol);
+        unused_imports.remove(symbol);
     }
 
     for symbol in constrained_module.module.referenced_types.iter() {
         unused_imported_modules.remove(&symbol.module_id());
-        unused_imports.remove(&symbol);
+        unused_imports.remove(symbol);
     }
 
     let existing = match state.module_cache.can_problems.entry(module_id) {
