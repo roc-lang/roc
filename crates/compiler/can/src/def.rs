@@ -462,7 +462,39 @@ fn canonicalize_claimed_ability_impl<'a>(
                     }
                 };
 
-            match scope.lookup_ability_member_shadow(member_symbol) {
+            // There are two options for how the implementation symbol is defined.
+            //
+            // OPTION-1: The implementation identifier is the only identifier of that name in the
+            //           scope. For example,
+            //
+            //               interface F imports [] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we just do a simple lookup in the scope to find our
+            //           `toEncoder` impl.
+            //
+            // OPTION-2: The implementation identifier is a unique shadow of the ability member,
+            //           which has also been explicitly imported. For example,
+            //
+            //               interface F imports [Encoding.{ toEncoder }] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we allow the `F` module's `toEncoder` def to shadow
+            //           `toEncoder` only to define this specialization's `toEncoder`.
+            //
+            // To handle both cases, try checking for a shadow first, then check for a direct
+            // reference. We want to check for a direct reference second so that if there is a
+            // shadow, we won't accidentally grab the imported symbol.
+            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
+                .or_else(|| scope.lookup_str(label_str, region).ok());
+
+            match opt_impl_symbol {
                 Some(impl_symbol) => Ok((member_symbol, impl_symbol)),
                 None => {
                     env.problem(Problem::ImplementationNotFound {
