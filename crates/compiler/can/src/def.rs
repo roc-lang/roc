@@ -495,8 +495,20 @@ fn canonicalize_claimed_ability_impl<'a>(
                 .or_else(|| scope.lookup_str(label_str, region).ok());
 
             match opt_impl_symbol {
-                Some(impl_symbol) => Ok((member_symbol, impl_symbol)),
-                None => {
+                // It's possible that even if we find a symbol it is still only the member
+                // definition symbol, for example when the ability is defined in the same
+                // module as an implementer:
+                //
+                //   Eq has eq : a, a -> U64 | a has Eq
+                //
+                //   A := U8 has [Eq {eq}]
+                //
+                // So, do a final check that the implementation symbol is not resolved directly
+                // to the member.
+                Some(impl_symbol) if impl_symbol != member_symbol => {
+                    Ok((member_symbol, impl_symbol))
+                }
+                _ => {
                     env.problem(Problem::ImplementationNotFound {
                         member: member_symbol,
                         region: label.region,
