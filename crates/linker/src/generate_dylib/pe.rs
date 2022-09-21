@@ -147,8 +147,7 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
 
     // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
-        // not sure if that 0x40 is important, I took it from a .dll that zig produced
-        let characteristics = object::pe::IMAGE_SCN_MEM_READ | 0x40;
+        let characteristics = object::pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA;
         let range = writer.reserve_section(
             *b".rdata\0\0",
             characteristics,
