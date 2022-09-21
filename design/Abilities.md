@@ -168,7 +168,7 @@ I'm not sure which version is more beginner-friendly, to be honest.
 The latter is more verbose, but it's much easier to guess roughly what it means. The `*` in `Num *` isn't really self-descriptive, so a beginner playing around in the repl who hasn't learned about type variables yet (let alone wildcard type variables) seems  less likely to have any useful intuition about what `Num *` is saying compared to what `where number has Num` is saying.
 
 
-This change to number literals would solve Problem #1 (nonsense numbers type-check) completely. The following would no longer type-check:
+This change to number literals would solve [Problem #1](#problem-1-nonsense-numbers-type-check) (nonsense numbers type-check) completely. The following would no longer type-check:
 
 ```coffee
 x : Num [ Whatever Str, Blah (List {} -> Bool) ]
@@ -202,7 +202,7 @@ x = 5
 ...but there's no opportunity to inject any nonsense that the type checker would accept.
 
 
-Since you can add abilities to your own custom types (as we'll see later), this means you can add `Num` to your own custom number types (as well as `Int` or `Frac`) and then use them with all the usual arithmetic operators. This solves Problem #2.
+Since you can add abilities to your own custom types (as we'll see later), this means you can add `Num` to your own custom number types (as well as `Int` or `Frac`) and then use them with all the usual arithmetic operators. This solves [Problem #2](#problem-2-custom-number-types-cant-use-arithmetic-operators).
 
 ### Functionless Constraints
 Here's how the type of `Bool.isEq` would change from the current world (using the functionless constraint with the ' syntax) to an Abilities world:
@@ -279,7 +279,7 @@ result = Decode.decode Json.decoder jsonStr
 So it would be like serde in Rust, except that - like with Elm records - you wouldn't even need to mark your User as deriving Encode and Decode; those abilities would already be there by default, just like `Eq`, `Hash`, and `Sort`.
 
 
-This would solve Problem #3, eliminating the need for a beginner curriculum to include the one technique I've seen beginning Elm programmers struggle the most to learn. That's a very big deal to me! I don't know whether decoding serialized data will be as common in Roc as it is in Elm, but I certainly expect it to come up often.
+This would solve [Problem #3](#problem-3-decoders-are-still-hard-to-learn), eliminating the need for a beginner curriculum to include the one technique I've seen beginning Elm programmers struggle the most to learn. That's a very big deal to me! I don't know whether decoding serialized data will be as common in Roc as it is in Elm, but I certainly expect it to come up often.
 
 
 Other nice things about this design:
@@ -382,8 +382,8 @@ isNotEq : Dict k v, Dict k v -> Bool
 In this `Eq { isEq, isNotEq }` declaration, I'm saying that `isEq` and `isNotEq` are functions already in scope. I could also choose different names using record literal syntax, e.g. `Eq { isEq: dictIsEq, isNotEq: dictIsNotEq }` - the relevant part is that I'm specifying the names of the functions (which must also be in scope) which specify how `Eq` for Dict should work.
 
 
-Now that I've specified this, when I use `==` on two `Dict` values, this `isEq` function will get run instead of the default `==` implementation. This solves Problem #3!
-I can also write something like has `Num` and provide the relevant functions to obtain a unit-ful number type - which solves Problem #2.
+Now that I've specified this, when I use `==` on two `Dict` values, this `isEq` function will get run instead of the default `==` implementation. This solves [Problem #3](#problem-3-decoders-are-still-hard-to-learn)!
+I can also write something like has `Num` and provide the relevant functions to obtain a unit-ful number type - which solves [Problem #2](#problem-2-custom-number-types-cant-use-arithmetic-operators).
 
 ### Default Abilities for Newtypes
 By default, if I don't use the has keyword when defining a newtype, Roc will give the type all the default builtin abilities it's eligible to have - so for example, it would get `Eq` and `Hash` by default unless it contains a function, in which case it's not eligible.
@@ -407,7 +407,7 @@ Using `has` means if new default abilities are later added to the language, `Dic
 On the other hand, if everyone uses has `only` everywhere as a precaution, and a new default ability gets added to the language, a staggering amount of collective hours would be spent going around adding it to all the has `only` declarations for `UserId` and such. So a good guideline might be for custom collections like `Dict` to recommend using has `only`, and for thin wrappers like `UserId` to use `has custom`.
 
 
-Of note, this syntax neatly solves Problem 5 - where functionlessness is awkward to talk about in API type diffs and documentation. This is a straightforward way to render the `Dict` type in documentation:
+Of note, this syntax neatly solves [Problem #5](#problem-5-how-to-specify-functionlessness-in-documentation) - where functionlessness is awkward to talk about in API type diffs and documentation. This is a straightforward way to render the `Dict` type in documentation:
 
 ```coffee
 Dict k v has only
@@ -524,10 +524,10 @@ Abilities offer a nice way to address all of these.
    * Since any given type can have multiple abilities, the different ways to integrate with the editor can too. There can be one ability for adding context menu items, another for specifying how the type renders, etc.
 
 
-In this way, abilities solve problem #6.
+In this way, abilities solve [problem #6](#problem-6-no-nice-way-to-specify-editor-specific-code).
 
 ### Avoiding the Classification Trap
-Although I think custom user-defined abilities are worth having in the language because they address Problem #7, I hope they are used rarely in practice.
+Although I think custom user-defined abilities are worth having in the language because they address [Problem #7](#problem-7-record-of-function-passing), I hope they are used rarely in practice.
 
 
 I chose the name "ability" rather than like Trait or Typeclass because I don't want to encourage *classification* - that is, using the language feature to spend a bunch of time thinking about how to classify types by what they "are."
