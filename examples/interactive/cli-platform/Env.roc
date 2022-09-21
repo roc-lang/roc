@@ -1,10 +1,10 @@
 interface Env
-    exposes [cwd, dict, var]
+    exposes [cwd, dict, var, exePath, setCwd]
     imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask]
 
 ## Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## from the environment. File operations on relative [Path]s are relative to this directory.
-cwd : Task Path [CwdUnavailable]* [Env]*
+cwd : Task Path [CwdUnavailable]* [Read [Env]*]*
 cwd =
     effect = Effect.map Effect.cwd \bytes ->
         if List.isEmpty bytes then
@@ -14,20 +14,32 @@ cwd =
 
     InternalTask.fromEffect effect
 
-# ## Sets the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
-# ## in the environment. After changing it, file operations on relative [Path]s will be relative
-# ## to this directory.
-# setCwd : Path -> Task {} [InvalidCwd]* [Env]*
-# setCwd = InternalTask.fromEffect Effect.setCwd
-# ## Gets the path to the currently-running executable.
-# exePath : Task Path [ExePathUnavailable]* [Env]*
-# exePath = InternalTask.fromEffect Effect.setCwd
+## Sets the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
+## in the environment. After changing it, file operations on relative [Path]s will be relative
+## to this directory.
+setCwd : Path -> Task {} [InvalidCwd]* [Read [Env]*]*
+setCwd = \path ->
+    Effect.setCwd (InternalPath.toBytes path)
+    |> Effect.map (\result -> Result.mapErr result \{} -> InvalidCwd)
+    |> InternalTask.fromEffect
+
+## Gets the path to the currently-running executable.
+exePath : Task Path [ExePathUnavailable]* [Read [Env]*]*
+exePath =
+    effect =
+        Effect.map Effect.exePath \result ->
+            when result is
+                Ok bytes -> Ok (InternalPath.fromOsBytes bytes)
+                Err {} -> Err ExePathUnavailable
+
+    InternalTask.fromEffect effect
+
 ## Reads the given environment variable.
 ##
 ## If the value is invalid Unicode, the invalid parts will be replaced with the
 ## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 ## (`�`).
-var : Str -> Task Str [VarNotFound]* [Env]*
+var : Str -> Task Str [VarNotFound]* [Read [Env]*]*
 var = \name ->
     Effect.envVar name
     |> Effect.map (\result -> Result.mapErr result \{} -> VarNotFound)
@@ -39,7 +51,7 @@ var = \name ->
 # ## if this ends up being used like a `Task U16 …` then the environment variable
 # ## will be decoded as a string representation of a `U16`.
 # ##
-# ##     getU16Var : Str -> Task U16 [VarNotFound, DecodeErr DecodeError]* [Env]*
+# ##     getU16Var : Str -> Task U16 [VarNotFound, DecodeErr DecodeError]* [Read [Env]*]*
 # ##     getU16Var = \var -> Env.decode var
 # ##     # If the environment contains a variable NUM_THINGS=123, then calling
 # ##     # (getU16Var "NUM_THINGS") would return a task which succeeds with the U16 number 123.
@@ -62,7 +74,7 @@ var = \name ->
 ##
 ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 ## (`�`) will be used in place of any parts of keys or values that are invalid Unicode.
-dict : Task (Dict Str Str) * [Env]*
+dict : Task (Dict Str Str) * [Read [Env]*]*
 dict =
     Effect.envDict
     |> Effect.map Ok
@@ -84,7 +96,7 @@ dict =
 # ##
 # ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 # ## (`�`) will be used in place of any parts of keys or values that are invalid Unicode.
-# walk : state, (state, Str, Str -> state) -> Task state [NonUnicodeEnv state]* [Env]*
+# walk : state, (state, Str, Str -> state) -> Task state [NonUnicodeEnv state]* [Read [Env]*]*
 # walk = \state, walker ->
 #     Effect.envWalk state walker
 #     |> InternalTask.fromEffect

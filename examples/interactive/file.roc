@@ -15,7 +15,7 @@ app "file-io"
 main : Program
 main = Program.noArgs mainTask
 
-mainTask : Task ExitCode [] [Write [File, Stdout, Stderr], Read [File], Env]
+mainTask : Task ExitCode [] [Write [File, Stdout, Stderr], Read [File, Env]]
 mainTask =
     path = Path.fromStr "out.txt"
     task =
