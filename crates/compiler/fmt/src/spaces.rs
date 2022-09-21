@@ -407,7 +407,7 @@ impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
 impl<'a> RemoveSpaces<'a> for TargetTriple<'a> {
     fn remove_spaces(&self, _: &'a Bump) -> Self {
         // Target triples already don't have any spaces
-        self.clone()
+        *self
     }
 }
 
