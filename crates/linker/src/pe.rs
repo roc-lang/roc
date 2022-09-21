@@ -986,6 +986,10 @@ mod test {
             extern fn roc_magic1() callconv(.C) u64;
             extern fn roc_magic2() callconv(.C) u8;
 
+            pub export fn roc_alloc() u64 {
+                return 123456;
+            }
+
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
                 try stdout.print("Hello, {} {} {} {}!\n", .{roc_magic1(), roc_magic2(), roc_one, roc_three});
@@ -1059,6 +1063,7 @@ mod test {
                 "-target",
                 "x86_64-windows-gnu",
                 "--strip",
+                "-rdynamic",
                 "-OReleaseFast",
             ])
             .output()
