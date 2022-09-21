@@ -328,7 +328,7 @@ mod cli_run {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
                             } else {
-                                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
+                                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
                                 return;
                             }
                         }
@@ -597,7 +597,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "swiftui",
             stdin: &[],
-            input_file: None,
+            arguments: &[],
             expected_ending: "",
             use_valgrind: false,
         },
