@@ -6494,7 +6494,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ Encoding, toEncoder }, Json]
+                    imports [Json]
                     provides [main] to "./platform"
 
                 HelloWorld := {} has [Encoding {toEncoder}]

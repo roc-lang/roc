@@ -80,6 +80,8 @@ const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// TODO: how can we populate these at compile/runtime from the standard library?
+/// Consider updating the macro in symbol to do this?
 const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("Num", Symbol::NUM_NUM),
     ("Int", Symbol::NUM_INT),
@@ -114,6 +116,12 @@ const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("F32", Symbol::NUM_F32),
     ("F64", Symbol::NUM_F64),
     ("Dec", Symbol::NUM_DEC),
+];
+
+const MODULE_ENCODE_TYPES: &[(&str, Symbol)] = &[
+    ("Encoder", Symbol::ENCODE_ENCODER),
+    ("Encoding", Symbol::ENCODE_ENCODING),
+    ("EncoderFormatting", Symbol::ENCODE_ENCODERFORMATTING),
 ];
 
 macro_rules! log {
@@ -2248,6 +2256,12 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::ENCODE, Region::zero());
+
+                for (type_name, symbol) in MODULE_ENCODE_TYPES {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
+                }
             }
 
             state
