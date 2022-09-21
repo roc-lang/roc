@@ -256,6 +256,7 @@ pub fn gen_from_mono_module_llvm(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &loaded.layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -473,6 +474,7 @@ fn gen_from_mono_module_dev_wasm32(
         module_id,
         procedures,
         mut interns,
+        layout_interner,
         ..
     } = loaded;
 
@@ -485,6 +487,7 @@ fn gen_from_mono_module_dev_wasm32(
 
     let env = roc_gen_wasm::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
@@ -492,7 +495,7 @@ fn gen_from_mono_module_dev_wasm32(
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
         panic!(
-            "Failed to read host object file {}! Try setting --precompiled-host=false",
+            "Failed to read host object file {}! Try setting --prebuilt-platform=false",
             preprocessed_host_path.display()
         )
     });
@@ -545,11 +548,13 @@ fn gen_from_mono_module_dev_assembly(
         procedures,
         mut interns,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
     let env = roc_gen_dev::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,

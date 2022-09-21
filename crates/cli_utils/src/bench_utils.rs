@@ -18,7 +18,7 @@ fn exec_bench_w_input<T: Measurement>(
         &[stdin_str],
     );
 
-    if !compile_out.stderr.is_empty() {
+    if !compile_out.stderr.is_empty() && compile_out.stderr != "🔨 Rebuilding platform...\n" {
         panic!("{}", compile_out.stderr);
     }
 

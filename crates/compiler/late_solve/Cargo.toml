@@ -14,4 +14,4 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }

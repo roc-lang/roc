@@ -49,7 +49,7 @@ macro_rules! assert_sizeof_wasm {
 }
 
 /// Assert that a type has the expected size on any target not covered above
-/// In practice we use this for x86_64, and add specific macros for other platforms
+/// In practice we use this for x86_64, and add specific macros for other targets
 #[macro_export]
 macro_rules! assert_sizeof_default {
     ($t: ty, $expected_size: expr) => {

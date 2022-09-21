@@ -14,7 +14,11 @@
 
       <section class="history">
         <div class="scroll-wrap">
-          <div id="history-text" class="scroll code"></div>
+          <div id="history-text" class="scroll code">
+            <div id="loading-message">
+              Loading Roc compiler as a WebAssembly module... please wait!
+            </div>
+          </div>
         </div>
       </section>
 
@@ -24,7 +28,8 @@
           autofocus
           id="source-input"
           class="code"
-          placeholder="Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)"
+          placeholder="You can enter Roc code here after the compiler is loaded!"
+          disabled
         ></textarea>
       </section>
     </div>

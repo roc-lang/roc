@@ -31,6 +31,6 @@ jobs:
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
 
-      # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-platform
+      # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release
         run: nix develop -c cargo test-gen-llvm-wasm --locked --release

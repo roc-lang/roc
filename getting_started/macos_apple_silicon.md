@@ -1,28 +1,55 @@
-0. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
-0. To prevent "roc can't be opened because Apple can't check it...":
-    ```
+# Roc installation guide for Apple silicon systems
+
+## How to install Roc
+
+In order to develop in Roc, you need to install the Roc CLI,
+which includes the Roc compiler and various helpful utilities.
+
+1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
+
+1. To prevent "roc can't be opened because Apple can't check it...":
+
+    ```sh
     xattr -d com.apple.quarantine roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
     ```
-0. Untar the archive:
+
+1. Untar the archive:
+
+    ```sh
+    tar xf roc_nightly-macos_apple_silicon-<VERSION>.tar.gz --one-top-level
+    cd roc_night<TAB TO AUTOCOMPLETE>
     ```
-    roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
+
+1. Install llvm 13:
+
+    ```sh
+    brew install llvm@13
     ```
-0. To be able to run examples:
-    - for the Rust example:
-    ```
+
+## How to install Roc platform dependencies
+
+In order to compile Roc apps (either in `examples/` or in your own projects),
+you need to install one or more of these platform language compilers, too.
+
+1. Install the Rust compiler, for apps with Rust-based platforms:
+
+    ```sh
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
-    - for the zig example:
-    ```
+
+1. Install the Zig compiler, for apps with Zig-based platforms:
+
+    ```sh
     brew install zig
     ```
-0. Run examples with:
+
+1. Run examples:
+
+    ```sh
+    # Note: If you installed rust in this terminal session, you'll need to open a new one first!
+    ./roc examples/platform-switching/rocLovesRust.roc
+
+    ./roc examples/platform-switching/rocLovesZig.roc
+
+    ./roc examples/platform-switching/rocLovesC.roc
     ```
-    # Rust. If you installed rust in this terminal you'll need to open a new one first!
-    ./roc examples/hello-world/rust-platform/helloRust.roc
-    # Zig
-    ./roc examples/hello-world/zig-platform/helloZig.roc
-    # C
-    ./roc examples/hello-world/c-platform/helloC.roc
-    ```
-0. See [here](../README.md#examples) for the other examples.

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+mod file_glue;
 mod glue;
 
 use core::alloc::Layout;
@@ -7,10 +8,16 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
-use roc_std::{RocList, RocStr};
-use std::ffi::CStr;
+use roc_std::{RocDict, RocList, RocResult, RocStr};
+use std::borrow::Borrow;
+use std::ffi::{CStr, OsStr};
+use std::fs::File;
 use std::os::raw::c_char;
+use std::path::Path;
 use std::time::Duration;
+
+use file_glue::ReadErr;
+use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -74,7 +81,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() -> u8 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -84,18 +91,15 @@ pub extern "C" fn rust_main() -> i32 {
 
         roc_main(buffer);
 
-        let result = call_the_closure(buffer);
+        let exit_code = call_the_closure(buffer);
 
         std::alloc::dealloc(buffer, layout);
 
-        result
-    };
-
-    // Exit code
-    0
+        exit_code
+    }
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe fn call_the_closure(closure_data_ptr: *const u8) -> u8 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;
@@ -109,11 +113,42 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 
     std::alloc::dealloc(buffer, layout);
 
+    // TODO return the u8 exit code returned by the Fx closure
     0
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getLine() -> RocStr {
+pub extern "C" fn roc_fx_envDict() -> RocDict<RocStr, RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::vars_os()
+        .map(|(key, val)| {
+            (
+                RocStr::from(key.to_string_lossy().borrow()),
+                RocStr::from(val.to_string_lossy().borrow()),
+            )
+        })
+        .collect()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_args() -> RocList<RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::args_os()
+        .map(|os_str| RocStr::from(os_str.to_string_lossy().borrow()))
+        .collect()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_envVar(roc_str: &RocStr) -> RocResult<RocStr, ()> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    match std::env::var_os(roc_str.as_str()) {
+        Some(os_str) => RocResult::ok(RocStr::from(os_str.to_string_lossy().borrow())),
+        None => RocResult::err(()),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_stdinLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();
@@ -123,9 +158,149 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: &RocStr) {
+pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
+    let string = line.as_str();
+    eprintln!("{}", string);
+}
+
+// #[no_mangle]
+// pub extern "C" fn roc_fx_fileWriteUtf8(
+//     roc_path: &RocList<u8>,
+//     roc_string: &RocStr,
+//     // ) -> RocResult<(), WriteErr> {
+// ) -> (u8, u8) {
+//     let _ = write_slice(roc_path, roc_string.as_str().as_bytes());
+
+//     (255, 255)
+// }
+
+// #[no_mangle]
+// pub extern "C" fn roc_fx_fileWriteUtf8(roc_path: &RocList<u8>, roc_string: &RocStr) -> Fail {
+//     write_slice2(roc_path, roc_string.as_str().as_bytes())
+// }
+#[no_mangle]
+pub extern "C" fn roc_fx_fileWriteUtf8(
+    roc_path: &RocList<u8>,
+    roc_str: &RocStr,
+) -> RocResult<(), WriteErr> {
+    write_slice(roc_path, roc_str.as_str().as_bytes())
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileWriteBytes(
+    roc_path: &RocList<u8>,
+    roc_bytes: &RocList<u8>,
+) -> RocResult<(), WriteErr> {
+    write_slice(roc_path, roc_bytes.as_slice())
+}
+
+fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> {
+    use std::io::Write;
+
+    match File::create(path_from_roc_path(roc_path)) {
+        Ok(mut file) => match file.write_all(bytes) {
+            Ok(()) => RocResult::ok(()),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
+}
+
+/// TODO: do this on Windows too. This may be trickier because it's unclear
+/// whether we want to use wide encoding (in which case we have to convert from
+/// &[u8] to &[u16] by converting UTF-8 to UTF-16) and then windows::OsStrExt::from_wide -
+/// https://doc.rust-lang.org/std/os/windows/ffi/trait.OsStringExt.html#tymethod.from_wide -
+/// or whether we want to try to set the Windows code page to UTF-8 instead.
+#[cfg(target_family = "unix")]
+fn path_from_roc_path(bytes: &RocList<u8>) -> &Path {
+    Path::new(os_str_from_list(bytes))
+}
+
+pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
+    std::os::unix::ffi::OsStrExt::from_bytes(bytes.as_slice())
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileReadBytes(roc_path: &RocList<u8>) -> RocResult<RocList<u8>, ReadErr> {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+
+    match File::open(path_from_roc_path(roc_path)) {
+        Ok(mut file) => match file.read_to_end(&mut bytes) {
+            Ok(_bytes_read) => RocResult::ok(RocList::from(bytes.as_slice())),
+            Err(_) => {
+                todo!("Report a file write error");
+            }
+        },
+        Err(_) => {
+            todo!("Report a file open error");
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_fileDelete(roc_path: &RocList<u8>) -> RocResult<(), ReadErr> {
+    match std::fs::remove_file(path_from_roc_path(roc_path)) {
+        Ok(()) => RocResult::ok(()),
+        Err(_) => {
+            todo!("Report a file write error");
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_cwd() -> RocList<u8> {
+    // TODO instead, call getcwd on UNIX and GetCurrentDirectory on Windows
+    match std::env::current_dir() {
+        Ok(path_buf) => os_str_to_roc_path(path_buf.into_os_string().as_os_str()),
+        Err(_) => {
+            // Default to empty path
+            RocList::empty()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_dirList(
+    // TODO: this RocResult should use Dir.WriteErr - but right now it's File.WriteErr
+    // because glue doesn't have Dir.WriteErr yet.
+    roc_path: &RocList<u8>,
+) -> RocResult<RocList<RocList<u8>>, WriteErr> {
+    println!("Dir.list...");
+    match std::fs::read_dir(path_from_roc_path(roc_path)) {
+        Ok(dir_entries) => RocResult::ok(
+            dir_entries
+                .map(|opt_dir_entry| match opt_dir_entry {
+                    Ok(entry) => os_str_to_roc_path(entry.path().into_os_string().as_os_str()),
+                    Err(_) => {
+                        todo!("handle dir_entry path didn't resolve")
+                    }
+                })
+                .collect::<RocList<RocList<u8>>>(),
+        ),
+        Err(_) => {
+            todo!("handle Dir.list error");
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+/// TODO convert from EncodeWide to RocPath on Windows
+fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    RocList::from(os_str.as_bytes())
 }
 
 #[no_mangle]

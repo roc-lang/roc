@@ -33,6 +33,9 @@ interface Str
         toU8,
         toI8,
         toScalars,
+        replaceEach,
+        replaceFirst,
+        replaceLast,
         splitFirst,
         splitLast,
         walkUtf8WithIndex,
@@ -276,6 +279,65 @@ countUtf8Bytes : Str -> Nat
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
 
+## Returns the string with each occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
+replaceEach : Str, Str, Str -> Result Str [NotFound]*
+replaceEach = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            # We found at least one needle, so start the buffer off with
+            # `before` followed by the first replacement flower.
+            Str.reserve "" (Str.countUtf8Bytes haystack)
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+            |> Ok
+
+        Err err -> Err err
+
+replaceEachHelp : Str, Str, Str, Str -> Str
+replaceEachHelp = \buf, haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            buf
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+
+        Err NotFound -> Str.concat buf haystack
+
+expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+
+## Returns the string with the first occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
+replaceFirst : Str, Str, Str -> Result Str [NotFound]*
+replaceFirst = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+
+## Returns the string with the last occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
+replaceLast : Str, Str, Str -> Result Str [NotFound]*
+replaceLast = \haystack, needle, flower ->
+    when splitLast haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
+
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
 ##
@@ -294,6 +356,18 @@ splitFirst = \haystack, needle ->
         None ->
             Err NotFound
 
+# splitFirst when needle isn't in haystack
+expect splitFirst "foo" "z" == Err NotFound
+
+# splitFirst when haystack ends with needle repeated
+expect splitFirst "foo" "o" == Ok { before: "f", after: "o" }
+
+# splitFirst with multi-byte needle
+expect splitFirst "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+
+# splitFirst when needle is haystack
+expect splitFirst "foo" "foo" == Ok { before: "", after: "" }
+
 firstMatch : Str, Str -> [Some Nat, None]
 firstMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
@@ -304,7 +378,7 @@ firstMatch = \haystack, needle ->
 
 firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
 firstMatchHelp = \haystack, needle, index, lastPossible ->
-    if index < lastPossible then
+    if index <= lastPossible then
         if matchesAt haystack index needle then
             Some index
         else
@@ -338,6 +412,9 @@ expect Str.splitLast "foo" "o" == Ok { before: "fo", after: "" }
 
 # splitLast with multi-byte needle
 expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+
+# splitLast when needle is haystack
+expect Str.splitLast "foo" "foo" == Ok { before: "", after: "" }
 
 lastMatch : Str, Str -> [Some Nat, None]
 lastMatch = \haystack, needle ->

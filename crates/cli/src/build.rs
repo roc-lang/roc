@@ -65,7 +65,7 @@ pub fn build_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
     order: BuildOrdering,
@@ -151,7 +151,7 @@ pub fn build_file<'a>(
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
     // Also, we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled hosts from there.
+    // a package repository, as we can then get prebuilt platforms from there.
 
     let exposed_values = loaded
         .exposed_to_host
@@ -182,7 +182,7 @@ pub fn build_file<'a>(
     let rebuild_thread = spawn_rebuild_thread(
         opt_level,
         linking_strategy,
-        precompiled,
+        prebuilt,
         host_input_path.clone(),
         preprocessed_host_path.clone(),
         binary_path.clone(),
@@ -191,8 +191,6 @@ pub fn build_file<'a>(
         exposed_closure_types,
     );
 
-    // TODO try to move as much of this linking as possible to the precompiled
-    // host, to minimize the amount of host-application linking required.
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
@@ -261,9 +259,9 @@ pub fn build_file<'a>(
 
     let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
         let rebuild_duration = rebuild_thread.join().unwrap();
-        if emit_timings && !precompiled {
+        if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
@@ -322,15 +320,15 @@ pub fn build_file<'a>(
 
     if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
         let rebuild_duration = thread.join().unwrap();
-        if emit_timings && !precompiled {
+        if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
     }
 
-    // Step 2: link the precompiled host and compiled app
+    // Step 2: link the prebuilt platform and compiled app
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
@@ -397,7 +395,7 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     host_input_path: PathBuf,
     preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
@@ -407,13 +405,16 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        if !precompiled {
-            println!("🔨 Rebuilding host...");
+        if !prebuilt {
+            // Printing to stderr because we want stdout to contain only the output of the roc program.
+            // We are aware of the trade-offs.
+            // `cargo run` follows the same approach
+            eprintln!("🔨 Rebuilding platform...");
         }
 
         let rebuild_host_start = Instant::now();
 
-        if !precompiled {
+        if !prebuilt {
             match linking_strategy {
                 LinkingStrategy::Additive => {
                     let host_dest = rebuild_host(

@@ -22,6 +22,7 @@ use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
+use roc_mono::layout::STLayoutInterner;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
@@ -122,6 +123,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_id: home,
         procedures,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
@@ -138,13 +140,14 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
-    verify_procedures(test_name, procedures, main_fn_symbol);
+    verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
 }
 
 #[cfg(debug_assertions)]
-fn verify_procedures(
+fn verify_procedures<'a>(
     test_name: &str,
-    procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
+    interner: STLayoutInterner<'a>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     main_fn_symbol: Symbol,
 ) {
     let index = procedures
@@ -154,7 +157,7 @@ fn verify_procedures(
 
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(200))
+        .map(|proc| proc.to_pretty(&interner, 200))
         .collect::<Vec<_>>();
 
     let main_fn = procs_string.swap_remove(index);
@@ -169,6 +172,7 @@ fn verify_procedures(
     std::fs::write(&path, result).unwrap();
 
     use std::process::Command;
+
     let is_tracked = Command::new("git")
         .args(&["ls-files", "--error-unmatch", &path])
         .output()
@@ -203,6 +207,7 @@ fn verify_procedures(
 #[cfg(not(debug_assertions))]
 fn verify_procedures(
     _expected: &str,
+    _interner: STLayoutInterner<'_>,
     _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     _main_fn_symbol: Symbol,
 ) {
@@ -1919,6 +1924,79 @@ fn issue_3669() {
 
         when unwrap (@Peano Zero) == {} is
             _ -> ""
+        "#
+    )
+}
+
+#[mono_test]
+fn num_width_gt_u8_layout_as_float() {
+    indoc!(
+        r#"
+        1 / 200
+        "#
+    )
+}
+
+#[mono_test]
+fn match_on_result_with_uninhabited_error_branch() {
+    indoc!(
+        r#"
+        x : Result Str []
+        x = Ok "abc"
+
+        when x is
+            Ok s -> s
+        "#
+    )
+}
+
+#[mono_test]
+fn unreachable_void_constructor() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        x : []
+
+        main = if True then Ok x else Err "abc" 
+        "#
+    )
+}
+
+#[mono_test]
+fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        provideThunk = \x ->
+            when x is
+                Ok _ ->
+                    t1 = \{} -> "t1"
+                    t1
+                # During specialization of `main` we specialize this function,
+                # which leads to elimination of this branch, because it is unreachable
+                # (it can only match the uninhabited type `Err []`).
+                #
+                # However, naive elimination of this branch would mean we don't traverse
+                # the branch body. If we don't do so, we will fail to see and specialize `t2`,
+                # which is problematic - while `t2` won't ever be reached in this specialization,
+                # it is still part of the lambda set, and `thunk {}` (in main) will match over
+                # it before calling.
+                #
+                # So, this test verifies that we eliminate this branch, but still specialize
+                # everything we need.
+                Err _ ->
+                    t2 = \{} -> "t2"
+                    t2
+
+        main =
+            x : Result Str []
+            x = Ok "abc"
+
+            thunk = provideThunk x
+
+            thunk {}
         "#
     )
 }

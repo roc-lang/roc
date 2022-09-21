@@ -6605,25 +6605,6 @@ All branches in an `if` must have the same type!
     Tip: To extract the `.inputs` field it must be non-optional, but the
     type says this field is optional. Learn more about optional fields at
     TODO.
-
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This 1st argument to `job` has an unexpected type:
-
-    9│      job { inputs: ["build", "test"] }
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-    The argument is a record of type:
-
-        { inputs : List Str }
-
-    But `job` needs its 1st argument to be:
-
-        { inputs ? List Str }
-
-    Tip: To extract the `.inputs` field it must be non-optional, but the
-    type says this field is optional. Learn more about optional fields at
-    TODO.
     "###
     );
 
@@ -8510,7 +8491,7 @@ All branches in an `if` must have the same type!
     Previously, we found it to specialize `hash` for `One`.
 
     Ability specializations can only provide implementations for one
-    opauqe type, since all opaque types are different!
+    opaque type, since all opaque types are different!
 
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -8537,7 +8518,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "TODO does not error yet"]
         ability_specialization_is_duplicated_with_type_mismatch,
         indoc!(
             r#"
@@ -8553,6 +8533,18 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    ── OVERLOADED SPECIALIZATION ───────────────────────────── /code/proj/Main.roc ─
+
+    This ability member specialization is already claimed to specialize
+    another opaque type:
+
+    7│  Two := {} has [Hash {hash}]
+                             ^^^^
+
+    Previously, we found it to specialize `hash` for `One`.
+
+    Ability specializations can only provide implementations for one
+    opaque type, since all opaque types are different!
     "###
     );
 
@@ -10296,13 +10288,13 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "needs structural deriving to be turned on first"]
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
             app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
 
-            A : {}
+            A := {}
+
             main =
                 myDecoder : Decoder {x : A} fmt | fmt has DecoderFormatting
                 myDecoder = decoder
@@ -10311,6 +10303,26 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    7│      myDecoder = decoder
+                        ^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        { x : A }
+
+    In particular, an implementation for
+
+        A
+
+    cannot be generated.
+
+    Tip: `A` does not implement `Decoding`. Consider adding a custom
+    implementation or `has Decode.Decoding` to the definition of `A`.
     "###
     );
 
@@ -10363,6 +10375,7 @@ All branches in an `if` must have the same type!
      8│               Ok "foo"
      9│ 
     10│           Bad _ ->
+    11│               Ok "foo"
 
     This `u8` value is a:
 
@@ -10485,6 +10498,193 @@ All branches in an `if` must have the same type!
         a -> b
 
     Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        record_with_optional_field_types_cannot_derive_decoding,
+        indoc!(
+            r#"
+             app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+             main =
+                 myDecoder : Decoder {x : Str, y ? Str} fmt | fmt has DecoderFormatting
+                 myDecoder = decoder
+
+                 myDecoder
+             "#
+        ),
+        @r###"
+     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+     This expression has a type that does not implement the abilities it's expected to:
+
+     5│      myDecoder = decoder
+                         ^^^^^^^
+
+     Roc can't generate an implementation of the `Decode.Decoding` ability
+     for
+
+         { x : Str, y ? Str }
+
+     Note: I can't derive decoding for a record with an optional field,
+     which in this case is `.y`. Optional record fields are polymorphic over
+     records that may or may not contain them at compile time, but are not
+     a concept that extends to runtime!
+     Maybe you wanted to use a `Result`?
+     "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive_nested,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Ok B) -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        branch_patterns_missing_nested_case,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] {}) {}
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+    8│>          Ok (Err _) -> ""
+    9│>          Err _ -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        branch_patterns_missing_nested_case_with_trivially_exhausted_variant,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok {} -> ""
+    8│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched_nested,
+        indoc!(
+            r#"
+            x : Result (Result {} []) []
+
+            when x is
+                Ok (Ok {}) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│       when x is
+    7│           Ok (Ok {}) -> ""
+    8│>          Ok (Err _) -> ""
+    9│           Err _ -> ""
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok (Ok {}) -> ""
+    8│          Ok (Err _) -> ""
+    9│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
     "###
     );
 }

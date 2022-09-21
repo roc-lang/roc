@@ -18,6 +18,6 @@ roc_std = { path = "../../roc_std" }
 roc_debug_flags = { path = "../debug_flags" }
 roc_region = { path = "../region" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"

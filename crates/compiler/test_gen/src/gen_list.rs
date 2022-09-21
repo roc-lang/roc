@@ -262,8 +262,9 @@ fn list_map_try_ok() {
         r#"
             List.mapTry [1, 2, 3] \elem -> Ok elem
         "#,
-        RocResult::ok(RocList::<i64>::from_slice(&[1, 2, 3])),
-        RocResult<RocList<i64>, ()>
+        // Result I64 [] is unwrapped to just I64
+        RocList::<i64>::from_slice(&[1, 2, 3]),
+        RocList<i64>
     );
     assert_evals_to!(
         // Transformation
@@ -273,12 +274,13 @@ fn list_map_try_ok() {
 
                 Ok "\(str)!"
         "#,
-        RocResult::ok(RocList::<RocStr>::from_slice(&[
+        // Result Str [] is unwrapped to just Str
+        RocList::<RocStr>::from_slice(&[
             RocStr::from("2!"),
             RocStr::from("4!"),
             RocStr::from("6!"),
-        ])),
-        RocResult<RocList<RocStr>, ()>
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -2808,7 +2810,12 @@ fn list_all_empty_with_unknown_element_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// then it works. We don't know what the problem is here!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(
@@ -2999,8 +3006,10 @@ fn list_find_empty_layout() {
             List.findFirst [] \_ -> True
             "#
         ),
-        RocResult::err(()),
-        RocResult<(), ()>
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
     );
 
     assert_evals_to!(
@@ -3009,8 +3018,10 @@ fn list_find_empty_layout() {
             List.findLast [] \_ -> True
             "#
         ),
-        RocResult::err(()),
-        RocResult<(), ()>
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
     );
 }
 

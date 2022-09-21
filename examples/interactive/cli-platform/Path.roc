@@ -2,13 +2,16 @@ interface Path
     exposes [
         Path,
         PathComponent,
+        CanonicalizeErr,
         WindowsRoot,
-        toComponents,
-        walkComponents,
+        # toComponents,
+        # walkComponents,
+        display,
         fromStr,
         fromBytes,
+        withExtension,
     ]
-    imports [InternalPath.{ InternalPath }, Task.{ Task }]
+    imports [InternalPath.{ InternalPath }]
 
 ## You can canonicalize a [Path] using [Path.canonicalize].
 ##
@@ -36,6 +39,10 @@ interface Path
 ## paths but is considered invalid in FAT32 paths.
 Path : InternalPath
 
+CanonicalizeErr a : [
+    PathCanonicalizeErr {},
+]a
+
 ## Note that the path may not be valid depending on the filesystem where it is used.
 ## For example, paths containing `:` are valid on ext4 and NTFS filesystems, but not
 ## on FAT ones. So if you have multiple disks on the same machine, but they have
@@ -54,7 +61,7 @@ fromStr = \str ->
 ## is not valid Unicode (like a Roc [Str] is), but which is valid for a particular filesystem.
 ##
 ## Note that if the list contains any `0` bytes, sending this path to any file operations
-## (e.g. [File.read] or [WriteStream.openPath]) will fail.
+## (e.g. `File.read` or `WriteStream.openPath`) will fail.
 fromBytes : List U8 -> Path
 fromBytes = \bytes ->
     ArbitraryBytes bytes
@@ -70,21 +77,19 @@ fromBytes = \bytes ->
 ## and can access the current working directory by turning a relative path into an
 ## absolute one (which can prepend the absolute path of the current working directory to
 ## the relative path).
-canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
-
+# canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 ## Unfortunately, operating system paths do not include information about which charset
 ## they were originally encoded with. It's most common (but not guaranteed) that they will
 ## have been encoded with the same charset as the operating system's curent locale (which
 ## typically does not change after it is set during installation of the OS), so
 ## this should convert a [Path] to a valid string as long as the path was created
-## with the given [Charset]. (Use [Env.charset] to get the current system charset.)
+## with the given `Charset`. (Use `Env.charset` to get the current system charset.)
 ##
 ## For a conversion to [Str] that is lossy but does not return a [Result], see
-## [displayUtf8].
-toInner : Path -> [Str Str, Bytes (List U8)]
-
+## [display].
+# toInner : Path -> [Str Str, Bytes (List U8)]
 ## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
-## and converts it to a string using [Str.displayUtf8].
+## and converts it to a string using `Str.display`.
 ##
 ## This conversion is lossy because the path may contain invalid UTF-8 bytes. If that happens,
 ## any invalid bytes will be replaced with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
@@ -99,50 +104,49 @@ toInner : Path -> [Str Str, Bytes (List U8)]
 ## Converting paths to strings can be an unreliable operation, because operating systems
 ## don't record the paths' encodings. This means it's possible for the path to have been
 ## encoded with a different character set than UTF-8 even if UTF-8 is the system default,
-## which means when [displayUtf8] converts them to a string, the string may include gibberish.
+## which means when [display] converts them to a string, the string may include gibberish.
 ## [Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
 ##
-## If you happen to know the [Charset] that was used to encode the path, you can use
-## [toStrUsingCharset] instead of [displayUtf8].
-displayUtf8 : Path -> Str
-displayUtf8 = \path ->
+## If you happen to know the `Charset` that was used to encode the path, you can use
+## `toStrUsingCharset` instead of [display].
+display : Path -> Str
+display = \path ->
     when InternalPath.unwrap path is
         FromStr str -> str
-        NoInteriorNul bytes | ArbitraryBytes bytes ->
-            Str.displayUtf8 bytes
+        FromOperatingSystem bytes | ArbitraryBytes bytes ->
+            when Str.fromUtf8 bytes is
+                Ok str -> str
+                # TODO: this should use the builtin Str.display to display invalid UTF-8 chars in just the right spots, but that does not exist yet!
+                Err _ -> "�"
 
-isEq : Path, Path -> Bool
-isEq = \p1, p2 ->
-    when InternalPath.unwrap p1 is
-        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
-            when InternalPath.unwrap p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
-                # We can't know the encoding that was originally used in the path, so we convert
-                # the string to bytes and see if those bytes are equal to the path's bytes.
-                #
-                # This may sound unreliable, but it's how all paths are compared; since the OS
-                # doesn't record which encoding was used to encode the path name, the only
-                # reasonable# definition for path equality is byte-for-byte equality.
-                FromStr str2 -> Str.isEqUtf8 str2 bytes1
-
-        FromStr str1 ->
-            when InternalPath.unwrap p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
-                FromStr str2 -> str1 == str2
-
-compare : Path, Path -> [Lt, Eq, Gt]
-compare = \p1, p2 ->
-    when InternalPath.unwrap p1 is
-        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
-            when InternalPath.unwrap p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
-                FromStr str2 -> Str.compareUtf8 str2 bytes1 |> Ord.reverse
-
-        FromStr str1 ->
-            when InternalPath.unwrap p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.compareUtf8 str1 bytes2
-                FromStr str2 -> Ord.compare str1 str2
-
+# isEq : Path, Path -> Bool
+# isEq = \p1, p2 ->
+#     when InternalPath.unwrap p1 is
+#         FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
+#             when InternalPath.unwrap p2 is
+#                 FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
+#                 # We can't know the encoding that was originally used in the path, so we convert
+#                 # the string to bytes and see if those bytes are equal to the path's bytes.
+#                 #
+#                 # This may sound unreliable, but it's how all paths are compared; since the OS
+#                 # doesn't record which encoding was used to encode the path name, the only
+#                 # reasonable# definition for path equality is byte-for-byte equality.
+#                 FromStr str2 -> Str.isEqUtf8 str2 bytes1
+#         FromStr str1 ->
+#             when InternalPath.unwrap p2 is
+#                 FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
+#                 FromStr str2 -> str1 == str2
+# compare : Path, Path -> [Lt, Eq, Gt]
+# compare = \p1, p2 ->
+#     when InternalPath.unwrap p1 is
+#         FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
+#             when InternalPath.unwrap p2 is
+#                 FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
+#                 FromStr str2 -> Str.compareUtf8 str2 bytes1 |> Ord.reverse
+#         FromStr str1 ->
+#             when InternalPath.unwrap p2 is
+#                 FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Str.compareUtf8 str1 bytes2
+#                 FromStr str2 -> Ord.compare str1 str2
 ## ## Path Components
 PathComponent : [
     ParentDir, # e.g. ".." on UNIX or Windows
@@ -158,151 +162,123 @@ PathComponent : [
 ## Note that a root of Slash (`/`) has different meanings on UNIX and on Windows.
 ## * On UNIX, `/` at the beginning of the path refers to the filesystem root, and means the path is absolute.
 ## * On Windows, `/` at the beginning of the path refers to the current disk drive, and means the path is relative.
-PathRoot : [
-    WindowsSpecificRoot WindowsRoot, # e.g. "C:" on Windows
-    Slash,
-    None,
-]
-
+# PathRoot : [
+#     WindowsSpecificRoot WindowsRoot, # e.g. "C:" on Windows
+#     Slash,
+#     None,
+# ]
 # TODO see https://doc.rust-lang.org/std/path/enum.Prefix.html
 WindowsRoot : []
 
 ## Returns the root of the path.
-root : Path -> PathRoot
-
-components : Path -> { root : PathRoot, components : List PathComponent }
-
+# root : Path -> PathRoot
+# components : Path -> { root : PathRoot, components : List PathComponent }
 ## Walk over the path's [components].
-walk :
-    Path,
-    # None means it's a relative path
-    (PathRoot -> state),
-    (state, PathComponent -> state)
-    -> state
-
+# walk :
+#     Path,
+#     # None means it's a relative path
+#     (PathRoot -> state),
+#     (state, PathComponent -> state)
+#     -> state
 ## Returns the path without its last [`component`](#components).
 ##
 ## If the path was empty or contained only a [root](#PathRoot), returns the original path.
-dropLast : Path -> Path
-
+# dropLast : Path -> Path
 # TODO see https://doc.rust-lang.org/std/path/struct.Path.html#method.join for
 # the definition of the term "adjoin" - should we use that term?
-append : Path, Path -> Path
-append = \prefix, suffix ->
-    content =
-        when InternalPath.unwrap prefix is
-            NoInteriorNul prefixBytes ->
-                when InternalPath.unwrap suffix is
-                    NoInteriorNul suffixBytes ->
-                        # Neither prefix nor suffix had interior nuls, so the answer won't either
-                        List.concat prefixBytes suffixBytes
-                        |> NoInteriorNul
-
-                    ArbitraryBytes suffixBytes ->
-                        List.concat prefixBytes suffixBytes
-                        |> ArbitraryBytes
-
-                    FromStr suffixStr ->
-                        # Append suffixStr by writing it to the end of prefixBytes
-                        Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                        |> ArbitraryBytes
-
-            ArbitraryBytes prefixBytes ->
-                when InternalPath.unwrap suffix is
-                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
-                        List.concat prefixBytes suffixBytes
-                        |> ArbitraryBytes
-
-                    FromStr suffixStr ->
-                        # Append suffixStr by writing it to the end of prefixBytes
-                        Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                        |> ArbitraryBytes
-
-            FromStr prefixStr ->
-                when InternalPath.unwrap suffix is
-                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
-                        List.concat suffixBytes (Str.toUtf8 prefixStr)
-                        |> ArbitraryBytes
-
-                    FromStr suffixStr ->
-                        Str.concat prefixStr suffixStr
-                        |> FromStr
-
-    InternalPath.wrap content
-
-appendStr : Path, Str -> Path
-appendStr = \prefix, suffixStr ->
-    content =
-        when InternalPath.unwrap prefix is
-            NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
-                # Append suffixStr by writing it to the end of prefixBytes
-                Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                |> ArbitraryBytes
-
-            FromStr prefixStr ->
-                Str.concat prefixStr suffixStr
-                |> FromStr
-
-    InternalPath.wrap content
-
+# append : Path, Path -> Path
+# append = \prefix, suffix ->
+#     content =
+#         when InternalPath.unwrap prefix is
+#             FromOperatingSystem prefixBytes ->
+#                 when InternalPath.unwrap suffix is
+#                     FromOperatingSystem suffixBytes ->
+#                         # Neither prefix nor suffix had interior nuls, so the answer won't either
+#                         List.concat prefixBytes suffixBytes
+#                         |> FromOperatingSystem
+#                     ArbitraryBytes suffixBytes ->
+#                         List.concat prefixBytes suffixBytes
+#                         |> ArbitraryBytes
+#                     FromStr suffixStr ->
+#                         # Append suffixStr by writing it to the end of prefixBytes
+#                         Str.appendToUtf8 suffixStr prefixBytes (List.len prefixBytes)
+#                         |> ArbitraryBytes
+#             ArbitraryBytes prefixBytes ->
+#                 when InternalPath.unwrap suffix is
+#                     ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
+#                         List.concat prefixBytes suffixBytes
+#                         |> ArbitraryBytes
+#                     FromStr suffixStr ->
+#                         # Append suffixStr by writing it to the end of prefixBytes
+#                         Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+#                         |> ArbitraryBytes
+#             FromStr prefixStr ->
+#                 when InternalPath.unwrap suffix is
+#                     ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
+#                         List.concat suffixBytes (Str.toUtf8 prefixStr)
+#                         |> ArbitraryBytes
+#                     FromStr suffixStr ->
+#                         Str.concat prefixStr suffixStr
+#                         |> FromStr
+#     InternalPath.wrap content
+# appendStr : Path, Str -> Path
+# appendStr = \prefix, suffixStr ->
+#     content =
+#         when InternalPath.unwrap prefix is
+#             FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+#                 # Append suffixStr by writing it to the end of prefixBytes
+#                 Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+#                 |> ArbitraryBytes
+#             FromStr prefixStr ->
+#                 Str.concat prefixStr suffixStr
+#                 |> FromStr
+#     InternalPath.wrap content
 ## Returns `True` if the first path begins with the second.
-startsWith : Path, Path -> Bool
-startsWith = \path, prefix ->
-    when InternalPath.unwrap path is
-        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
-            when InternalPath.unwrap prefix is
-                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
-                    List.startsWith pathBytes prefixBytes
-
-                FromStr prefixStr ->
-                    strLen = Str.countUtf8Bytes str
-
-                    if strLen == List.len pathBytes then
-                        # Grab the first N bytes of the list, where N = byte length of string.
-                        bytesPrefix = List.takeAt pathBytes 0 strLen
-
-                        # Compare the two for equality.
-                        Str.isEqUtf8 prefixStr bytesPrefix
-                    else
-                        False
-
-        FromStr pathStr ->
-            when InternalPath.unwrap prefix is
-                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
-                    Str.startsWithUtf8 pathStr prefixBytes
-
-                FromStr prefixStr ->
-                    Str.startsWith pathStr prefixStr
-
+# startsWith : Path, Path -> Bool
+# startsWith = \path, prefix ->
+#     when InternalPath.unwrap path is
+#         FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
+#             when InternalPath.unwrap prefix is
+#                 FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+#                     List.startsWith pathBytes prefixBytes
+#                 FromStr prefixStr ->
+#                     strLen = Str.countUtf8Bytes prefixStr
+#                     if strLen == List.len pathBytes then
+#                         # Grab the first N bytes of the list, where N = byte length of string.
+#                         bytesPrefix = List.takeAt pathBytes 0 strLen
+#                         # Compare the two for equality.
+#                         Str.isEqUtf8 prefixStr bytesPrefix
+#                     else
+#                         False
+#         FromStr pathStr ->
+#             when InternalPath.unwrap prefix is
+#                 FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+#                     Str.startsWithUtf8 pathStr prefixBytes
+#                 FromStr prefixStr ->
+#                     Str.startsWith pathStr prefixStr
 ## Returns `True` if the first path ends with the second.
-endsWith : Path, Path -> Bool
-endsWith = \path, prefix ->
-    when InternalPath.unwrap path is
-        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
-            when InternalPath.unwrap suffix is
-                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
-                    List.endsWith pathBytes suffixBytes
-
-                FromStr suffixStr ->
-                    strLen = Str.countUtf8Bytes suffixStr
-
-                    if strLen == List.len pathBytes then
-                        # Grab the last N bytes of the list, where N = byte length of string.
-                        bytesSuffix = List.takeAt pathBytes (strLen - 1) strLen
-
-                        # Compare the two for equality.
-                        Str.startsWithUtf8 suffixStr bytesSuffix
-                    else
-                        False
-
-        FromStr pathStr ->
-            when InternalPath.unwrap suffix is
-                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
-                    Str.endsWithUtf8 pathStr suffixBytes
-
-                FromStr suffixStr ->
-                    Str.endsWith pathStr suffixStr
-
+# endsWith : Path, Path -> Bool
+# endsWith = \path, prefix ->
+#     when InternalPath.unwrap path is
+#         FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
+#             when InternalPath.unwrap suffix is
+#                 FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
+#                     List.endsWith pathBytes suffixBytes
+#                 FromStr suffixStr ->
+#                     strLen = Str.countUtf8Bytes suffixStr
+#                     if strLen == List.len pathBytes then
+#                         # Grab the last N bytes of the list, where N = byte length of string.
+#                         bytesSuffix = List.takeAt pathBytes (strLen - 1) strLen
+#                         # Compare the two for equality.
+#                         Str.startsWithUtf8 suffixStr bytesSuffix
+#                     else
+#                         False
+#         FromStr pathStr ->
+#             when InternalPath.unwrap suffix is
+#                 FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
+#                     Str.endsWithUtf8 pathStr suffixBytes
+#                 FromStr suffixStr ->
+#                     Str.endsWith pathStr suffixStr
 # TODO https://doc.rust-lang.org/std/path/struct.Path.html#method.strip_prefix
 # TODO idea: what if it's File.openRead and File.openWrite? And then e.g. File.metadata,
 # File.isDir, etc.
@@ -317,16 +293,16 @@ endsWith = \path, prefix ->
 withExtension : Path, Str -> Path
 withExtension = \path, extension ->
     when InternalPath.unwrap path is
-        NoInteriorNul bytes | ArbitraryBytes bytes ->
+        FromOperatingSystem bytes | ArbitraryBytes bytes ->
             beforeDot =
-                when List.splitLast '.' is
+                when List.splitLast bytes (Num.toU8 '.') is
                     Ok { before } -> before
                     Err NotFound -> bytes
 
             beforeDot
-            |> List.reserve (1 + List.len bytes)
-            |> List.append '.'
-            |> List.concat bytes
+            |> List.reserve (1 + Str.countUtf8Bytes extension)
+            |> List.append (Num.toU8 '.')
+            |> List.concat (Str.toUtf8 extension)
             |> ArbitraryBytes
             |> InternalPath.wrap
 
@@ -337,9 +313,9 @@ withExtension = \path, extension ->
                     Err NotFound -> str
 
             beforeDot
-            |> Str.reserve (1 + Str.countUtf8Bytes str)
+            |> Str.reserve (1 + Str.countUtf8Bytes extension)
             |> Str.concat "."
-            |> Str.concat str
+            |> Str.concat extension
             |> FromStr
             |> InternalPath.wrap
 

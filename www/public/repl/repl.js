@@ -41,7 +41,11 @@ const repl = {
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default('/repl/roc_repl_wasm_bg.wasm').then((instance) => {
+roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
+  repl.elemHistory.querySelector('#loading-message').remove();
+  repl.elemSourceInput.disabled = false;
+  repl.elemSourceInput.placeholder =
+    "Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)";
   repl.compiler = instance;
 });
 
@@ -137,7 +141,7 @@ async function processInputQueue() {
 // ----------------------------------------------------------------------------
 
 // Create an executable Wasm instance from an array of bytes
-// (Browser validates the module and does the final compilation to the host's machine code.)
+// (Browser validates the module and does the final compilation.)
 async function js_create_app(wasm_module_bytes) {
   const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
   const importObj = getMockWasiImports(wasiLinkObject);

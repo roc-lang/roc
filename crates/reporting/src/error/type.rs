@@ -2,12 +2,15 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_exhaustive::CtorName;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
+use roc_solve_problem::{
+    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+};
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
@@ -334,9 +337,11 @@ fn report_underivable_reason<'a>(
         UnderivableReason::NotABuiltin => {
             Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
         }
-        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, typ),
-        UnderivableReason::NestedNotDerivable(nested_typ) => {
-            let hint = underivable_hint(alloc, ability, &nested_typ);
+        UnderivableReason::SurfaceNotDerivable(context) => {
+            underivable_hint(alloc, ability, context, typ)
+        }
+        UnderivableReason::NestedNotDerivable(nested_typ, context) => {
+            let hint = underivable_hint(alloc, ability, context, &nested_typ);
             let reason = alloc.stack(
                 [
                     alloc.reflow("In particular, an implementation for"),
@@ -354,59 +359,80 @@ fn report_underivable_reason<'a>(
 fn underivable_hint<'b>(
     alloc: &'b RocDocAllocator<'b>,
     ability: Symbol,
+    context: NotDerivableContext,
     typ: &ErrorType,
 ) -> Option<RocDocBuilder<'b>> {
-    match typ {
-        ErrorType::Function(..) => Some(alloc.note("").append(alloc.concat([
+    match context {
+        NotDerivableContext::NoContext => None,
+        NotDerivableContext::Function => Some(alloc.note("").append(alloc.concat([
             alloc.symbol_unqualified(ability),
             alloc.reflow(" cannot be generated for functions."),
         ]))),
-        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => Some(alloc.tip().append(alloc.concat([
-            alloc.reflow("This type variable is not bound to "),
+        NotDerivableContext::Opaque(symbol) => Some(alloc.tip().append(alloc.concat([
+            alloc.symbol_unqualified(symbol),
+            alloc.reflow(" does not implement "),
             alloc.symbol_unqualified(ability),
-            alloc.reflow(". Consider adding a "),
-            alloc.keyword("has"),
-            alloc.reflow(" clause to bind the type variable, like "),
-            alloc.inline_type_block(alloc.concat([
-                alloc.string("| ".to_string()),
-                alloc.type_variable(v.clone()),
-                alloc.space(),
-                alloc.keyword("has"),
-                alloc.space(),
-                alloc.symbol_qualified(ability),
-            ])),
+            alloc.reflow("."),
+            if symbol.module_id() == alloc.home {
+                alloc.concat([
+                    alloc.reflow(" Consider adding a custom implementation"),
+                    if ability.is_builtin() {
+                        alloc.concat([
+                            alloc.reflow(" or "),
+                            alloc.inline_type_block(alloc.concat([
+                                alloc.keyword("has"),
+                                alloc.space(),
+                                alloc.symbol_qualified(ability),
+                            ])),
+                            alloc.reflow(" to the definition of "),
+                            alloc.symbol_unqualified(symbol),
+                        ])
+                    } else {
+                        alloc.nil()
+                    },
+                    alloc.reflow("."),
+                ])
+            } else {
+                alloc.nil()
+            },
         ]))),
-        ErrorType::Alias(symbol, _, _, AliasKind::Opaque) => {
+        NotDerivableContext::UnboundVar => {
+            let v = match typ {
+                ErrorType::FlexVar(v) => v,
+                ErrorType::RigidVar(v) => v,
+                _ => internal_error!("unbound variable context only applicable for variables"),
+            };
+
             Some(alloc.tip().append(alloc.concat([
-                alloc.symbol_unqualified(*symbol),
-                alloc.reflow(" does not implement "),
+                alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow("."),
-                if symbol.module_id() == alloc.home {
-                    alloc.concat([
-                        alloc.reflow(" Consider adding a custom implementation"),
-                        if ability.is_builtin() {
-                            alloc.concat([
-                                alloc.reflow(" or "),
-                                alloc.inline_type_block(alloc.concat([
-                                    alloc.keyword("has"),
-                                    alloc.space(),
-                                    alloc.symbol_qualified(ability),
-                                ])),
-                                alloc.reflow(" to the definition of "),
-                                alloc.symbol_unqualified(*symbol),
-                            ])
-                        } else {
-                            alloc.nil()
-                        },
-                        alloc.reflow("."),
-                    ])
-                } else {
-                    alloc.nil()
-                },
+                alloc.reflow(". Consider adding a "),
+                alloc.keyword("has"),
+                alloc.reflow(" clause to bind the type variable, like "),
+                alloc.inline_type_block(alloc.concat([
+                    alloc.string("| ".to_string()),
+                    alloc.type_variable(v.clone()),
+                    alloc.space(),
+                    alloc.keyword("has"),
+                    alloc.space(),
+                    alloc.symbol_qualified(ability),
+                ])),
             ])))
         }
-        _ => None,
+        NotDerivableContext::Decode(reason) => match reason {
+            NotDerivableDecode::OptionalRecordField(field) => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
+                    alloc.record_field(field),
+                    alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
+                    alloc.reflow("but are not a concept that extends to runtime!"),
+                    alloc.hardline(),
+                    alloc.reflow("Maybe you wanted to use a "),
+                    alloc.symbol_unqualified(Symbol::RESULT_RESULT),
+                    alloc.reflow("?"),
+                ])))
+            }
+        },
     }
 }
 
@@ -3883,6 +3909,34 @@ fn exhaustive_problem<'a>(
             Report {
                 filename,
                 title: "REDUNDANT PATTERN".to_string(),
+                doc,
+                severity: Severity::Warning,
+            }
+        }
+        Unmatchable {
+            overall_region,
+            branch_region,
+            index,
+        } => {
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" pattern will never be matched:"),
+                ]),
+                alloc.region_with_subregion(
+                    lines.convert_region(overall_region),
+                    lines.convert_region(branch_region),
+                ),
+                alloc.reflow(
+                    "It's impossible to create a value of this shape, \
+                so this pattern can be safely removed!",
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "UNMATCHABLE PATTERN".to_string(),
                 doc,
                 severity: Severity::Warning,
             }

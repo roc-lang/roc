@@ -1,5 +1,5 @@
 use roc_can::expected::{Expected, PExpected};
-use roc_module::symbol::Symbol;
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::Region;
 
@@ -55,7 +55,21 @@ pub enum Unfulfilled {
 pub enum UnderivableReason {
     NotABuiltin,
     /// The surface type is not derivable
-    SurfaceNotDerivable,
+    SurfaceNotDerivable(NotDerivableContext),
     /// A nested type is not derivable
-    NestedNotDerivable(ErrorType),
+    NestedNotDerivable(ErrorType, NotDerivableContext),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum NotDerivableContext {
+    NoContext,
+    Function,
+    UnboundVar,
+    Opaque(Symbol),
+    Decode(NotDerivableDecode),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum NotDerivableDecode {
+    OptionalRecordField(Lowercase),
 }

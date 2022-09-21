@@ -27,7 +27,7 @@ roc_reporting = { path = "../../reporting" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std" }
 roc_utils = { path = "../../utils" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 libloading = "0.7.1"
 tempfile = "3.2.0"
 inkwell = { path = "../../vendor/inkwell" }
@@ -35,7 +35,7 @@ target-lexicon = "0.12.3"
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-serde_json = "1.0.69"
+serde_json = "1.0.85"
 
 [features]
 target-arm = []

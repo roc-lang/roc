@@ -6,11 +6,12 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = {version = "3.11.0", features = ["collections"]}
 target-lexicon = "0.12.2"
 
 roc_builtins = {path = "../compiler/builtins"}
 roc_collections = {path = "../compiler/collections"}
+roc_intern = {path = "../compiler/intern"}
 roc_load = {path = "../compiler/load"}
 roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
@@ -27,14 +28,14 @@ roc_build = { path = "../compiler/build" }
 libloading = "0.7.1"
 inkwell = { path = "../vendor/inkwell" }
 signal-hook = "0.3.14"
-libc = "0.2.106"
+libc = "0.2.132"
 
 [dev-dependencies]
 test_gen = { path = "../compiler/test_gen" }
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
 tempfile = "3.2.0"
 indoc = "1.0.7"
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 strip-ansi-escapes = "0.1.1"
 
 

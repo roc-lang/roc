@@ -512,6 +512,20 @@ impl<'a> PackageModuleIds<'a> {
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
         self.by_id.iter()
     }
+
+    /// Returns true iff two modules belong to the same package.
+    /// Returns [None] if one module is unknown.
+    pub fn package_eq(&self, left: ModuleId, right: ModuleId) -> Option<bool> {
+        if left.is_builtin() ^ right.is_builtin() {
+            return Some(false);
+        }
+        let result = match (self.get_name(left)?, self.get_name(right)?) {
+            (PQModuleName::Unqualified(_), PQModuleName::Unqualified(_)) => true,
+            (PQModuleName::Qualified(pkg1, _), PQModuleName::Qualified(pkg2, _)) => pkg1 == pkg2,
+            _ => false,
+        };
+        Some(result)
+    }
 }
 
 /// Stores a mapping between ModuleId and InlinableString.
@@ -1229,6 +1243,9 @@ define_builtins! {
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
+        50 STR_REPLACE_EACH: "replaceEach"
+        51 STR_REPLACE_FIRST: "replaceFirst"
+        52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

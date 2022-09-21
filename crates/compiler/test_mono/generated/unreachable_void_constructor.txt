@@ -1,0 +1,7 @@
+procedure Test.0 ():
+    let Test.7 : Int1 = true;
+    if Test.7 then
+        Error voided tag constructor is unreachable
+    else
+        let Test.6 : Str = "abc";
+        ret Test.6;

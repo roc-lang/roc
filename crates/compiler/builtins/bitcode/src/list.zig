@@ -148,9 +148,12 @@ pub const RocList = extern struct {
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique()) {
-                const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
-
-                return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
+                if (self.capacity >= new_length) {
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
+                } else {
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
+                }
             }
         }
 
@@ -727,17 +730,20 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         return list_b;
     } else if (list_b.isEmpty()) {
         return list_a;
-    } else if (!list_a.isEmpty() and list_a.isUnique()) {
+    } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
         if (list_a.bytes) |source| {
-            const new_source = utils.unsafeReallocate(
-                source,
-                alignment,
-                list_a.len(),
-                total_length,
-                element_width,
-            );
+            const new_source = if (list_a.capacity >= total_length)
+                source
+            else
+                utils.unsafeReallocate(
+                    source,
+                    alignment,
+                    list_a.len(),
+                    total_length,
+                    element_width,
+                );
 
             if (list_b.bytes) |source_b| {
                 @memcpy(new_source + list_a.len() * element_width, source_b, list_b.len() * element_width);

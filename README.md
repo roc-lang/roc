@@ -1,14 +1,16 @@
 # Work in progress!
 
 Roc is not ready for a 0.1 release yet, but we do have:
+
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://github.com/roc-lang/roc/blob/main/TUTORIAL.md)
+- [some docs for the standard library](https://www.roc-lang.org/builtins/Str)
 - [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
 - [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions
 
 If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 
-# Sponsors
+## Sponsors
 
 We are very grateful to our sponsors [NoRedInk](https://www.noredink.com/), [rwx](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
 

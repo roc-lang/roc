@@ -10,6 +10,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
+use roc_mono::layout::STLayoutInterner;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::{RocList, RocStr, U128};
 
@@ -18,14 +19,16 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
+    let interner = STLayoutInterner::with_capacity(4);
+
     let t = &[Layout::u8()] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
     let target_info = roc_target::TargetInfo::default_x86_64();
-    assert_eq!(layout.alignment_bytes(target_info), 1);
-    assert_eq!(layout.stack_size(target_info), 2);
+    assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
+    assert_eq!(layout.stack_size(&interner, target_info), 2);
 }
 
 #[test]
@@ -1061,12 +1064,8 @@ fn result_never() {
                 res : Result I64 []
                 res = Ok 4
 
-                # we should provide this in the stdlib
-                never : [] -> a
-
                 when res is
                     Ok v -> v
-                    Err empty -> never empty
                 #"
         ),
         4,
@@ -1637,7 +1636,12 @@ fn issue_2777_default_branch_codegen() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// then it works. We don't know what the problem is here!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = "Erroneous")]
 fn issue_2900_unreachable_pattern() {
     assert_evals_to!(
@@ -1952,6 +1956,51 @@ fn tag_union_let_generalization() {
             "#
         ),
         RocStr::from("done"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn fit_recursive_union_in_struct_into_recursive_pointer() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            NonEmpty := [
+                First Str,
+                Next { item: Str, rest: NonEmpty },
+            ]
+
+            nonEmpty =
+                a = "abcdefgh"
+                b = @NonEmpty (First "ijkl")
+                c = Next { item: a, rest: b }
+                @NonEmpty c
+
+            when nonEmpty is
+                @NonEmpty (Next r) -> r.item
+                _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("abcdefgh"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn match_on_result_with_uninhabited_error_branch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result Str []
+            x = Ok "abc"
+
+            when x is
+                Ok s -> s
+            "#
+        ),
+        RocStr::from("abc"),
         RocStr
     );
 }

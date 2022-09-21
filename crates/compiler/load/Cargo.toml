@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 roc_load_internal = { path = "../load_internal" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
 roc_types = { path = "../types" }
@@ -20,7 +20,7 @@ roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 
 [target.'cfg(not(windows))'.build-dependencies]
 roc_load_internal = { path = "../load_internal" }

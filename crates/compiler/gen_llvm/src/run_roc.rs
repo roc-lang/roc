@@ -162,7 +162,7 @@ macro_rules! run_jit_function_dynamic_type {
                 // first field is a char pointer (to the error message)
                 // read value, and transmute to a pointer
                 let ptr_as_int = *(result as *const u64).offset(1);
-                let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
+                let ptr = ptr_as_int as *mut c_char;
 
                 // make CString (null-terminated)
                 let raw = CString::from_raw(ptr);

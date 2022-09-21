@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
+roc_error_macros = { path = "../error_macros" }
 roc_exhaustive = { path = "../compiler/exhaustive" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
@@ -19,7 +20,7 @@ roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_std = { path = "../roc_std" }
 ven_pretty = { path = "../vendor/pretty" }
 distance = "0.4.0"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 
 [dev-dependencies]
 roc_constrain = { path = "../compiler/constrain" }
@@ -31,6 +32,6 @@ roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }
 roc_test_utils = { path = "../test_utils" }
 roc_solve = { path = "../compiler/solve" }
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 indoc = "1.0.7"
-insta = "1.18.2"
+insta = "1.19.0"

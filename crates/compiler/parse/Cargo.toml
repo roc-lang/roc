@@ -12,12 +12,12 @@ edition = "2021"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 encode_unicode = "1.0.0"
 
 [dev-dependencies]
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"]}
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 indoc = "1.0.7"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"

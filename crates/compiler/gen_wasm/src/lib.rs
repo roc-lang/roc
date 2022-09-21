@@ -16,7 +16,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
-use roc_mono::layout::LayoutIds;
+use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
 use wasm_module::parse::ParseError;
 
@@ -43,6 +43,7 @@ pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub stack_bytes: u32,
@@ -131,13 +132,18 @@ pub fn build_app_module<'a>(
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+        CodeGenHelp::new(
+            env.arena,
+            env.layout_interner,
+            TargetInfo::default_wasm32(),
+            env.module_id,
+        ),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:?}", proc);
         }
     }
@@ -155,7 +161,7 @@ pub fn build_app_module<'a>(
     if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:#?}", proc);
         }
     }

@@ -164,7 +164,7 @@ where
 pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
     cmd_name: &str,
     stdin_vals: I,
-    args: &[&str],
+    args: &[String],
 ) -> Out {
     let mut cmd = Command::new(cmd_name);
 
@@ -202,7 +202,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
 
 pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
     stdin_vals: I,
-    args: &[&str],
+    args: &[String],
 ) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
@@ -365,7 +365,7 @@ pub fn examples_dir(dir_name: &str) -> PathBuf {
 
     // Descend into examples/{dir_name}
     path.push("examples");
-    path.extend(dir_name.split("/")); // Make slashes cross-platform
+    path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }
@@ -388,7 +388,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.extend(dir_name.split("/")); // Make slashes cross-platform
+    path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }

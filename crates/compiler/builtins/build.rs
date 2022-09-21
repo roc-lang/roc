@@ -60,6 +60,12 @@ fn main() {
 
     generate_object_file(&bitcode_path, "object", BUILTINS_HOST_FILE);
 
+    generate_object_file(
+        &bitcode_path,
+        "windows-x86_64-object",
+        "builtins-windows-x86_64.obj",
+    );
+
     generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
 
     copy_zig_builtins_to_target_dir(&bitcode_path);

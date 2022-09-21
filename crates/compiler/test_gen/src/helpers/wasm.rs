@@ -107,6 +107,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         procedures,
         mut interns,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
@@ -120,6 +121,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
 
     let env = roc_gen_wasm::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,

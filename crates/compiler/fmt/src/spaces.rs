@@ -542,17 +542,17 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
             },
             Expect {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => Expect {
                 condition: arena.alloc(condition.remove_spaces(arena)),
-                preceding_comment,
+                preceding_comment: Region::zero(),
             },
             ExpectFx {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => ExpectFx {
                 condition: arena.alloc(condition.remove_spaces(arena)),
-                preceding_comment,
+                preceding_comment: Region::zero(),
             },
         }
     }

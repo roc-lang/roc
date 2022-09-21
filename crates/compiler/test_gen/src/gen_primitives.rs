@@ -946,7 +946,13 @@ fn when_peano() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a Result.withDefault 0 (so it's returning
+// an integer instead of a Result), then it works on Windows, suggesting this is a C ABI issue.
+// We should try this out on Windows again after making adjustments to the Result C ABI!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(

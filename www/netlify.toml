@@ -19,6 +19,9 @@
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
     Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval';"
     X-Content-Type-Options = "nosniff"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
 
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo
 #

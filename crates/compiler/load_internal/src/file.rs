@@ -23,6 +23,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -33,7 +34,9 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{
+    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -461,9 +464,11 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
+                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
+                    && state.module_cache.expectations.contains_key(&module_id);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
-                    execution_mode: state.exec_mode,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -475,6 +480,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    build_expects,
                 }
             }
             Phase::MakeSpecializations => {
@@ -506,7 +512,7 @@ fn start_phase<'a>(
                             IdentIds::default(),
                             Subs::default(),
                             ProcsBase::default(),
-                            LayoutCache::new(state.target_info),
+                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
                             ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
@@ -718,6 +724,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -845,6 +852,9 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
+        /// The layout interner after all passes in mono are done.
+        /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
+        layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
     },
 
@@ -952,6 +962,8 @@ struct State<'a> {
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
+
+    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
 }
 
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
@@ -1004,6 +1016,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
+            layout_interner: GlobalInterner::with_capacity(128),
         }
     }
 }
@@ -1116,7 +1129,6 @@ enum BuildTask<'a> {
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
-        execution_mode: ExecutionMode,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
@@ -1127,6 +1139,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        build_expects: bool,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1602,12 +1615,14 @@ fn state_thread_step<'a>(
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
+                    layout_interner,
                     exposed_to_host,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+                    let monomorphized =
+                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -1983,12 +1998,12 @@ fn start_tasks<'a>(
 }
 
 macro_rules! debug_print_ir {
-    ($state:expr, $flag:path) => {
+    ($state:expr, $interner:expr, $flag:path) => {
         dbg_do!($flag, {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty(200))
+                .map(|proc| proc.to_pretty($interner, 200))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
@@ -2358,7 +2373,14 @@ fn update<'a>(
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            if !loc_expects.is_empty() {
+            let should_include_expects = !loc_expects.is_empty() && {
+                let modules = state.arc_modules.lock();
+                modules
+                    .package_eq(module_id, state.root_id)
+                    .expect("root or this module is not yet known - that's a bug!")
+            };
+
+            if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
                 let expectations = Expectations {
@@ -2383,7 +2405,11 @@ fn update<'a>(
                 Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
-            if is_host_exposed {
+            let add_to_host_exposed = is_host_exposed &&
+                // During testing, we don't need to expose anything to the host.
+                !matches!(state.exec_mode, ExecutionMode::Test);
+
+            if add_to_host_exposed {
                 state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol
@@ -2471,10 +2497,9 @@ fn update<'a>(
                 if state.goal_phase() > Phase::SolveTypes
                     || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
                 {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                    let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info)
+                    });
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -2659,7 +2684,7 @@ fn update<'a>(
                             ident_ids,
                             subs,
                             module_timing,
-                            layout_cache: _,
+                            layout_cache: _layout_cache,
                             procs_base: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
@@ -2669,11 +2694,25 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+
+                        #[cfg(debug_assertions)]
+                        {
+                            log_layout_stats(module_id, &_layout_cache);
+                        }
                     }
+
+                    let layout_interner = {
+                        let mut taken = GlobalInterner::with_capacity(0);
+                        std::mem::swap(&mut state.layout_interner, &mut taken);
+                        taken
+                    };
+                    let layout_interner = layout_interner
+                        .unwrap()
+                        .expect("outstanding references to global layout interener, but we just drained all layout caches");
 
                     log!("specializations complete from {:?}", module_id);
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -2685,17 +2724,18 @@ fn update<'a>(
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     Proc::insert_refcount_operations(
                         arena,
+                        &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
@@ -2713,7 +2753,7 @@ fn update<'a>(
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
-                            // TODO thread through mono problems
+                            layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2813,11 +2853,35 @@ fn update<'a>(
     }
 }
 
-fn finish_specialization(
-    state: State,
+#[cfg(debug_assertions)]
+fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
+    let (cache_stats, raw_function_cache_stats) = layout_cache.statistics();
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = cache_stats.insertions,
+        hits = cache_stats.hits,
+        misses = cache_stats.misses,
+        non_insertable = cache_stats.non_insertable,
+        non_reusable = cache_stats.non_reusable,
+        "cache stats"
+    );
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = raw_function_cache_stats.insertions,
+        hits = raw_function_cache_stats.hits,
+        misses = raw_function_cache_stats.misses,
+        non_insertable = raw_function_cache_stats.non_insertable,
+        non_reusable = raw_function_cache_stats.non_reusable,
+        "raw function cache stats"
+    );
+}
+
+fn finish_specialization<'a>(
+    state: State<'a>,
     subs: Subs,
+    layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
-) -> Result<MonomorphizedModule, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
             "total Type clones: {} ",
@@ -2940,6 +3004,7 @@ fn finish_specialization(
         module_id: state.root_id,
         subs,
         interns,
+        layout_interner,
         procedures,
         entry_point,
         sources,
@@ -4808,7 +4873,6 @@ fn make_specializations<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
-    execution_mode: ExecutionMode,
     solved_subs: Solved<Subs>,
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
@@ -4821,6 +4885,7 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    build_expects: bool,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
 
@@ -5067,11 +5132,8 @@ fn build_pending_specializations<'a>(
             }
             Expectation => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5143,11 +5205,8 @@ fn build_pending_specializations<'a>(
             }
             ExpectationFx => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5422,7 +5481,6 @@ fn run_task<'a>(
         )),
         BuildPendingSpecializations {
             module_id,
-            execution_mode,
             ident_ids,
             decls,
             module_timing,
@@ -5433,9 +5491,9 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            build_expects,
         } => Ok(build_pending_specializations(
             arena,
-            execution_mode,
             solved_subs,
             imported_module_thunks,
             module_id,
@@ -5448,6 +5506,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            build_expects,
         )),
         MakeSpecializations {
             module_id,

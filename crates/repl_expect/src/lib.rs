@@ -1,9 +1,10 @@
 #[cfg(not(windows))]
 use {
+    roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{CapturesNiche, LayoutCache},
+        layout::{CapturesNiche, Layout, LayoutCache},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{
@@ -12,6 +13,7 @@ use {
     },
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},
+    std::sync::Arc,
 };
 
 #[cfg(not(windows))]
@@ -29,6 +31,7 @@ pub fn get_values<'a>(
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
@@ -53,7 +56,8 @@ pub fn get_values<'a>(
 
             let content = subs.get_content_without_compacting(variable);
 
-            let mut layout_cache = LayoutCache::new(target_info);
+            // TODO: pass layout_cache to jit_to_ast directly
+            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
             let proc_layout = ProcLayout {
@@ -62,7 +66,7 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            let element = jit_to_ast(
+            jit_to_ast(
                 arena,
                 app,
                 "expect_repl_main_fn",
@@ -70,10 +74,9 @@ pub fn get_values<'a>(
                 content,
                 subs,
                 interns,
+                layout_interner.fork(),
                 target_info,
-            )?;
-
-            element
+            )?
         };
 
         result.push(expr);
@@ -134,7 +137,7 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects) = expect_mono_module_to_dylib(
+        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
             arena,
             target.clone(),
             loaded,
@@ -162,6 +165,7 @@ mod test {
             RenderTarget::ColorTerminal,
             arena,
             interns,
+            &layout_interner.into_global(),
             &lib,
             &mut expectations,
             expects,
@@ -335,7 +339,7 @@ mod test {
                 When it failed, these variables had these values:
 
                 a : List (List Str)
-                a = [[""], []]
+                a = [["foo"], []]
 
                 b : List (List Str)
                 b = [["a string so long that it cannot be short", "bar"]]
@@ -839,6 +843,93 @@ mod test {
 
                 b : RoseTree Str
                 b = Tree "foo" [Tree "bar" []]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn big_recursive_tag_copied_back() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface A exposes [] imports []
+
+                NonEmpty := [
+                    First Str U8,
+                    Next (List { item: Str, rest: NonEmpty }),
+                ]
+                
+                expect
+                    nonEmpty =
+                        a = "abcdefgh"
+                        b = @NonEmpty (First "ijkl" 67u8)
+                        c = Next [{ item: a, rest: b }]
+                        @NonEmpty c
+                
+                    when nonEmpty is
+                        _ -> False
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+                
+                 8│>  expect
+                 9│>      nonEmpty =
+                10│>          a = "abcdefgh"
+                11│>          b = @NonEmpty (First "ijkl" 67u8)
+                12│>          c = Next [{ item: a, rest: b }]
+                13│>          @NonEmpty c
+                14│>
+                15│>      when nonEmpty is
+                16│>          _ -> False
+                
+                When it failed, these variables had these values:
+                
+                nonEmpty : NonEmpty
+                nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn arg_parser() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface A exposes [] imports []
+
+                makeForcer : {} -> (Str -> U8)
+                makeForcer = \{} -> \_ -> 2u8
+
+                expect
+                    forcer = makeForcer {}
+
+                    case = ""
+
+                    forcer case == 5u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      forcer = makeForcer {}
+                 8│>
+                 9│>      case = ""
+                10│>
+                11│>      forcer case == 5u8
+
+                When it failed, these variables had these values:
+
+                forcer : Str -> U8
+                forcer = <function>
+
+                case : Str
+                case = ""
                 "#
             ),
         );

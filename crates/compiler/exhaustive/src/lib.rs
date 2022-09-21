@@ -93,6 +93,11 @@ pub enum Error {
         branch_region: Region,
         index: HumanIndex,
     },
+    Unmatchable {
+        overall_region: Region,
+        branch_region: Region,
+        index: HumanIndex,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -451,7 +456,7 @@ fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagId, Union> {
     let mut ctors = MutMap::default();
 
     for row in matrix {
-        if let Some(Ctor(union, id, _)) = row.get(row.len() - 1) {
+        if let Some(Ctor(union, id, _)) = row.last() {
             ctors.insert(*id, union.clone());
         }
     }

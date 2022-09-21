@@ -11,5 +11,5 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_error_macros = {path="../../error_macros"}
 roc_debug_flags = {path="../debug_flags"}
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 static_assertions = "1.1.0"

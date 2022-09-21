@@ -29,8 +29,8 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 
     // TODO: get info from a package module; this is all hardcoded for now.
     let mut package = roc_load::docs::Documentation {
-        name: "roc/builtins".to_string(),
-        version: "1.0.0".to_string(),
+        name: "documentation".to_string(),
+        version: "".to_string(),
         docs: "Package introduction or README.".to_string(),
         modules: loaded_modules,
     };
@@ -58,36 +58,49 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
+    let module_pairs = package.modules.iter().flat_map(|loaded_module| {
+        loaded_module
+            .documentation
+            .iter()
+            .filter_map(move |(module_id, module)| {
+                // TODO it seems this `documentation` dictionary has entries for
+                // every module, but only the current module has any info in it.
+                // We disregard the others, but probably this shouldn't bother
+                // being a hash map in the first place if only one of its entries
+                // actually has interesting information in it?
+                if *module_id == loaded_module.module_id {
+                    let exposed_values = loaded_module
+                        .exposed_values
+                        .iter()
+                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
+                        .collect::<Vec<String>>();
+
+                    Some((module, exposed_values))
+                } else {
+                    None
+                }
+            })
+    });
+
     let template_html = include_str!("./static/index.html")
         .replace("<!-- search.js -->", "/search.js")
         .replace("<!-- styles.css -->", "/styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
-            "<!-- Module links -->",
-            render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-                loaded_module
-                    .documentation
-                    .iter()
-                    .filter_map(move |(module_id, module)| {
-                        // TODO it seems this `documentation` dictionary has entries for
-                        // every module, but only the current module has any info in it.
-                        // We disregard the others, but probably this shouldn't bother
-                        // being a hash map in the first place if only one of its entries
-                        // actually has interesting information in it?
-                        if *module_id == loaded_module.module_id {
-                            let exposed_values = loaded_module
-                                .exposed_values
-                                .iter()
-                                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
-                                .collect::<Vec<String>>();
+            "<!-- Prefetch links -->",
+            &module_pairs
+                .clone()
+                .map(|(module, _)| {
+                    let href = sidebar_link_url(module);
 
-                            Some((module, exposed_values))
-                        } else {
-                            None
-                        }
-                    })
-            }))
-            .as_str(),
+                    format!(r#"<link rel="prefetch" href="{href}"/>"#)
+                })
+                .collect::<Vec<String>>()
+                .join("\n    "),
+        )
+        .replace(
+            "<!-- Module links -->",
+            render_sidebar(module_pairs).as_str(),
         );
 
     // Write each package's module docs html file
@@ -118,6 +131,13 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+fn sidebar_link_url(module: &ModuleDocumentation) -> String {
+    let mut href_buf = base_url();
+    href_buf.push_str(module.name.as_str());
+
+    href_buf
 }
 
 // converts plain-text code to highlighted html
@@ -219,7 +239,7 @@ fn render_module_documentation(
                         }
                     }
 
-                    type_annotation_to_html(0, &mut content, type_ann);
+                    type_annotation_to_html(0, &mut content, type_ann, false);
 
                     buf.push_str(
                         html_to_string(
@@ -359,21 +379,14 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
     let mut buf = String::new();
 
     for (module, exposed_values) in modules {
+        let href = sidebar_link_url(module);
         let mut sidebar_entry_content = String::new();
-
-        let name = module.name.as_str();
-
-        let href = {
-            let mut href_buf = base_url();
-            href_buf.push_str(name);
-            href_buf
-        };
 
         sidebar_entry_content.push_str(
             html_to_string(
                 "a",
-                vec![("class", "sidebar-module-link"), ("href", href.as_str())],
-                name,
+                vec![("class", "sidebar-module-link"), ("href", &href)],
+                module.name.as_str(),
             )
             .as_str(),
         );
@@ -464,60 +477,65 @@ fn new_line(buf: &mut String) {
 }
 
 // html is written to buf
-fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
+fn type_annotation_to_html(
+    indent_level: usize,
+    buf: &mut String,
+    type_ann: &TypeAnnotation,
+    needs_parens: bool,
+) {
     let is_multiline = should_be_multiline(type_ann);
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            let tags_len = tags.len();
+            if tags.is_empty() {
+                buf.push_str("[]");
+            } else {
+                let tags_len = tags.len();
 
-            let tag_union_indent = indent_level + 1;
-
-            if is_multiline {
-                new_line(buf);
-
-                indent(buf, tag_union_indent);
-            }
-
-            buf.push('[');
-
-            if is_multiline {
-                new_line(buf);
-            }
-
-            let next_indent_level = tag_union_indent + 1;
-
-            for (index, tag) in tags.iter().enumerate() {
-                if is_multiline {
-                    indent(buf, next_indent_level);
-                } else {
-                    buf.push(' ');
-                }
-
-                buf.push_str(tag.name.as_str());
-
-                for type_value in &tag.values {
-                    buf.push(' ');
-                    type_annotation_to_html(next_indent_level, buf, type_value);
-                }
+                let tag_union_indent = indent_level + 1;
 
                 if is_multiline {
-                    if index < (tags_len - 1) {
-                        buf.push(',');
-                    }
+                    new_line(buf);
 
+                    indent(buf, tag_union_indent);
+                }
+
+                buf.push('[');
+
+                if is_multiline {
                     new_line(buf);
                 }
+
+                let next_indent_level = tag_union_indent + 1;
+
+                for (index, tag) in tags.iter().enumerate() {
+                    if is_multiline {
+                        indent(buf, next_indent_level);
+                    }
+
+                    buf.push_str(tag.name.as_str());
+
+                    for type_value in &tag.values {
+                        buf.push(' ');
+                        type_annotation_to_html(next_indent_level, buf, type_value, true);
+                    }
+
+                    if is_multiline {
+                        if index < (tags_len - 1) {
+                            buf.push(',');
+                        }
+
+                        new_line(buf);
+                    }
+                }
+
+                if is_multiline {
+                    indent(buf, tag_union_indent);
+                }
+
+                buf.push(']');
             }
 
-            if is_multiline {
-                indent(buf, tag_union_indent);
-            } else {
-                buf.push(' ');
-            }
-
-            buf.push(']');
-
-            type_annotation_to_html(indent_level, buf, extension);
+            type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
@@ -526,82 +544,91 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             if parts.is_empty() {
                 buf.push_str(name);
             } else {
-                buf.push('(');
+                if needs_parens {
+                    buf.push('(');
+                }
+
                 buf.push_str(name);
                 for part in parts {
                     buf.push(' ');
-                    type_annotation_to_html(indent_level, buf, part);
+                    type_annotation_to_html(indent_level, buf, part, true);
                 }
-                buf.push(')');
+
+                if needs_parens {
+                    buf.push(')');
+                }
             }
         }
         TypeAnnotation::Record { fields, extension } => {
-            let fields_len = fields.len();
+            if fields.is_empty() {
+                buf.push_str("{}");
+            } else {
+                let fields_len = fields.len();
+                let record_indent = indent_level + 1;
 
-            let record_indent = indent_level + 1;
-
-            if is_multiline {
-                new_line(buf);
-                indent(buf, record_indent);
-            }
-
-            buf.push('{');
-
-            if is_multiline {
-                new_line(buf);
-            }
-
-            let next_indent_level = record_indent + 1;
-
-            for (index, field) in fields.iter().enumerate() {
                 if is_multiline {
-                    indent(buf, next_indent_level);
+                    new_line(buf);
+                    indent(buf, record_indent);
+                }
+
+                buf.push('{');
+
+                if is_multiline {
+                    new_line(buf);
+                }
+
+                let next_indent_level = record_indent + 1;
+
+                for (index, field) in fields.iter().enumerate() {
+                    if is_multiline {
+                        indent(buf, next_indent_level);
+                    } else {
+                        buf.push(' ');
+                    }
+
+                    let fields_name = match field {
+                        RecordField::RecordField { name, .. } => name,
+                        RecordField::OptionalField { name, .. } => name,
+                        RecordField::LabelOnly { name } => name,
+                    };
+
+                    buf.push_str(fields_name.as_str());
+
+                    match field {
+                        RecordField::RecordField {
+                            type_annotation, ..
+                        } => {
+                            buf.push_str(" : ");
+                            type_annotation_to_html(next_indent_level, buf, type_annotation, false);
+                        }
+                        RecordField::OptionalField {
+                            type_annotation, ..
+                        } => {
+                            buf.push_str(" ? ");
+                            type_annotation_to_html(next_indent_level, buf, type_annotation, false);
+                        }
+                        RecordField::LabelOnly { .. } => {}
+                    }
+
+                    if is_multiline {
+                        if index < (fields_len - 1) {
+                            buf.push(',');
+                        }
+
+                        new_line(buf);
+                    }
+                }
+
+                if is_multiline {
+                    indent(buf, record_indent);
                 } else {
                     buf.push(' ');
                 }
 
-                let fields_name = match field {
-                    RecordField::RecordField { name, .. } => name,
-                    RecordField::OptionalField { name, .. } => name,
-                    RecordField::LabelOnly { name } => name,
-                };
-
-                buf.push_str(fields_name.as_str());
-
-                match field {
-                    RecordField::RecordField {
-                        type_annotation, ..
-                    } => {
-                        buf.push_str(" : ");
-                        type_annotation_to_html(next_indent_level, buf, type_annotation);
-                    }
-                    RecordField::OptionalField {
-                        type_annotation, ..
-                    } => {
-                        buf.push_str(" ? ");
-                        type_annotation_to_html(next_indent_level, buf, type_annotation);
-                    }
-                    RecordField::LabelOnly { .. } => {}
-                }
-
-                if is_multiline {
-                    if index < (fields_len - 1) {
-                        buf.push(',');
-                    }
-
-                    new_line(buf);
-                }
+                buf.push('}');
             }
 
-            if is_multiline {
-                indent(buf, record_indent);
-            } else {
-                buf.push(' ');
-            }
-
-            buf.push('}');
-
-            type_annotation_to_html(indent_level, buf, extension);
+            type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::Function { args, output } => {
             let mut peekable_args = args.iter().peekable();
@@ -613,7 +640,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     indent(buf, indent_level + 1);
                 }
 
-                type_annotation_to_html(indent_level, buf, arg);
+                type_annotation_to_html(indent_level, buf, arg, false);
 
                 if peekable_args.peek().is_some() {
                     buf.push_str(", ");
@@ -633,7 +660,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 next_indent_level += 1;
             }
 
-            type_annotation_to_html(next_indent_level, buf, output);
+            type_annotation_to_html(next_indent_level, buf, output, false);
         }
         TypeAnnotation::Ability { members: _ } => {
             // TODO(abilities): fill me in

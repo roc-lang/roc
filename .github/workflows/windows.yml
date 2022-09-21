@@ -1,0 +1,38 @@
+on: [pull_request]
+
+name: Test windows build
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows-cargo-build:
+    name: windows-cargo-build
+    runs-on: windows-2022
+    env:
+      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: download and install zig
+        run: |
+          curl.exe --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
+          cd C:\
+          7z x zig-windows-x86_64-0.9.1.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.9.1\"
+
+      - name: zig version
+        run: zig version
+
+      - name: set up llvm 13
+        run: |
+          curl.exe -L -O https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
+          7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
+
+      - name: build
+        run: cargo build

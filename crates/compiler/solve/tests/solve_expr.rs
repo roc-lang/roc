@@ -4275,7 +4275,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[Empty, Foo Bar I64]",
+            "[Empty, Foo [Bar] I64]",
         );
     }
 
@@ -7759,6 +7759,68 @@ mod solve_expr {
         foo : {} -[[foo(5) [True]* [False]* Str Str]]-> Str
         bar : {} -[[bar(6) [True]* [False]* Str Str]]-> Str
         "###
+        );
+    }
+
+    #[test]
+    fn unify_optional_record_fields_in_two_closed_records() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : { x ? Str, y ? Str } -> {}
+                
+                f {x : ""}
+                "#
+            ),
+            "{}",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_branch() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                when x is
+                    Ok s -> s
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                Ok str = x
+
+                str
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str [] -> Str
+                x = \Ok s -> s
+
+                x
+                "#
+            ),
+            "Result Str [] -> Str",
         );
     }
 }

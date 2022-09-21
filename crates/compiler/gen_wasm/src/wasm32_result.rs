@@ -6,6 +6,7 @@ The user needs to analyse the Wasm module's memory to decode the result.
 
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_intern::Interner;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 
@@ -36,13 +37,14 @@ pub trait Wasm32Result {
 /// Layout-driven wrapper generation
 pub fn insert_wrapper_for_layout<'a>(
     arena: &'a Bump,
+    interner: &impl Interner<'a, Layout<'a>>,
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
     let mut stack_data_structure = || {
-        let size = layout.stack_size(TargetInfo::default_wasm32());
+        let size = layout.stack_size(interner, TargetInfo::default_wasm32());
         if size == 0 {
             <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         } else {

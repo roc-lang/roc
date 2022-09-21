@@ -1,3 +1,5 @@
+# Snippet ideas
+
 I think snippet insertion would make for an awesome demo that shows off the potential of the editor and a basic version would not be that difficult to implement.
 With snippet insertion I mean the following:
 
@@ -26,22 +28,20 @@ The CC0 license seems like a good fit for the snippets.
 
 Fuzzy matching should be done to suggest a closest fuzzy match, so if the user types the snippet command `empty Map`, we should suggest `empty Dict`.
 
-# Snippet ideas
-
 ## Pure Text Snippets
 
 Pure text snippets are not templates and do not contain typed holes.
 Fish hooks are used when subvariants should be created e.g.: <collection> means this pure text snippets should be created for all Roc collections such as Dict, Set, List...
 
 - command: empty <collection>
-    + example: empty dict >> `{::}`
+  - example: empty dict >> `{::}`
 - command: <common algorithm>
-    + example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
-    + common algorithms: sieve of erathostenes, greatest common divisor, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
+  - example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
+  - common algorithms: sieve of erathostenes, greatest common divisor, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
 - command: current date/datetime
-    + example: current datetime >> `now <- Time.now\n`
+  - example: current datetime >> `now <- Time.now\n`
 - command: list range 1 to 5
-    + example: [1, 2, 3, 4, 5]
+  - example: [1, 2, 3, 4, 5]
 - command: use commandline args
 - command: post/get/put request
 - command: extract float(s)/number/emal addresses  from string. regex match float/number/email address/...
@@ -54,27 +54,28 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
 Snippets are inserted based on type of value on which the cursor is located.
 
 - command: <all builtins for current type>
-    + example:
-        * We have the cursor like this `people|`
-        * User presses snippet shortcut or dot key
-        * We show  a list with all builtin functions for the List type
-        * User chooses contains
-        * We change code to `List.contains people |Blank`
+  - example:
+    - We have the cursor like this `people|`
+    - User presses snippet shortcut or dot key
+    - We show  a list with all builtin functions for the List type
+    - User chooses contains
+    - We change code to `List.contains people |Blank`
 - command: Str to chars/charlist
-
 
 ## Snippets with Typed Holes
 
 - command: sort ^List *^ (by ^Record Field^) {ascending/descending}
-    + example: sort people by age descending >> ...
+  - example: sort people by age descending >> ...
 - command: escape url
-    + example: >> `percEncodedString = Url.percentEncode ^String^`
+  - example: >> `percEncodedString = Url.percentEncode ^String^`
 - command: list files in directory
-    + example: >>
+  - example: >>
+
         ```
         path <- File.pathFromStr ^String^
         dirContents <- File.enumerateDir path
         ```
+
 - command: remove/create file
 - command: read/write from file
 - command: concatenate strings
@@ -85,26 +86,27 @@ Snippets are inserted based on type of value on which the cursor is located.
 - command: reverse stirng
 - command: lambda/anonymous function
 - we should auto create type hole commands for all builtins.
-    + example: List has builtins reverse, repeat, len... generated snippet commands should be:
-        * reverse list > List.reverse ^List *^
-        * repeat list > List.repeat ^elem^ ^Nat^
-        * len list (fuzzy matches should be length of list)
+  - example: List has builtins reverse, repeat, len... generated snippet commands should be:
+    - reverse list > List.reverse ^List *^
+    - repeat list > List.repeat ^elem^ ^Nat^
+    - len list (fuzzy matches should be length of list)
 - append element to list
 
-# fuzzy matching
+## fuzzy matching
 
  some pairs for fuzzy matching unit tests:
- - hashmap > Dict
- - map > map (function), Dict
- - for > map, mapWithIndex, walk, walkBackwards, zip
- - apply/for yield > map
- - fold > walk, walkBackwards
- - foldl > walkBackwards
- - foldr > walk
- - head > takeFirst
- - filter > keepIf
 
-# Inspiration
+- hashmap > Dict
+- map > map (function), Dict
+- for > map, mapWithIndex, walk, walkBackwards, zip
+- apply/for yield > map
+- fold > walk, walkBackwards
+- foldl > walkBackwards
+- foldr > walk
+- head > takeFirst
+- filter > keepIf
+
+## Inspiration
 
 - [grepper](https://www.codegrepper.com/) snippet collection that embeds in google search results. See also this [collection of common questions](https://www.codegrepper.com/code-examples/rust).
 - [github copilot](https://copilot.github.com/) snippet generation with machine learning

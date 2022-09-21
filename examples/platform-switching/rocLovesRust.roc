@@ -1,5 +1,5 @@
 app "rocLovesRust"
-    packages { pf: "main.roc" }
+    packages { pf: "rust-platform/main.roc" }
     imports []
     provides [main] to pf
 

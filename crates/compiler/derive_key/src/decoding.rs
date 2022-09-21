@@ -1,7 +1,10 @@
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
-use crate::{util::debug_name_record, DeriveError};
+use crate::{
+    util::{check_derivable_ext_var, debug_name_record},
+    DeriveError,
+};
 
 #[derive(Hash)]
 pub enum FlatDecodable {
@@ -38,10 +41,11 @@ impl FlatDecodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    let fields_iter = match fields.unsorted_iterator(subs, ext) {
-                        Ok(it) => it,
-                        Err(_) => return Err(Underivable),
-                    };
+                    let (fields_iter, ext) = fields.unsorted_iterator_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyRecord))
+                    })?;
 
                     let mut field_names = Vec::with_capacity(fields.len());
                     for (field_name, record_field) in fields_iter {

@@ -210,7 +210,7 @@ impl<K, V> ExactSizeIterator for IntoIter<K, V> {
     }
 }
 
-impl<K: Ord, V> std::iter::FromIterator<(K, V)> for VecMap<K, V> {
+impl<K: PartialEq, V> std::iter::FromIterator<(K, V)> for VecMap<K, V> {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
