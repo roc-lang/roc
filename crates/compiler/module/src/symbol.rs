@@ -796,6 +796,12 @@ macro_rules! define_builtins {
         )+
         num_modules: $total:literal
     } => {
+        impl<'a> super::ident::QualifiedModuleName<'a> {
+            pub fn is_builtin(&self) -> bool {
+                self.opt_package.is_none() && ($($module_name == self.module.as_str() ||)+ false)
+            }
+        }
+
         impl IdentIds {
             pub fn exposed_builtins(extra_capacity: usize) -> IdentIdsByModule {
                 let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
