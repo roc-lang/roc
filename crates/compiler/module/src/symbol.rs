@@ -1169,7 +1169,7 @@ define_builtins! {
         85 NUM_INT_CAST: "intCast"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         87 NUM_DECIMAL: "Decimal" exposed_type=true
-        88 NUM_DEC: "Dec"  // the Num.Dectype alias
+        88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
         89 NUM_BYTES_TO_U16: "bytesToU16"
         90 NUM_BYTES_TO_U32: "bytesToU32"
         91 NUM_CAST_TO_NAT: "#castToNat"
