@@ -1958,7 +1958,7 @@ fn unreachable_void_constructor() {
 
         x : []
 
-        main = if True then Ok x else Err "abc" 
+        main = if Bool.true then Ok x else Err "abc" 
         "#
     )
 }
