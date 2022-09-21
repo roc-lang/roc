@@ -15,7 +15,6 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use itertools::Itertools;
 use roc_ast::{
     ast_error::ASTResult,
     lang::{
@@ -409,10 +408,10 @@ pub fn expr2_to_markup<'a>(
                 })
                 .collect::<ModuleResult<Vec<&str>>>()?;
 
-            let arg_mark_nodes = arg_names
+            let arg_mark_nodes: Vec<_> = arg_names
                 .iter()
                 .map(|arg_name| new_arg_name_mn(arg_name.to_string()))
-                .collect_vec();
+                .collect();
 
             let args_with_commas: Vec<MarkupNode> = join_mark_nodes_commas(arg_mark_nodes);
 

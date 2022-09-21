@@ -12,7 +12,6 @@ use super::{
 use crate::markup_error::{
     ExpectedTextNodeSnafu, NestedNodeMissingChildSnafu, NestedNodeRequiredSnafu,
 };
-use itertools::Itertools;
 use roc_ast::{
     lang::{core::ast::ASTNodeId, env::Env},
     mem_pool::pool_str::PoolStr,
@@ -448,9 +447,9 @@ pub fn join_mark_nodes_spaces(
         .collect();
 
     if with_prepend {
-        join_nodes.into_iter().interleave(mark_nodes_ids).collect()
+        interleave(join_nodes.into_iter(), mark_nodes_ids)
     } else {
-        mark_nodes_ids.into_iter().interleave(join_nodes).collect()
+        interleave(mark_nodes_ids, join_nodes.into_iter())
     }
 }
 
@@ -460,7 +459,7 @@ pub fn join_mark_nodes_commas(mark_nodes: Vec<MarkupNode>) -> Vec<MarkupNode> {
         .map(|_| new_comma_mn())
         .collect();
 
-    mark_nodes.into_iter().interleave(join_nodes).collect()
+    interleave(mark_nodes.into_iter(), join_nodes)
 }
 
 pub fn mark_nodes_to_string(markup_node_ids: &[MarkNodeId], mark_node_pool: &SlowPool) -> String {
@@ -491,5 +490,44 @@ pub fn node_to_string_w_children(
         let node_content_str = node.get_full_content();
 
         str_buffer.push_str(&node_content_str);
+    }
+}
+
+fn interleave<I, J>(i: I, j: J) -> Vec<I::Item>
+where
+    I: IntoIterator,
+    J: IntoIterator<Item = I::Item>,
+{
+    let mut output = Vec::new();
+
+    let mut flag = false;
+
+    let mut i = i.into_iter();
+    let mut j = j.into_iter();
+
+    loop {
+        flag = !flag;
+
+        if flag {
+            match i.next() {
+                None => {
+                    output.extend(j);
+                    break output;
+                }
+                Some(v) => {
+                    output.push(v);
+                }
+            }
+        } else {
+            match j.next() {
+                None => {
+                    output.extend(i);
+                    break output;
+                }
+                Some(v) => {
+                    output.push(v);
+                }
+            }
+        }
     }
 }
