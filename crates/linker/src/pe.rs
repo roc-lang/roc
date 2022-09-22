@@ -122,8 +122,8 @@ pub(crate) fn preprocess_windows(
     let last_host_section_size = last_host_section.size();
     let last_host_section_address = last_host_section.address();
 
+    // in the data directories, update the length of the imports (there is one fewer now)
     {
-        // in the data directories, update the length of the imports (there is one fewer now)
         let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
             &mut executable,
             dynamic_relocations.data_directories_offset_in_file as usize
@@ -131,11 +131,19 @@ pub(crate) fn preprocess_windows(
                     * std::mem::size_of::<pe::ImageDataDirectory>(),
         );
 
-        let current = dir.size.get(LE);
-        dir.size.set(
-            LE,
-            dbg!(current - std::mem::size_of::<pe::ImageImportDescriptor>() as u32),
-        );
+        let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
+        dir.size.set(LE, new);
+    }
+
+    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
+    {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        let start = dynamic_relocations.imports_offset_in_file as usize
+            + W * dynamic_relocations.dummy_import_index as usize;
+        for b in executable[start..][..W].iter_mut() {
+            *b = 0;
+        }
     }
 
     let metadata = PeMetadata {
@@ -339,17 +347,6 @@ pub(crate) fn surgery_pe(
         .collect();
 
     redirect_dummy_dll_functions(executable, &symbols, &md.imports, md.thunks_start_offset);
-
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-        let start = md.dynamic_relocations.imports_offset_in_file as usize
-            + W * md.dynamic_relocations.dummy_import_index as usize;
-        for b in executable[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
