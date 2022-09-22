@@ -60,7 +60,7 @@ pub(crate) fn preprocess_windows(
     let exec_file = std::fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let exec_data = &*exec_mmap;
-    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+    let _exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse executable file: {}", err);
@@ -71,10 +71,9 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(exec_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
 
-    let exec_data = std::fs::read(out_filename).unwrap();
-    let exec_data = exec_data.as_slice();
+    let exec_data: &[u8] = &*executable;
     let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
@@ -1025,7 +1024,7 @@ fn increase_number_of_sections_help(
     input_data: &[u8],
     new_sections: &[[u8; 8]],
     output_file: &Path,
-) {
+) -> MmapMut {
     use object::read::pe::ImageNtHeaders;
 
     let dos_header = object::pe::ImageDosHeader::parse(input_data).unwrap();
@@ -1065,6 +1064,8 @@ fn increase_number_of_sections_help(
         .collect();
 
     assert_eq!(new_sections, names.as_slice());
+
+    mmap
 }
 
 #[cfg(test)]
