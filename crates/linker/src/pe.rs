@@ -9,7 +9,7 @@ use object::{
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::load_struct_inplace_mut;
+use crate::{load_struct_inplace, load_struct_inplace_mut};
 
 #[allow(dead_code)]
 pub(crate) fn preprocess_windows(
@@ -408,12 +408,12 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
     unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
+/// Find the place in the executable where the thunks for our dummy .dll are stored
 #[allow(dead_code)]
-fn redirect_dummy_dll_functions(
-    executable: &mut [u8],
+fn find_thunks_start_offset(
+    executable: &[u8],
     dynamic_relocations: &DynamicRelocationsPe,
-    function_definition_vas: &[(String, u64)],
-) {
+) -> usize {
     // The host executable contains indirect calls to functions that the host should provide
     //
     //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
@@ -440,14 +440,13 @@ fn redirect_dummy_dll_functions(
     // sources:
     //
     // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
-
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
     let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
-        load_struct_inplace_mut::<ImageImportDescriptor>(executable, dummy_import_desc_start);
+        load_struct_inplace::<ImageImportDescriptor>(executable, dummy_import_desc_start);
 
     // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
     //
@@ -461,47 +460,42 @@ fn redirect_dummy_dll_functions(
     let dummy_thunks_address_va = dummy_import_desc.first_thunk;
     let dummy_thunks_address = dummy_thunks_address_va.get(LE);
 
-    use object::Object;
-    let object = object::read::pe::PeFile64::parse(&*executable).unwrap();
-    let imports: Vec<_> = object
-        .imports()
-        .unwrap()
-        .iter()
-        .filter(|import| import.library() == b"roc-cheaty-lib.dll")
-        .map(|import| {
-            std::str::from_utf8(import.name())
-                .unwrap_or_default()
-                .to_owned()
-        })
-        .collect();
-
-    let data: &[u8] = executable;
-
-    let dos_header = object::pe::ImageDosHeader::parse(data).unwrap();
+    let dos_header = object::pe::ImageDosHeader::parse(executable).unwrap();
     let mut offset = dos_header.nt_headers_offset().into();
 
     use object::read::pe::ImageNtHeaders;
-    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
-    let sections = nt_headers.sections(data, offset).unwrap();
+    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(executable, &mut offset).unwrap();
+    let sections = nt_headers.sections(executable, offset).unwrap();
 
-    // so we look at what section this virtual address is in
+    // find the section the virtual address is in
     let (section_va, offset_in_file) = sections
         .iter()
         .find_map(|section| {
-            section.pe_data_containing(data, dummy_thunks_address).map(
-                |(_section_data, section_va)| (section_va, section.pointer_to_raw_data.get(LE)),
-            )
+            section
+                .pe_data_containing(executable, dummy_thunks_address)
+                .map(|(_section_data, section_va)| {
+                    (section_va, section.pointer_to_raw_data.get(LE))
+                })
         })
         .expect("Invalid thunk virtual address");
 
     // and get the offset in the file of 0x1400037f0
-    let thunks_start_offset = (dummy_thunks_address - section_va + offset_in_file) as usize;
+    (dummy_thunks_address - section_va + offset_in_file) as usize
+}
 
+/// Make the thunks point to our actual roc application functions
+#[allow(dead_code)]
+fn redirect_dummy_dll_functions(
+    executable: &mut [u8],
+    function_definition_vas: &[(String, u64)],
+    imports: &[String],
+    thunks_start_offset: usize,
+) {
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
     let mut targets = function_definition_vas.iter();
-    'outer: for (i, host_name) in imports.iter().enumerate() {
-        for (app_target_name, app_target_va) in targets.by_ref() {
-            if host_name == app_target_name {
+    'outer: for (i, name) in imports.iter().enumerate() {
+        for (target_name, target_va) in targets.by_ref() {
+            if name == target_name {
                 // addresses are 64-bit values
                 let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
 
@@ -512,7 +506,7 @@ fn redirect_dummy_dll_functions(
                 }
 
                 // update the address to a function VA
-                address_bytes.copy_from_slice(&app_target_va.to_le_bytes());
+                address_bytes.copy_from_slice(&target_va.to_le_bytes());
 
                 continue 'outer;
             }
@@ -973,6 +967,35 @@ mod test {
         increase_number_of_sections_help(PE_DYNHOST, &new_sections, &path);
     }
 
+    fn redirect_dummy_dll_functions_test(
+        executable: &mut [u8],
+        dynamic_relocations: &DynamicRelocationsPe,
+        function_definition_vas: &[(String, u64)],
+    ) {
+        let object = object::read::pe::PeFile64::parse(&*executable).unwrap();
+        let imports: Vec<_> = object
+            .imports()
+            .unwrap()
+            .iter()
+            .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+            .map(|import| {
+                std::str::from_utf8(import.name())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+
+        // and get the offset in the file of 0x1400037f0
+        let thunks_start_offset = find_thunks_start_offset(executable, dynamic_relocations);
+
+        redirect_dummy_dll_functions(
+            executable,
+            function_definition_vas,
+            &imports,
+            thunks_start_offset,
+        )
+    }
+
     fn link_zig_host_and_app_help(dir: &Path) {
         use object::ObjectSection;
 
@@ -1196,7 +1219,7 @@ mod test {
             .into_iter()
             .map(|s| (s.name, s.offset_in_section as u64))
             .collect();
-        redirect_dummy_dll_functions(&mut executable, &dynamic_relocations, &symbols);
+        redirect_dummy_dll_functions_test(&mut executable, &dynamic_relocations, &symbols);
 
         remove_dummy_dll_import_table(
             &mut executable,
