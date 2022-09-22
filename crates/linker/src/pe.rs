@@ -124,12 +124,11 @@ pub(crate) fn preprocess_windows(
 
     // in the data directories, update the length of the imports (there is one fewer now)
     {
-        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
-            &mut executable,
-            dynamic_relocations.data_directories_offset_in_file as usize
-                + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
-                    * std::mem::size_of::<pe::ImageDataDirectory>(),
-        );
+        let start = dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
+                * std::mem::size_of::<pe::ImageDataDirectory>();
+
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut executable, start);
 
         let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
         dir.size.set(LE, new);
@@ -141,6 +140,7 @@ pub(crate) fn preprocess_windows(
 
         let start = dynamic_relocations.imports_offset_in_file as usize
             + W * dynamic_relocations.dummy_import_index as usize;
+
         for b in executable[start..][..W].iter_mut() {
             *b = 0;
         }
@@ -200,15 +200,10 @@ pub(crate) fn surgery_pe(
         .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
         .sum();
 
-    let dynhost_bytes = std::fs::read(out_filename).unwrap();
-
     let executable = &mut mmap_mut(
         Path::new(out_filename),
         md.dynhost_file_size + app_sections_size,
     );
-
-    // copying over all of the dynhost.exe bytes
-    executable[..md.dynhost_file_size].copy_from_slice(&dynhost_bytes);
 
     let app_code_section_va = md.last_host_section_address
         + next_multiple_of(
@@ -700,7 +695,6 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
         .read(true)
         .write(true)
         .create(true)
-        .truncate(true)
         .open(path)
         .unwrap_or_else(|e| internal_error!("{e}"));
     out_file
