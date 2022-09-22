@@ -73,10 +73,6 @@ pub(crate) fn preprocess_windows(
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     increase_number_of_sections_help(&data, &new_sections, out_filename);
 
-    use object::ObjectSection;
-    let last_host_section_index = exec_obj.sections().count() - 2; // we add 2 sections
-    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
-
     let exec_data = std::fs::read(out_filename).unwrap();
     let exec_data = exec_data.as_slice();
     let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
@@ -85,6 +81,11 @@ pub(crate) fn preprocess_windows(
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
+
+    use object::ObjectSection;
+    // -2 because we added 2 sections, -1 because we have a count and want an index
+    let last_host_section_index = exec_obj.sections().count() - 2 - 1;
+    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
 
     let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
     let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
