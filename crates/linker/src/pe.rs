@@ -86,6 +86,9 @@ pub(crate) fn preprocess_windows(
         }
     };
 
+    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
+    let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
+
     let optional_header = exec_obj.nt_headers().optional_header;
 
     let optional_header_offset = exec_obj.dos_header().nt_headers_offset() as usize
@@ -115,9 +118,6 @@ pub(crate) fn preprocess_windows(
                 .to_owned()
         })
         .collect();
-
-    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
-    let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
 
     let metadata = PeMetadata {
         dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
@@ -314,7 +314,6 @@ pub(crate) fn surgery_pe(
         data_bytes_added as u32,
     );
 
-    let dynamic_relocations = DynamicRelocationsPe::new(executable);
     let symbols: Vec<_> = symbols
         .into_iter()
         .map(|s| (s.name, s.offset_in_section as u64))
@@ -324,9 +323,9 @@ pub(crate) fn surgery_pe(
 
     remove_dummy_dll_import_table(
         executable,
-        dynamic_relocations.data_directories_offset_in_file,
-        dynamic_relocations.imports_offset_in_file,
-        dynamic_relocations.dummy_import_index,
+        md.dynamic_relocations.data_directories_offset_in_file,
+        md.dynamic_relocations.imports_offset_in_file,
+        md.dynamic_relocations.dummy_import_index,
     );
 }
 
