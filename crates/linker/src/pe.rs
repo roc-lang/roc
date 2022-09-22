@@ -117,51 +117,7 @@ pub(crate) fn preprocess_windows(
         .collect();
 
     let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
-
-    let thunks_start_offset = {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
-            + W * dynamic_relocations.dummy_import_index as usize;
-
-        let dummy_import_desc =
-            load_struct_inplace::<ImageImportDescriptor>(exec_data, dummy_import_desc_start);
-
-        // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
-        //
-        // > Once an imported value has been resolved, the pointer to it is stored in the FirstThunk array.
-        // > It can then be used at runtime to address imported values.
-        //
-        // There is also an OriginalFirstThunk array, which we don't use.
-        //
-        // The `dummy_thunks_address` is the 0x1400037f0 of our example. In and of itself that is no good though,
-        // this is a virtual address, we need a file offset
-        let dummy_thunks_address_va = dummy_import_desc.first_thunk;
-        let dummy_thunks_address = dummy_thunks_address_va.get(LE);
-
-        dbg!(dummy_thunks_address);
-
-        let dos_header = object::pe::ImageDosHeader::parse(exec_data).unwrap();
-        let mut offset = dos_header.nt_headers_offset().into();
-
-        use object::read::pe::ImageNtHeaders;
-        let (nt_headers, _data_directories) =
-            ImageNtHeaders64::parse(exec_data, &mut offset).unwrap();
-        let sections = nt_headers.sections(exec_data, offset).unwrap();
-
-        let (section_va, offset_in_file) = sections
-            .iter()
-            .find_map(|section| {
-                section
-                    .pe_data_containing(exec_data, dummy_thunks_address)
-                    .map(|(_section_data, section_va)| {
-                        (section_va, section.pointer_to_raw_data.get(LE))
-                    })
-            })
-            .expect("Invalid thunk virtual address");
-
-        (dummy_thunks_address - section_va + offset_in_file) as usize
-    };
+    let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
 
     let metadata = PeMetadata {
         dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
