@@ -74,7 +74,7 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 operating_system: target_lexicon::OperatingSystem::Windows,
                 binary_format: target_lexicon::BinaryFormat::Coff,
                 ..
-            } => false,
+            } => true,
 
             _ => false,
         }
