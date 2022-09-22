@@ -71,20 +71,20 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(exec_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let mut executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let exec_data = &*executable;
 
-    use object::ObjectSection;
-    let last_host_section_index = exec_obj.sections().count() - 2; // we add 2 sections
-    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
-
-    let exec_data = std::fs::read(out_filename).unwrap();
-    let exec_data = exec_data.as_slice();
     let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
+
+    use object::ObjectSection;
+    // -2 because we add 2 sections, and -1 because we get a count and want an index
+    let last_host_section_index = exec_obj.sections().count() - 2 - 1;
+    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
 
     let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
     let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
@@ -119,14 +119,24 @@ pub(crate) fn preprocess_windows(
         })
         .collect();
 
+    let last_host_section_size = last_host_section.size();
+    let last_host_section_address = last_host_section.address();
+
+    remove_dummy_dll_import_table(
+        &mut executable,
+        dynamic_relocations.data_directories_offset_in_file,
+        dynamic_relocations.imports_offset_in_file,
+        dynamic_relocations.dummy_import_index,
+    );
+
     let metadata = PeMetadata {
         dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
         image_base: optional_header.image_base.get(LE),
         file_alignment: optional_header.file_alignment.get(LE),
         section_alignment: optional_header.section_alignment.get(LE),
-        last_host_section_size: last_host_section.size(),
-        last_host_section_address: last_host_section.address(),
         optional_header_offset,
+        last_host_section_size,
+        last_host_section_address,
         imports,
         exports,
         dynamic_relocations,
@@ -320,13 +330,6 @@ pub(crate) fn surgery_pe(
         .collect();
 
     redirect_dummy_dll_functions(executable, &symbols, &md.imports, md.thunks_start_offset);
-
-    remove_dummy_dll_import_table(
-        executable,
-        md.dynamic_relocations.data_directories_offset_in_file,
-        md.dynamic_relocations.imports_offset_in_file,
-        md.dynamic_relocations.dummy_import_index,
-    );
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1024,7 +1027,7 @@ fn increase_number_of_sections_help(
     input_data: &[u8],
     new_sections: &[[u8; 8]],
     output_file: &Path,
-) {
+) -> MmapMut {
     use object::read::pe::ImageNtHeaders;
 
     let dos_header = object::pe::ImageDosHeader::parse(input_data).unwrap();
@@ -1064,6 +1067,8 @@ fn increase_number_of_sections_help(
         .collect();
 
     assert_eq!(new_sections, names.as_slice());
+
+    mmap
 }
 
 #[cfg(test)]
