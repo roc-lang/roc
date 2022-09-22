@@ -175,8 +175,6 @@ pub(crate) fn surgery_pe(
     app_bytes: &[u8],
     _verbose: bool,
 ) {
-    use object::pe;
-
     let md: PeMetadata = {
         let input =
             std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
@@ -434,7 +432,6 @@ impl DynamicRelocationsPe {
     }
 
     fn new_help(data: &[u8]) -> object::read::Result<Self> {
-        use object::pe;
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(data)?;
@@ -555,7 +552,6 @@ impl Preprocessor {
     }
 
     fn new(data: &[u8], extra_sections: &[[u8; 8]]) -> Self {
-        use object::pe;
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
@@ -1675,16 +1671,12 @@ mod test {
     fn link_roc_host_and_app_help(dir: &Path) {
         use object::ObjectSection;
 
-        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
-
         // open our app object; we'll copy sections from it later
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
         let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
         let app_obj_sections = AppSections::from_data(&*app_obj);
         let mut symbols = app_obj_sections.symbols;
-
-        let app_obj_file = object::File::parse(&*app_obj).unwrap();
 
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
