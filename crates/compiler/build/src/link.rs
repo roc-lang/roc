@@ -133,6 +133,7 @@ pub fn build_zig_host_native(
         command.args(&[
             "build-exe",
             "-fPIE",
+            "-rdynamic", // make sure roc_alloc and friends are exposed
             shared_lib_path.to_str().unwrap(),
             &builtins_obj,
         ]);

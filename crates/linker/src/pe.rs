@@ -1,21 +1,52 @@
-use std::{ops::Range, path::Path, time::Instant};
+use std::{
+    io::{BufReader, BufWriter},
+    ops::Range,
+    path::Path,
+    time::Instant,
+};
 
+use bincode::{deserialize_from, serialize_into};
 use memmap2::{Mmap, MmapMut};
 use object::{
-    pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
+    pe::{
+        ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
+        ImageThunkData64,
+    },
     read::pe::ImportTable,
-    LittleEndian as LE, RelocationTarget, SectionIndex, SymbolIndex,
+    LittleEndian as LE, Object, RelocationTarget, SectionIndex,
 };
+use serde::{Deserialize, Serialize};
+
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::load_struct_inplace_mut;
+use crate::{load_struct_inplace, load_struct_inplace_mut};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PeMetadata {
+    dynhost_file_size: usize,
+
+    image_base: u64,
+    file_alignment: u32,
+    section_alignment: u32,
+
+    last_host_section_size: u64,
+    last_host_section_address: u64,
+
+    optional_header_offset: usize,
+
+    imports: Vec<String>,
+    exports: MutMap<String, i64>,
+
+    dynamic_relocations: DynamicRelocationsPe,
+    thunks_start_offset: usize,
+}
 
 #[allow(dead_code)]
 pub(crate) fn preprocess_windows(
     exec_filename: &str,
-    _metadata_filename: &str,
-    out_filename: &str,
+    metadata_filename: &Path,
+    out_filename: &Path,
     _shared_lib: &Path,
     _verbose: bool,
     _time: bool,
@@ -26,7 +57,7 @@ pub(crate) fn preprocess_windows(
     let exec_file = std::fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let exec_data = &*exec_mmap;
-    let _exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse executable file: {}", err);
@@ -37,21 +68,310 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(exec_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    increase_number_of_sections_help(&data, &new_sections, Path::new(out_filename));
+    increase_number_of_sections_help(&data, &new_sections, out_filename);
+
+    use object::ObjectSection;
+    let last_host_section_index = exec_obj.sections().count() - 2; // we add 2 sections
+    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
+
+    let exec_data = std::fs::read(out_filename).unwrap();
+    let exec_data = exec_data.as_slice();
+    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+        Ok(obj) => obj,
+        Err(err) => {
+            internal_error!("Failed to parse executable file: {}", err);
+        }
+    };
+
+    let optional_header = exec_obj.nt_headers().optional_header;
+
+    let optional_header_offset = exec_obj.dos_header().nt_headers_offset() as usize
+        + std::mem::size_of::<u32>()
+        + std::mem::size_of::<ImageFileHeader>();
+
+    let exports: MutMap<String, i64> = exec_obj
+        .exports()
+        .unwrap()
+        .into_iter()
+        .map(|e| {
+            (
+                String::from_utf8(e.name().to_vec()).unwrap(),
+                (e.address() - optional_header.image_base.get(LE)) as i64,
+            )
+        })
+        .collect();
+
+    let imports: Vec<_> = exec_obj
+        .imports()
+        .unwrap()
+        .iter()
+        .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+        .map(|import| {
+            std::str::from_utf8(import.name())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+
+    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
+
+    let thunks_start_offset = {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
+            + W * dynamic_relocations.dummy_import_index as usize;
+
+        let dummy_import_desc =
+            load_struct_inplace::<ImageImportDescriptor>(exec_data, dummy_import_desc_start);
+
+        // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
+        //
+        // > Once an imported value has been resolved, the pointer to it is stored in the FirstThunk array.
+        // > It can then be used at runtime to address imported values.
+        //
+        // There is also an OriginalFirstThunk array, which we don't use.
+        //
+        // The `dummy_thunks_address` is the 0x1400037f0 of our example. In and of itself that is no good though,
+        // this is a virtual address, we need a file offset
+        let dummy_thunks_address_va = dummy_import_desc.first_thunk;
+        let dummy_thunks_address = dummy_thunks_address_va.get(LE);
+
+        dbg!(dummy_thunks_address);
+
+        let dos_header = object::pe::ImageDosHeader::parse(exec_data).unwrap();
+        let mut offset = dos_header.nt_headers_offset().into();
+
+        use object::read::pe::ImageNtHeaders;
+        let (nt_headers, _data_directories) =
+            ImageNtHeaders64::parse(exec_data, &mut offset).unwrap();
+        let sections = nt_headers.sections(exec_data, offset).unwrap();
+
+        let (section_va, offset_in_file) = sections
+            .iter()
+            .find_map(|section| {
+                section
+                    .pe_data_containing(exec_data, dummy_thunks_address)
+                    .map(|(_section_data, section_va)| {
+                        (section_va, section.pointer_to_raw_data.get(LE))
+                    })
+            })
+            .expect("Invalid thunk virtual address");
+
+        (dummy_thunks_address - section_va + offset_in_file) as usize
+    };
+
+    let metadata = PeMetadata {
+        dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
+        image_base: optional_header.image_base.get(LE),
+        file_alignment: optional_header.file_alignment.get(LE),
+        section_alignment: optional_header.section_alignment.get(LE),
+        last_host_section_size: last_host_section.size(),
+        last_host_section_address: last_host_section.address(),
+        optional_header_offset,
+        imports,
+        exports,
+        dynamic_relocations,
+        thunks_start_offset,
+    };
+
+    let metadata_file =
+        std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+    serialize_into(BufWriter::new(metadata_file), &metadata)
+        .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
 
     Ok(())
 }
 
 pub(crate) fn surgery_pe(
+    out_filename: &str,
+    metadata_filename: &str,
+    app_bytes: &[u8],
     _verbose: bool,
-    // md: &metadata::Metadata,
-    exec_mmap: &mut MmapMut,
-    _offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
-    app_obj: object::File,
 ) {
+    use object::pe;
+
+    let md: PeMetadata = {
+        let input =
+            std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        match deserialize_from(BufReader::new(input)) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
+        }
+    };
+
+    let app_obj_sections = AppSections::from_data(app_bytes);
+    let mut symbols = app_obj_sections.symbols;
+
+    let image_base: u64 = md.image_base;
+    let file_alignment = md.file_alignment as usize;
+    let section_alignment = md.section_alignment as usize;
+
+    let app_sections_size: usize = app_obj_sections
+        .sections
+        .iter()
+        .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
+        .sum();
+
+    let dynhost_bytes = std::fs::read(out_filename).unwrap();
+
+    let executable = &mut mmap_mut(
+        Path::new(out_filename),
+        md.dynhost_file_size + app_sections_size,
+    );
+
+    // copying over all of the dynhost.exe bytes
+    executable[..md.dynhost_file_size].copy_from_slice(&dynhost_bytes);
+
+    let app_code_section_va = md.last_host_section_address
+        + next_multiple_of(
+            md.last_host_section_size as usize,
+            section_alignment as usize,
+        ) as u64;
+
+    let mut section_header_start = 624;
+    let mut section_file_offset = md.dynhost_file_size;
+    let mut virtual_address = (app_code_section_va - image_base) as u32;
+
+    let mut code_bytes_added = 0;
+    let mut data_bytes_added = 0;
+    let mut file_bytes_added = 0;
+
+    for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
+        let length: usize = app_obj_sections
+            .sections
+            .iter()
+            .filter(|s| s.kind == kind)
+            .map(|s| s.file_range.end - s.file_range.start)
+            .sum();
+
+        // offset_in_section now becomes a proper virtual address
+        for symbol in symbols.iter_mut() {
+            if symbol.section_kind == kind {
+                symbol.offset_in_section += image_base as usize + virtual_address as usize;
+            }
+        }
+
+        let virtual_size = length as u32;
+        let size_of_raw_data = next_multiple_of(length, file_alignment) as u32;
+
+        match kind {
+            SectionKind::Text => {
+                code_bytes_added += size_of_raw_data;
+
+                write_section_header(
+                    executable,
+                    *b".text1\0\0",
+                    pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE,
+                    section_header_start,
+                    section_file_offset,
+                    virtual_size,
+                    virtual_address,
+                    size_of_raw_data,
+                );
+            }
+            SectionKind::ReadOnlyData => {
+                data_bytes_added += size_of_raw_data;
+
+                write_section_header(
+                    executable,
+                    *b".rdata1\0",
+                    pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
+                    section_header_start,
+                    section_file_offset,
+                    virtual_size,
+                    virtual_address,
+                    size_of_raw_data,
+                );
+            }
+        }
+
+        let mut offset = section_file_offset;
+        let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+        for section in it {
+            let slice = &app_bytes[section.file_range.start..section.file_range.end];
+            executable[offset..][..slice.len()].copy_from_slice(slice);
+
+            for (name, app_relocation) in section.relocations.iter() {
+                let AppRelocation {
+                    offset_in_section,
+                    relocation,
+                    address,
+                } = app_relocation;
+
+                match md.exports.get(name) {
+                    Some(destination) => {
+                        match relocation.kind() {
+                            object::RelocationKind::Relative => {
+                                // we implicitly only do 32-bit relocations
+                                debug_assert_eq!(relocation.size(), 32);
+
+                                let delta = destination
+                                    - virtual_address as i64
+                                    - *offset_in_section as i64
+                                    + relocation.addend();
+
+                                executable[offset + *offset_in_section as usize..][..4]
+                                    .copy_from_slice(&(delta as i32).to_le_bytes());
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    None => {
+                        match relocation.kind() {
+                            object::RelocationKind::Relative => {
+                                // we implicitly only do 32-bit relocations
+                                debug_assert_eq!(relocation.size(), 32);
+
+                                let delta = *address as i64 - *offset_in_section as i64
+                                    + relocation.addend();
+
+                                executable[offset + *offset_in_section as usize..][..4]
+                                    .copy_from_slice(&(delta as i32).to_le_bytes());
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                }
+            }
+
+            offset += slice.len();
+        }
+
+        section_header_start += std::mem::size_of::<ImageSectionHeader>();
+        section_file_offset += size_of_raw_data as usize;
+        virtual_address += next_multiple_of(length, section_alignment) as u32;
+        file_bytes_added += next_multiple_of(length, section_alignment) as u32;
+    }
+
+    update_optional_header(
+        executable,
+        md.optional_header_offset,
+        code_bytes_added as u32,
+        file_bytes_added as u32,
+        data_bytes_added as u32,
+    );
+
+    let dynamic_relocations = DynamicRelocationsPe::new(executable);
+    let symbols: Vec<_> = symbols
+        .into_iter()
+        .map(|s| (s.name, s.offset_in_section as u64))
+        .collect();
+
+    redirect_dummy_dll_functions_help(executable, &symbols, &md.imports, md.thunks_start_offset);
+
+    remove_dummy_dll_import_table(
+        executable,
+        dynamic_relocations.data_directories_offset_in_file,
+        dynamic_relocations.imports_offset_in_file,
+        dynamic_relocations.dummy_import_index,
+    );
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct DynamicRelocationsPe {
     name_by_virtual_address: MutMap<u32, String>,
 
@@ -420,7 +740,7 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
 
 #[allow(dead_code)]
 fn redirect_dummy_dll_functions(
-    app: &mut [u8],
+    executable: &mut [u8],
     dynamic_relocations: &DynamicRelocationsPe,
     function_definition_vas: &[(String, u64)],
 ) {
@@ -457,7 +777,7 @@ fn redirect_dummy_dll_functions(
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
-        load_struct_inplace_mut::<ImageImportDescriptor>(app, dummy_import_desc_start);
+        load_struct_inplace::<ImageImportDescriptor>(executable, dummy_import_desc_start);
 
     // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
     //
@@ -471,8 +791,9 @@ fn redirect_dummy_dll_functions(
     let dummy_thunks_address_va = dummy_import_desc.first_thunk;
     let dummy_thunks_address = dummy_thunks_address_va.get(LE);
 
-    use object::Object;
-    let object = object::read::pe::PeFile64::parse(&*app).unwrap();
+    dbg!(dummy_thunks_address);
+
+    let object = object::read::pe::PeFile64::parse(&*executable).unwrap();
     let imports: Vec<_> = object
         .imports()
         .unwrap()
@@ -485,7 +806,7 @@ fn redirect_dummy_dll_functions(
         })
         .collect();
 
-    let data: &[u8] = app;
+    let data: &[u8] = executable;
 
     let dos_header = object::pe::ImageDosHeader::parse(data).unwrap();
     let mut offset = dos_header.nt_headers_offset().into();
@@ -507,13 +828,57 @@ fn redirect_dummy_dll_functions(
     // and get the offset in the file of 0x1400037f0
     let thunks_start_offset = (dummy_thunks_address - section_va + offset_in_file) as usize;
 
+    dbg!(&imports, thunks_start_offset);
+
+    redirect_dummy_dll_functions_help(
+        executable,
+        function_definition_vas,
+        &imports,
+        thunks_start_offset,
+    )
+}
+
+#[allow(dead_code)]
+fn redirect_dummy_dll_functions_help(
+    executable: &mut [u8],
+    function_definition_vas: &[(String, u64)],
+    imports: &[String],
+    thunks_start_offset: usize,
+) {
+    // The host executable contains indirect calls to functions that the host should provide
+    //
+    //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
+    //     140001062:	89 c3                	mov    ebx,eax
+    //     140001064:	b1 21                	mov    cl,0x21
+    //
+    // This `call` is an indirect call (see https://www.felixcloutier.com/x86/call, our call starts
+    // with 0xe8, so it is relative) In other words, at runtime the program will go to 0x1400037f0,
+    // read a pointer-sized value there, and jump to that location.
+    //
+    // The 0x1400037f0 virtual address is located in the .rdata section
+    //
+    //     Sections:
+    //     Idx Name          Size      VMA               LMA               File off  Algn
+    //       0 .text         0000169a  0000000140001000  0000000140001000  00000600  2**4
+    //                       CONTENTS, ALLOC, LOAD, READONLY, CODE
+    //       1 .rdata        00000ba8  0000000140003000  0000000140003000  00001e00  2**4
+    //                       CONTENTS, ALLOC, LOAD, READONLY, DATA
+    //
+    // Our task is then to put a valid function pointer at 0x1400037f0. The value should be a
+    // virtual address pointing at the start of a function (which must be located in an executable
+    // section)
+    //
+    // sources:
+    //
+    // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
+
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
     let mut targets = function_definition_vas.iter();
     'outer: for (i, name) in imports.iter().enumerate() {
         for (target_name, target_va) in targets.by_ref() {
             if name == target_name {
                 // addresses are 64-bit values
-                let address_bytes = &mut app[thunks_start_offset + i * 8..][..8];
+                let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
 
                 // the array of addresses is null-terminated; make sure we haven't reached the end
                 let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
@@ -572,7 +937,7 @@ struct AppSections {
 impl AppSections {
     #[allow(dead_code)]
     fn from_data(data: &[u8]) -> Self {
-        use object::{Object, ObjectSection};
+        use object::ObjectSection;
 
         let file = object::File::parse(data).unwrap();
 
