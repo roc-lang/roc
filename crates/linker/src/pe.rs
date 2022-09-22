@@ -119,13 +119,16 @@ pub(crate) fn preprocess_windows(
         })
         .collect();
 
+    let last_host_section_size = last_host_section.size();
+    let last_host_section_address = last_host_section.address();
+
     let metadata = PeMetadata {
         dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
         image_base: optional_header.image_base.get(LE),
         file_alignment: optional_header.file_alignment.get(LE),
         section_alignment: optional_header.section_alignment.get(LE),
-        last_host_section_size: last_host_section.size(),
-        last_host_section_address: last_host_section.address(),
+        last_host_section_size,
+        last_host_section_address,
         optional_header_offset,
         imports,
         exports,
