@@ -1115,6 +1115,7 @@ mod test {
                 "-lc",
                 "-target",
                 "x86_64-windows-gnu",
+                "-rdynamic",
                 "--strip",
                 "-OReleaseFast",
             ])
