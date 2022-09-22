@@ -410,7 +410,7 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
 
 #[allow(dead_code)]
 fn redirect_dummy_dll_functions(
-    app: &mut [u8],
+    executable: &mut [u8],
     dynamic_relocations: &DynamicRelocationsPe,
     function_definition_vas: &[(String, u64)],
 ) {
@@ -447,7 +447,7 @@ fn redirect_dummy_dll_functions(
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
-        load_struct_inplace_mut::<ImageImportDescriptor>(app, dummy_import_desc_start);
+        load_struct_inplace_mut::<ImageImportDescriptor>(executable, dummy_import_desc_start);
 
     // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
     //
@@ -462,7 +462,7 @@ fn redirect_dummy_dll_functions(
     let dummy_thunks_address = dummy_thunks_address_va.get(LE);
 
     use object::Object;
-    let object = object::read::pe::PeFile64::parse(&*app).unwrap();
+    let object = object::read::pe::PeFile64::parse(&*executable).unwrap();
     let imports: Vec<_> = object
         .imports()
         .unwrap()
@@ -475,7 +475,7 @@ fn redirect_dummy_dll_functions(
         })
         .collect();
 
-    let data: &[u8] = app;
+    let data: &[u8] = executable;
 
     let dos_header = object::pe::ImageDosHeader::parse(data).unwrap();
     let mut offset = dos_header.nt_headers_offset().into();
@@ -499,11 +499,11 @@ fn redirect_dummy_dll_functions(
 
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
     let mut targets = function_definition_vas.iter();
-    'outer: for (i, name) in imports.iter().enumerate() {
-        for (target_name, target_va) in targets.by_ref() {
-            if name == target_name {
+    'outer: for (i, host_name) in imports.iter().enumerate() {
+        for (app_target_name, app_target_va) in targets.by_ref() {
+            if host_name == app_target_name {
                 // addresses are 64-bit values
-                let address_bytes = &mut app[thunks_start_offset + i * 8..][..8];
+                let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
 
                 // the array of addresses is null-terminated; make sure we haven't reached the end
                 let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
@@ -512,7 +512,7 @@ fn redirect_dummy_dll_functions(
                 }
 
                 // update the address to a function VA
-                address_bytes.copy_from_slice(&target_va.to_le_bytes());
+                address_bytes.copy_from_slice(&app_target_va.to_le_bytes());
 
                 continue 'outer;
             }
@@ -1091,15 +1091,15 @@ mod test {
 
         let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
-        let mut app = mmap_mut(
+        let mut executable = mmap_mut(
             &dir.join("app.exe"),
             dynhost_bytes.len() + app_sections_size,
         );
 
         // copying over all of the dynhost.exe bytes
-        app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
+        executable[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
 
-        let file = PeFile64::parse(app.deref()).unwrap();
+        let file = PeFile64::parse(executable.deref()).unwrap();
         let last_host_section = file.sections().nth(last_host_section_index).unwrap();
 
         let optional_header_offset = file.dos_header().nt_headers_offset() as usize
@@ -1143,7 +1143,7 @@ mod test {
                     code_bytes_added += size_of_raw_data;
 
                     write_section_header(
-                        &mut app,
+                        &mut executable,
                         *b".text1\0\0",
                         pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE,
                         section_header_start,
@@ -1157,7 +1157,7 @@ mod test {
                     data_bytes_added += size_of_raw_data;
 
                     write_section_header(
-                        &mut app,
+                        &mut executable,
                         *b".rdata1\0",
                         pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
                         section_header_start,
@@ -1173,7 +1173,7 @@ mod test {
             let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
             for section in it {
                 let slice = &app_obj[section.file_range.start..section.file_range.end];
-                app[offset..][..slice.len()].copy_from_slice(slice);
+                executable[offset..][..slice.len()].copy_from_slice(slice);
                 offset += slice.len();
             }
 
@@ -1184,22 +1184,22 @@ mod test {
         }
 
         update_optional_header(
-            &mut app,
+            &mut executable,
             optional_header_offset,
             code_bytes_added as u32,
             file_bytes_added as u32,
             data_bytes_added as u32,
         );
 
-        let dynamic_relocations = DynamicRelocationsPe::new(&app);
+        let dynamic_relocations = DynamicRelocationsPe::new(&executable);
         let symbols: Vec<_> = symbols
             .into_iter()
             .map(|s| (s.name, s.offset_in_section as u64))
             .collect();
-        redirect_dummy_dll_functions(&mut app, &dynamic_relocations, &symbols);
+        redirect_dummy_dll_functions(&mut executable, &dynamic_relocations, &symbols);
 
         remove_dummy_dll_import_table(
-            &mut app,
+            &mut executable,
             dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
             dynamic_relocations.dummy_import_index,
