@@ -1061,10 +1061,10 @@ mod test {
 
         // open our app object; we'll copy sections from it later
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
-        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+        let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        let app_obj_sections = AppSections::from_data(&*app_obj);
-        let mut symbols = app_obj_sections.symbols;
+        let roc_app_sections = AppSections::from_data(&*roc_app);
+        let mut symbols = roc_app_sections.symbols;
 
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
@@ -1106,7 +1106,7 @@ mod test {
         let section_alignment = 0x1000;
         let last_host_section_index = 5;
 
-        let app_sections_size: usize = app_obj_sections
+        let roc_app_sections_size: usize = roc_app_sections
             .sections
             .iter()
             .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
@@ -1116,7 +1116,7 @@ mod test {
 
         let mut executable = mmap_mut(
             &dir.join("app.exe"),
-            dynhost_bytes.len() + app_sections_size,
+            dynhost_bytes.len() + roc_app_sections_size,
         );
 
         // copying over all of the dynhost.exe bytes
@@ -1129,7 +1129,7 @@ mod test {
             + std::mem::size_of::<u32>()
             + std::mem::size_of::<ImageFileHeader>();
 
-        let app_code_section_va = last_host_section.address()
+        let extra_code_section_va = last_host_section.address()
             + next_multiple_of(
                 last_host_section.size() as usize,
                 section_alignment as usize,
@@ -1137,14 +1137,14 @@ mod test {
 
         let mut section_header_start = 624;
         let mut section_file_offset = dynhost_bytes.len();
-        let mut virtual_address = (app_code_section_va - image_base) as u32;
+        let mut virtual_address = (extra_code_section_va - image_base) as u32;
 
         let mut code_bytes_added = 0;
         let mut data_bytes_added = 0;
         let mut file_bytes_added = 0;
 
         for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
-            let length: usize = app_obj_sections
+            let length: usize = roc_app_sections
                 .sections
                 .iter()
                 .filter(|s| s.kind == kind)
@@ -1193,9 +1193,9 @@ mod test {
             }
 
             let mut offset = section_file_offset;
-            let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+            let it = roc_app_sections.sections.iter().filter(|s| s.kind == kind);
             for section in it {
-                let slice = &app_obj[section.file_range.start..section.file_range.end];
+                let slice = &roc_app[section.file_range.start..section.file_range.end];
                 executable[offset..][..slice.len()].copy_from_slice(slice);
                 offset += slice.len();
             }
