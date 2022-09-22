@@ -9,7 +9,7 @@ use bincode::{deserialize_from, serialize_into};
 use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{
-        ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
+        self, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
         ImageThunkData64,
     },
     read::pe::ImportTable,
@@ -71,7 +71,7 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(exec_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let mut executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
 
     let exec_data: &[u8] = &*executable;
     let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
@@ -121,6 +121,22 @@ pub(crate) fn preprocess_windows(
 
     let last_host_section_size = last_host_section.size();
     let last_host_section_address = last_host_section.address();
+
+    {
+        // in the data directories, update the length of the imports (there is one fewer now)
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+            &mut executable,
+            dynamic_relocations.data_directories_offset_in_file as usize
+                + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
+                    * std::mem::size_of::<pe::ImageDataDirectory>(),
+        );
+
+        let current = dir.size.get(LE);
+        dir.size.set(
+            LE,
+            dbg!(current - std::mem::size_of::<pe::ImageImportDescriptor>() as u32),
+        );
+    }
 
     let metadata = PeMetadata {
         dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
@@ -324,12 +340,16 @@ pub(crate) fn surgery_pe(
 
     redirect_dummy_dll_functions(executable, &symbols, &md.imports, md.thunks_start_offset);
 
-    remove_dummy_dll_import_table(
-        executable,
-        md.dynamic_relocations.data_directories_offset_in_file,
-        md.dynamic_relocations.imports_offset_in_file,
-        md.dynamic_relocations.dummy_import_index,
-    );
+    {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
+        let start = md.dynamic_relocations.imports_offset_in_file as usize
+            + W * md.dynamic_relocations.dummy_import_index as usize;
+        for b in executable[start..][..W].iter_mut() {
+            *b = 0;
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -474,14 +494,12 @@ impl DynamicRelocationsPe {
 }
 
 #[allow(dead_code)]
-fn remove_dummy_dll_import_table(
+fn remove_dummy_dll_import_table_test(
     data: &mut [u8],
     data_directories_offset_in_file: u32,
     imports_offset_in_file: u32,
     dummy_import_index: u32,
 ) {
-    use object::pe;
-
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
     // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
@@ -1229,7 +1247,7 @@ mod test {
         let dynamic_relocations = DynamicRelocationsPe::new(PE_DYNHOST);
         let mut data = PE_DYNHOST.to_vec();
 
-        remove_dummy_dll_import_table(
+        remove_dummy_dll_import_table_test(
             &mut data,
             dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
@@ -1594,7 +1612,7 @@ mod test {
             .collect();
         redirect_dummy_dll_functions_test(&mut app, &dynamic_relocations, &symbols);
 
-        remove_dummy_dll_import_table(
+        remove_dummy_dll_import_table_test(
             &mut app,
             dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
@@ -1853,7 +1871,7 @@ mod test {
             .collect();
         redirect_dummy_dll_functions_test(&mut app, &dynamic_relocations, &symbols);
 
-        remove_dummy_dll_import_table(
+        remove_dummy_dll_import_table_test(
             &mut app,
             dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
