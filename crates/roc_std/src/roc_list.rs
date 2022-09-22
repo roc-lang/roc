@@ -103,18 +103,6 @@ impl<T> RocList<T> {
         self.len() == 0
     }
 
-    pub fn get(&self, index: usize) -> Option<&T> {
-        if self.len() <= index {
-            return None;
-        }
-
-        let elements = self.elements?;
-        let element_ptr = unsafe { elements.as_ptr().add(index) };
-
-        // Return the element.
-        Some(unsafe { ManuallyDrop::into_inner(element_ptr.cast::<ManuallyDrop<&T>>().read()) })
-    }
-
     /// Note that there is no way to convert directly to a Vec.
     ///
     /// This is because RocList values are not allocated using the system allocator, so
