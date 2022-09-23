@@ -76,14 +76,14 @@ impl<'a, K, V> IntoIterator for &'a RocDict<K, V> {
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
             index: 0,
-            items: self,
+            items: self.0.as_slice(),
         }
     }
 }
 
 pub struct IntoIter<'a, K, V> {
     index: usize,
-    items: &'a RocDict<K, V>,
+    items: &'a [RocDictItem<K, V>],
 }
 
 impl<'a, K, V> Iterator for IntoIter<'a, K, V> {
@@ -92,7 +92,6 @@ impl<'a, K, V> Iterator for IntoIter<'a, K, V> {
     fn next(&mut self) -> Option<Self::Item> {
         let item = self
             .items
-            .0
             .get(self.index)
             .map(|item| (item.key(), item.value()));
 
@@ -102,7 +101,7 @@ impl<'a, K, V> Iterator for IntoIter<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.items.0.len() - self.index;
+        let remaining = self.items.len() - self.index;
 
         (remaining, Some(remaining))
     }

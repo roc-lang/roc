@@ -1,7 +1,11 @@
+procedure Bool.2 ():
+    let Bool.11 : Int1 = true;
+    ret Bool.11;
+
 procedure Test.0 ():
-    let Test.7 : Int1 = true;
-    if Test.7 then
+    let Test.6 : Int1 = CallByName Bool.2;
+    if Test.6 then
         Error voided tag constructor is unreachable
     else
-        let Test.6 : Str = "abc";
-        ret Test.6;
+        let Test.5 : Str = "abc";
+        ret Test.5;

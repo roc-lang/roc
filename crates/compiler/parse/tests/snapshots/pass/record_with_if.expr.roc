@@ -1,1 +1,1 @@
-{x : if True then 1 else 2, y: 3 }
+{x : if Bool.true then 1 else 2, y: 3 }

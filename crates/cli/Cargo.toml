@@ -64,7 +64,7 @@ clap = { version = "3.2.20", default-features = false, features = ["std", "color
 const_format = { version = "0.2.23", features = ["const_generics"] }
 bumpalo = { version = "3.11.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }
-libc = "0.2.132"
+libc = "0.2.133"
 errno = "0.2.8"
 ven_pretty = { path = "../vendor/pretty" }
 

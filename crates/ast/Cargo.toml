@@ -26,7 +26,7 @@ bumpalo = { version = "3.11.0", features = ["collections"] }
 page_size = "0.4.2"
 snafu = { version = "0.7.1", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
-libc = "0.2.132"
+libc = "0.2.133"
 
 [dev-dependencies]
 indoc = "1.0.7"

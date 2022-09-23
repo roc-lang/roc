@@ -728,6 +728,16 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
+            Symbol::BOOL_TRUE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+            }
+            Symbol::BOOL_FALSE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+            }
             _ => todo!("the function, {:?}", func_sym),
         }
     }

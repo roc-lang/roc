@@ -37,7 +37,7 @@ roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std"  }
 roc_debug_flags = {path="../debug_flags"}
 bumpalo = { version = "3.11.0", features = ["collections"] }
-libc = "0.2.132"
+libc = "0.2.133"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"
 libloading = "0.7.1"

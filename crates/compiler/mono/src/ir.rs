@@ -3919,11 +3919,13 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    env.arena.alloc(match hole {
-                        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([assigned])),
-                        Stmt::Ret(_) => Stmt::Ret(assigned),
-                        _ => unreachable!(),
-                    }),
+                    match hole {
+                        Stmt::Jump(id, _) => env
+                            .arena
+                            .alloc(Stmt::Jump(*id, env.arena.alloc([assigned]))),
+                        Stmt::Ret(_) => env.arena.alloc(Stmt::Ret(assigned)),
+                        hole => hole,
+                    },
                 );
 
                 return result;
@@ -7597,7 +7599,31 @@ where
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         let mut result = result;
-        for (_, (variable, left)) in needed_specializations_of_left {
+
+        let no_specializations_needed = needed_specializations_of_left.len() == 0;
+        let needed_specializations_of_left = needed_specializations_of_left
+            .map(|(_, spec)| Some(spec))
+            // HACK: sometimes specializations can be lost, for example for `x` in
+            //   x = Bool.true
+            //   p = \_ -> x == 1
+            // that's because when specializing `p`, we collect specializations for `x`, but then
+            // drop all of them when leaving the body of `p`, because `x` is an argument of `p` in
+            // such a case.
+            // So, if we have no recorded specializations, suppose we are in a case like this, and
+            // generate the default implementation.
+            //
+            // TODO: we should fix this properly. I think the way to do it is to only have proc
+            // specialization only drop specializations of non-captured symbols. That's because
+            // captured symbols can only ever be specialized outside the closure.
+            // After that is done, remove this hack.
+            .chain(if no_specializations_needed {
+                [Some((variable, left))]
+            } else {
+                [None]
+            })
+            .flatten();
+
+        for (variable, left) in needed_specializations_of_left {
             add_needed_external(procs, env, variable, LambdaName::no_niche(right));
 
             let res_layout = layout_cache.from_var(env.arena, variable, env.subs);

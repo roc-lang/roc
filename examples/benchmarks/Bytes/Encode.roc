@@ -1,30 +1,30 @@
-interface Bytes.Encode exposes [Encoder, sequence, u8, u16, bytes, empty, encode] imports []
+interface Bytes.Encode exposes [ByteEncoder, sequence, u8, u16, bytes, empty, encode] imports []
 
 Endianness : [BE, LE]
 
-Encoder : [Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List Encoder), Bytes (List U8)]
+ByteEncoder : [Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List ByteEncoder), Bytes (List U8)]
 
-u8 : U8 -> Encoder
+u8 : U8 -> ByteEncoder
 u8 = \value -> Unsigned8 value
 
-empty : Encoder
+empty : ByteEncoder
 empty =
-    foo : List Encoder
+    foo : List ByteEncoder
     foo = []
 
     Sequence 0 foo
 
-u16 : Endianness, U16 -> Encoder
+u16 : Endianness, U16 -> ByteEncoder
 u16 = \endianness, value -> Unsigned16 endianness value
 
-bytes : List U8 -> Encoder
+bytes : List U8 -> ByteEncoder
 bytes = \bs -> Bytes bs
 
-sequence : List Encoder -> Encoder
+sequence : List ByteEncoder -> ByteEncoder
 sequence = \encoders ->
     Sequence (getWidths encoders 0) encoders
 
-getWidth : Encoder -> Nat
+getWidth : ByteEncoder -> Nat
 getWidth = \encoder ->
     when encoder is
         Signed8 _ -> 1
@@ -40,18 +40,18 @@ getWidth = \encoder ->
         Sequence w _ -> w
         Bytes bs -> List.len bs
 
-getWidths : List Encoder, Nat -> Nat
+getWidths : List ByteEncoder, Nat -> Nat
 getWidths = \encoders, initial ->
     List.walk encoders initial \accum, encoder -> accum + getWidth encoder
 
-encode : Encoder -> List U8
+encode : ByteEncoder -> List U8
 encode = \encoder ->
     output = List.repeat 0 (getWidth encoder)
 
     encodeHelp encoder 0 output
     |> .output
 
-encodeHelp : Encoder, Nat, List U8 -> { output : List U8, offset : Nat }
+encodeHelp : ByteEncoder, Nat, List U8 -> { output : List U8, offset : Nat }
 encodeHelp = \encoder, offset, output ->
     when encoder is
         Unsigned8 value ->
