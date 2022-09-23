@@ -34,7 +34,7 @@ roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
 bumpalo = { version = "3.11.0", features = ["collections"] }
 arrayvec = "0.7.2"
-libc = "0.2.132"
+libc = "0.2.133"
 page_size = "0.4.2"
 # once winit 0.26 is out, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
 winit = "0.26.0"
