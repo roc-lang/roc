@@ -5648,9 +5648,9 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                     .parser_suggestion(filename.to_str().unwrap())
                     .indent(4),
                 alloc.concat([
-                    alloc.reflow(r"But ran into a "),
+                    alloc.reflow(r#"But ran into a ""#),
                     alloc.text(formatted),
-                    alloc.reflow(r" problem."),
+                    alloc.reflow(r#"" problem."#),
                 ]),
             ]);
 
