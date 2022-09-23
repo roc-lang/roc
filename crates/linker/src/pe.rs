@@ -26,28 +26,31 @@ use crate::{load_struct_inplace, load_struct_inplace_mut};
 struct PeMetadata {
     dynhost_file_size: usize,
 
-    image_base: u64,
-    file_alignment: u32,
-    section_alignment: u32,
-
     last_host_section_size: u64,
     last_host_section_address: u64,
 
     optional_header_offset: usize,
+
+    dynamic_relocations: DynamicRelocationsPe,
+
+    /// File offset for the thunks of our dummy .dll
+    thunks_start_offset: usize,
+
+    /// Constants from the host .exe header
+    image_base: u64,
+    file_alignment: u32,
+    section_alignment: u32,
 
     /// Symbols that the host imports, like roc__mainForHost_1_exposed_generic
     imports: Vec<String>,
 
     /// Symbols that the host exports, like roc_alloc
     exports: MutMap<String, i64>,
-
-    dynamic_relocations: DynamicRelocationsPe,
-    thunks_start_offset: usize,
 }
 
 #[allow(dead_code)]
 pub(crate) fn preprocess_windows(
-    exec_filename: &str,
+    host_exe_filename: &str,
     metadata_filename: &Path,
     out_filename: &Path,
     _shared_lib: &Path,
@@ -57,19 +60,9 @@ pub(crate) fn preprocess_windows(
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
 
-    let exec_file = std::fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
-    let exec_data = &*exec_mmap;
-    let _exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            internal_error!("Failed to parse host .exe file: {}", err);
-        }
-    };
-
     let _exec_parsing_duration = exec_parsing_start.elapsed();
 
-    let data = std::fs::read(exec_filename).unwrap();
+    let data = std::fs::read(host_exe_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
 
