@@ -271,6 +271,7 @@ mod cli_run {
             );
         }
     }
+
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -322,9 +323,12 @@ mod cli_run {
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
                             return;
                         }
-                        "rocLovesSwift" => {
+                        "swiftui" | "rocLovesSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
+                                return;
+                            } else {
+                                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
                                 return;
                             }
                         }
@@ -588,6 +592,14 @@ mod cli_run {
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
+        },
+        swiftui:"swiftui" => Example {
+            filename: "main.roc",
+            executable_filename: "swiftui",
+            stdin: &[],
+            arguments: &[],
+            expected_ending: "",
+            use_valgrind: false,
         },
         static_site_gen: "static-site-gen" => {
             Example {
