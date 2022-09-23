@@ -5651,7 +5651,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                     alloc.reflow(r"But ran into a "),
                     alloc.text(formatted),
                     alloc.reflow(r" problem."),
-                ])
+                ]),
             ]);
 
             Report {
