@@ -70,8 +70,8 @@ setBlack = \tree ->
 isRed : Tree a b -> Bool
 isRed = \tree ->
     when tree is
-        Node Red _ _ _ _ -> True
-        _ -> False
+        Node Red _ _ _ _ -> Bool.true
+        _ -> Bool.false
 
 lt = \x, y -> x < y
 

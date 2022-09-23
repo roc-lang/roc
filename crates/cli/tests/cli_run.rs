@@ -16,11 +16,14 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use once_cell::sync::Lazy;
+    use parking_lot::{Mutex, RwLock};
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::sync::Once;
     use strum::IntoEnumIterator;
     use strum_macros::EnumIter;
 
@@ -31,8 +34,19 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    use std::sync::Once;
     static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
+    static POPULATED_EXAMPLE_LOCKS: Once = Once::new();
+
+    use std::collections::HashMap;
+    static EXAMPLE_PLATFORM_LOCKS: Lazy<RwLock<HashMap<PathBuf, Mutex<()>>>> =
+        once_cell::sync::Lazy::new(|| RwLock::new(HashMap::default()));
+
+    fn populate_example_locks(examples: impl Iterator<Item = PathBuf>) {
+        let mut locks = EXAMPLE_PLATFORM_LOCKS.write();
+        for example in examples {
+            locks.insert(example, Default::default());
+        }
+    }
 
     #[derive(Debug, EnumIter)]
     enum CliMode {
@@ -257,6 +271,7 @@ mod cli_run {
             );
         }
     }
+
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -270,12 +285,19 @@ mod cli_run {
     /// add a test for it here!
     macro_rules! examples {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
+            static EXAMPLE_NAMES: &[&str] = &[$($name,)+];
+
             $(
                 #[test]
                 #[allow(non_snake_case)]
                 fn $test_name() {
+                    POPULATED_EXAMPLE_LOCKS.call_once( || {
+                        populate_example_locks(EXAMPLE_NAMES.iter().map(|name| examples_dir(name)))
+                    });
+
                     let dir_name = $name;
                     let example = $example;
+                    let example_dir = examples_dir(dir_name);
                     let file_name = example_file(dir_name, example.filename);
 
                     let mut app_args: Vec<String> = vec![];
@@ -301,9 +323,12 @@ mod cli_run {
                             run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
                             return;
                         }
-                        "rocLovesSwift" => {
+                        "swiftui" | "rocLovesSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
+                                return;
+                            } else {
+                                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
                                 return;
                             }
                         }
@@ -317,6 +342,17 @@ mod cli_run {
                         }
                         _ => {}
                     }
+
+                    // To avoid concurrent examples tests overwriting produced host binaries, lock
+                    // on the example's directory, so that only one example per directory runs at a
+                    // time.
+                    // NOTE: we are assuming that each example corresponds to one platform, under
+                    // the subdirectory. This is not necessarily true, and moreover is too
+                    // restrictive. To increase throughput we only need to lock the produced host
+                    // file, however, it is not trivial to recover what that file is today (without
+                    // enumerating all examples and their platforms).
+                    let locks = EXAMPLE_PLATFORM_LOCKS.read();
+                    let _example_guard = locks.get(&example_dir).unwrap().lock();
 
                     // Check with and without optimizations
                     check_output_with_stdin(
@@ -491,7 +527,7 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        args:"interactive" => Example {
+        cli_args:"interactive" => Example {
             filename: "args.roc",
             executable_filename: "args",
             stdin: &[],
@@ -507,7 +543,7 @@ mod cli_run {
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
-        // tea:"tea" => Example {
+        // tui_tea:"tea" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "tea-example",
         //     stdin: &[],
@@ -515,7 +551,7 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"interactive" => Example {
+        cli_form:"interactive" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
@@ -556,6 +592,14 @@ mod cli_run {
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
+        },
+        swiftui:"swiftui" => Example {
+            filename: "main.roc",
+            executable_filename: "swiftui",
+            stdin: &[],
+            arguments: &[],
+            expected_ending: "",
+            use_valgrind: false,
         },
         static_site_gen: "static-site-gen" => {
             Example {
@@ -967,23 +1011,50 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
 
-                Nothing is named `d` in this scope.
+                Something is off with the type annotation of the main required symbol:
 
-                10│      _ <- await (line d)
-                                          ^
+                2│      requires {} { main : InternalProgram }
+                                             ^^^^^^^^^^^^^^^
 
-                Did you mean one of these?
+                This #UserApp.main value is a:
 
-                    U8
-                    Ok
-                    I8
-                    F64
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But the type annotation on main says it should be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+
+
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
+
+                This 1st argument to toEffect has an unexpected type:
+
+                9│  mainForHost = InternalProgram.toEffect main
+                                                           ^^^^
+
+                This #UserApp.main value is a:
+
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But toEffect needs its 1st argument to be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                1 error and 0 warnings found in <ignored for test> ms."#
+                2 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }

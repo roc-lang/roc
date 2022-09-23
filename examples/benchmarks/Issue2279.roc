@@ -5,7 +5,7 @@ app "issue2279"
 
 main =
     text =
-        if True then
+        if Bool.true then
             Issue2279Help.text
         else
             Issue2279Help.asText 42

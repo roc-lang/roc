@@ -456,6 +456,7 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_swift_host_native(
     env_path: &str,
     env_home: &str,
@@ -464,16 +465,25 @@ pub fn build_swift_host_native(
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
     objc_header_path: Option<&str>,
+    arch: Architecture,
 ) -> Output {
     if shared_lib_path.is_some() {
         unimplemented!("Linking a shared library to Swift not yet implemented");
     }
 
-    let mut command = Command::new("xcrun"); // xcrun helps swiftc to find the right header files
+    let mut command = Command::new("arch");
     command
         .env_clear()
         .env("PATH", &env_path)
-        .env("HOME", &env_home)
+        .env("HOME", &env_home);
+
+    match arch {
+        Architecture::Aarch64(_) => command.arg("-arm64"),
+        _ => command.arg(format!("-{}", arch)),
+    };
+
+    command
+        .arg("xcrun") // xcrun helps swiftc to find the right header files
         .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
@@ -785,6 +795,7 @@ pub fn rebuild_host(
             swift_host_header_src
                 .exists()
                 .then(|| swift_host_header_src.to_str().unwrap()),
+            target.architecture,
         );
         validate_output("host.swift", "swiftc", output);
     }

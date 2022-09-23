@@ -704,7 +704,12 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
     unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
-fn find_thunks_start_offset(exec_data: &[u8], dynamic_relocations: &DynamicRelocationsPe) -> usize {
+/// Find the place in the executable where the thunks for our dummy .dll are stored
+#[allow(dead_code)]
+fn find_thunks_start_offset(
+    executable: &[u8],
+    dynamic_relocations: &DynamicRelocationsPe,
+) -> usize {
     // The host executable contains indirect calls to functions that the host should provide
     //
     //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
@@ -737,7 +742,7 @@ fn find_thunks_start_offset(exec_data: &[u8], dynamic_relocations: &DynamicReloc
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
-        load_struct_inplace::<ImageImportDescriptor>(exec_data, dummy_import_desc_start);
+        load_struct_inplace::<ImageImportDescriptor>(executable, dummy_import_desc_start);
 
     // per https://en.wikibooks.org/wiki/X86_Disassembly/Windows_Executable_Files#The_Import_directory,
     //
@@ -751,19 +756,19 @@ fn find_thunks_start_offset(exec_data: &[u8], dynamic_relocations: &DynamicReloc
     let dummy_thunks_address_va = dummy_import_desc.first_thunk;
     let dummy_thunks_address = dummy_thunks_address_va.get(LE);
 
-    let dos_header = object::pe::ImageDosHeader::parse(exec_data).unwrap();
+    let dos_header = object::pe::ImageDosHeader::parse(executable).unwrap();
     let mut offset = dos_header.nt_headers_offset().into();
 
     use object::read::pe::ImageNtHeaders;
-    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(exec_data, &mut offset).unwrap();
-    let sections = nt_headers.sections(exec_data, offset).unwrap();
+    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(executable, &mut offset).unwrap();
+    let sections = nt_headers.sections(executable, offset).unwrap();
 
     // find the section the virtual address is in
     let (section_va, offset_in_file) = sections
         .iter()
         .find_map(|section| {
             section
-                .pe_data_containing(exec_data, dummy_thunks_address)
+                .pe_data_containing(executable, dummy_thunks_address)
                 .map(|(_section_data, section_va)| {
                     (section_va, section.pointer_to_raw_data.get(LE))
                 })
@@ -774,6 +779,8 @@ fn find_thunks_start_offset(exec_data: &[u8], dynamic_relocations: &DynamicReloc
     (dummy_thunks_address - section_va + offset_in_file) as usize
 }
 
+/// Make the thunks point to our actual roc application functions
+#[allow(dead_code)]
 fn redirect_dummy_dll_functions(
     executable: &mut [u8],
     function_definition_vas: &[(String, u64)],
@@ -782,9 +789,9 @@ fn redirect_dummy_dll_functions(
 ) {
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
     let mut targets = function_definition_vas.iter();
-    'outer: for (i, name) in imports.iter().enumerate() {
-        for (target_name, target_va) in targets.by_ref() {
-            if name == target_name {
+    'outer: for (i, host_name) in imports.iter().enumerate() {
+        for (roc_app_target_name, roc_app_target_va) in targets.by_ref() {
+            if host_name == roc_app_target_name {
                 // addresses are 64-bit values
                 let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
 
@@ -795,7 +802,7 @@ fn redirect_dummy_dll_functions(
                 }
 
                 // update the address to a function VA
-                address_bytes.copy_from_slice(&target_va.to_le_bytes());
+                address_bytes.copy_from_slice(&roc_app_target_va.to_le_bytes());
 
                 continue 'outer;
             }
@@ -1384,6 +1391,7 @@ mod test {
                 "-target",
                 "x86_64-windows-gnu",
                 "--strip",
+                "-rdynamic",
                 "-OReleaseFast",
             ])
             .output()
@@ -1400,10 +1408,10 @@ mod test {
 
         // open our app object; we'll copy sections from it later
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
-        let app_obj = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+        let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        let app_obj_sections = AppSections::from_data(&*app_obj);
-        let mut symbols = app_obj_sections.symbols;
+        let roc_app_sections = AppSections::from_data(&*roc_app);
+        let mut symbols = roc_app_sections.symbols;
 
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
@@ -1420,6 +1428,7 @@ mod test {
                 "-lc",
                 "-target",
                 "x86_64-windows-gnu",
+                "-rdynamic",
                 "--strip",
                 "-rdynamic",
                 "-OReleaseFast",
@@ -1446,7 +1455,7 @@ mod test {
         let section_alignment = 0x1000;
         let last_host_section_index = 5;
 
-        let app_sections_size: usize = app_obj_sections
+        let roc_app_sections_size: usize = roc_app_sections
             .sections
             .iter()
             .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
@@ -1454,15 +1463,15 @@ mod test {
 
         let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
-        let mut app = mmap_mut(
+        let mut executable = mmap_mut(
             &dir.join("app.exe"),
-            dynhost_bytes.len() + app_sections_size,
+            dynhost_bytes.len() + roc_app_sections_size,
         );
 
         // copying over all of the dynhost.exe bytes
-        app[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
+        executable[..dynhost_bytes.len()].copy_from_slice(&dynhost_bytes);
 
-        let file = PeFile64::parse(app.deref()).unwrap();
+        let file = PeFile64::parse(executable.deref()).unwrap();
         let last_host_section = file.sections().nth(last_host_section_index).unwrap();
 
         let exports: MutMap<String, i64> = file
@@ -1481,7 +1490,7 @@ mod test {
             + std::mem::size_of::<u32>()
             + std::mem::size_of::<ImageFileHeader>();
 
-        let app_code_section_va = last_host_section.address()
+        let extra_code_section_va = last_host_section.address()
             + next_multiple_of(
                 last_host_section.size() as usize,
                 section_alignment as usize,
@@ -1489,14 +1498,14 @@ mod test {
 
         let mut section_header_start = 624;
         let mut section_file_offset = dynhost_bytes.len();
-        let mut virtual_address = (app_code_section_va - image_base) as u32;
+        let mut virtual_address = (extra_code_section_va - image_base) as u32;
 
         let mut code_bytes_added = 0;
         let mut data_bytes_added = 0;
         let mut file_bytes_added = 0;
 
         for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
-            let length: usize = app_obj_sections
+            let length: usize = roc_app_sections
                 .sections
                 .iter()
                 .filter(|s| s.kind == kind)
@@ -1518,7 +1527,7 @@ mod test {
                     code_bytes_added += size_of_raw_data;
 
                     write_section_header(
-                        &mut app,
+                        &mut executable,
                         *b".text1\0\0",
                         pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_CODE | pe::IMAGE_SCN_MEM_EXECUTE,
                         section_header_start,
@@ -1532,7 +1541,7 @@ mod test {
                     data_bytes_added += size_of_raw_data;
 
                     write_section_header(
-                        &mut app,
+                        &mut executable,
                         *b".rdata1\0",
                         pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
                         section_header_start,
@@ -1545,10 +1554,10 @@ mod test {
             }
 
             let mut offset = section_file_offset;
-            let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+            let it = roc_app_sections.sections.iter().filter(|s| s.kind == kind);
             for section in it {
-                let slice = &app_obj[section.file_range.start..section.file_range.end];
-                app[offset..][..slice.len()].copy_from_slice(slice);
+                let slice = &roc_app[section.file_range.start..section.file_range.end];
+                executable[offset..][..slice.len()].copy_from_slice(slice);
 
                 for (name, app_relocation) in section.relocations.iter() {
                     let destination = exports[name];
@@ -1568,7 +1577,7 @@ mod test {
                                 destination - virtual_address as i64 - *offset_in_section as i64
                                     + relocation.addend();
 
-                            app[offset + *offset_in_section as usize..][..4]
+                            executable[offset + *offset_in_section as usize..][..4]
                                 .copy_from_slice(&(delta as i32).to_le_bytes());
                         }
                         _ => todo!(),
@@ -1585,22 +1594,22 @@ mod test {
         }
 
         update_optional_header(
-            &mut app,
+            &mut executable,
             optional_header_offset,
             code_bytes_added as u32,
             file_bytes_added as u32,
             data_bytes_added as u32,
         );
 
-        let dynamic_relocations = DynamicRelocationsPe::new(&app);
+        let dynamic_relocations = DynamicRelocationsPe::new(&executable);
         let symbols: Vec<_> = symbols
             .into_iter()
             .map(|s| (s.name, s.offset_in_section as u64))
             .collect();
-        redirect_dummy_dll_functions_test(&mut app, &dynamic_relocations, &symbols);
+        redirect_dummy_dll_functions_test(&mut executable, &dynamic_relocations, &symbols);
 
         remove_dummy_dll_import_table_test(
-            &mut app,
+            &mut executable,
             dynamic_relocations.data_directories_offset_in_file,
             dynamic_relocations.imports_offset_in_file,
             dynamic_relocations.dummy_import_index,

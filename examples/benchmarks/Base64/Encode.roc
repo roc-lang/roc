@@ -1,6 +1,6 @@
 interface Base64.Encode
     exposes [toBytes]
-    imports [Bytes.Encode.{ Encoder }]
+    imports [Bytes.Encode.{ ByteEncoder }]
 
 InvalidChar : U8
 
@@ -13,7 +13,7 @@ toBytes = \str ->
     |> Bytes.Encode.sequence
     |> Bytes.Encode.encode
 
-encodeChunks : List U8 -> List Encoder
+encodeChunks : List U8 -> List ByteEncoder
 encodeChunks = \bytes ->
     List.walk bytes { output: [], accum: None } folder
     |> encodeResidual
@@ -21,7 +21,7 @@ encodeChunks = \bytes ->
 coerce : Nat, a -> a
 coerce = \_, x -> x
 
-# folder : { output : List Encoder, accum : State }, U8 -> { output : List Encoder, accum : State }
+# folder : { output : List ByteEncoder, accum : State }, U8 -> { output : List ByteEncoder, accum : State }
 folder = \{ output, accum }, char ->
     when accum is
         Unreachable n -> coerce n { output, accum: Unreachable n }
@@ -40,7 +40,7 @@ folder = \{ output, accum }, char ->
                     { output, accum: None }
 
 #  SGVs bG8g V29y bGQ=
-# encodeResidual : { output : List Encoder, accum : State } -> List Encoder
+# encodeResidual : { output : List ByteEncoder, accum : State } -> List ByteEncoder
 encodeResidual = \{ output, accum } ->
     when accum is
         Unreachable _ -> output
@@ -59,8 +59,8 @@ encodeResidual = \{ output, accum } ->
 equals : U8
 equals = 61
 
-# Convert 4 characters to 24 bits (as an Encoder)
-encodeCharacters : U8, U8, U8, U8 -> Result Encoder InvalidChar
+# Convert 4 characters to 24 bits (as an ByteEncoder)
+encodeCharacters : U8, U8, U8, U8 -> Result ByteEncoder InvalidChar
 encodeCharacters = \a, b, c, d ->
     if !(isValidChar a) then
         Err a
@@ -131,19 +131,19 @@ encodeCharacters = \a, b, c, d ->
 isValidChar : U8 -> Bool
 isValidChar = \c ->
     if isAlphaNum c then
-        True
+        Bool.true
     else
         when c is
             43 ->
                 # '+'
-                True
+                Bool.true
 
             47 ->
                 # '/'
-                True
+                Bool.true
 
             _ ->
-                False
+                Bool.false
 
 isAlphaNum : U8 -> Bool
 isAlphaNum = \key ->

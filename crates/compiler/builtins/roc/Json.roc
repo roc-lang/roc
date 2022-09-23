@@ -307,14 +307,14 @@ decodeBool = Decode.custom \bytes, @Json {} ->
     if
         maybeFalse == [asciiByte 'f', asciiByte 'a', asciiByte 'l', asciiByte 's', asciiByte 'e']
     then
-        { result: Ok False, rest: afterFalse }
+        { result: Ok Bool.false, rest: afterFalse }
     else
         { before: maybeTrue, others: afterTrue } = List.split bytes 4
 
         if
             maybeTrue == [asciiByte 't', asciiByte 'r', asciiByte 'u', asciiByte 'e']
         then
-            { result: Ok True, rest: afterTrue }
+            { result: Ok Bool.true, rest: afterTrue }
         else
             { result: Err TooShort, rest: bytes }
 

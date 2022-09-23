@@ -10,7 +10,8 @@ which includes the Roc compiler and various helpful utilities.
 1. Untar the archive:
 
     ```sh
-    tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
+    tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz --one-top-level
+    cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
 ## How to install Roc platform dependencies

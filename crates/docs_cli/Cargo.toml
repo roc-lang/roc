@@ -21,4 +21,4 @@ roc_docs = { path = "../docs" }
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions", "derive"] }
 
 [target.'cfg(windows)'.dependencies]
-libc = "0.2.132"
+libc = "0.2.133"

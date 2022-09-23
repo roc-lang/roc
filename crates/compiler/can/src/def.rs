@@ -462,9 +462,53 @@ fn canonicalize_claimed_ability_impl<'a>(
                     }
                 };
 
-            match scope.lookup_ability_member_shadow(member_symbol) {
-                Some(impl_symbol) => Ok((member_symbol, impl_symbol)),
-                None => {
+            // There are two options for how the implementation symbol is defined.
+            //
+            // OPTION-1: The implementation identifier is the only identifier of that name in the
+            //           scope. For example,
+            //
+            //               interface F imports [] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we just do a simple lookup in the scope to find our
+            //           `toEncoder` impl.
+            //
+            // OPTION-2: The implementation identifier is a unique shadow of the ability member,
+            //           which has also been explicitly imported. For example,
+            //
+            //               interface F imports [Encoding.{ toEncoder }] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we allow the `F` module's `toEncoder` def to shadow
+            //           `toEncoder` only to define this specialization's `toEncoder`.
+            //
+            // To handle both cases, try checking for a shadow first, then check for a direct
+            // reference. We want to check for a direct reference second so that if there is a
+            // shadow, we won't accidentally grab the imported symbol.
+            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
+                .or_else(|| scope.lookup_str(label_str, region).ok());
+
+            match opt_impl_symbol {
+                // It's possible that even if we find a symbol it is still only the member
+                // definition symbol, for example when the ability is defined in the same
+                // module as an implementer:
+                //
+                //   Eq has eq : a, a -> U64 | a has Eq
+                //
+                //   A := U8 has [Eq {eq}]
+                //
+                // So, do a final check that the implementation symbol is not resolved directly
+                // to the member.
+                Some(impl_symbol) if impl_symbol != member_symbol => {
+                    Ok((member_symbol, impl_symbol))
+                }
+                _ => {
                     env.problem(Problem::ImplementationNotFound {
                         member: member_symbol,
                         region: label.region,

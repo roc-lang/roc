@@ -8,7 +8,7 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
@@ -21,7 +21,7 @@ use file_glue::WriteErr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8, args: *const RocList<RocStr>);
+    fn roc_main(output: *mut u8);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -81,33 +81,25 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() -> u8 {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
-
-    // TODO: can we be more efficient about reusing the String's memory for RocStr?
-    let args: RocList<RocStr> = std::env::args_os()
-        .map(|s| RocStr::from(s.to_string_lossy().borrow()))
-        .collect();
 
     unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer, &args);
+        roc_main(buffer);
 
-        let result = call_the_closure(buffer);
+        let exit_code = call_the_closure(buffer);
 
         std::alloc::dealloc(buffer, layout);
 
-        result
-    };
-
-    // Exit code
-    0
+        exit_code
+    }
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe fn call_the_closure(closure_data_ptr: *const u8) -> u8 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;
@@ -121,7 +113,38 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 
     std::alloc::dealloc(buffer, layout);
 
+    // TODO return the u8 exit code returned by the Fx closure
     0
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_envDict() -> RocDict<RocStr, RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::vars_os()
+        .map(|(key, val)| {
+            (
+                RocStr::from(key.to_string_lossy().borrow()),
+                RocStr::from(val.to_string_lossy().borrow()),
+            )
+        })
+        .collect()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_args() -> RocList<RocStr> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    std::env::args_os()
+        .map(|os_str| RocStr::from(os_str.to_string_lossy().borrow()))
+        .collect()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_envVar(roc_str: &RocStr) -> RocResult<RocStr, ()> {
+    // TODO: can we be more efficient about reusing the String's memory for RocStr?
+    match std::env::var_os(roc_str.as_str()) {
+        Some(os_str) => RocResult::ok(RocStr::from(os_str.to_string_lossy().borrow())),
+        None => RocResult::err(()),
+    }
 }
 
 #[no_mangle]
@@ -156,14 +179,6 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
 
 //     (255, 255)
 // }
-
-type Fail = Foo;
-
-#[repr(C)]
-pub struct Foo {
-    data: u8,
-    tag: u8,
-}
 
 // #[no_mangle]
 // pub extern "C" fn roc_fx_fileWriteUtf8(roc_path: &RocList<u8>, roc_string: &RocStr) -> Fail {

@@ -346,14 +346,14 @@ Int range : Num (Integer range)
 ##
 ##     wasItPrecise = 0.1 + 0.2 == 0.3
 ##
-## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
 ##
 ##     wasItPrecise = 0.1f64 + 0.2 == 0.3
 ##
-## Here, `wasItPrecise` will be `False` because the entire calculation will have
+## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
 ## been done in a base-2 floating point calculation, which causes noticeable
 ## precision loss in this case.
 ##
@@ -534,45 +534,45 @@ bytesToU32 = \bytes, index ->
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
-## Returns `True` if the first number is less than the second.
+## Returns `Bool.true` if the first number is less than the second.
 ##
 ## `a < b` is shorthand for `Num.isLt a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
 ## >>> 5
 ## >>>     |> Num.isLt 6
 isLt : Num a, Num a -> Bool
 
-## Returns `True` if the first number is greater than the second.
+## Returns `Bool.true` if the first number is greater than the second.
 ##
 ## `a > b` is shorthand for `Num.isGt a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
 ## >>> 6
 ## >>>     |> Num.isGt 5
 isGt : Num a, Num a -> Bool
 
-## Returns `True` if the first number is less than or equal to the second.
+## Returns `Bool.true` if the first number is less than or equal to the second.
 ##
 ## `a <= b` is shorthand for `Num.isLte a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isLte : Num a, Num a -> Bool
 
-## Returns `True` if the first number is greater than or equal to the second.
+## Returns `Bool.true` if the first number is greater than or equal to the second.
 ##
 ## `a >= b` is shorthand for `Num.isGte a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
 
-## Returns `True` if the number is `0`, and `False` otherwise.
+## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
 isZero = \x -> x == 0
 
@@ -1265,34 +1265,34 @@ toF32Checked : Num * -> Result F32 [OutOfBounds]*
 toF64Checked : Num * -> Result F64 [OutOfBounds]*
 
 # Special Floating-Point operations
-## When given a [F64] or [F32] value, returns `False` if that value is
-## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.false` if that value is
+## [*NaN*](Num.isNaN), ∞ or -∞, and `Bool.true` otherwise.
 ##
-## Always returns `True` when given a [Dec].
+## Always returns `Bool.true` when given a [Dec].
 ##
 ## This is the opposite of #isInfinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
+## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
 # isFinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `True` if that value is either
-## ∞ or -∞, and `False` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.true` if that value is either
+## ∞ or -∞, and `Bool.false` otherwise.
 ##
-## Always returns `False` when given a [Dec].
+## Always returns `Bool.false` when given a [Dec].
 ##
 ## This is the opposite of #isFinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
+## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
 # isInfinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `True` if that value is
-## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.true` if that value is
+## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `Bool.false` otherwise.
 ##
-## Always returns `False` when given a [Dec].
+## Always returns `Bool.false` when given a [Dec].
 ##
 ## >>> Num.isNaN 12.3
 ##
 ## >>> Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
-## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
+## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `Bool.false` if either argument is *NaN*.
+## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `Bool.false` if either argument is *NaN*.
 ##
 ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## floating point standard. Because almost all modern processors are built to
@@ -1306,12 +1306,12 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 # isNaN : Frac * -> Bool
 ## Returns the higher of two numbers.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 # max : Num a, Num a -> Num a
 ## Returns the lower of two numbers.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 # min : Num a, Num a -> Num a
 # Branchless implementation that works for all numeric types:

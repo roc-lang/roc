@@ -93,6 +93,11 @@ pub enum Error {
         branch_region: Region,
         index: HumanIndex,
     },
+    Unmatchable {
+        overall_region: Region,
+        branch_region: Region,
+        index: HumanIndex,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

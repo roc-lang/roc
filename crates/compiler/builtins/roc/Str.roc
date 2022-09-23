@@ -131,7 +131,7 @@ Utf8ByteProblem : [
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
-## Returns `True` if the string is empty, and `False` otherwise.
+## Returns `Bool.true` if the string is empty, and `Bool.false` otherwise.
 ##
 ## >>> Str.isEmpty "hi!"
 ##
@@ -167,10 +167,10 @@ repeat : Str, Nat -> Str
 countGraphemes : Str -> Nat
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return `True`. Otherwise return `False`.
+## equal to the given [U32], return `Bool.true`. Otherwise return `Bool.false`.
 ##
 ## If the given [Str] is empty, or if the given [U32] is not a valid
-## code point, this will return `False`.
+## code point, this will return `Bool.false`.
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
@@ -452,9 +452,9 @@ matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
         if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
             matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) endIndex
         else
-            False
+            Bool.false
     else
-        True
+        Bool.true
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
 ## UTF-8 `U8` byte as well as the index of that byte within the string.

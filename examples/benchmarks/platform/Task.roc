@@ -66,13 +66,13 @@ getInt =
     Effect.after
         Effect.getInt
         \{ isError, value } ->
-            when isError is
-                True ->
-                    # when errorCode is
-                    #    # A -> Task.fail InvalidCharacter
-                    #    # B -> Task.fail IOError
-                    #    _ ->
-                    Task.succeed -1
-
-                False ->
-                    Task.succeed value
+            if
+                isError
+            then
+                # when errorCode is
+                #    # A -> Task.fail InvalidCharacter
+                #    # B -> Task.fail IOError
+                #    _ ->
+                Task.succeed -1
+            else
+                Task.succeed value
