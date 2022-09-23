@@ -5642,10 +5642,16 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{}", error);
-            let doc = alloc.concat([
-                alloc.reflow(r"I tried to read this file, but ran into a "),
-                alloc.text(formatted),
-                alloc.reflow(r" problem."),
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file:"),
+                alloc
+                    .parser_suggestion(filename.to_str().unwrap())
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"But ran into a "),
+                    alloc.text(formatted),
+                    alloc.reflow(r" problem."),
+                ])
             ]);
 
             Report {
