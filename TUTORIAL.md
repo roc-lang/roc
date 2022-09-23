@@ -116,10 +116,10 @@ Create a new file called `Hello.roc` and put this inside it:
 ```coffee
 app "hello"
     packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
-main = Stdout.line "I'm a Roc application!"
+main = Stdout.line "I'm a Roc application!" |> Program.quick
 ```
 
 > **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
@@ -146,7 +146,7 @@ this file above `main` do later, but first let's play around a bit.
 Try replacing the `main` line with this:
 
 ```coffee
-main = Stdout.line "There are \(total) animals."
+main = Stdout.line "There are \(total) animals." |> Program.quick
 
 birds = 3
 
@@ -166,7 +166,7 @@ short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
 
-- The first def assigns the name `main` to the expression `Stdout.line "There are \(total) animals."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
+- The first def assigns the name `main` to the expression `Stdout.line "There are \(total) animals." |> Program.quick`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device). Then `Program.quick` wrap this expression into an executable Roc program.
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 
@@ -201,7 +201,7 @@ So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`.
 Next let's try defining a function of our own.
 
 ```coffee
-main = Stdout.line "There are \(total) animals."
+main = Stdout.line "There are \(total) animals." |> Program.quick
 
 birds = 3
 
@@ -1258,7 +1258,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 ```coffee
 app "hello"
     packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    imports [pf.Stdout, pf.Program]
     provides main to pf
 ```
 
@@ -1276,7 +1276,7 @@ The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
 packages { pf: "examples/interactive/cli-platform/main.roc" }
-imports [pf.Stdout]
+imports [pf.Stdout, pf.Program]
 provides main to pf
 ```
 
@@ -1285,22 +1285,24 @@ The `packages { pf: "examples/interactive/cli-platform/main.roc" }` part says tw
 - We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform/main.roc"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
-The `imports [pf.Stdout]` line says that we want to import the `Stdout` module
-from the `pf` package, and make it available in the current module.
+The `imports [pf.Stdout, pf.Program]` line says that we want to import the `Stdout` and `Program` modules
+from the `pf` package, and make them available in the current module.
 
 This import has a direct interaction with our definition of `main`. Let's look
 at that again:
 
 ```coffee
-main = Stdout.line "I'm a Roc application!"
+main = Stdout.line "I'm a Roc application!" |> Program.quick
 ```
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's
 calling a function named `line` which is exposed by a module named
 `Stdout`.
+Then the result of that function call is passed to the `quick` function of the `Program` module,
+which effectively makes it a simple Roc program.
 
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout`
-module comes from the `pf` package.
+When we write `imports [pf.Stdout, pf.Program]`, it specifies that the `Stdout`
+and `Program` modules come from the `pf` package.
 
 Since `pf` was the name we chose for the `examples/interactive/cli-platform/main.roc`
 package (when we wrote `packages { pf: "examples/interactive/cli-platform/main.roc" }`),
@@ -1327,11 +1329,12 @@ First, let's do a basic "Hello World" using the tutorial app.
 ```coffee
 app "cli-tutorial"
     packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
 main =
     Stdout.line "Hello, World!"
+        |> Program.quick
 ```
 
 The `Stdout.line` function takes a `Str` and writes it to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)).
@@ -1364,10 +1367,12 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 ```swift
 app "cli-tutorial"
     packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stdin, pf.Task]
+    imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
     provides [main] to pf
 
-main =
+main = Program.quick task
+
+task =
     Task.await Stdin.line \text ->
         Stdout.line "You just entered: \(text)"
 ```
@@ -1395,7 +1400,7 @@ we did in our `\text -> …` callback function here:
     Stdout.line "You just entered: \(text)"
 ```
 
-Notice that, just like before, we're still setting `main` to be a single `Task`. This is how we'll
+Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll
 always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting
 `main` to be that one big `Task`.
 
@@ -1403,7 +1408,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 the program isn't doing anything when we start it up:
 
 ```swift
-main =
+task =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
         Task.await Stdin.line \text ->
             Stdout.line "You just entered: \(text)"
@@ -1414,10 +1419,12 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 ```haskell
 app "cli-tutorial"
     packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
     provides [main] to pf
 
-main =
+main = Program.quick task
+
+task =
     await (Stdout.line "Type something press Enter:") \_ ->
         await Stdin.line \text ->
             Stdout.line "You just entered: \(text)"
@@ -1436,10 +1443,10 @@ across a small number of lines of code.
 
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this
 code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we
-can rewrite `main` into this style which looks different but does the same thing:
+can rewrite `task` into this style which looks different but does the same thing:
 
 ```swift
-main =
+task =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
@@ -1512,11 +1519,11 @@ which is totally allowed! Since backpassing is nothing more than syntax sugar fo
 defining a function and passing back as an argument to another function, there's no
 reason we can't mix and match if we like.
 
-That said, the typical style in which this `main` would be written in Roc is using
+That said, the typical style in which this `task` would be written in Roc is using
 backpassing for all the `await` calls, like we had above:
 
 ```swift
-main =
+task =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
