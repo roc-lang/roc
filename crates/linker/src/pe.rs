@@ -63,7 +63,7 @@ pub(crate) fn preprocess_windows(
     let _exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
-            internal_error!("Failed to parse executable file: {}", err);
+            internal_error!("Failed to parse host .exe file: {}", err);
         }
     };
 

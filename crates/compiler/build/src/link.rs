@@ -393,7 +393,9 @@ pub fn build_zig_host_wasm32(
     command.output().unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_c_host_native(
+    target: &Triple,
     env_path: &str,
     env_home: &str,
     env_cpath: &str,
@@ -411,17 +413,38 @@ pub fn build_c_host_native(
         .args(sources)
         .args(&["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&[
-            shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
-            "-fPIE",
-            "-pie",
-            "-lm",
-            "-lpthread",
-            "-ldl",
-            "-lrt",
-            "-lutil",
-        ]);
+        match target.operating_system {
+            OperatingSystem::Windows => {
+                // just use zig as a C compiler
+
+                // I think we only ever have one C source file in practice
+                assert_eq!(sources.len(), 1);
+
+                return build_zig_host_native(
+                    env_path,
+                    env_home,
+                    &format!("-femit-bin={}", dest),
+                    sources[0],
+                    find_zig_str_path().to_str().unwrap(),
+                    "x86_64-windows-gnu",
+                    opt_level,
+                    Some(shared_lib_path),
+                );
+            }
+            _ => {
+                command.args(&[
+                    shared_lib_path.to_str().unwrap(),
+                    &bitcode::get_builtins_host_obj_path(),
+                    "-fPIE",
+                    "-pie",
+                    "-lm",
+                    "-lpthread",
+                    "-ldl",
+                    "-lrt",
+                    "-lutil",
+                ]);
+            }
+        }
     } else {
         command.args(&["-fPIC", "-c"]);
     }
@@ -635,6 +658,7 @@ pub fn rebuild_host(
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -687,6 +711,7 @@ pub fn rebuild_host(
         if shared_lib_path.is_some() {
             // If compiling to executable, let c deal with linking as well.
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -701,6 +726,7 @@ pub fn rebuild_host(
             validate_output("host.c", "clang", output);
         } else {
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -737,6 +763,7 @@ pub fn rebuild_host(
     } else if c_host_src.exists() {
         // Compile host.c, if it exists
         let output = build_c_host_native(
+            target,
             &env_path,
             &env_home,
             &env_cpath,
