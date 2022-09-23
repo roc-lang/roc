@@ -6,7 +6,7 @@ use std::{
 };
 
 use bincode::{deserialize_from, serialize_into};
-use memmap2::{Mmap, MmapMut};
+use memmap2::MmapMut;
 use object::{
     pe::{
         self, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::{load_struct_inplace, load_struct_inplace_mut};
+use crate::{generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PeMetadata {
@@ -57,6 +57,8 @@ pub(crate) fn preprocess_windows(
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
+    use object::ObjectSection;
+
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
 
@@ -64,31 +66,31 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(host_exe_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut executable = increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let mut dynhost = increase_number_of_sections_help(&data, &new_sections, out_filename);
 
-    let exec_data: &[u8] = &*executable;
-    let exec_obj = match object::read::pe::PeFile64::parse(exec_data) {
+    let dynhost_data: &[u8] = &*dynhost;
+    let dynhost_obj = match object::read::pe::PeFile64::parse(dynhost_data) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse executable file: {}", err);
         }
     };
 
-    use object::ObjectSection;
     // -2 because we added 2 sections, -1 because we have a count and want an index
-    let last_host_section_index = exec_obj.sections().count() - 2 - 1;
-    let last_host_section = exec_obj.sections().nth(last_host_section_index).unwrap();
+    let last_host_section = dynhost_obj
+        .sections()
+        .nth(dynhost_obj.sections().count() - 2 - 1)
+        .unwrap();
 
-    let dynamic_relocations = DynamicRelocationsPe::new(exec_data);
-    let thunks_start_offset = find_thunks_start_offset(exec_data, &dynamic_relocations);
+    let dynamic_relocations = DynamicRelocationsPe::new(dynhost_data);
+    let thunks_start_offset = find_thunks_start_offset(dynhost_data, &dynamic_relocations);
 
-    let optional_header = exec_obj.nt_headers().optional_header;
-
-    let optional_header_offset = exec_obj.dos_header().nt_headers_offset() as usize
+    let optional_header = dynhost_obj.nt_headers().optional_header;
+    let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
         + std::mem::size_of::<u32>()
         + std::mem::size_of::<ImageFileHeader>();
 
-    let exports: MutMap<String, i64> = exec_obj
+    let exports: MutMap<String, i64> = dynhost_obj
         .exports()
         .unwrap()
         .into_iter()
@@ -100,11 +102,11 @@ pub(crate) fn preprocess_windows(
         })
         .collect();
 
-    let imports: Vec<_> = exec_obj
+    let imports: Vec<_> = dynhost_obj
         .imports()
         .unwrap()
         .iter()
-        .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+        .filter(|import| import.library() == APP_DLL.as_bytes())
         .map(|import| {
             std::str::from_utf8(import.name())
                 .unwrap_or_default()
@@ -121,7 +123,7 @@ pub(crate) fn preprocess_windows(
             + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
                 * std::mem::size_of::<pe::ImageDataDirectory>();
 
-        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut executable, start);
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut dynhost, start);
 
         let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
         dir.size.set(LE, new);
@@ -134,7 +136,7 @@ pub(crate) fn preprocess_windows(
         let start = dynamic_relocations.imports_offset_in_file as usize
             + W * dynamic_relocations.dummy_import_index as usize;
 
-        for b in executable[start..][..W].iter_mut() {
+        for b in dynhost[start..][..W].iter_mut() {
             *b = 0;
         }
     }
@@ -376,7 +378,7 @@ impl DynamicRelocationsPe {
             let name = import_table.name(descriptor.name.get(LE))?;
             // dbg!(String::from_utf8_lossy(name));
 
-            if name == b"roc-cheaty-lib.dll" {
+            if name == APP_DLL.as_bytes() {
                 return Ok(Some((*descriptor, index)));
             }
 
@@ -1206,7 +1208,7 @@ mod test {
             .imports()
             .unwrap()
             .iter()
-            .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+            .filter(|import| import.library() == APP_DLL.as_bytes())
             .map(|import| String::from_utf8_lossy(import.name()))
             .collect();
 
@@ -1261,7 +1263,7 @@ mod test {
                 .imports()
                 .unwrap()
                 .iter()
-                .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+                .filter(|import| import.library() == APP_DLL.as_bytes())
                 .count(),
             0
         );
@@ -1305,7 +1307,7 @@ mod test {
             .imports()
             .unwrap()
             .iter()
-            .filter(|import| import.library() == b"roc-cheaty-lib.dll")
+            .filter(|import| import.library() == APP_DLL.as_bytes())
             .map(|import| {
                 std::str::from_utf8(import.name())
                     .unwrap_or_default()
