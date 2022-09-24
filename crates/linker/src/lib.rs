@@ -74,7 +74,7 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 operating_system: target_lexicon::OperatingSystem::Windows,
                 binary_format: target_lexicon::BinaryFormat::Coff,
                 ..
-            } => false,
+            } => true,
 
             _ => false,
         }
@@ -97,9 +97,14 @@ pub fn build_and_preprocess_host(
         host_input_path.with_file_name("libapp.so")
     };
 
+    let dynhost = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        host_input_path.with_file_name("dynhost.exe")
+    } else {
+        host_input_path.with_file_name("dynhost")
+    };
+
     generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
-    let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
     // let prehost = host_input_path.with_file_name("preprocessedhost");
 
@@ -466,6 +471,20 @@ pub fn preprocess(
 ) {
     if verbose {
         println!("Targeting: {}", target);
+    }
+
+    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
+        crate::pe::preprocess_windows(
+            exec_filename,
+            Path::new(metadata_filename),
+            Path::new(out_filename),
+            shared_lib,
+            verbose,
+            time,
+        )
+        .unwrap_or_else(|e| internal_error!("{}", e));
+
+        return;
     }
 
     let total_start = Instant::now();
@@ -1970,6 +1989,23 @@ pub fn surgery(
     time: bool,
     target: &Triple,
 ) {
+    let app_parsing_start = Instant::now();
+    let app_file = fs::File::open(app_filename).unwrap_or_else(|e| internal_error!("{}", e));
+    let app_mmap = unsafe { Mmap::map(&app_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let app_data = &*app_mmap;
+    let app_obj = match object::File::parse(app_data) {
+        Ok(obj) => obj,
+        Err(err) => {
+            internal_error!("Failed to parse application file: {}", err);
+        }
+    };
+
+    let app_parsing_duration = app_parsing_start.elapsed();
+
+    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
+        return crate::pe::surgery_pe(out_filename, metadata_filename, app_data, verbose);
+    }
+
     let total_start = Instant::now();
     let loading_metadata_start = total_start;
     let md: metadata::Metadata = {
@@ -1983,18 +2019,6 @@ pub fn surgery(
         }
     };
     let loading_metadata_duration = loading_metadata_start.elapsed();
-
-    let app_parsing_start = Instant::now();
-    let app_file = fs::File::open(app_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let app_mmap = unsafe { Mmap::map(&app_file).unwrap_or_else(|e| internal_error!("{}", e)) };
-    let app_data = &*app_mmap;
-    let app_obj = match object::File::parse(app_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            internal_error!("Failed to parse application file: {}", err);
-        }
-    };
-    let app_parsing_duration = app_parsing_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
     let exec_file = fs::OpenOptions::new()

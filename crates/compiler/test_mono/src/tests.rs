@@ -1361,26 +1361,26 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-        Encoding has
-          toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+        MEncoding has
+          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
 
         Format has
-          u8 : U8 -> Encoder fmt | fmt has Format
+          u8 : U8 -> MEncoder fmt | fmt has Format
 
 
         Linear := {} has [Format {u8}]
 
-        u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+        u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [Encoding {toEncoder}]
+        MyU8 := U8 has [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
         myU8Bytes =
             when toEncoder (@MyU8 15) is
-                @Encoder doEncode -> doEncode [] (@Linear {})
+                @MEncoder doEncode -> doEncode [] (@Linear {})
         "#
     )
 }
@@ -1958,7 +1958,7 @@ fn unreachable_void_constructor() {
 
         x : []
 
-        main = if True then Ok x else Err "abc" 
+        main = if Bool.true then Ok x else Err "abc" 
         "#
     )
 }

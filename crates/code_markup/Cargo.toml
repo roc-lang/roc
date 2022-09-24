@@ -14,4 +14,3 @@ serde = { version = "1.0.144", features = ["derive"] }
 palette = "0.6.1"
 snafu = { version = "0.7.1", features = ["backtraces"] }
 bumpalo = { version = "3.11.0", features = ["collections"] }
-itertools = "0.10.1"

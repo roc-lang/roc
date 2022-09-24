@@ -924,7 +924,7 @@ dependencies = [
  "clap 2.34.0",
  "criterion-plot",
  "csv",
- "itertools 0.10.3",
+ "itertools 0.10.5",
  "lazy_static",
  "num-traits",
  "oorandom",
@@ -1911,9 +1911,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.10.3"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9a9d19fa1e79b6215ff29b9d6880b706147f16e9b1dbb1e4e5947b5b02bc5e3"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
 ]
@@ -2025,9 +2025,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.132"
+version = "0.2.133"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8371e4e5341c3a96db127eb2465ac681ced4c433e01dd0e938adbef26ba93ba5"
+checksum = "c0f80d65747a3e43d1596c7c5492d95d5edddaabd45a7fcdb02b95f644164966"
 
 [[package]]
 name = "libloading"
@@ -3499,7 +3499,6 @@ name = "roc_code_markup"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "itertools 0.10.3",
  "palette",
  "roc_ast",
  "roc_module",

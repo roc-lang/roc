@@ -44,7 +44,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{Annotation, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -80,6 +80,8 @@ const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// TODO: how can we populate these at compile/runtime from the standard library?
+/// Consider updating the macro in symbol to do this?
 const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("Num", Symbol::NUM_NUM),
     ("Int", Symbol::NUM_INT),
@@ -114,6 +116,20 @@ const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("F32", Symbol::NUM_F32),
     ("F64", Symbol::NUM_F64),
     ("Dec", Symbol::NUM_DEC),
+];
+
+const MODULE_ENCODE_TYPES: &[(&str, Symbol)] = &[
+    ("Encoder", Symbol::ENCODE_ENCODER),
+    ("Encoding", Symbol::ENCODE_ENCODING),
+    ("EncoderFormatting", Symbol::ENCODE_ENCODERFORMATTING),
+];
+
+const MODULE_DECODE_TYPES: &[(&str, Symbol)] = &[
+    ("DecodeError", Symbol::DECODE_DECODE_ERROR),
+    ("DecodeResult", Symbol::DECODE_DECODE_RESULT),
+    ("Decoder", Symbol::DECODE_DECODER_OPAQUE),
+    ("Decoding", Symbol::DECODE_DECODING),
+    ("DecoderFormatting", Symbol::DECODE_DECODERFORMATTING),
 ];
 
 macro_rules! log {
@@ -2241,6 +2257,7 @@ fn update<'a>(
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
 
+                // ENCODE
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
@@ -2248,6 +2265,27 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::ENCODE, Region::zero());
+
+                for (type_name, symbol) in MODULE_ENCODE_TYPES {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
+                }
+
+                // DECODE
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::DECODE));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::DECODE, Region::zero());
+
+                for (type_name, symbol) in MODULE_DECODE_TYPES {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
+                }
             }
 
             state
@@ -3911,14 +3949,21 @@ fn send_header_two<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = match qualified_module_name.opt_package {
-                None => match opt_shorthand {
-                    Some(shorthand) => {
-                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                    }
-                    None => PQModuleName::Unqualified(qualified_module_name.module),
-                },
-                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+            let pq_module_name = if qualified_module_name.is_builtin() {
+                // If this is a builtin, it must be unqualified, and we should *never* prefix it
+                // with the package shorthand! The user intended to import the module as-is here.
+                debug_assert!(qualified_module_name.opt_package.is_none());
+                PQModuleName::Unqualified(qualified_module_name.module)
+            } else {
+                match qualified_module_name.opt_package {
+                    None => match opt_shorthand {
+                        Some(shorthand) => {
+                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
+                        }
+                        None => PQModuleName::Unqualified(qualified_module_name.module),
+                    },
+                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+                }
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -5597,10 +5642,14 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{}", error);
-            let doc = alloc.concat([
-                alloc.reflow(r"I tried to read this file, but ran into a "),
-                alloc.text(formatted),
-                alloc.reflow(r" problem."),
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file:"),
+                alloc
+                    .text(filename.to_str().unwrap())
+                    .annotate(Annotation::Error)
+                    .indent(4),
+                alloc.reflow(r"But ran into:"),
+                alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
