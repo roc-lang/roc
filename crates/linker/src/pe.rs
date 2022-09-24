@@ -58,6 +58,28 @@ struct PeMetadata {
     exports: MutMap<String, i64>,
 }
 
+impl PeMetadata {
+    fn write_to_file(&self, metadata_filename: &Path) {
+        let metadata_file =
+            std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        serialize_into(BufWriter::new(metadata_file), self)
+            .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
+    }
+
+    fn read_from_file(metadata_filename: &Path) -> Self {
+        let input =
+            std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        match deserialize_from(BufReader::new(input)) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
+        }
+    }
+}
+
 pub(crate) fn preprocess_windows(
     host_exe_filename: &str,
     metadata_filename: &Path,
@@ -163,32 +185,18 @@ pub(crate) fn preprocess_windows(
         thunks_start_offset,
     };
 
-    let metadata_file =
-        std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-
-    serialize_into(BufWriter::new(metadata_file), &metadata)
-        .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
+    metadata.write_to_file(metadata_filename);
 
     Ok(())
 }
 
 pub(crate) fn surgery_pe(
-    out_filename: &str,
-    metadata_filename: &str,
+    executable_path: &Path,
+    metadata_path: &Path,
     app_bytes: &[u8],
     _verbose: bool,
 ) {
-    let md: PeMetadata = {
-        let input =
-            std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-
-        match deserialize_from(BufReader::new(input)) {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to deserialize metadata: {}", err);
-            }
-        }
-    };
+    let md = PeMetadata::read_from_file(metadata_path);
 
     let app_obj_sections = AppSections::from_data(app_bytes);
     let mut symbols = app_obj_sections.symbols;
@@ -203,10 +211,7 @@ pub(crate) fn surgery_pe(
         .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
         .sum();
 
-    let executable = &mut mmap_mut(
-        Path::new(out_filename),
-        md.dynhost_file_size + app_sections_size,
-    );
+    let executable = &mut mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
 
     let app_code_section_va = md.last_host_section_address
         + next_multiple_of(

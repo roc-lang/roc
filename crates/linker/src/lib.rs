@@ -2040,7 +2040,12 @@ pub fn surgery(
     let app_parsing_duration = app_parsing_start.elapsed();
 
     if let target_lexicon::BinaryFormat::Coff = target.binary_format {
-        return crate::pe::surgery_pe(out_filename, metadata_filename, app_data, verbose);
+        return crate::pe::surgery_pe(
+            Path::new(out_filename),
+            Path::new(metadata_filename),
+            app_data,
+            verbose,
+        );
     }
 
     let total_start = Instant::now();
