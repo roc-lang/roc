@@ -463,7 +463,7 @@ pub fn gen_from_mono_module_dev(
     target: &target_lexicon::Triple,
     _host_input_path: &Path,
     _wasm_dev_stack_bytes: Option<u32>,
-) -> CodeGenTiming {
+) -> (CodeObject, CodeGenTiming) {
     use target_lexicon::Architecture;
 
     match target.architecture {
