@@ -10,7 +10,7 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        example_file, examples_dir, cli_testing_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
         known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
@@ -115,6 +115,7 @@ mod cli_run {
         stdin: &[&str],
         app_args: &[String],
     ) -> Out {
+        dbg!(file);
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
             args.into_iter()
@@ -584,7 +585,7 @@ mod cli_run {
         //     expected_ending: "successfully wrote to file\n",
         //     use_valgrind: true,
         // },
-        false_interpreter:"false-interpreter" => {
+        false_interpreter:"cli/false-interpreter" => {
             Example {
                 filename: "False.roc",
                 executable_filename: "false",
@@ -623,7 +624,7 @@ mod cli_run {
                 #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
                 fn $test_name() {
                     let benchmark = $benchmark;
-                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+                    let file_name = cli_testing_dir("benchmarks").join(benchmark.filename);
 
                     // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
