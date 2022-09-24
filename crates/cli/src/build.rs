@@ -5,6 +5,7 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
+use roc_error_macros::internal_error;
 use roc_load::{
     EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
@@ -332,7 +333,16 @@ pub fn build_file<'a>(
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path);
+            let roc_app_bytes = std::fs::read(app_o_file)
+                .unwrap_or_else(|e| internal_error!("Could not read roc app object: {e:?}"));
+
+            roc_linker::link_preprocessed_host(
+                target,
+                &host_input_path,
+                &roc_app_bytes,
+                &binary_path,
+            );
+
             problems
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
