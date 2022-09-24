@@ -1,4 +1,5 @@
 use crate::ir::Parens;
+use bitvec::vec::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -2177,11 +2178,11 @@ pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
 
 #[inline(always)]
 pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
-    use {roc_types::num::IntLitWidth::*, Content::*, NumericRange::*};
+    use {Content::*, NumericRange::*};
     let content = subs.get_content_without_compacting(var);
     matches!(
         content,
-        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+        RangedNumber(NumAtLeastEitherSign(..) | NumAtLeastSigned(..)),
     )
 }
 
@@ -3270,7 +3271,6 @@ impl From<Symbol> for TagOrClosure {
 pub enum UnionVariant<'a> {
     Never,
     Unit,
-    UnitWithArguments,
     BoolUnion {
         ttrue: TagOrClosure,
         ffalse: TagOrClosure,
@@ -3279,6 +3279,11 @@ pub enum UnionVariant<'a> {
     Newtype {
         tag_name: TagOrClosure,
         arguments: Vec<'a, Layout<'a>>,
+    },
+    NewtypeByVoid {
+        data_tag_name: TagOrClosure,
+        data_tag_id: TagIdIntType,
+        data_tag_arguments: Vec<'a, Layout<'a>>,
     },
     Wrapped(WrappedVariant<'a>),
 }
@@ -3526,6 +3531,8 @@ where
                 Vec::with_capacity_in(tags_list.len(), env.arena);
             let mut has_any_arguments = false;
 
+            let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
+
             for &(tag_name, arguments) in tags_list.into_iter() {
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
@@ -3537,6 +3544,10 @@ where
                             has_any_arguments = true;
 
                             arg_layouts.push(layout);
+
+                            if layout == Layout::VOID {
+                                inhabited_tag_ids.set(answer.len(), false);
+                            }
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3559,6 +3570,18 @@ where
                 });
 
                 answer.push((tag_name.clone().into(), arg_layouts.into_bump_slice()));
+            }
+
+            if inhabited_tag_ids.count_ones() == 1 {
+                let kept_tag_id = inhabited_tag_ids.first_one().unwrap();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                let variant = UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+                };
+                return Cacheable(variant, cache_criteria);
             }
 
             match num_tags {
@@ -3628,19 +3651,13 @@ where
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), env.arena);
-            let mut contains_zero_sized = false;
 
             for var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
                 cache_criteria.and(criteria);
                 match result {
                     Ok(layout) => {
-                        // Drop any zero-sized arguments like {}
-                        if !layout.is_dropped_because_empty() {
-                            layouts.push(layout);
-                        } else {
-                            contains_zero_sized = true;
-                        }
+                        layouts.push(layout);
                     }
                     Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                         // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3663,11 +3680,7 @@ where
             });
 
             if layouts.is_empty() {
-                if contains_zero_sized {
-                    Cacheable(UnionVariant::UnitWithArguments, cache_criteria)
-                } else {
-                    Cacheable(UnionVariant::Unit, cache_criteria)
-                }
+                Cacheable(UnionVariant::Unit, cache_criteria)
             } else if let Some(rec_var) = opt_rec_var {
                 let variant = UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name: tag_name.into(),
@@ -3691,6 +3704,7 @@ where
             let mut has_any_arguments = false;
 
             let mut nullable = None;
+            let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
@@ -3732,6 +3746,10 @@ where
                             } else {
                                 arg_layouts.push(layout);
                             }
+
+                            if layout == Layout::VOID {
+                                inhabited_tag_ids.set(answer.len(), false);
+                            }
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3755,6 +3773,18 @@ where
                 });
 
                 answer.push((tag_name.into(), arg_layouts.into_bump_slice()));
+            }
+
+            if inhabited_tag_ids.count_ones() == 1 && !is_recursive {
+                let kept_tag_id = inhabited_tag_ids.first_one().unwrap();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                let variant = UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+                };
+                return Cacheable(variant, cache_criteria);
             }
 
             match num_tags {
@@ -3866,7 +3896,7 @@ where
 
     let result = match variant {
         Never => Layout::VOID,
-        Unit | UnitWithArguments => Layout::UNIT,
+        Unit => Layout::UNIT,
         BoolUnion { .. } => Layout::bool(),
         ByteUnion(_) => Layout::u8(),
         Newtype {
@@ -3880,6 +3910,15 @@ where
             };
 
             answer1
+        }
+        NewtypeByVoid {
+            data_tag_arguments, ..
+        } => {
+            if data_tag_arguments.len() == 1 {
+                data_tag_arguments[0]
+            } else {
+                Layout::struct_no_name_order(data_tag_arguments.into_bump_slice())
+            }
         }
         Wrapped(variant) => {
             use WrappedVariant::*;

@@ -1,13 +1,13 @@
-interface Bytes.Decode exposes [Decoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3] imports []
+interface Bytes.Decode exposes [ByteDecoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3] imports []
 
 State : { bytes : List U8, cursor : Nat }
 
 DecodeProblem : [OutOfBytes]
 
-Decoder a := State -> [Good State a, Bad DecodeProblem]
+ByteDecoder a := State -> [Good State a, Bad DecodeProblem]
 
-decode : List U8, Decoder a -> Result a DecodeProblem
-decode = \bytes, @Decoder decoder ->
+decode : List U8, ByteDecoder a -> Result a DecodeProblem
+decode = \bytes, @ByteDecoder decoder ->
     when decoder { bytes, cursor: 0 } is
         Good _ value ->
             Ok value
@@ -15,12 +15,12 @@ decode = \bytes, @Decoder decoder ->
         Bad e ->
             Err e
 
-succeed : a -> Decoder a
-succeed = \value -> @Decoder \state -> Good state value
+succeed : a -> ByteDecoder a
+succeed = \value -> @ByteDecoder \state -> Good state value
 
-map : Decoder a, (a -> b) -> Decoder b
-map = \@Decoder decoder, transform ->
-    @Decoder
+map : ByteDecoder a, (a -> b) -> ByteDecoder b
+map = \@ByteDecoder decoder, transform ->
+    @ByteDecoder
         \state ->
             when decoder state is
                 Good state1 value ->
@@ -29,9 +29,9 @@ map = \@Decoder decoder, transform ->
                 Bad e ->
                     Bad e
 
-map2 : Decoder a, Decoder b, (a, b -> c) -> Decoder c
-map2 = \@Decoder decoder1, @Decoder decoder2, transform ->
-    @Decoder
+map2 : ByteDecoder a, ByteDecoder b, (a, b -> c) -> ByteDecoder c
+map2 = \@ByteDecoder decoder1, @ByteDecoder decoder2, transform ->
+    @ByteDecoder
         \state1 ->
             when decoder1 state1 is
                 Good state2 a ->
@@ -45,9 +45,9 @@ map2 = \@Decoder decoder1, @Decoder decoder2, transform ->
                 Bad e ->
                     Bad e
 
-map3 : Decoder a, Decoder b, Decoder c, (a, b, c -> d) -> Decoder d
-map3 = \@Decoder decoder1, @Decoder decoder2, @Decoder decoder3, transform ->
-    @Decoder
+map3 : ByteDecoder a, ByteDecoder b, ByteDecoder c, (a, b, c -> d) -> ByteDecoder d
+map3 = \@ByteDecoder decoder1, @ByteDecoder decoder2, @ByteDecoder decoder3, transform ->
+    @ByteDecoder
         \state1 ->
             when decoder1 state1 is
                 Good state2 a ->
@@ -66,21 +66,21 @@ map3 = \@Decoder decoder1, @Decoder decoder2, @Decoder decoder3, transform ->
                 Bad e ->
                     Bad e
 
-after : Decoder a, (a -> Decoder b) -> Decoder b
-after = \@Decoder decoder, transform ->
-    @Decoder
+after : ByteDecoder a, (a -> ByteDecoder b) -> ByteDecoder b
+after = \@ByteDecoder decoder, transform ->
+    @ByteDecoder
         \state ->
             when decoder state is
                 Good state1 value ->
-                    (@Decoder decoder1) = transform value
+                    (@ByteDecoder decoder1) = transform value
 
                     decoder1 state1
 
                 Bad e ->
                     Bad e
 
-u8 : Decoder U8
-u8 = @Decoder
+u8 : ByteDecoder U8
+u8 = @ByteDecoder
     \state ->
         when List.get state.bytes state.cursor is
             Ok b ->
@@ -91,14 +91,14 @@ u8 = @Decoder
 
 Step state b : [Loop state, Done b]
 
-loop : (state -> Decoder (Step state a)), state -> Decoder a
+loop : (state -> ByteDecoder (Step state a)), state -> ByteDecoder a
 loop = \stepper, initial ->
-    @Decoder
+    @ByteDecoder
         \state ->
             loopHelp stepper initial state
 
 loopHelp = \stepper, accum, state ->
-    (@Decoder stepper1) = stepper accum
+    (@ByteDecoder stepper1) = stepper accum
 
     when stepper1 state is
         Good newState (Done value) ->

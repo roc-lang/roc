@@ -1181,10 +1181,8 @@ define_builtins! {
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
-        1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
-                                       // NB: not strictly needed; used for finding tag names in error suggestions
-        2 BOOL_TRUE: "True" imported // Bool.Bool = [False, True]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        1 BOOL_FALSE: "false"
+        2 BOOL_TRUE: "true"
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
@@ -1243,6 +1241,9 @@ define_builtins! {
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
+        50 STR_REPLACE_EACH: "replaceEach"
+        51 STR_REPLACE_FIRST: "replaceFirst"
+        52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

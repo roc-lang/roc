@@ -12,6 +12,10 @@ impl<T> RocSet<T> {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     #[allow(unused)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self(RocDict::with_capacity(capacity))

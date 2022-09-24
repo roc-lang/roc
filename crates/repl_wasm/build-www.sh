@@ -12,7 +12,7 @@ set -euxo pipefail
 
 if ! which wasm-pack
 then
-    echo "To build the Web REPL, you need to run `cargo install wasm-pack`"
+    echo "To build the Web REPL, you need to run 'cargo install wasm-pack'"
     exit 1
 fi
 

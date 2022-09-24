@@ -2,11 +2,11 @@ on:
   schedule:
     - cron:  '0 13 * * *'
 
-name: Test latest nightly release for macOS x86_64
+name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
 jobs:
   test-nightly:
-    name: test nightly macos x86_64
+    name: test nightly macos, ubu 20.04, ubu 22.04
     strategy:
       matrix:
         os: [ macos-12, ubuntu-20.04, ubuntu-22.04 ]

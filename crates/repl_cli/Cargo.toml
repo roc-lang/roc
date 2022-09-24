@@ -15,7 +15,7 @@ target-x86 = ["roc_build/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64"]
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = {version = "3.11.0", features = ["collections"]}
 const_format = { version = "0.2.23", features = ["const_generics"] }
 inkwell = {path = "../vendor/inkwell"}
 libloading = "0.7.1"

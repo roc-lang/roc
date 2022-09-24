@@ -1287,7 +1287,18 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        _ => todo!(),
+        BadOpaqueRef(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("This opaque type reference has an invalid name:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"Opaque type names must begin with a capital letter, "),
+                    alloc.reflow(r"and must contain only letters and numbers."),
+                ]),
+            ])
+        }
     }
 }
 

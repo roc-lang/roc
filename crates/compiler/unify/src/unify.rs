@@ -2077,6 +2077,37 @@ enum Rec {
     Both(Variable, Variable),
 }
 
+/// Checks if an extension type `ext1` should be permitted to grow by the `candidate_type`, if it
+/// uninhabited.
+///
+/// This is relevant for the unification strategy of branch and condition
+/// types, where we would like
+///
+/// x : Result Str []
+/// when x is
+///     Ok x -> x
+///
+/// to typecheck, because [Ok Str][] = [Ok Str, Result []][] (up to isomorphism).
+///
+/// Traditionally, such types do not unify because the right-hand side is seen to have a
+/// `Result` constructor, but for branches, that constructor is not material.
+///
+/// Note that such a unification is sound, precisely because `Result` is uninhabited!
+///
+/// NB: the tag union extension to grow should be `ext1`, and the candidate
+/// NB: uninhabited type should be `candidate_type`.
+/// of the variables under unification
+fn should_extend_ext_with_uninhabited_type(
+    subs: &Subs,
+    ext1: Variable,
+    candidate_type: Variable,
+) -> bool {
+    matches!(
+        subs.get_content_without_compacting(ext1),
+        Content::Structure(FlatType::EmptyTagUnion)
+    ) && !subs.is_inhabited(candidate_type)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unify_tag_unions<M: MetaCollector>(
     env: &mut Env,
@@ -2088,7 +2119,7 @@ fn unify_tag_unions<M: MetaCollector>(
     initial_ext2: Variable,
     recursion_var: Rec,
 ) -> Outcome<M> {
-    let (separate, mut ext1, ext2) =
+    let (separate, mut ext1, mut ext2) =
         separate_union_tags(env.subs, tags1, initial_ext1, tags2, initial_ext2);
 
     let shared_tags = separate.in_both;
@@ -2148,10 +2179,25 @@ fn unify_tag_unions<M: MetaCollector>(
 
             shared_tags_outcome
         } else {
-            let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
-            let flat_type = FlatType::TagUnion(unique_tags2, ext2);
-            let sub_record = fresh(env, pool, ctx, Structure(flat_type));
-            let ext_outcome = unify_pool(env, pool, ext1, sub_record, ctx.mode);
+            let extra_tags_in_2 = {
+                let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
+                let flat_type = FlatType::TagUnion(unique_tags2, ext2);
+                fresh(env, pool, ctx, Structure(flat_type))
+            };
+
+            // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
+            // patch `ext1` to grow accordingly.
+            if should_extend_ext_with_uninhabited_type(env.subs, ext1, extra_tags_in_2) {
+                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
+                let mut new_desc = ctx.first_desc;
+                new_desc.content = new_union;
+                env.subs.set(ctx.first, new_desc);
+
+                ext1 = new_ext;
+            }
+
+            let ext_outcome = unify_pool(env, pool, ext1, extra_tags_in_2, ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2163,7 +2209,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                sub_record,
+                extra_tags_in_2,
                 recursion_var,
             );
 
@@ -2172,15 +2218,29 @@ fn unify_tag_unions<M: MetaCollector>(
             shared_tags_outcome
         }
     } else if separate.only_in_2.is_empty() {
-        let unique_tags1 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_1);
-        let flat_type = FlatType::TagUnion(unique_tags1, ext1);
-        let sub_record = fresh(env, pool, ctx, Structure(flat_type));
+        let extra_tags_in_1 = {
+            let unique_tags1 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_1);
+            let flat_type = FlatType::TagUnion(unique_tags1, ext1);
+            fresh(env, pool, ctx, Structure(flat_type))
+        };
 
         let mut total_outcome = Outcome::default();
 
         // In a presence context, we don't care about ext2 being equal to tags1
         if ctx.mode.is_eq() {
-            let ext_outcome = unify_pool(env, pool, sub_record, ext2, ctx.mode);
+            // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
+            // patch `ext2` to grow accordingly.
+            if should_extend_ext_with_uninhabited_type(env.subs, ext2, extra_tags_in_1) {
+                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                let new_union = Structure(FlatType::TagUnion(tags2, new_ext));
+                let mut new_desc = ctx.second_desc;
+                new_desc.content = new_union;
+                env.subs.set(ctx.second, new_desc);
+
+                ext2 = new_ext;
+            }
+
+            let ext_outcome = unify_pool(env, pool, extra_tags_in_1, ext2, ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2194,7 +2254,7 @@ fn unify_tag_unions<M: MetaCollector>(
             ctx,
             shared_tags,
             OtherTags2::Empty,
-            sub_record,
+            extra_tags_in_1,
             recursion_var,
         );
         total_outcome.union(shared_tags_outcome);

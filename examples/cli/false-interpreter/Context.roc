@@ -104,4 +104,4 @@ inWhileScope = \ctx ->
             scope.whileInfo != None
 
         Err ListWasEmpty ->
-            False
+            Bool.false

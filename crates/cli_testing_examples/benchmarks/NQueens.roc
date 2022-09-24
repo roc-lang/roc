@@ -28,7 +28,7 @@ lengthHelp = \foobar, acc ->
 safe : I64, I64, ConsList I64 -> Bool
 safe = \queen, diagonal, xs ->
     when xs is
-        Nil -> True
+        Nil -> Bool.true
         Cons q t ->
             queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
 

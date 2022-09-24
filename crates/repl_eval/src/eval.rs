@@ -125,6 +125,9 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(name, _, real_var, kind) => {
+                if *name == Symbol::BOOL_BOOL {
+                    return (newtype_containers, alias_content, content);
+                }
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. For example,
                 //   T : { a : Str }
@@ -656,7 +659,15 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
                 }
-                _ => unreachable!("any other content would have a different layout"),
+                Content::RecursionVar { structure, ..} => {
+                    match env.subs.get_content_without_compacting(*structure) {
+                        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                            (rec_var, tags)
+                        }
+                        content => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(content, env.subs)),
+                    }
+                }
+                _ => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(raw_content, env.subs)),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 

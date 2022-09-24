@@ -44,3 +44,8 @@ been able to find beginner-friendly projects to get people up to speed gradually
 
 If you're interested in getting involved, check out
 [CONTRIBUTING.md](https://github.com/roc-lang/roc/blob/main/CONTRIBUTING.md)!
+
+If you're interested in substantial implementation- or research-heavy projects
+related to Roc, check out [Roc Project Ideas][project-ideas]!
+
+[project-ideas]: https://docs.google.com/document/d/1mMaxIi7vxyUyNAUCs98d68jYj6C9Fpq4JIZRU735Kwg/edit?usp=sharing

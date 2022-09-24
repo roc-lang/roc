@@ -152,7 +152,7 @@ appendHelp = \prefix, suffix ->
                 Err NotFound ->
                     # This should never happen, because we already verified
                     # that the suffix startsWith "/"
-                    # TODO `expect False` here with a comment
+                    # TODO `expect Bool.false` here with a comment
                     Str.concat prefix suffix
         else
             # prefix ends with "/" but suffix doesn't start with one, so just append.
@@ -334,15 +334,15 @@ query = \@Url urlStr ->
         Ok { after } -> after
         Err NotFound -> ""
 
-## Returns `True` if the URL has a `?` in it.
+## Returns `Bool.true` if the URL has a `?` in it.
 ##
 ##     Url.fromStr "https://example.com?key=value#stuff"
 ##         |> Url.hasQuery
-##     # True
+##     # Bool.true
 ##
 ##     Url.fromStr "https://example.com#stuff"
 ##         |> Url.hasQuery
-##     # False
+##     # Bool.false
 hasQuery : Url -> Bool
 hasQuery = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"
@@ -404,15 +404,15 @@ withFragment = \@Url urlStr, fragmentStr ->
                 # The URL didn't have a fragment, so give it this one
                 @Url "\(urlStr)#\(fragmentStr)"
 
-## Returns `True` if the URL has a `#` in it.
+## Returns `Bool.true` if the URL has a `#` in it.
 ##
 ##     Url.fromStr "https://example.com?key=value#stuff"
 ##         |> Url.hasFragment
-##     # True
+##     # Bool.true
 ##
 ##     Url.fromStr "https://example.com?key=value"
 ##         |> Url.hasFragment
-##     # False
+##     # Bool.false
 hasFragment : Url -> Bool
 hasFragment = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"

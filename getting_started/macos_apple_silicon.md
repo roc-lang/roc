@@ -16,7 +16,14 @@ which includes the Roc compiler and various helpful utilities.
 1. Untar the archive:
 
     ```sh
-    roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
+    tar xf roc_nightly-macos_apple_silicon-<VERSION>.tar.gz --one-top-level
+    cd roc_night<TAB TO AUTOCOMPLETE>
+    ```
+
+1. Install llvm 13:
+
+    ```sh
+    brew install llvm@13
     ```
 
 ## How to install Roc platform dependencies

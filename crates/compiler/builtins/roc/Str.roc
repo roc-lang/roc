@@ -33,6 +33,9 @@ interface Str
         toU8,
         toI8,
         toScalars,
+        replaceEach,
+        replaceFirst,
+        replaceLast,
         splitFirst,
         splitLast,
         walkUtf8WithIndex,
@@ -128,7 +131,7 @@ Utf8ByteProblem : [
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
-## Returns `True` if the string is empty, and `False` otherwise.
+## Returns `Bool.true` if the string is empty, and `Bool.false` otherwise.
 ##
 ## >>> Str.isEmpty "hi!"
 ##
@@ -164,10 +167,10 @@ repeat : Str, Nat -> Str
 countGraphemes : Str -> Nat
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return `True`. Otherwise return `False`.
+## equal to the given [U32], return `Bool.true`. Otherwise return `Bool.false`.
 ##
 ## If the given [Str] is empty, or if the given [U32] is not a valid
-## code point, this will return `False`.
+## code point, this will return `Bool.false`.
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
@@ -275,6 +278,65 @@ countUtf8Bytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string with each occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
+replaceEach : Str, Str, Str -> Result Str [NotFound]*
+replaceEach = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            # We found at least one needle, so start the buffer off with
+            # `before` followed by the first replacement flower.
+            Str.reserve "" (Str.countUtf8Bytes haystack)
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+            |> Ok
+
+        Err err -> Err err
+
+replaceEachHelp : Str, Str, Str, Str -> Str
+replaceEachHelp = \buf, haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            buf
+            |> Str.concat before
+            |> Str.concat flower
+            |> replaceEachHelp after needle flower
+
+        Err NotFound -> Str.concat buf haystack
+
+expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+
+## Returns the string with the first occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
+replaceFirst : Str, Str, Str -> Result Str [NotFound]*
+replaceFirst = \haystack, needle, flower ->
+    when splitFirst haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+
+## Returns the string with the last occurrence of a substring replaced with a replacement.
+## If the substring is not found, returns `Err NotFound`.
+##
+##     Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
+replaceLast : Str, Str, Str -> Result Str [NotFound]*
+replaceLast = \haystack, needle, flower ->
+    when splitLast haystack needle is
+        Ok { before, after } ->
+            Ok "\(before)\(flower)\(after)"
+
+        Err err -> Err err
+
+expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
 ## Returns the string before the first occurrence of a delimiter, as well as the
 ## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
@@ -390,9 +452,9 @@ matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
         if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
             matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) endIndex
         else
-            False
+            Bool.false
     else
-        True
+        Bool.true
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
 ## UTF-8 `U8` byte as well as the index of that byte within the string.

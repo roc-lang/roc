@@ -10,6 +10,6 @@ fnv = "1.0.7"
 im    = "15.0.0"
 im-rc = "15.0.0"
 wyhash = "0.5.0"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
 bitvec = "1"

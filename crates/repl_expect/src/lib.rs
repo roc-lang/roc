@@ -339,7 +339,7 @@ mod test {
                 When it failed, these variables had these values:
 
                 a : List (List Str)
-                a = [[""], []]
+                a = [["foo"], []]
 
                 b : List (List Str)
                 b = [["a string so long that it cannot be short", "bar"]]
@@ -843,6 +843,93 @@ mod test {
 
                 b : RoseTree Str
                 b = Tree "foo" [Tree "bar" []]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn big_recursive_tag_copied_back() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface A exposes [] imports []
+
+                NonEmpty := [
+                    First Str U8,
+                    Next (List { item: Str, rest: NonEmpty }),
+                ]
+                
+                expect
+                    nonEmpty =
+                        a = "abcdefgh"
+                        b = @NonEmpty (First "ijkl" 67u8)
+                        c = Next [{ item: a, rest: b }]
+                        @NonEmpty c
+                
+                    when nonEmpty is
+                        _ -> Bool.false
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+                
+                 8│>  expect
+                 9│>      nonEmpty =
+                10│>          a = "abcdefgh"
+                11│>          b = @NonEmpty (First "ijkl" 67u8)
+                12│>          c = Next [{ item: a, rest: b }]
+                13│>          @NonEmpty c
+                14│>
+                15│>      when nonEmpty is
+                16│>          _ -> Bool.false
+                
+                When it failed, these variables had these values:
+                
+                nonEmpty : NonEmpty
+                nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn arg_parser() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface A exposes [] imports []
+
+                makeForcer : {} -> (Str -> U8)
+                makeForcer = \{} -> \_ -> 2u8
+
+                expect
+                    forcer = makeForcer {}
+
+                    case = ""
+
+                    forcer case == 5u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      forcer = makeForcer {}
+                 8│>
+                 9│>      case = ""
+                10│>
+                11│>      forcer case == 5u8
+
+                When it failed, these variables had these values:
+
+                forcer : Str -> U8
+                forcer = <function>
+
+                case : Str
+                case = ""
                 "#
             ),
         );

@@ -299,14 +299,14 @@ fn small_str_zeroed_literal() {
                     reusedSpace = createStr isForRealThisTime
 
                     # Unoptimised 'if' ensures that we don't just allocate in the caller's frame
-                    if True then
+                    if Bool.true then
                         reusedSpace
                     else
                         reusedSpace
 
                 main =
-                    garbage = functionWithReusedSpace False
-                    functionWithReusedSpace True
+                    garbage = functionWithReusedSpace Bool.false
+                    functionWithReusedSpace Bool.true
                  "#
         ),
         [

@@ -6,6 +6,7 @@ interface Path
         WindowsRoot,
         # toComponents,
         # walkComponents,
+        display,
         fromStr,
         fromBytes,
         withExtension,
@@ -15,7 +16,7 @@ interface Path
 ## You can canonicalize a [Path] using [Path.canonicalize].
 ##
 ## Comparing canonical paths is often more reliable than comparing raw ones.
-## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `False`,
+## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `Bool.false`,
 ## because those are different paths even though their canonical equivalents would be equal.
 ##
 ## Also note that canonicalization reads from the file system (in order to resolve symbolic
@@ -82,13 +83,13 @@ fromBytes = \bytes ->
 ## have been encoded with the same charset as the operating system's curent locale (which
 ## typically does not change after it is set during installation of the OS), so
 ## this should convert a [Path] to a valid string as long as the path was created
-## with the given [Charset]. (Use [Env.charset] to get the current system charset.)
+## with the given `Charset`. (Use `Env.charset` to get the current system charset.)
 ##
 ## For a conversion to [Str] that is lossy but does not return a [Result], see
-## [displayUtf8].
+## [display].
 # toInner : Path -> [Str Str, Bytes (List U8)]
 ## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
-## and converts it to a string using [Str.displayUtf8].
+## and converts it to a string using `Str.display`.
 ##
 ## This conversion is lossy because the path may contain invalid UTF-8 bytes. If that happens,
 ## any invalid bytes will be replaced with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
@@ -103,17 +104,21 @@ fromBytes = \bytes ->
 ## Converting paths to strings can be an unreliable operation, because operating systems
 ## don't record the paths' encodings. This means it's possible for the path to have been
 ## encoded with a different character set than UTF-8 even if UTF-8 is the system default,
-## which means when [displayUtf8] converts them to a string, the string may include gibberish.
+## which means when [display] converts them to a string, the string may include gibberish.
 ## [Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
 ##
-## If you happen to know the [Charset] that was used to encode the path, you can use
-## [toStrUsingCharset] instead of [displayUtf8].
-# displayUtf8 : Path -> Str
-# displayUtf8 = \path ->
-#     when InternalPath.unwrap path is
-#         FromStr str -> str
-#         FromOperatingSystem bytes | ArbitraryBytes bytes ->
-#             Str.displayUtf8 bytes
+## If you happen to know the `Charset` that was used to encode the path, you can use
+## `toStrUsingCharset` instead of [display].
+display : Path -> Str
+display = \path ->
+    when InternalPath.unwrap path is
+        FromStr str -> str
+        FromOperatingSystem bytes | ArbitraryBytes bytes ->
+            when Str.fromUtf8 bytes is
+                Ok str -> str
+                # TODO: this should use the builtin Str.display to display invalid UTF-8 chars in just the right spots, but that does not exist yet!
+                Err _ -> "�"
+
 # isEq : Path, Path -> Bool
 # isEq = \p1, p2 ->
 #     when InternalPath.unwrap p1 is
@@ -228,7 +233,7 @@ WindowsRoot : []
 #                 Str.concat prefixStr suffixStr
 #                 |> FromStr
 #     InternalPath.wrap content
-## Returns `True` if the first path begins with the second.
+## Returns `Bool.true` if the first path begins with the second.
 # startsWith : Path, Path -> Bool
 # startsWith = \path, prefix ->
 #     when InternalPath.unwrap path is
@@ -244,14 +249,14 @@ WindowsRoot : []
 #                         # Compare the two for equality.
 #                         Str.isEqUtf8 prefixStr bytesPrefix
 #                     else
-#                         False
+#                         Bool.false
 #         FromStr pathStr ->
 #             when InternalPath.unwrap prefix is
 #                 FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
 #                     Str.startsWithUtf8 pathStr prefixBytes
 #                 FromStr prefixStr ->
 #                     Str.startsWith pathStr prefixStr
-## Returns `True` if the first path ends with the second.
+## Returns `Bool.true` if the first path ends with the second.
 # endsWith : Path, Path -> Bool
 # endsWith = \path, prefix ->
 #     when InternalPath.unwrap path is
@@ -267,7 +272,7 @@ WindowsRoot : []
 #                         # Compare the two for equality.
 #                         Str.startsWithUtf8 suffixStr bytesSuffix
 #                     else
-#                         False
+#                         Bool.false
 #         FromStr pathStr ->
 #             when InternalPath.unwrap suffix is
 #                 FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
