@@ -1,4 +1,3 @@
-use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
 use object::{elf, endian, macho};
@@ -15,7 +14,6 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
@@ -25,7 +23,7 @@ use target_lexicon::Triple;
 mod generate_dylib;
 mod metadata;
 mod pe;
-use metadata::VirtualOffset;
+use metadata::{Metadata, VirtualOffset};
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
 
@@ -462,9 +460,9 @@ impl<'a> Surgeries<'a> {
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
 pub fn preprocess(
     target: &Triple,
-    exec_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
+    host_exe_path: &str,
+    metadata_path: &str,
+    preprocessed_path: &str,
     shared_lib: &Path,
     verbose: bool,
     time: bool,
@@ -477,9 +475,9 @@ pub fn preprocess(
         target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
             preprocess_elf_and_macho(
                 target,
-                exec_filename,
-                metadata_filename,
-                out_filename,
+                Path::new(host_exe_path),
+                Path::new(metadata_path),
+                Path::new(preprocessed_path),
                 shared_lib,
                 verbose,
                 time,
@@ -488,9 +486,9 @@ pub fn preprocess(
 
         target_lexicon::BinaryFormat::Coff => {
             crate::pe::preprocess_windows(
-                Path::new(exec_filename),
-                Path::new(metadata_filename),
-                Path::new(out_filename),
+                Path::new(host_exe_path),
+                Path::new(metadata_path),
+                Path::new(preprocessed_path),
                 verbose,
                 time,
             )
@@ -517,16 +515,16 @@ pub fn preprocess(
 
 fn preprocess_elf_and_macho(
     target: &Triple,
-    exec_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
+    host_exe_path: &Path,
+    metadata_path: &Path,
+    preprocessed_path: &Path,
     shared_lib: &Path,
     verbose: bool,
     time: bool,
 ) {
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
-    let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
+    let exec_file = fs::File::open(host_exe_path).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let exec_data = &*exec_mmap;
     let exec_obj = match object::File::parse(exec_data) {
@@ -815,7 +813,7 @@ fn preprocess_elf_and_macho(
                 gen_elf_le(
                     exec_data,
                     &mut md,
-                    out_filename,
+                    preprocessed_path,
                     &got_app_syms,
                     &got_sections,
                     dynamic_lib_count,
@@ -870,7 +868,7 @@ fn preprocess_elf_and_macho(
                     gen_macho_le(
                         exec_data,
                         &mut md,
-                        out_filename,
+                        preprocessed_path,
                         macho_load_so_offset,
                         target,
                         verbose,
@@ -907,15 +905,7 @@ fn preprocess_elf_and_macho(
     }
 
     let saving_metadata_start = Instant::now();
-    // This block ensure that the metadata is fully written and timed before continuing.
-    {
-        let output =
-            fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-        let output = BufWriter::new(output);
-        if let Err(err) = serialize_into(output, &md) {
-            internal_error!("Failed to serialize metadata: {}", err);
-        };
-    }
+    md.write_to_file(metadata_path);
     let saving_metadata_duration = saving_metadata_start.elapsed();
 
     let flushing_data_start = Instant::now();
@@ -960,7 +950,7 @@ fn preprocess_elf_and_macho(
 fn gen_macho_le(
     exec_data: &[u8],
     md: &mut metadata::Metadata,
-    out_filename: &str,
+    out_filename: &Path,
     macho_load_so_offset: usize,
     _target: &Triple,
     _verbose: bool,
@@ -1516,7 +1506,7 @@ fn gen_macho_le(
 fn gen_elf_le(
     exec_data: &[u8],
     md: &mut metadata::Metadata,
-    out_filename: &str,
+    preprocessed_path: &Path,
     got_app_syms: &[(String, usize)],
     got_sections: &[(usize, usize)],
     dynamic_lib_count: usize,
@@ -1555,7 +1545,7 @@ fn gen_elf_le(
         .write(true)
         .create(true)
         .truncate(true)
-        .open(out_filename)
+        .open(preprocessed_path)
         .unwrap_or_else(|e| internal_error!("{}", e));
     out_file
         .set_len(md.exec_len)
@@ -2026,8 +2016,54 @@ pub fn surgery(
     time: bool,
     target: &Triple,
 ) {
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
+            surgery_elf_and_macho(
+                Path::new(app_filename),
+                Path::new(metadata_filename),
+                Path::new(out_filename),
+                verbose,
+                time,
+                target,
+            );
+        }
+
+        target_lexicon::BinaryFormat::Coff => {
+            crate::pe::surgery_pe(
+                Path::new(out_filename),
+                Path::new(metadata_filename),
+                Path::new(app_filename),
+            );
+        }
+
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            internal_error!("Roc does not support unknown host binary formats!");
+        }
+        other => {
+            internal_error!(
+                concat!(
+                    r"Roc does not yet support the {:?} binary format. ",
+                    r"Please file a bug report for this, describing what operating system you were targeting!"
+                ),
+                other,
+            )
+        }
+    }
+}
+
+fn surgery_elf_and_macho(
+    app_path: &Path,
+    metadata_path: &Path,
+    executable_path: &Path,
+    verbose: bool,
+    time: bool,
+    target: &Triple,
+) {
     let app_parsing_start = Instant::now();
-    let app_file = fs::File::open(app_filename).unwrap_or_else(|e| internal_error!("{}", e));
+    let app_file = fs::File::open(app_path).unwrap_or_else(|e| internal_error!("{}", e));
     let app_mmap = unsafe { Mmap::map(&app_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let app_data = &*app_mmap;
     let app_obj = match object::File::parse(app_data) {
@@ -2039,34 +2075,17 @@ pub fn surgery(
 
     let app_parsing_duration = app_parsing_start.elapsed();
 
-    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
-        return crate::pe::surgery_pe(
-            Path::new(out_filename),
-            Path::new(metadata_filename),
-            app_data,
-            verbose,
-        );
-    }
-
     let total_start = Instant::now();
+
     let loading_metadata_start = total_start;
-    let md: metadata::Metadata = {
-        let input = fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-        let input = BufReader::new(input);
-        match deserialize_from(input) {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to deserialize metadata: {}", err);
-            }
-        }
-    };
+    let md = Metadata::read_from_file(metadata_path);
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
     let exec_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(out_filename)
+        .open(executable_path)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
     let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
@@ -2086,9 +2105,9 @@ pub fn surgery(
             surgery_elf(verbose, &md, &mut exec_mmap, &mut offset, app_obj)
         }
         target_lexicon::BinaryFormat::Macho => surgery_macho(
-            app_filename,
-            metadata_filename,
-            out_filename,
+            app_path,
+            metadata_path,
+            executable_path,
             verbose,
             time,
             &md,
@@ -2123,11 +2142,11 @@ pub fn surgery(
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let mut perms = fs::metadata(out_filename)
+        let mut perms = fs::metadata(executable_path)
             .unwrap_or_else(|e| internal_error!("{}", e))
             .permissions();
         perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(out_filename, perms).unwrap_or_else(|e| internal_error!("{}", e));
+        fs::set_permissions(executable_path, perms).unwrap_or_else(|e| internal_error!("{}", e));
     }
 
     let total_duration = total_start.elapsed();
@@ -2154,9 +2173,9 @@ pub fn surgery(
 
 #[allow(clippy::too_many_arguments)]
 pub fn surgery_macho(
-    _app_filename: &str,
-    _metadata_filename: &str,
-    _out_filename: &str,
+    _app_filename: &Path,
+    _metadata_filename: &Path,
+    _out_filename: &Path,
     verbose: bool,
     _time: bool,
     md: &metadata::Metadata,

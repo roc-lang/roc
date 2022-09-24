@@ -188,15 +188,11 @@ pub(crate) fn preprocess_windows(
     Ok(())
 }
 
-pub(crate) fn surgery_pe(
-    executable_path: &Path,
-    metadata_path: &Path,
-    app_bytes: &[u8],
-    _verbose: bool,
-) {
+pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, app_path: &Path) {
     let md = PeMetadata::read_from_file(metadata_path);
+    let app_bytes = open_mmap(app_path);
 
-    let app_obj_sections = AppSections::from_data(app_bytes);
+    let app_obj_sections = AppSections::from_data(&app_bytes);
     let mut symbols = app_obj_sections.symbols;
 
     let image_base: u64 = md.image_base;
