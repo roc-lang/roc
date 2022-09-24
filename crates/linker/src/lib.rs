@@ -488,7 +488,7 @@ pub fn preprocess(
 
         target_lexicon::BinaryFormat::Coff => {
             crate::pe::preprocess_windows(
-                exec_filename,
+                Path::new(exec_filename),
                 Path::new(metadata_filename),
                 Path::new(out_filename),
                 verbose,

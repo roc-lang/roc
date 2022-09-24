@@ -6,7 +6,7 @@ use std::{
 };
 
 use bincode::{deserialize_from, serialize_into};
-use memmap2::MmapMut;
+use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{
         self, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
@@ -84,7 +84,7 @@ impl PeMetadata {
 }
 
 pub(crate) fn preprocess_windows(
-    host_exe_filename: &str,
+    host_exe_filename: &Path,
     metadata_filename: &Path,
     out_filename: &Path,
     _verbose: bool,
@@ -97,7 +97,7 @@ pub(crate) fn preprocess_windows(
 
     let _exec_parsing_duration = exec_parsing_start.elapsed();
 
-    let data = std::fs::read(host_exe_filename).unwrap();
+    let data = open_mmap(host_exe_filename);
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut dynhost = Preprocessor::preprocess(out_filename, &data, &new_sections);
 
@@ -215,7 +215,7 @@ pub(crate) fn surgery_pe(
         .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
         .sum();
 
-    let executable = &mut mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
+    let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
 
     let app_code_section_va = md.last_host_section_address
         + next_multiple_of(
@@ -522,7 +522,7 @@ impl Preprocessor {
 
     fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
         let this = Self::new(data, extra_sections);
-        let mut result = mmap_mut(output_path, data.len() + this.additional_length);
+        let mut result = open_mmap_mut(output_path, data.len() + this.additional_length);
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
@@ -673,7 +673,17 @@ impl Preprocessor {
     }
 }
 
-fn mmap_mut(path: &Path, length: usize) -> MmapMut {
+fn open_mmap(path: &Path) -> Mmap {
+    let in_file = std::fs::OpenOptions::new()
+        .read(true)
+        .create(true)
+        .open(path)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    unsafe { Mmap::map(&in_file).unwrap_or_else(|e| internal_error!("{e}")) }
+}
+
+fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
     let out_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -1462,7 +1472,7 @@ mod test {
 
         let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
-        let mut executable = mmap_mut(
+        let mut executable = open_mmap_mut(
             &dir.join("app.exe"),
             dynhost_bytes.len() + roc_app_sections_size,
         );
