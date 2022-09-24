@@ -66,7 +66,6 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 ..
             } => false,
 
-            // windows support is incomplete
             Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Windows,

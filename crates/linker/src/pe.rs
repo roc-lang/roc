@@ -82,77 +82,92 @@ impl PeMetadata {
             }
         }
     }
+
+    fn from_preprocessed_host(preprocessed_data: &[u8], new_sections: &[[u8; 8]]) -> Self {
+        use object::ObjectSection;
+
+        let dynhost_obj = object::read::pe::PeFile64::parse(preprocessed_data)
+            .unwrap_or_else(|err| internal_error!("Failed to parse executable file: {}", err));
+
+        let host_section_count = dynhost_obj.sections().count() - new_sections.len();
+        let last_host_section = dynhost_obj
+            .sections()
+            .nth(host_section_count - 1) // -1 because we have a count and want an index
+            .unwrap();
+
+        let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
+        let thunks_start_offset = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+
+        let optional_header = dynhost_obj.nt_headers().optional_header;
+        let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
+            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<ImageFileHeader>();
+
+        let exports: MutMap<String, i64> = dynhost_obj
+            .exports()
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                (
+                    String::from_utf8(e.name().to_vec()).unwrap(),
+                    (e.address() - optional_header.image_base.get(LE)) as i64,
+                )
+            })
+            .collect();
+
+        let imports: Vec<_> = dynhost_obj
+            .imports()
+            .unwrap()
+            .iter()
+            .filter(|import| import.library() == APP_DLL.as_bytes())
+            .map(|import| {
+                std::str::from_utf8(import.name())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+
+        let last_host_section_size = last_host_section.size();
+        let last_host_section_address = last_host_section.address();
+
+        PeMetadata {
+            dynhost_file_size: preprocessed_data.len(),
+            image_base: optional_header.image_base.get(LE),
+            file_alignment: optional_header.file_alignment.get(LE),
+            section_alignment: optional_header.section_alignment.get(LE),
+            last_host_section_size,
+            last_host_section_address,
+            host_section_count,
+            optional_header_offset,
+            imports,
+            exports,
+            dynamic_relocations,
+            thunks_start_offset,
+        }
+    }
 }
 
 pub(crate) fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
-    out_filename: &Path,
+    preprocessed_filename: &Path,
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
-    use object::ObjectSection;
-
     let data = open_mmap(host_exe_filename);
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut dynhost = Preprocessor::preprocess(out_filename, &data, &new_sections);
+    let mut preprocessed = Preprocessor::preprocess(preprocessed_filename, &data, &new_sections);
 
-    let dynhost_data: &[u8] = &*dynhost;
-    let dynhost_obj = match object::read::pe::PeFile64::parse(dynhost_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            internal_error!("Failed to parse executable file: {}", err);
-        }
-    };
-
-    let host_section_count = dynhost_obj.sections().count() - new_sections.len();
-    let last_host_section = dynhost_obj
-        .sections()
-        .nth(host_section_count - 1) // -1 because we have a count and want an index
-        .unwrap();
-
-    let dynamic_relocations = DynamicRelocationsPe::new(dynhost_data);
-    let thunks_start_offset = find_thunks_start_offset(dynhost_data, &dynamic_relocations);
-
-    let optional_header = dynhost_obj.nt_headers().optional_header;
-    let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
-        + std::mem::size_of::<u32>()
-        + std::mem::size_of::<ImageFileHeader>();
-
-    let exports: MutMap<String, i64> = dynhost_obj
-        .exports()
-        .unwrap()
-        .into_iter()
-        .map(|e| {
-            (
-                String::from_utf8(e.name().to_vec()).unwrap(),
-                (e.address() - optional_header.image_base.get(LE)) as i64,
-            )
-        })
-        .collect();
-
-    let imports: Vec<_> = dynhost_obj
-        .imports()
-        .unwrap()
-        .iter()
-        .filter(|import| import.library() == APP_DLL.as_bytes())
-        .map(|import| {
-            std::str::from_utf8(import.name())
-                .unwrap_or_default()
-                .to_owned()
-        })
-        .collect();
-
-    let last_host_section_size = last_host_section.size();
-    let last_host_section_address = last_host_section.address();
+    // get the metadata from the preprocessed executable before the destructive operations below
+    let md = PeMetadata::from_preprocessed_host(&preprocessed, &new_sections);
 
     // in the data directories, update the length of the imports (there is one fewer now)
     {
-        let start = dynamic_relocations.data_directories_offset_in_file as usize
+        let start = md.dynamic_relocations.data_directories_offset_in_file as usize
             + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
                 * std::mem::size_of::<pe::ImageDataDirectory>();
 
-        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut dynhost, start);
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut preprocessed, start);
 
         let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
         dir.size.set(LE, new);
@@ -162,30 +177,15 @@ pub(crate) fn preprocess_windows(
     {
         const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
-        let start = dynamic_relocations.imports_offset_in_file as usize
-            + W * dynamic_relocations.dummy_import_index as usize;
+        let start = md.dynamic_relocations.imports_offset_in_file as usize
+            + W * md.dynamic_relocations.dummy_import_index as usize;
 
-        for b in dynhost[start..][..W].iter_mut() {
+        for b in preprocessed[start..][..W].iter_mut() {
             *b = 0;
         }
     }
 
-    let metadata = PeMetadata {
-        dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
-        image_base: optional_header.image_base.get(LE),
-        file_alignment: optional_header.file_alignment.get(LE),
-        section_alignment: optional_header.section_alignment.get(LE),
-        last_host_section_size,
-        last_host_section_address,
-        host_section_count,
-        optional_header_offset,
-        imports,
-        exports,
-        dynamic_relocations,
-        thunks_start_offset,
-    };
-
-    metadata.write_to_file(metadata_filename);
+    md.write_to_file(metadata_filename);
 
     Ok(())
 }
@@ -587,8 +587,6 @@ impl Preprocessor {
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
-        // start of the first new section
-
         for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
