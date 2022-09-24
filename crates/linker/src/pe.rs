@@ -39,6 +39,9 @@ struct PeMetadata {
     last_host_section_size: u64,
     last_host_section_address: u64,
 
+    /// Number of sections in the unmodified host .exe
+    host_section_count: usize,
+
     optional_header_offset: usize,
 
     dynamic_relocations: DynamicRelocationsPe,
@@ -106,10 +109,10 @@ pub(crate) fn preprocess_windows(
         }
     };
 
-    // -1 because we have a count and want an index
+    let host_section_count = dynhost_obj.sections().count() - new_sections.len();
     let last_host_section = dynhost_obj
         .sections()
-        .nth(dynhost_obj.sections().count() - new_sections.len() - 1)
+        .nth(host_section_count - 1) // -1 because we have a count and want an index
         .unwrap();
 
     let dynamic_relocations = DynamicRelocationsPe::new(dynhost_data);
@@ -178,6 +181,7 @@ pub(crate) fn preprocess_windows(
         section_alignment: optional_header.section_alignment.get(LE),
         last_host_section_size,
         last_host_section_address,
+        host_section_count,
         optional_header_offset,
         imports,
         exports,
@@ -219,9 +223,12 @@ pub(crate) fn surgery_pe(
             section_alignment as usize,
         ) as u64;
 
-    let mut section_header_start = 624;
     let mut section_file_offset = md.dynhost_file_size;
     let mut virtual_address = (app_code_section_va - image_base) as u32;
+
+    // find the location to write the section headers for our new sections
+    let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
+        + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
 
     let mut code_bytes_added = 0;
     let mut data_bytes_added = 0;
@@ -372,6 +379,9 @@ struct DynamicRelocationsPe {
 
     /// The dummy .dll is the `dummy_import_index`th import of the host .exe
     dummy_import_index: u32,
+
+    /// Start of the first ImageSectionHeader of the file
+    section_headers_offset_in_file: u64,
 }
 
 impl DynamicRelocationsPe {
@@ -441,6 +451,7 @@ impl DynamicRelocationsPe {
 
         let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
         let sections = nt_headers.sections(data, offset)?;
+        let section_headers_offset_in_file = offset;
 
         let data_dir = match data_directories.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
             Some(data_dir) => data_dir,
@@ -479,6 +490,7 @@ impl DynamicRelocationsPe {
             imports_offset_in_file,
             data_directories_offset_in_file,
             dummy_import_index,
+            section_headers_offset_in_file,
         };
 
         this.append_roc_imports(&import_table, &descriptor)?;
