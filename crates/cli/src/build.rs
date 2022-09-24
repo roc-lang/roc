@@ -191,12 +191,6 @@ pub fn build_file<'a>(
         exposed_closure_types,
     );
 
-    let app_o_file = Builder::new()
-        .prefix("roc_app")
-        .suffix(&format!(".{}", app_extension))
-        .tempfile()
-        .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
-    let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -335,10 +329,19 @@ pub fn build_file<'a>(
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
             binary_path.set_extension(app_extension);
-            std::fs::copy(app_o_file, &binary_path).unwrap();
+            std::fs::write(&binary_path, &*roc_app_bytes).unwrap();
             problems
         }
         (LinkingStrategy::Legacy, _) => {
+            let app_o_file = Builder::new()
+                .prefix("roc_app")
+                .suffix(&format!(".{}", app_extension))
+                .tempfile()
+                .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
+            let app_o_file = app_o_file.path();
+
+            std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
+
             let mut inputs = vec![
                 host_input_path.as_path().to_str().unwrap(),
                 app_o_file.to_str().unwrap(),
