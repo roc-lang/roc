@@ -44,7 +44,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{RenderTarget, Annotation};
+use roc_reporting::report::{Annotation, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -5649,10 +5649,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                     .annotate(Annotation::Error)
                     .indent(4),
                 alloc.reflow(r"But ran into:"),
-                alloc
-                    .text(formatted)
-                    .annotate(Annotation::Error)
-                    .indent(4),
+                alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
