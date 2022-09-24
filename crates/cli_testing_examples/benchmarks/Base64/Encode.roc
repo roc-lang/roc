@@ -21,7 +21,7 @@ encodeChunks = \bytes ->
 coerce : Nat, a -> a
 coerce = \_, x -> x
 
-# folder : { output : List Encoder, accum : State }, U8 -> { output : List ByteEncoder, accum : State }
+# folder : { output : List ByteEncoder, accum : State }, U8 -> { output : List ByteEncoder, accum : State }
 folder = \{ output, accum }, char ->
     when accum is
         Unreachable n -> coerce n { output, accum: Unreachable n }

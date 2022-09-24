@@ -380,8 +380,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(tags.len(), 1);
-
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     Ok(single_tag_union_to_ast(
