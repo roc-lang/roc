@@ -2102,15 +2102,14 @@ fn surgery_elf_and_macho(
         report_timing("Loading and mmap-ing", load_and_mmap_duration);
         report_timing("Output Generation", out_gen_duration);
         report_timing("Flushing Data to Disk", flushing_data_duration);
-        report_timing(
-            "Other",
-            total_duration
-                - loading_metadata_duration
-                - app_parsing_duration
-                - load_and_mmap_duration
-                - out_gen_duration
-                - flushing_data_duration,
-        );
+
+        let sum = loading_metadata_duration
+            + app_parsing_duration
+            + load_and_mmap_duration
+            + out_gen_duration
+            + flushing_data_duration;
+
+        report_timing("Other", total_duration.saturating_sub(sum));
         report_timing("Total", total_duration);
     }
 }
@@ -2752,34 +2751,39 @@ fn surgery_elf(
                         };
                         if verbose {
                             println!(
-                                "\t\tRelocation base location: {:+x} (virt: {:+x})",
-                                base, virt_base
+                                "\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})",
                             );
-                            println!("\t\tFinal relocation target offset: {:+x}", target);
+                            println!("\t\tFinal relocation target offset: {target:+x}");
                         }
                         match rel.1.size() {
                             32 => {
                                 let data = (target as i32).to_le_bytes();
-                                exec_mmap[base..base + 4].copy_from_slice(&data);
+                                exec_mmap[base..][..4].copy_from_slice(&data);
                             }
                             64 => {
                                 let data = target.to_le_bytes();
-                                exec_mmap[base..base + 8].copy_from_slice(&data);
+                                exec_mmap[base..][..8].copy_from_slice(&data);
                             }
-                            x => {
-                                internal_error!("Relocation size not yet supported: {}", x);
+                            other => {
+                                internal_error!("Relocation size not yet supported: {other}");
                             }
                         }
-                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3"].contains(&sym.name().unwrap_or_default()))
-                    {
-                        // Explicitly ignore some symbols that are currently always linked.
-                        continue;
                     } else {
-                        internal_error!(
-                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
-                            rel,
-                            app_obj.symbol_by_index(index)
-                        );
+                        // Explicitly ignore some symbols that are currently always linked.
+                        const ALWAYS_LINKED: &[&str] = &["__divti3", "__udivti3"];
+
+                        match app_obj.symbol_by_index(index) {
+                            Ok(sym) if ALWAYS_LINKED.contains(&sym.name().unwrap_or_default()) => {
+                                continue
+                            }
+                            _ => {
+                                internal_error!(
+                                    "Undefined Symbol in relocation, {:+x?}: {:+x?}",
+                                    rel,
+                                    app_obj.symbol_by_index(index)
+                                );
+                            }
+                        }
                     }
                 }
 
