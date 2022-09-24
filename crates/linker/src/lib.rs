@@ -107,9 +107,9 @@ pub fn build_and_preprocess_host(
 
     preprocess(
         target,
-        dynhost.to_str().unwrap(),
-        metadata.to_str().unwrap(),
-        preprocessed_host_path.to_str().unwrap(),
+        &dynhost,
+        &metadata,
+        preprocessed_host_path,
         &dummy_lib,
         false,
         false,
@@ -123,14 +123,7 @@ pub fn link_preprocessed_host(
     binary_path: &Path,
 ) {
     let metadata = host_input_path.with_file_name("metadata");
-    surgery(
-        roc_app_obj.to_str().unwrap(),
-        metadata.to_str().unwrap(),
-        binary_path.to_str().unwrap(),
-        false,
-        false,
-        target,
-    )
+    surgery(roc_app_obj, &metadata, binary_path, false, false, target)
 }
 
 fn generate_dynamic_lib(
@@ -454,11 +447,11 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
-pub fn preprocess(
+fn preprocess(
     target: &Triple,
-    host_exe_path: &str,
-    metadata_path: &str,
-    preprocessed_path: &str,
+    host_exe_path: &Path,
+    metadata_path: &Path,
+    preprocessed_path: &Path,
     shared_lib: &Path,
     verbose: bool,
     time: bool,
@@ -471,9 +464,9 @@ pub fn preprocess(
         target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
             preprocess_elf_and_macho(
                 target,
-                Path::new(host_exe_path),
-                Path::new(metadata_path),
-                Path::new(preprocessed_path),
+                host_exe_path,
+                metadata_path,
+                preprocessed_path,
                 shared_lib,
                 verbose,
                 time,
@@ -482,9 +475,9 @@ pub fn preprocess(
 
         target_lexicon::BinaryFormat::Coff => {
             crate::pe::preprocess_windows(
-                Path::new(host_exe_path),
-                Path::new(metadata_path),
-                Path::new(preprocessed_path),
+                host_exe_path,
+                metadata_path,
+                preprocessed_path,
                 verbose,
                 time,
             )
@@ -1979,10 +1972,10 @@ fn scan_elf_dynamic_deps(
     }
 }
 
-pub fn surgery(
-    app_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
+fn surgery(
+    app_filename: &Path,
+    metadata_filename: &Path,
+    out_filename: &Path,
     verbose: bool,
     time: bool,
     target: &Triple,
@@ -1990,9 +1983,9 @@ pub fn surgery(
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
             surgery_elf_and_macho(
-                Path::new(app_filename),
-                Path::new(metadata_filename),
-                Path::new(out_filename),
+                app_filename,
+                metadata_filename,
+                out_filename,
                 verbose,
                 time,
                 target,
@@ -2000,11 +1993,7 @@ pub fn surgery(
         }
 
         target_lexicon::BinaryFormat::Coff => {
-            crate::pe::surgery_pe(
-                Path::new(out_filename),
-                Path::new(metadata_filename),
-                Path::new(app_filename),
-            );
+            crate::pe::surgery_pe(out_filename, metadata_filename, app_filename);
         }
 
         target_lexicon::BinaryFormat::Wasm => {
@@ -2127,7 +2116,7 @@ fn surgery_elf_and_macho(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn surgery_macho(
+fn surgery_macho(
     _app_filename: &Path,
     _metadata_filename: &Path,
     _out_filename: &Path,
@@ -2548,7 +2537,7 @@ pub fn surgery_macho(
     *offset_ref = offset;
 }
 
-pub fn surgery_elf(
+fn surgery_elf(
     verbose: bool,
     md: &metadata::Metadata,
     exec_mmap: &mut MmapMut,
