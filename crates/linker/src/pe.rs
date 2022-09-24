@@ -2,7 +2,6 @@ use std::{
     io::{BufReader, BufWriter},
     ops::Range,
     path::Path,
-    time::Instant,
 };
 
 use bincode::{deserialize_from, serialize_into};
@@ -91,11 +90,6 @@ pub(crate) fn preprocess_windows(
     _time: bool,
 ) -> object::read::Result<()> {
     use object::ObjectSection;
-
-    let total_start = Instant::now();
-    let exec_parsing_start = total_start;
-
-    let _exec_parsing_duration = exec_parsing_start.elapsed();
 
     let data = open_mmap(host_exe_filename);
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
