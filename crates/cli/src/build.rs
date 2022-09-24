@@ -5,7 +5,6 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
-use roc_error_macros::internal_error;
 use roc_load::{
     EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
@@ -271,12 +270,11 @@ pub fn build_file<'a>(
         HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
     };
 
-    let code_gen_timing = program::gen_from_mono_module(
+    let (roc_app_bytes, code_gen_timing) = program::gen_from_mono_module(
         arena,
         loaded,
         &app_module_path,
         target,
-        app_o_file,
         opt_level,
         emit_debug_info,
         &preprocessed_host_path,
@@ -293,18 +291,10 @@ pub fn build_file<'a>(
         "Generate Assembly from Mono IR",
         code_gen_timing.code_gen,
     );
-    report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
     let compilation_end = compilation_start.elapsed();
 
-    let size = std::fs::metadata(&app_o_file)
-        .unwrap_or_else(|err| {
-            panic!(
-                "Could not open {:?} - which was supposed to have been generated. Error: {:?}",
-                app_o_file, err
-            );
-        })
-        .len();
+    let size = roc_app_bytes.len();
 
     if emit_timings {
         println!(
@@ -333,9 +323,6 @@ pub fn build_file<'a>(
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            let roc_app_bytes = std::fs::read(app_o_file)
-                .unwrap_or_else(|e| internal_error!("Could not read roc app object: {e:?}"));
-
             roc_linker::link_preprocessed_host(
                 target,
                 &host_input_path,
