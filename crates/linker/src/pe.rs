@@ -62,7 +62,6 @@ pub(crate) fn preprocess_windows(
     host_exe_filename: &str,
     metadata_filename: &Path,
     out_filename: &Path,
-    _shared_lib: &Path,
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {

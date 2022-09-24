@@ -478,7 +478,6 @@ pub fn preprocess(
             exec_filename,
             Path::new(metadata_filename),
             Path::new(out_filename),
-            shared_lib,
             verbose,
             time,
         )
