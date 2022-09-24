@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use pulldown_cmark::{html, Parser};
+use roc_std::RocStr;
 use std::env;
 use std::ffi::CStr;
 use std::fs;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
-    fn roc_transformFileContentForHost(content: RocList<u8>) -> RocResult<RocList<u8>, RocStr>;
+    fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
 }
 
 #[no_mangle]
@@ -90,26 +91,42 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
             .map_err(|e| format!("{}: {}", output_dirname, e))?
     };
 
+    if !input_dir.exists() {
+        return Err(format!("{} does not exist. The first argument should be the directory where your Markdown files are.", input_dir.display()));
+    }
+
+    if !output_dir.exists() {
+        return Err(format!("Could not create {}", output_dir.display()));
+    }
+
     let mut input_files: Vec<PathBuf> = vec![];
     find_files(&input_dir, &mut input_files)
         .map_err(|e| format!("Error finding input files: {}", e))?;
 
     println!("Processing {} input files...", input_files.len());
 
-    let mut had_errors = false;
-
     // TODO: process the files asynchronously
+    let num_files = input_files.len();
+    let mut num_errors = 0;
+    let mut num_successes = 0;
     for input_file in input_files {
         match process_file(&input_dir, &output_dir, &input_file) {
-            Ok(()) => {}
+            Ok(()) => {
+                num_successes += 1;
+            }
             Err(e) => {
                 eprintln!("{}", e);
-                had_errors = true;
+                num_errors += 1;
             }
         }
     }
 
-    if had_errors {
+    println!(
+        "Processed {} files with {} successes and {} errors",
+        num_files, num_successes, num_errors
+    );
+
+    if num_errors > 0 {
         Err("Could not process all files".into())
     } else {
         Ok(())
@@ -117,45 +134,42 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-    let rust_content = match fs::read(input_file) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return Err(format!(
-                "Error reading {}: {}",
-                input_file.to_str().unwrap_or("an input file"),
-                e
-            ));
-        }
+    match input_file.extension() {
+        Some(s) if s.eq("md".into()) => {}
+        _ => return Err("Only .md files are supported".into()),
     };
-    let roc_content = RocList::from_iter(rust_content);
-    let roc_result = unsafe { roc_transformFileContentForHost(roc_content) };
-    match Result::from(roc_result) {
-        Ok(roc_output_bytes) => {
-            let input_relpath = input_file
-                .strip_prefix(input_dir)
-                .map_err(|e| e.to_string())?
-                .to_path_buf();
 
-            let mut output_relpath = input_relpath.clone();
-            output_relpath.set_extension("html");
+    let input_relpath = input_file
+        .strip_prefix(input_dir)
+        .map_err(|e| e.to_string())?
+        .to_path_buf();
 
-            let output_file = output_dir.join(&output_relpath);
-            let rust_output_bytes = Vec::from_iter(roc_output_bytes.into_iter());
-            fs::write(&output_file, &rust_output_bytes).map_err(|e| format!("{}", e))?;
+    let mut output_relpath = input_relpath.clone();
+    output_relpath.set_extension("html");
 
-            println!(
-                "{} -> {}",
-                input_relpath.display(),
-                output_relpath.display()
-            );
-            Ok(())
-        }
-        Err(roc_error_str) => Err(format!(
-            "Error transforming {}: {}",
+    let content_md = fs::read_to_string(input_file).map_err(|e| {
+        format!(
+            "Error reading {}: {}",
             input_file.to_str().unwrap_or("an input file"),
-            roc_error_str.as_str()
-        )),
-    }
+            e
+        )
+    })?;
+
+    let mut content_html = String::new();
+    let parser = Parser::new(&content_md);
+    html::push_html(&mut content_html, parser);
+
+    let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
+    let roc_content_html = RocStr::from(content_html.as_str());
+    let roc_output_str =
+        unsafe { roc_transformFileContentForHost(&roc_relpath, &roc_content_html) };
+
+    let output_file = output_dir.join(&output_relpath);
+    let rust_output_str: &str = &roc_output_str;
+
+    println!("{} -> {}", input_file.display(), output_file.display());
+
+    fs::write(output_file, rust_output_str).map_err(|e| format!("{}", e))
 }
 
 fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> {

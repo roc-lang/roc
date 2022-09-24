@@ -1356,10 +1356,11 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                let outcome = unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ);
+                let unify_cond_and_patterns_outcome =
+                    unify(&mut UEnv::new(subs), branches_var, real_var, Mode::EQ);
 
                 let should_check_exhaustiveness;
-                match outcome {
+                match unify_cond_and_patterns_outcome {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1471,7 +1472,7 @@ fn solve(
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, sketched_rows, context);
+                    } = check(subs, real_var, sketched_rows, context);
 
                     // Store information about whether the "when" is exhaustive, and
                     // which (if any) of its branches are redundant. Codegen may use

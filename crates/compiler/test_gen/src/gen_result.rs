@@ -264,7 +264,7 @@ fn roc_result_err() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
-        if True then List.first [15] else Str.toI64 ""
+        if Bool.true then List.first [15] else Str.toI64 ""
         "#,
         RocResult::ok(15i64),
         RocResult<i64, bool>

@@ -60,9 +60,9 @@ roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
 roc_tracing = { path = "../tracing" }
-clap = { version = "3.2.18", default-features = false, features = ["std", "color", "suggestions"] }
+clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }
 libc = "0.2.132"
 errno = "0.2.8"
@@ -93,7 +93,7 @@ wasmer = { version = "2.2.1", optional = true, default-features = false, feature
 
 [dev-dependencies]
 wasmer-wasi = "2.2.1"
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 roc_test_utils = { path = "../test_utils" }
 indoc = "1.0.7"
 serial_test = "0.9.0"
@@ -101,6 +101,8 @@ criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
 strum = "0.24.0"
 strum_macros = "0.24"
+once_cell = "1.14.0"
+parking_lot = "0.12"
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]

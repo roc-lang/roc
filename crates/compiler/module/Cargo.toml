@@ -10,7 +10,7 @@ roc_region = { path = "../region" }
 roc_ident = { path = "../ident" }
 roc_collections = { path = "../collections" }
 roc_error_macros = {path = "../../error_macros"}
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 lazy_static = "1.4.0"
 static_assertions = "1.1.0"
 snafu = { version = "0.7.1", features = ["backtraces"] }

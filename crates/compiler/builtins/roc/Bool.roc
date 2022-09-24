@@ -1,20 +1,28 @@
 interface Bool
-    exposes [Bool, and, or, not, isEq, isNotEq]
+    exposes [Bool, true, false, and, or, not, isEq, isNotEq]
     imports []
 
-Bool : [True, False]
+Bool := [True, False]
 
-## Returns `True` when given `True` and `True`, and `False` when either argument is `False`.
+## The boolean true value.
+true : Bool
+true = @Bool True
+
+## The boolean false value.
+false : Bool
+false = @Bool False
+
+## Returns `Bool.true` when given `Bool.true` and `Bool.true`, and `Bool.false` when either argument is `Bool.false`.
 ##
 ## `a && b` is shorthand for `Bool.and a b`
 ##
-## >>> True && True
+## >>> Bool.true && Bool.true
 ##
-## >>> True && False
+## >>> Bool.true && Bool.false
 ##
-## >>> False && True
+## >>> Bool.false && Bool.true
 ##
-## >>> False && False
+## >>> Bool.false && Bool.false
 ##
 ## ## Performance Notes
 ##
@@ -26,7 +34,7 @@ Bool : [True, False]
 ##     if enablePets then
 ##         likesDogs user
 ##     else
-##         False
+##         Bool.false
 ##
 ## In Roc, however, `&&` and `||` are not special. They work the same way as
 ## other functions. Conditionals like `if` and `when` have a performance cost,
@@ -37,17 +45,17 @@ Bool : [True, False]
 ## one explicitly!)
 and : Bool, Bool -> Bool
 
-## Returns `True` when given `True` for either argument, and `False` only when given `False` and `False`.
+## Returns `Bool.true` when given `Bool.true` for either argument, and `Bool.false` only when given `Bool.false` and `Bool.false`.
 ##
 ## `a || b` is shorthand for `Bool.or a b`.
 ##
-## >>> True || True
+## >>> Bool.true || Bool.true
 ##
-## >>> True || False
+## >>> Bool.true || Bool.false
 ##
-## >>> False || True
+## >>> Bool.false || Bool.true
 ##
-## >>> False || False
+## >>> Bool.false || Bool.false
 ##
 ## ## Performance Notes
 ##
@@ -56,10 +64,10 @@ and : Bool, Bool -> Bool
 ## In Roc, this is not the case. See the performance notes for [Bool.and] for details.
 or : Bool, Bool -> Bool
 # xor : Bool, Bool -> Bool # currently unimplemented
-## Returns `False` when given `True`, and vice versa.
+## Returns `Bool.false` when given `Bool.true`, and vice versa.
 not : Bool -> Bool
 
-## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
+## Returns `Bool.true` if the two values are *structurally equal*, and `Bool.false` otherwise.
 ##
 ## `a == b` is shorthand for `Bool.isEq a b`
 ##
@@ -68,7 +76,7 @@ not : Bool -> Bool
 ## 1. Tags are equal if they have the same tag name, and also their contents (if any) are equal.
 ## 2. Records are equal if all their fields are equal.
 ## 3. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
-## 4. [Num](Num#Num) values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
+## 4. [Num](Num#Num) values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `Bool.false`. See `Num.isNaN` for more about *NaN*.
 ##
 ## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
 ## accept arguments whose types contain functions.

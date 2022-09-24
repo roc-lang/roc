@@ -433,9 +433,10 @@ reverseSort = \list -> List.reverse (List.sort list)
 
 I've consistently found that I can more quickly and accurately understand function definitions that use
 named arguments, even though the code is longer. I suspect this is because I'm faster at reading than I am at
-desugaring, and whenever I read the top version I end up needing to mentally desugar it into the bottom version.
+eta-expanding ( e.g. converting `List.sort` into `\l -> List.sort l` ). Whenever I read
+the top version I end up needing to mentally eta-expand it into the bottom version.
 In more complex examples (this is among the tamest pointfree function composition examples I've seen), I make
-a mistake in my mental desugaring, and misunderstand what the function is doing - which can cause bugs.
+a mistake in my mental eta-expansion, and misunderstand what the function is doing - which can cause bugs.
 
 I assumed I would get faster and more accurate at this over time. However, by now it's been about a decade
 since I first learned about the technique, and I'm still slower and less accurate at reading code that uses

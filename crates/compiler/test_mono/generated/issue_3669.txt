@@ -1,6 +1,6 @@
 procedure Bool.7 (#Attr.2, #Attr.3):
-    let Bool.9 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.9;
+    let Bool.11 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.11;
 
 procedure Test.2 (Test.19):
     joinpoint Test.13 Test.7:

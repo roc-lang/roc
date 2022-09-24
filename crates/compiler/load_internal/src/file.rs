@@ -2405,7 +2405,11 @@ fn update<'a>(
                 Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
-            if is_host_exposed {
+            let add_to_host_exposed = is_host_exposed &&
+                // During testing, we don't need to expose anything to the host.
+                !matches!(state.exec_mode, ExecutionMode::Test);
+
+            if add_to_host_exposed {
                 state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol

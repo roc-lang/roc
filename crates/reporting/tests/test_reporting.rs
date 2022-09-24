@@ -603,10 +603,10 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        True
         Str
         Frac
         Num
+        Err
     "###
     );
 
@@ -758,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     List
-                    True
+                    Err
                     Box
-                    Str
                 "#
             ),
         );
@@ -786,8 +786,8 @@ mod test_reporting {
 
         Str
 
-    But I need every `if` condition to evaluate to a Bool—either `True` or
-    `False`.
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
     "###
     );
 
@@ -814,7 +814,7 @@ mod test_reporting {
         Num a
 
     But I need every `if` guard condition to evaluate to a Bool—either
-    `True` or `False`.
+    `Bool.true` or `Bool.false`.
     "###
     );
 
@@ -822,7 +822,7 @@ mod test_reporting {
         if_2_branch_mismatch,
         indoc!(
             r#"
-            if True then 2 else "foo"
+            if Bool.true then 2 else "foo"
             "#
         ),
         @r###"
@@ -830,8 +830,8 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    4│      if True then 2 else "foo"
-                                ^^^^^
+    4│      if Bool.true then 2 else "foo"
+                                     ^^^^^
 
     The `else` branch is a string of type:
 
@@ -849,7 +849,7 @@ mod test_reporting {
         if_3_branch_mismatch,
         indoc!(
             r#"
-             if True then 2 else if False then 2 else "foo"
+             if Bool.true then 2 else if Bool.false then 2 else "foo"
              "#
         ),
         @r###"
@@ -857,8 +857,8 @@ mod test_reporting {
 
     The 3rd branch of this `if` does not match all the previous branches:
 
-    4│      if True then 2 else if False then 2 else "foo"
-                                                     ^^^^^
+    4│      if Bool.true then 2 else if Bool.false then 2 else "foo"
+                                                               ^^^^^
 
     The 3rd branch is a string of type:
 
@@ -1404,7 +1404,7 @@ mod test_reporting {
         indoc!(
             r#"
             x : Num.Int *
-            x = if True then 3.14 else 4
+            x = if Bool.true then 3.14 else 4
 
             x
             "#
@@ -1415,8 +1415,8 @@ mod test_reporting {
     Something is off with the `then` branch of this `if` expression:
 
     4│      x : Num.Int *
-    5│      x = if True then 3.14 else 4
-                             ^^^^
+    5│      x = if Bool.true then 3.14 else 4
+                                  ^^^^
 
     The 1st branch is a fraction of type:
 
@@ -1960,7 +1960,7 @@ mod test_reporting {
     //                Something is off with the body of the `f` definition:
     //
     //                1│ f : a, b -> a
-    //                2│ f = \x, y -> if True then x else y
+    //                2│ f = \x, y -> if Bool.true then x else y
     //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                The body is an anonymous function of type:
@@ -1975,7 +1975,7 @@ mod test_reporting {
         indoc!(
             r#"
             f : a, b -> a
-            f = \x, y -> if True then x else y
+            f = \x, y -> if Bool.true then x else y
 
             f
             "#
@@ -1986,8 +1986,8 @@ mod test_reporting {
     Something is off with the `else` branch of this `if` expression:
 
     4│      f : a, b -> a
-    5│      f = \x, y -> if True then x else y
-                                             ^
+    5│      f = \x, y -> if Bool.true then x else y
+                                                  ^
 
     This `y` value is a:
 
@@ -2380,7 +2380,7 @@ mod test_reporting {
     4│      42 + True
                  ^^^^
 
-    This `True` boolean has the type:
+    This `True` tag has the type:
 
         [True]a
 
@@ -5252,7 +5252,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if True then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "\(greeting), World!"
             "#,
             ),
             @r###"
@@ -5260,8 +5260,8 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if True then 1 else "\(greeting), World!"
-                                ^^^^^^^^^^^^^^^^^^^^^
+    6│      if Bool.true then 1 else "\(greeting), World!"
+                                     ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
 
@@ -5280,14 +5280,14 @@ mod test_reporting {
             $(
             test_report!(
                 $name,
-                &format!(r#"if True then "abc" else 1 {} 2"#, $op),
+                &format!(r#"if Bool.true then "abc" else 1 {} 2"#, $op),
                 |golden| assert_eq!(golden, format!(
 r#"── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
 This `if` has an `else` branch with a different type from its `then` branch:
 
-4│      if True then "abc" else 1 {} 2
-                                ^^{}^^
+4│      if Bool.true then "abc" else 1 {} 2
+                                     ^^{}^^
 
 This comparison produces:
 
@@ -5829,7 +5829,7 @@ All branches in an `if` must have the same type!
         apply_unary_not,
         indoc!(
             r#"
-            foo = True
+            foo = Bool.true
 
             !foo 1 2
             "#
@@ -6063,8 +6063,8 @@ All branches in an `if` must have the same type!
 
         Str
 
-    But I need every `expect` condition to evaluate to a Bool—either `True`
-    or `False`.
+    But I need every `expect` condition to evaluate to a Bool—either
+    `Bool.true` or `Bool.false`.
     "###
     );
 
@@ -7616,7 +7616,7 @@ All branches in an `if` must have the same type!
             r#"
             F n := n
 
-            if True
+            if Bool.true
             then @F ""
             else @F {}
             "#
@@ -7856,7 +7856,7 @@ All branches in an `if` must have the same type!
             r#"
             x : [A]
             when x is
-                A if True -> ""
+                A if Bool.true -> ""
             "#
         ),
         @r###"
@@ -7865,7 +7865,7 @@ All branches in an `if` must have the same type!
     This `when` does not cover all the possibilities:
 
     5│>      when x is
-    6│>          A if True -> ""
+    6│>          A if Bool.true -> ""
 
     Other possibilities include:
 
@@ -8563,27 +8563,27 @@ All branches in an `if` must have the same type!
             eq = \@You {}, @AndI {} -> False
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with this specialization of `eq`:
+    Something is off with this specialization of `eq`:
 
-        9│  eq = \@You {}, @AndI {} -> False
-            ^^
+    9│  eq = \@You {}, @AndI {} -> False
+        ^^
 
-        This value is a declared specialization of type:
+    This value is a declared specialization of type:
 
-            You, AndI -> [False, True]
+        You, AndI -> [False]a
 
-        But the type annotation on `eq` says it must match:
+    But the type annotation on `eq` says it must match:
 
-            You, You -> Bool
+        You, You -> Bool
 
-        Tip: Type comparisons between an opaque type are only ever equal if
-        both types are the same opaque type. Did you mean to create an opaque
-        type by wrapping it? If I have an opaque type Age := U32 I can create
-        an instance of this opaque type by doing @Age 23.
-        "#
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
     );
 
     test_report!(
@@ -9643,27 +9643,27 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             f : _ -> (_ -> Str)
-            f = \_ -> if True then {} else f {}
+            f = \_ -> if Bool.true then {} else f {}
 
             f
             "#
         ),
         @r###"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression is used in an unexpected way:
+    This expression is used in an unexpected way:
 
-        5│      f = \_ -> if True then {} else f {}
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    5│      f = \_ -> if Bool.true then {} else f {}
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        It is a value of type:
+    It is a value of type:
 
-            {}
+        {}
 
-        But you are trying to use it as:
+    But you are trying to use it as:
 
-            a -> Str
-        "###
+        a -> Str
+    "###
     );
 
     test_report!(
@@ -10375,6 +10375,7 @@ All branches in an `if` must have the same type!
      8│               Ok "foo"
      9│ 
     10│           Bad _ ->
+    11│               Ok "foo"
 
     This `u8` value is a:
 
@@ -10424,7 +10425,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             f : {a: Str, b ? Str}
-            f = if True then {a: ""} else {a: "b", b: ""}
+            f = if Bool.true then {a: ""} else {a: "b", b: ""}
             f
             "#
         ),
@@ -10434,8 +10435,8 @@ All branches in an `if` must have the same type!
     Something is off with the `then` branch of this `if` expression:
 
     4│      f : {a: Str, b ? Str}
-    5│      f = if True then {a: ""} else {a: "b", b: ""}
-                             ^^^^^^^
+    5│      f = if Bool.true then {a: ""} else {a: "b", b: ""}
+                                  ^^^^^^^
 
     The 1st branch is a record of type:
 
@@ -10532,5 +10533,158 @@ All branches in an `if` must have the same type!
      a concept that extends to runtime!
      Maybe you wanted to use a `Result`?
      "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        uninhabited_type_is_trivially_exhaustive_nested,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Ok B) -> ""
+            "#
+        ),
+    // no problem!
+    @r###"
+    "###
+    );
+
+    test_report!(
+        branch_patterns_missing_nested_case,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] {}) {}
+
+            when x is
+                Ok (Ok A) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+    8│>          Ok (Err _) -> ""
+    9│>          Err _ -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        branch_patterns_missing_nested_case_with_trivially_exhausted_variant,
+        indoc!(
+            r#"
+            x : Result (Result [A, B] []) []
+
+            when x is
+                Ok (Ok A) -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          Ok (Ok A) -> ""
+
+    Other possibilities include:
+
+        Ok (Ok B)
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched,
+        indoc!(
+            r#"
+            x : Result {} []
+
+            when x is
+                Ok {} -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok {} -> ""
+    8│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+    "###
+    );
+
+    test_report!(
+        uninhabited_err_branch_is_redundant_when_err_is_matched_nested,
+        indoc!(
+            r#"
+            x : Result (Result {} []) []
+
+            when x is
+                Ok (Ok {}) -> ""
+                Ok (Err _) -> ""
+                Err _ -> ""
+            "#
+        ),
+    @r###"
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern will never be matched:
+
+    6│       when x is
+    7│           Ok (Ok {}) -> ""
+    8│>          Ok (Err _) -> ""
+    9│           Err _ -> ""
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+
+    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern will never be matched:
+
+    6│      when x is
+    7│          Ok (Ok {}) -> ""
+    8│          Ok (Err _) -> ""
+    9│          Err _ -> ""
+                ^^^^^
+
+    It's impossible to create a value of this shape, so this pattern can
+    be safely removed!
+    "###
     );
 }

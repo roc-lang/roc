@@ -16,11 +16,14 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use once_cell::sync::Lazy;
+    use parking_lot::{Mutex, RwLock};
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::sync::Once;
     use strum::IntoEnumIterator;
     use strum_macros::EnumIter;
 
@@ -31,8 +34,19 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    use std::sync::Once;
     static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
+    static POPULATED_EXAMPLE_LOCKS: Once = Once::new();
+
+    use std::collections::HashMap;
+    static EXAMPLE_PLATFORM_LOCKS: Lazy<RwLock<HashMap<PathBuf, Mutex<()>>>> =
+        once_cell::sync::Lazy::new(|| RwLock::new(HashMap::default()));
+
+    fn populate_example_locks(examples: impl Iterator<Item = PathBuf>) {
+        let mut locks = EXAMPLE_PLATFORM_LOCKS.write();
+        for example in examples {
+            locks.insert(example, Default::default());
+        }
+    }
 
     #[derive(Debug, EnumIter)]
     enum CliMode {
@@ -62,11 +76,17 @@ mod cli_run {
     const ALLOW_VALGRIND: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
+    enum Arg<'a> {
+        ExamplePath(&'a str),
+        PlainText(&'a str),
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
     struct Example<'a> {
         filename: &'a str,
         executable_filename: &'a str,
         stdin: &'a [&'a str],
-        input_paths: &'a [&'a str],
+        arguments: &'a [Arg<'a>],
         expected_ending: &'a str,
         use_valgrind: bool,
     }
@@ -223,7 +243,7 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
-        input_paths: &[&str],
+        args: &[&Arg],
         expected_ending: &str,
     ) {
         assert!(input_paths.is_empty(), "Wasm does not support input files");
@@ -264,18 +284,35 @@ mod cli_run {
     /// add a test for it here!
     macro_rules! examples {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
+            static EXAMPLE_NAMES: &[&str] = &[$($name,)+];
+
             $(
                 #[test]
                 #[allow(non_snake_case)]
                 fn $test_name() {
+                    POPULATED_EXAMPLE_LOCKS.call_once( || {
+                        populate_example_locks(EXAMPLE_NAMES.iter().map(|name| examples_dir(name)))
+                    });
+
                     let dir_name = $name;
                     let example = $example;
+                    let example_dir = examples_dir(dir_name);
                     let file_name = example_file(dir_name, example.filename);
 
                     let mut app_args: Vec<String> = vec![];
-                    for file in example.input_paths {
-                        app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
+                    for arg in example.arguments {
+                        match arg {
+                            Arg::ExamplePath(file) => {
+                                app_args.push(example_file(dir_name, file).to_str().unwrap().to_string());
+                            }
+                            Arg::PlainText(arg) => {
+                                app_args.push(arg.to_string());
+                            }
+                        }
                     }
+
+                    // workaround for surgical linker issue, see PR #3990
+                    let mut custom_flags : Vec<&str> = vec![];
 
                     match example.executable_filename {
                         "form" | "hello-gui" | "breakout" | "ruby" => {
@@ -296,20 +333,35 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
+                        "args" => {
+                            custom_flags = vec![LINKER_FLAG, "legacy"];
+                        }
                         _ => {}
                     }
+
+                    // To avoid concurrent examples tests overwriting produced host binaries, lock
+                    // on the example's directory, so that only one example per directory runs at a
+                    // time.
+                    // NOTE: we are assuming that each example corresponds to one platform, under
+                    // the subdirectory. This is not necessarily true, and moreover is too
+                    // restrictive. To increase throughput we only need to lock the produced host
+                    // file, however, it is not trivial to recover what that file is today (without
+                    // enumerating all examples and their platforms).
+                    let locks = EXAMPLE_PLATFORM_LOCKS.read();
+                    let _example_guard = locks.get(&example_dir).unwrap().lock();
 
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[],
+                        &custom_flags,
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
                     );
 
+                    custom_flags.push(OPTIMIZE_FLAG);
                     // This is mostly because the false interpreter is still very slow -
                     // 25s for the cli tests is just not acceptable during development!
                     #[cfg(not(debug_assertions))]
@@ -317,7 +369,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[OPTIMIZE_FLAG],
+                        &custom_flags,
                         &app_args,
                         example.expected_ending,
                         example.use_valgrind,
@@ -369,7 +421,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "helloWorld",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -377,7 +429,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "rocLovesPlatforms",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
@@ -388,7 +440,7 @@ mod cli_run {
         //     filename: "rocLovesC.roc",
         //     executable_filename: "rocLovesC",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending:"Roc <3 C!\n",
         //     use_valgrind: true,
         // },
@@ -396,7 +448,7 @@ mod cli_run {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
@@ -404,7 +456,7 @@ mod cli_run {
             filename: "rocLovesSwift.roc",
             executable_filename: "rocLovesSwift",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
@@ -412,7 +464,7 @@ mod cli_run {
             filename: "rocLovesWebAssembly.roc",
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
@@ -420,7 +472,7 @@ mod cli_run {
             filename: "rocLovesZig.roc",
             executable_filename: "rocLovesZig",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"Roc <3 Zig!\n",
             use_valgrind: true,
         },
@@ -428,7 +480,7 @@ mod cli_run {
             filename: "main.roc",
             executable_filename: "libhello",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"",
             use_valgrind: true,
         },
@@ -436,7 +488,7 @@ mod cli_run {
             filename: "fibonacci.roc",
             executable_filename: "fibonacci",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending:"55\n",
             use_valgrind: true,
         },
@@ -444,7 +496,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-gui",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -452,7 +504,7 @@ mod cli_run {
             filename: "breakout.roc",
             executable_filename: "breakout",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -460,7 +512,7 @@ mod cli_run {
             filename: "quicksort.roc",
             executable_filename: "quicksort",
             stdin: &[],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             use_valgrind: true,
         },
@@ -468,31 +520,39 @@ mod cli_run {
         //     filename: "Quicksort.roc",
         //     executable_filename: "quicksort",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        effects:"cli" => Example {
+        cli_args:"interactive" => Example {
+            filename: "args.roc",
+            executable_filename: "args",
+            stdin: &[],
+            arguments: &[Arg::PlainText("log"), Arg::PlainText("-b"), Arg::PlainText("3"), Arg::PlainText("--num"), Arg::PlainText("81")],
+            expected_ending: "4\n",
+            use_valgrind: false,
+        },
+        effects:"interactive" => Example {
             filename: "effects.roc",
             executable_filename: "effects",
             stdin: &["hi there!"],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
-        // tea:"tea" => Example {
+        // tui_tea:"tea" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "tea-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"cli" => Example {
+        cli_form:"interactive" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: false,
         },
@@ -500,7 +560,7 @@ mod cli_run {
             filename: "tui.roc",
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
-            input_paths: &[],
+            arguments: &[],
             expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
@@ -508,7 +568,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "ms!\nThe list was small!\n",
         //     use_valgrind: true,
         // },
@@ -516,7 +576,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "task-example",
         //     stdin: &[],
-        //     input_paths: &[],
+        //     arguments: &[],
         //     expected_ending: "successfully wrote to file\n",
         //     use_valgrind: true,
         // },
@@ -525,7 +585,7 @@ mod cli_run {
                 filename: "False.roc",
                 executable_filename: "false",
                 stdin: &[],
-                input_paths: &["examples/hello.false"],
+                arguments: &[Arg::ExamplePath("examples/hello.false")],
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
@@ -535,8 +595,8 @@ mod cli_run {
                 filename: "static-site.roc",
                 executable_filename: "static-site",
                 stdin: &[],
-                input_paths: &["input", "output"],
-                expected_ending: "hello.txt -> hello.html\n",
+                arguments: &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
+                expected_ending: "Processed 3 files with 3 successes and 0 errors\n",
                 use_valgrind: false,
             }
         },
@@ -565,8 +625,15 @@ mod cli_run {
                     let mut ran_without_optimizations = false;
 
                     let mut app_args: Vec<String> = vec![];
-                    for file in benchmark.input_paths {
-                        app_args.push(examples_dir("benchmarks").join(file).to_str().unwrap().to_string());
+                    for arg in benchmark.arguments {
+                        match arg {
+                            Arg::ExamplePath(file) => {
+                                app_args.push(examples_dir("benchmarks").join(file).to_str().unwrap().to_string());
+                            }
+                            Arg::PlainText(arg) => {
+                                app_args.push(arg.to_string());
+                            }
+                        }
                     }
 
                     BENCHMARKS_BUILD_PLATFORM.call_once( || {
@@ -718,7 +785,7 @@ mod cli_run {
                 filename: "NQueens.roc",
                 executable_filename: "nqueens",
                 stdin: &["6"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "4\n",
                 use_valgrind: true,
             },
@@ -726,7 +793,7 @@ mod cli_run {
                 filename: "CFold.roc",
                 executable_filename: "cfold",
                 stdin: &["3"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "11 & 11\n",
                 use_valgrind: true,
             },
@@ -734,7 +801,7 @@ mod cli_run {
                 filename: "Deriv.roc",
                 executable_filename: "deriv",
                 stdin: &["2"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "1 count: 6\n2 count: 22\n",
                 use_valgrind: true,
             },
@@ -742,7 +809,7 @@ mod cli_run {
                 filename: "RBTreeCk.roc",
                 executable_filename: "rbtree-ck",
                 stdin: &["100"],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "10\n",
                 use_valgrind: true,
             },
@@ -750,7 +817,7 @@ mod cli_run {
                 filename: "RBTreeInsert.roc",
                 executable_filename: "rbtree-insert",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "Node Black 0 {} Empty Empty\n",
                 use_valgrind: true,
             },
@@ -758,7 +825,7 @@ mod cli_run {
     //            filename: "RBTreeDel.roc",
     //            executable_filename: "rbtree-del",
     //            stdin: &["420"],
-    //            input_paths: &[],
+    //            arguments: &[],
     //            expected_ending: "30\n",
     //            use_valgrind: true,
     //        },
@@ -766,7 +833,7 @@ mod cli_run {
                 filename: "TestAStar.roc",
                 executable_filename: "test-astar",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "True\n",
                 use_valgrind: false,
             },
@@ -774,7 +841,7 @@ mod cli_run {
                 filename: "TestBase64.roc",
                 executable_filename: "test-base64",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 use_valgrind: true,
             },
@@ -782,7 +849,7 @@ mod cli_run {
                 filename: "Closure.roc",
                 executable_filename: "closure",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "",
                 use_valgrind: false,
             },
@@ -790,7 +857,7 @@ mod cli_run {
                 filename: "Issue2279.roc",
                 executable_filename: "issue2279",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "Hello, world!\n",
                 use_valgrind: true,
             },
@@ -798,7 +865,7 @@ mod cli_run {
                 filename: "QuicksortApp.roc",
                 executable_filename: "quicksortapp",
                 stdin: &[],
-                input_paths: &[],
+                arguments: &[],
                 expected_ending: "todo put the correct quicksort answer here",
                 use_valgrind: true,
             },
@@ -933,23 +1000,50 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
 
-                Nothing is named `d` in this scope.
+                Something is off with the type annotation of the main required symbol:
 
-                10│      _ <- await (line d)
-                                          ^
+                2│      requires {} { main : InternalProgram }
+                                             ^^^^^^^^^^^^^^^
 
-                Did you mean one of these?
+                This #UserApp.main value is a:
 
-                    U8
-                    Ok
-                    I8
-                    F64
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But the type annotation on main says it should be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+
+
+                ── TYPE MISMATCH ─ ...d/../../../../examples/interactive/cli-platform/main.roc ─
+
+                This 1st argument to toEffect has an unexpected type:
+
+                9│  mainForHost = InternalProgram.toEffect main
+                                                           ^^^^
+
+                This #UserApp.main value is a:
+
+                    Task.Task {} * [Write [Stdout]*]* ?
+
+                But toEffect needs its 1st argument to be:
+
+                    InternalProgram.InternalProgram ?
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                1 error and 0 warnings found in <ignored for test> ms."#
+                2 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }

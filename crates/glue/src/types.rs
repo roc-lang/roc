@@ -65,24 +65,45 @@ impl Types {
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
+        self.is_equivalent_help(RocTypeOrPending::Type(a), RocTypeOrPending::Type(b))
+    }
+
+    fn is_equivalent_help(&self, a: RocTypeOrPending, b: RocTypeOrPending) -> bool {
         use RocType::*;
+
+        let (a, b) = match (a, b) {
+            (RocTypeOrPending::Type(a), RocTypeOrPending::Type(b)) => (a, b),
+            (RocTypeOrPending::Pending, RocTypeOrPending::Pending) => return true,
+            _ => return false,
+        };
 
         match (a, b) {
             (RocStr, RocStr) | (Bool, Bool) | (EmptyTagUnion, EmptyTagUnion) | (Unit, Unit) => true,
             (RocResult(ok_a, err_a), RocResult(ok_b, err_b)) => {
-                self.is_equivalent(self.get_type(*ok_a), self.get_type(*ok_b))
-                    && self.is_equivalent(self.get_type(*err_a), self.get_type(*err_b))
+                self.is_equivalent_help(
+                    self.get_type_or_pending(*ok_a),
+                    self.get_type_or_pending(*ok_b),
+                ) && self.is_equivalent_help(
+                    self.get_type_or_pending(*err_a),
+                    self.get_type_or_pending(*err_b),
+                )
             }
             (Num(num_a), Num(num_b)) => num_a == num_b,
             (RocList(elem_a), RocList(elem_b))
             | (RocSet(elem_a), RocSet(elem_b))
             | (RocBox(elem_a), RocBox(elem_b))
-            | (RecursivePointer(elem_a), RecursivePointer(elem_b)) => {
-                self.is_equivalent(self.get_type(*elem_a), self.get_type(*elem_b))
-            }
+            | (RecursivePointer(elem_a), RecursivePointer(elem_b)) => self.is_equivalent_help(
+                self.get_type_or_pending(*elem_a),
+                self.get_type_or_pending(*elem_b),
+            ),
             (RocDict(key_a, val_a), RocDict(key_b, val_b)) => {
-                self.is_equivalent(self.get_type(*key_a), self.get_type(*key_b))
-                    && self.is_equivalent(self.get_type(*val_a), self.get_type(*val_b))
+                self.is_equivalent_help(
+                    self.get_type_or_pending(*key_a),
+                    self.get_type_or_pending(*key_b),
+                ) && self.is_equivalent_help(
+                    self.get_type_or_pending(*val_a),
+                    self.get_type_or_pending(*val_b),
+                )
             }
             (TagUnion(union_a), TagUnion(union_b)) => {
                 use RocTagUnion::*;
@@ -113,8 +134,10 @@ impl Types {
                         },
                     ) => {
                         tag_name_a == tag_name_b
-                            && self
-                                .is_equivalent(self.get_type(*payload_a), self.get_type(*payload_b))
+                            && self.is_equivalent_help(
+                                self.get_type_or_pending(*payload_a),
+                                self.get_type_or_pending(*payload_b),
+                            )
                     }
                     (Enumeration { tags: tags_a, .. }, Enumeration { tags: tags_b, .. }) => {
                         tags_a == tags_b
@@ -157,9 +180,9 @@ impl Types {
                                 |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                     name_a == name_b
                                         && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
-                                                self.get_type(*id_a),
-                                                self.get_type(*id_b),
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
                                             ),
                                             (None, None) => true,
                                             (None, Some(_)) | (Some(_), None) => false,
@@ -179,9 +202,9 @@ impl Types {
                                 |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                     name_a == name_b
                                         && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
-                                                self.get_type(*id_a),
-                                                self.get_type(*id_b),
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
                                             ),
                                             (None, None) => true,
                                             (None, Some(_)) | (Some(_), None) => false,
@@ -241,7 +264,10 @@ impl Types {
                         .zip(fields_b.iter())
                         .all(|((name_a, id_a), (name_b, id_b))| {
                             name_a == name_b
-                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                                && self.is_equivalent_help(
+                                    self.get_type_or_pending(*id_a),
+                                    self.get_type_or_pending(*id_b),
+                                )
                         })
                 } else {
                     false
@@ -261,7 +287,10 @@ impl Types {
                         .zip(fields_b.iter())
                         .all(|((name_a, id_a), (name_b, id_b))| {
                             name_a == name_b
-                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                                && self.is_equivalent_help(
+                                    self.get_type_or_pending(*id_a),
+                                    self.get_type_or_pending(*id_b),
+                                )
                         })
                 } else {
                     false
@@ -283,10 +312,16 @@ impl Types {
                 // with the same type could have completely different implementations!
                 if name_a == name_b
                     && args_a.len() == args_b.len()
-                    && self.is_equivalent(self.get_type(*ret_a), self.get_type(*ret_b))
+                    && self.is_equivalent_help(
+                        self.get_type_or_pending(*ret_a),
+                        self.get_type_or_pending(*ret_b),
+                    )
                 {
                     args_a.iter().zip(args_b.iter()).all(|(id_a, id_b)| {
-                        self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                        self.is_equivalent_help(
+                            self.get_type_or_pending(*id_a),
+                            self.get_type_or_pending(*id_b),
+                        )
                     })
                 } else {
                     false
@@ -359,6 +394,12 @@ impl Types {
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
+        for (id, existing_type) in self.types.iter().enumerate() {
+            if self.is_equivalent(&typ, existing_type) {
+                return TypeId(id);
+            }
+        }
+
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
@@ -379,7 +420,15 @@ impl Types {
     pub fn get_type(&self, id: TypeId) -> &RocType {
         match self.types.get(id.0) {
             Some(typ) => typ,
-            None => unreachable!(),
+            None => unreachable!("{:?}", id),
+        }
+    }
+
+    fn get_type_or_pending(&self, id: TypeId) -> RocTypeOrPending {
+        match self.types.get(id.0) {
+            Some(typ) => RocTypeOrPending::Type(typ),
+            None if id == TypeId::PENDING => RocTypeOrPending::Pending,
+            None => unreachable!("{:?}", id),
         }
     }
 
@@ -440,6 +489,12 @@ impl Types {
             } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
         }
     }
+}
+
+enum RocTypeOrPending<'a> {
+    Type(&'a RocType),
+    /// A pending recursive pointer
+    Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -653,6 +708,8 @@ impl<'a> Env<'a> {
     }
 
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
+
         let layout = self
             .layout_cache
             .from_var(self.arena, var, self.subs)
@@ -1179,6 +1236,30 @@ fn add_tag_union<'a>(
     };
 
     let tag_union_type = match layout {
+        _ if union_tags.is_newtype_wrapper(subs)
+            && matches!(
+                subs.get_content_without_compacting(var),
+                // Make sure this is a tag union, *not* a recursive tag union!
+                // Otherwise, we could end up with a recursive tag union
+                // getting unwrapped incorrectly.
+                Content::Structure(FlatType::TagUnion(_, _))
+            ) =>
+        {
+            let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
+
+            // A newtype wrapper should always have exactly one payload.
+            debug_assert_eq!(payload_vars.len(), 1);
+
+            // A newtype wrapper should always have the same layout as its payload.
+            let payload_layout = layout;
+            let payload_id = add_type_help(env, payload_layout, payload_vars[0], None, types);
+
+            RocTagUnion::SingleTagStruct {
+                name: name.clone(),
+                tag_name: tag_name.to_string(),
+                payload_fields: vec![payload_id],
+            }
+        }
         Layout::Union(union_layout) => {
             use UnionLayout::*;
 
@@ -1222,19 +1303,16 @@ fn add_tag_union<'a>(
                     }
                 }
                 NonNullableUnwrapped(_) => {
-                    let mut tags =
-                        union_tags_to_types(&name, union_tags, subs, env, types, layout, true);
-
-                    debug_assert_eq!(tags.len(), 1);
-
-                    let (tag_name, opt_payload) = tags.pop().unwrap();
+                    let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
+                    let (tag_name, opt_payload) =
+                        tag_to_type(&name, env, tag_name, payload_vars, types, layout, true);
 
                     // A recursive tag union with just one constructor
                     // Optimization: No need to store a tag ID (the payload is "unwrapped")
                     // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
                     RocTagUnion::NonNullableUnwrapped {
                         name: name.clone(),
-                        tag_name,
+                        tag_name: tag_name.to_string(),
                         payload: opt_payload.unwrap(),
                     }
                 }
@@ -1318,7 +1396,7 @@ fn add_tag_union<'a>(
             // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name,
+                tag_name: tag_name.to_string(),
                 payload_fields,
             }
         }
@@ -1334,7 +1412,7 @@ fn add_tag_union<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name,
+                tag_name: tag_name.to_string(),
                 payload_fields: vec![type_id],
             }
         }
@@ -1344,7 +1422,7 @@ fn add_tag_union<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name,
+                tag_name: tag_name.to_string(),
                 payload_fields,
             }
         }
@@ -1402,31 +1480,44 @@ fn union_tags_to_types<'a>(
             (name_str, payload_vars.to_vec())
         })
         .collect();
+
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    tags_to_types(name, tags, env, types, layout, is_recursive)
+    tags.into_iter()
+        .map(|(tag_name, payload_vars)| {
+            tag_to_type(
+                name,
+                env,
+                tag_name,
+                &payload_vars,
+                types,
+                layout,
+                is_recursive,
+            )
+        })
+        .collect()
 }
 
 fn single_tag_payload<'a>(
     union_tags: &'a UnionLabels<TagName>,
     subs: &'a Subs,
-) -> (String, &'a [Variable]) {
+) -> (&'a str, &'a [Variable]) {
     let mut iter = union_tags.iter_from_subs(subs);
     let (tag_name, payload_vars) = iter.next().unwrap();
     // This should be a single-tag union.
     debug_assert_eq!(iter.next(), None);
 
-    (tag_name.0.as_str().to_string(), payload_vars)
+    (tag_name.0.as_str(), payload_vars)
 }
 
-fn single_tag_payload_fields<'a>(
-    union_tags: &UnionLabels<TagName>,
-    subs: &Subs,
+fn single_tag_payload_fields<'a, 'b>(
+    union_tags: &'b UnionLabels<TagName>,
+    subs: &'b Subs,
     field_layouts: &[Layout<'a>],
     env: &mut Env<'a>,
     types: &mut Types,
-) -> (String, Vec<TypeId>) {
+) -> (&'b str, Vec<TypeId>) {
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 
     let payload_fields: Vec<TypeId> = payload_vars
@@ -1438,48 +1529,44 @@ fn single_tag_payload_fields<'a>(
     (tag_name, payload_fields)
 }
 
-fn tags_to_types<'a>(
+fn tag_to_type<'a, D: Display>(
     name: &str,
-    tags: Vec<(String, Vec<Variable>)>,
     env: &mut Env<'a>,
+    tag_name: D,
+    payload_vars: &[Variable],
     types: &mut Types,
     layout: Layout<'a>,
     is_recursive: bool,
-) -> Vec<(String, Option<TypeId>)> {
-    tags.into_iter()
-        .map(|(tag_name, payload_vars)| {
-            match struct_fields_needed(env, payload_vars.iter().copied()) {
-                0 => {
-                    // no payload
-                    (tag_name, None)
-                }
-                1 if !is_recursive => {
-                    // this isn't recursive and there's 1 payload item, so it doesn't
-                    // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
-                    // can have payloads of plain old Str, no struct wrapper needed.
-                    let payload_var = payload_vars.get(0).unwrap();
-                    let payload_layout = env
-                        .layout_cache
-                        .from_var(env.arena, *payload_var, env.subs)
-                        .expect("Something weird ended up in the content");
-                    let payload_id = add_type_help(env, payload_layout, *payload_var, None, types);
+) -> (D, Option<TypeId>) {
+    match struct_fields_needed(env, payload_vars.iter().copied()) {
+        0 => {
+            // no payload
+            (tag_name, None)
+        }
+        1 if !is_recursive => {
+            // this isn't recursive and there's 1 payload item, so it doesn't
+            // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
+            // can have payloads of plain old Str, no struct wrapper needed.
+            let payload_var = payload_vars.get(0).unwrap();
+            let payload_layout = env
+                .layout_cache
+                .from_var(env.arena, *payload_var, env.subs)
+                .expect("Something weird ended up in the content");
+            let payload_id = add_type_help(env, payload_layout, *payload_var, None, types);
 
-                    (tag_name, Some(payload_id))
-                }
-                _ => {
-                    // create a RocType for the payload and save it
-                    let struct_name = format!("{}_{}", &name, tag_name); // e.g. "MyUnion_MyVariant"
-                    let fields = payload_vars.iter().copied().enumerate();
-                    let struct_id =
-                        add_struct(env, struct_name, fields, types, layout, |name, fields| {
-                            RocType::TagUnionPayload { name, fields }
-                        });
+            (tag_name, Some(payload_id))
+        }
+        _ => {
+            // create a RocType for the payload and save it
+            let struct_name = format!("{}_{}", &name, tag_name); // e.g. "MyUnion_MyVariant"
+            let fields = payload_vars.iter().copied().enumerate();
+            let struct_id = add_struct(env, struct_name, fields, types, layout, |name, fields| {
+                RocType::TagUnionPayload { name, fields }
+            });
 
-                    (tag_name, Some(struct_id))
-                }
-            }
-        })
-        .collect()
+            (tag_name, Some(struct_id))
+        }
+    }
 }
 
 fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, vars: I) -> usize {

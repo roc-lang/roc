@@ -219,7 +219,9 @@ fn build_clone<'a, 'ctx, 'env>(
             when_recursive,
         ),
 
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+        // Since we will never actually display functions (and hence lambda sets)
+        // we just write nothing to the buffer
+        Layout::LambdaSet(_) => cursors.extra_offset,
 
         Layout::Union(union_layout) => {
             if layout.safe_to_memcpy(env.layout_interner) {
@@ -933,7 +935,8 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
                 bd.build_int_add(offset, elements_width, "new_offset")
             } else {
-                let elements_start_offset = offset;
+                // We cloned the elements into the extra_offset address.
+                let elements_start_offset = cursors.extra_offset;
 
                 let element_type = basic_type_from_layout(env, elem);
                 let elements = bd.build_pointer_cast(

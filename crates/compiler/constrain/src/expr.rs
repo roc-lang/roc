@@ -724,11 +724,7 @@ pub fn constrain_expr(
 
             let branches_region = {
                 debug_assert!(!branches.is_empty());
-                Region::span_across(
-                    &loc_cond.region,
-                    // &branches.first().unwrap().region(),
-                    &branches.last().unwrap().pattern_region(),
-                )
+                Region::span_across(&loc_cond.region, &branches.last().unwrap().value.region)
             };
 
             let branch_expr_reason =
@@ -866,7 +862,7 @@ pub fn constrain_expr(
             pattern_cons.push(cond_constraint);
 
             // Now check the condition against the type expected by the branches.
-            let sketched_rows = sketch_when_branches(real_cond_var, branches_region, branches);
+            let sketched_rows = sketch_when_branches(branches_region, branches);
             let cond_matches_branches_constraint = constraints.exhaustive(
                 real_cond_var,
                 loc_cond.region,
@@ -2452,8 +2448,7 @@ fn constrain_typed_function_arguments(
 
                 // Exhaustiveness-check the type in the pattern against what the
                 // annotation wants.
-                let sketched_rows =
-                    sketch_pattern_to_rows(annotation_var, loc_pattern.region, &loc_pattern.value);
+                let sketched_rows = sketch_pattern_to_rows(loc_pattern.region, &loc_pattern.value);
                 let category = loc_pattern.value.category();
                 let expected = PExpected::ForReason(
                     PReason::TypedArg {
@@ -2564,8 +2559,7 @@ fn constrain_typed_function_arguments_simple(
             {
                 // Exhaustiveness-check the type in the pattern against what the
                 // annotation wants.
-                let sketched_rows =
-                    sketch_pattern_to_rows(annotation_var, loc_pattern.region, &loc_pattern.value);
+                let sketched_rows = sketch_pattern_to_rows(loc_pattern.region, &loc_pattern.value);
                 let category = loc_pattern.value.category();
                 let expected = PExpected::ForReason(
                     PReason::TypedArg {

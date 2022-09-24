@@ -393,11 +393,11 @@ contains = \list, needle ->
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
 walk = \list, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
     walkHelp = \currentState, element -> Continue (func currentState element)
 
     when List.iterate list state walkHelp is
         Continue newState -> newState
-        Break void -> List.unreachable void
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -441,7 +441,7 @@ product : List (Num a) -> Num a
 product = \list ->
     List.walk list 1 Num.mul
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
 any = \list, predicate ->
@@ -452,10 +452,10 @@ any = \list, predicate ->
             Continue {}
 
     when List.iterate list {} looper is
-        Continue {} -> False
-        Break {} -> True
+        Continue {} -> Bool.false
+        Break {} -> Bool.true
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
 all = \list, predicate ->
@@ -466,11 +466,11 @@ all = \list, predicate ->
             Break {}
 
     when List.iterate list {} looper is
-        Continue {} -> True
-        Break {} -> False
+        Continue {} -> Bool.true
+        Break {} -> Bool.false
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `True`.
+## elements for which the function returned `Bool.true`.
 ##
 ## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -507,7 +507,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
         List.takeFirst list kept
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `False`.
+## elements for which the function returned `Bool.false`.
 ##
 ## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -875,24 +875,24 @@ intersperse = \list, sep ->
 
     List.dropLast newList
 
-## Returns `True` if the first list starts with the second list.
+## Returns `Bool.true` if the first list starts with the second list.
 ##
-## If the second list is empty, this always returns `True`; every list
+## If the second list is empty, this always returns `Bool.true`; every list
 ## is considered to "start with" an empty list.
 ##
-## If the first list is empty, this only returns `True` if the second list is empty.
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
 startsWith : List elem, List elem -> Bool
 startsWith = \list, prefix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
     prefix == List.sublist list { start: 0, len: List.len prefix }
 
-## Returns `True` if the first list ends with the second list.
+## Returns `Bool.true` if the first list ends with the second list.
 ##
-## If the second list is empty, this always returns `True`; every list
+## If the second list is empty, this always returns `Bool.true`; every list
 ## is considered to "end with" an empty list.
 ##
-## If the first list is empty, this only returns `True` if the second list is empty.
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
 endsWith : List elem, List elem -> Bool
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
@@ -1006,6 +1006,3 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
-
-## useful for typechecking guaranteed-unreachable cases
-unreachable : [] -> a

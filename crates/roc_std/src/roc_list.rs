@@ -103,6 +103,18 @@ impl<T> RocList<T> {
         self.len() == 0
     }
 
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if self.len() <= index {
+            return None;
+        }
+
+        let elements = self.elements?;
+        let element_ptr = unsafe { elements.as_ptr().add(index) };
+
+        // Return the element.
+        Some(unsafe { ManuallyDrop::into_inner(element_ptr.cast::<ManuallyDrop<&T>>().read()) })
+    }
+
     /// Note that there is no way to convert directly to a Vec.
     ///
     /// This is because RocList values are not allocated using the system allocator, so
@@ -495,53 +507,6 @@ impl<'a, T> IntoIterator for &'a RocList<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.as_slice().iter()
-    }
-}
-
-impl<T> IntoIterator for RocList<T> {
-    type Item = T;
-    type IntoIter = IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter { list: self, idx: 0 }
-    }
-}
-
-pub struct IntoIter<T> {
-    list: RocList<T>,
-    idx: usize,
-}
-
-impl<T> Iterator for IntoIter<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.list.len() <= self.idx {
-            return None;
-        }
-
-        let elements = self.list.elements?;
-        let element_ptr = unsafe { elements.as_ptr().add(self.idx) };
-        self.idx += 1;
-
-        // Return the element.
-        Some(unsafe { ManuallyDrop::into_inner(element_ptr.read()) })
-    }
-}
-
-impl<T> Drop for IntoIter<T> {
-    fn drop(&mut self) {
-        // If there are any elements left that need to be dropped, drop them.
-        if let Some(elements) = self.list.elements {
-            // Set the list's length to zero to prevent double-frees.
-            // Note that this leaks if dropping any of the elements panics.
-            let len = mem::take(&mut self.list.length);
-
-            // Drop the elements that haven't been returned from the iterator.
-            for i in self.idx..len {
-                mem::drop::<T>(unsafe { ManuallyDrop::take(&mut *elements.as_ptr().add(i)) })
-            }
-        }
     }
 }
 

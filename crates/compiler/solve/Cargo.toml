@@ -20,7 +20,7 @@ roc_solve_problem = { path = "../solve_problem" }
 roc_unify = { path = "../unify" }
 roc_debug_flags = { path = "../debug_flags" }
 arrayvec = "0.7.2"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 
 [dev-dependencies]
 roc_load = { path = "../load" }
@@ -31,10 +31,10 @@ roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
 roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 indoc = "1.0.7"
 tempfile = "3.2.0"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 regex = "1.5.5"
 lazy_static = "1.4.0"
 insta = "1.19.0"

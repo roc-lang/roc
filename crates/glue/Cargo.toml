@@ -18,16 +18,17 @@ roc_module = { path = "../compiler/module" }
 roc_collections = { path = "../compiler/collections" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+roc_tracing = { path = "../tracing" }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 target-lexicon = "0.12.3"
-clap = { version = "3.2.18", default-features = false, features = ["std", "color", "suggestions", "derive"] }
+clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions", "derive"] }
 strum = "0.24.0"
 strum_macros = "0.24"
 indexmap = "1.8.1"
 fnv = "1.0.7"
 
 [dev-dependencies]
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 tempfile = "3.2.0"
 indoc = "1.0.7"
 cli_utils = { path = "../cli_utils" }

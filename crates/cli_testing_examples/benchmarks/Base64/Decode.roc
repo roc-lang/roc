@@ -1,13 +1,13 @@
-interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ Decoder, DecodeProblem }]
+interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ ByteDecoder, DecodeProblem }]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
     Bytes.Decode.decode bytes (decodeBase64 (List.len bytes))
 
-decodeBase64 : Nat -> Decoder Str
+decodeBase64 : Nat -> ByteDecoder Str
 decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: "" }
 
-loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
+loopHelp : { remaining : Nat, string : Str } -> ByteDecoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
         x, y, z <- Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8

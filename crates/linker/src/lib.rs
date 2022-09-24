@@ -24,6 +24,7 @@ use target_lexicon::Triple;
 
 mod generate_dylib;
 mod metadata;
+mod pe;
 use metadata::VirtualOffset;
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
