@@ -906,6 +906,6 @@ fn import_builtin_in_platform_and_check_app() {
         ),
     ];
 
-    let result = multiple_modules("issue_2863_module_type_does_not_exist", modules);
+    let result = multiple_modules("import_builtin_in_platform_and_check_app", modules);
     assert!(result.is_ok(), "should check");
 }

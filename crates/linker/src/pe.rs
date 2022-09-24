@@ -4,7 +4,7 @@ use memmap2::{Mmap, MmapMut};
 use object::{
     pe::{ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader, ImageThunkData64},
     read::pe::ImportTable,
-    LittleEndian as LE, SectionIndex,
+    LittleEndian as LE, RelocationTarget, SectionIndex,
 };
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
@@ -526,8 +526,8 @@ enum SectionKind {
 struct Section {
     /// File range of the section (in the app object)
     file_range: Range<usize>,
-
     kind: SectionKind,
+    relocations: MutMap<String, (u64, object::Relocation)>,
 }
 
 #[allow(dead_code)]
@@ -568,6 +568,24 @@ impl AppSections {
                 _ => continue,
             };
 
+            let mut relocations = MutMap::default();
+
+            for (offset_in_section, relocation) in section.relocations() {
+                match relocation.target() {
+                    RelocationTarget::Symbol(symbol_index) => {
+                        use object::ObjectSymbol;
+
+                        let name = file
+                            .symbol_by_index(symbol_index)
+                            .and_then(|s| s.name())
+                            .unwrap_or_default();
+
+                        relocations.insert(name.to_string(), (offset_in_section, relocation));
+                    }
+                    _ => todo!(),
+                }
+            }
+
             let (start, length) = section.file_range().unwrap();
             let file_range = start as usize..(start + length) as usize;
 
@@ -585,7 +603,11 @@ impl AppSections {
                 }
             }
 
-            let section = Section { file_range, kind };
+            let section = Section {
+                file_range,
+                kind,
+                relocations,
+            };
 
             sections.push(section);
         }
@@ -1009,6 +1031,14 @@ mod test {
             extern fn roc_magic1() callconv(.C) u64;
             extern fn roc_magic2() callconv(.C) u8;
 
+            pub export fn roc_alloc() u64 {
+                return 123456;
+            }
+
+            pub export fn roc_realloc() u64 {
+                return 111111;
+            }
+
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
                 try stdout.print("Hello, {} {} {} {}!\n", .{roc_magic1(), roc_magic2(), roc_one, roc_three});
@@ -1021,8 +1051,11 @@ mod test {
             export const roc_one: u64 = 1;
             export const roc_three: u64 = 3;
 
+            extern fn roc_alloc() u64;
+            extern fn roc_realloc() u64;
+
             export fn roc_magic1() u64 {
-                return 42;
+                return roc_alloc() + roc_realloc();
             }
 
             export fn roc_magic2() u8 {
@@ -1045,6 +1078,7 @@ mod test {
                 "-target",
                 "x86_64-windows-gnu",
                 "--strip",
+                "-rdynamic",
                 "-OReleaseFast",
             ])
             .output()
@@ -1081,6 +1115,7 @@ mod test {
                 "-lc",
                 "-target",
                 "x86_64-windows-gnu",
+                "-rdynamic",
                 "--strip",
                 "-OReleaseFast",
             ])
@@ -1124,6 +1159,18 @@ mod test {
 
         let file = PeFile64::parse(executable.deref()).unwrap();
         let last_host_section = file.sections().nth(last_host_section_index).unwrap();
+
+        let exports: MutMap<String, i64> = file
+            .exports()
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                (
+                    String::from_utf8(e.name().to_vec()).unwrap(),
+                    (e.address() - image_base) as i64,
+                )
+            })
+            .collect();
 
         let optional_header_offset = file.dos_header().nt_headers_offset() as usize
             + std::mem::size_of::<u32>()
@@ -1197,6 +1244,26 @@ mod test {
             for section in it {
                 let slice = &roc_app[section.file_range.start..section.file_range.end];
                 executable[offset..][..slice.len()].copy_from_slice(slice);
+
+                for (name, (offset_in_section, relocation)) in section.relocations.iter() {
+                    let destination = exports[name];
+
+                    match relocation.kind() {
+                        object::RelocationKind::Relative => {
+                            // we implicitly only do 32-bit relocations
+                            debug_assert_eq!(relocation.size(), 32);
+
+                            let delta =
+                                destination - virtual_address as i64 - *offset_in_section as i64
+                                    + relocation.addend();
+
+                            executable[offset + *offset_in_section as usize..][..4]
+                                .copy_from_slice(&(delta as i32).to_le_bytes());
+                        }
+                        _ => todo!(),
+                    }
+                }
+
                 offset += slice.len();
             }
 
@@ -1253,7 +1320,7 @@ mod test {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello, 42 32 1 3!\n", output);
+        assert_eq!("Hello, 234567 32 1 3!\n", output);
     }
 
     #[ignore]
@@ -1281,6 +1348,6 @@ mod test {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello, 42 32 1 3!\n", output);
+        assert_eq!("Hello, 234567 32 1 3!\n", output);
     }
 }
