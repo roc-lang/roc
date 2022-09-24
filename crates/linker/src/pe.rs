@@ -22,6 +22,16 @@ use roc_error_macros::internal_error;
 
 use crate::{generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut};
 
+/// The metadata stores information about/from the host .exe because
+///
+/// - it is faster to retrieve than parsing the host .exe on every link
+/// - the information is erased from the host .exe to make linking faster
+///
+/// For instance, we remove our dummy .dll from the import table, but its dynamic relocations are
+/// still somewhere in the host .exe. We use the metadata to store this offset, so at link time we
+/// can make modifications at that location.
+///
+/// PeMetadata is created during preprocessing and stored to disk.
 #[derive(Debug, Serialize, Deserialize)]
 struct PeMetadata {
     dynhost_file_size: usize,
