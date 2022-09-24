@@ -65,7 +65,7 @@ pub(crate) fn preprocess_windows(
 
     let data = std::fs::read(host_exe_filename).unwrap();
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut dynhost = increase_number_of_sections_help(&data, &new_sections, out_filename);
+    let mut dynhost = Preprocessor::preprocess(out_filename, &data, &new_sections);
 
     let dynhost_data: &[u8] = &*dynhost;
     let dynhost_obj = match object::read::pe::PeFile64::parse(dynhost_data) {
@@ -983,54 +983,6 @@ fn write_section_header(
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
-fn increase_number_of_sections_help(
-    input_data: &[u8],
-    new_sections: &[[u8; 8]],
-    output_file: &Path,
-) -> MmapMut {
-    use object::read::pe::ImageNtHeaders;
-
-    let dos_header = object::pe::ImageDosHeader::parse(input_data).unwrap();
-    let mut offset = dos_header.nt_headers_offset().into();
-    let header_offset = offset;
-    let number_of_sections_offset = header_offset + 4 + 2;
-
-    let sections_len_old = u16::from_le_bytes(
-        input_data[number_of_sections_offset as usize..][..2]
-            .try_into()
-            .unwrap(),
-    );
-
-    let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
-
-    let data = &*mmap;
-
-    let sections_len_new = u16::from_le_bytes(
-        data[number_of_sections_offset as usize..][..2]
-            .try_into()
-            .unwrap(),
-    );
-
-    assert_eq!(
-        sections_len_old + new_sections.len() as u16,
-        sections_len_new
-    );
-
-    let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
-    let sections = nt_headers.sections(data, offset).unwrap();
-
-    let names: Vec<_> = sections
-        .iter()
-        .map(|h| h.name)
-        .skip(sections_len_old as usize)
-        .take(new_sections.len())
-        .collect();
-
-    assert_eq!(new_sections, names.as_slice());
-
-    mmap
-}
-
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
@@ -1267,6 +1219,50 @@ mod test {
         );
 
         assert_eq!(actual, 7)
+    }
+
+    fn increase_number_of_sections_help(
+        input_data: &[u8],
+        new_sections: &[[u8; 8]],
+        output_file: &Path,
+    ) -> MmapMut {
+        use object::read::pe::ImageNtHeaders;
+
+        let dos_header = object::pe::ImageDosHeader::parse(input_data).unwrap();
+        let mut offset = dos_header.nt_headers_offset().into();
+
+        let image_headers_old = load_struct_inplace::<ImageNtHeaders64>(
+            input_data,
+            dos_header.nt_headers_offset() as usize,
+        );
+
+        let sections_len_old = image_headers_old.file_header().number_of_sections.get(LE);
+
+        let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
+
+        let image_headers_new =
+            load_struct_inplace::<ImageNtHeaders64>(&mmap, dos_header.nt_headers_offset() as usize);
+
+        let sections_len_new = image_headers_new.file_header().number_of_sections.get(LE);
+
+        assert_eq!(
+            sections_len_old + new_sections.len() as u16,
+            sections_len_new
+        );
+
+        let (nt_headers, _data_directories) = ImageNtHeaders64::parse(&*mmap, &mut offset).unwrap();
+        let sections = nt_headers.sections(&*mmap, offset).unwrap();
+
+        let names: Vec<_> = sections
+            .iter()
+            .map(|h| h.name)
+            .skip(sections_len_old as usize)
+            .take(new_sections.len())
+            .collect();
+
+        assert_eq!(new_sections, names.as_slice());
+
+        mmap
     }
 
     #[test]
