@@ -31,6 +31,9 @@ pub enum HeaderFor<'a> {
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
         main_for_host: roc_module::symbol::Symbol,
+
+        /// function used to evaluate expect-fx
+        platform_test_runner: roc_module::symbol::Symbol,
     },
     Interface,
 }

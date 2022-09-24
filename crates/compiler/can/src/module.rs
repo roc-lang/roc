@@ -378,12 +378,21 @@ pub fn canonicalize_module_defs<'a>(
 
     let pending_derives = output.pending_derives;
 
+    let platform_test_runner = match header_for {
+        HeaderFor::Platform {
+            platform_test_runner,
+            ..
+        } => Some(platform_test_runner),
+        _ => None,
+    };
+
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
     for (symbol, region) in symbols_introduced {
         if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
+            && Some(&symbol) != platform_test_runner
         {
             env.problem(Problem::UnusedDef(symbol, region));
         }

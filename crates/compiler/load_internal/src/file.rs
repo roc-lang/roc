@@ -3865,6 +3865,7 @@ struct PlatformHeaderInfo<'a> {
     requires: &'a [Loc<TypedIdent<'a>>],
     requires_types: &'a [Loc<UppercaseIdent<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
+    platform_test_runner: Loc<ExposedName<'a>>,
 }
 
 // TODO refactor so more logic is shared with `send_header`
@@ -3886,6 +3887,7 @@ fn send_header_two<'a>(
         requires,
         requires_types,
         imports,
+        platform_test_runner,
     } = info;
 
     let declared_name: ModuleName = "".into();
@@ -4071,11 +4073,18 @@ fn send_header_two<'a>(
         Symbol::new(home, ident_id)
     };
 
+    let platform_test_runner = {
+        let ident_id = ident_ids.get_or_insert(platform_test_runner.value.as_str());
+
+        Symbol::new(home, ident_id)
+    };
+
     let extra = HeaderFor::Platform {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,
         main_for_host,
+        platform_test_runner,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
@@ -4561,6 +4570,7 @@ fn fabricate_platform_module<'a>(
         )]),
         requires_types: unspace(arena, header.requires.rigids.items),
         imports: unspace(arena, header.imports.items),
+        platform_test_runner: Loc::at(header.tests.region, header.tests.extract_spaces().item),
     };
 
     send_header_two(
