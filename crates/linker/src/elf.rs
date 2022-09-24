@@ -1520,9 +1520,11 @@ mod tests {
         let mut triple = Triple::host();
         triple.binary_format = target_lexicon::BinaryFormat::Elf;
 
-        let symbols = collect_roc_undefined_symbols(&object, &triple);
-
-        let mut keys: Vec<_> = symbols.iter().filter_map(|s| s.name().ok()).collect();
+        let mut keys: Vec<_> = object
+            .dynamic_symbols()
+            .filter(is_roc_undefined)
+            .filter_map(|s| s.name().ok())
+            .collect();
         keys.sort_unstable();
 
         assert_eq!(
