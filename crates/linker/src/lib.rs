@@ -473,19 +473,57 @@ pub fn preprocess(
         println!("Targeting: {}", target);
     }
 
-    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
-        crate::pe::preprocess_windows(
-            exec_filename,
-            Path::new(metadata_filename),
-            Path::new(out_filename),
-            verbose,
-            time,
-        )
-        .unwrap_or_else(|e| internal_error!("{}", e));
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
+            preprocess_elf_and_macho(
+                target,
+                exec_filename,
+                metadata_filename,
+                out_filename,
+                shared_lib,
+                verbose,
+                time,
+            );
+        }
 
-        return;
+        target_lexicon::BinaryFormat::Coff => {
+            crate::pe::preprocess_windows(
+                exec_filename,
+                Path::new(metadata_filename),
+                Path::new(out_filename),
+                verbose,
+                time,
+            )
+            .unwrap_or_else(|e| internal_error!("{}", e));
+        }
+
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            internal_error!("Roc does not support unknown host binary formats!");
+        }
+        other => {
+            internal_error!(
+                concat!(
+                    r"Roc does not yet support the {:?} binary format. ",
+                    r"Please file a bug report for this, describing what operating system you were targeting!"
+                ),
+                other,
+            )
+        }
     }
+}
 
+fn preprocess_elf_and_macho(
+    target: &Triple,
+    exec_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    shared_lib: &Path,
+    verbose: bool,
+    time: bool,
+) {
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
     let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
