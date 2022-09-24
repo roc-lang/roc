@@ -1,6 +1,8 @@
 use object::pe;
 use object::LittleEndian as LE;
 
+pub(crate) const APP_DLL: &str = "roc-cheaty-lib.dll";
+
 fn synthetic_image_export_directory(
     name: &str,
     virtual_address: u32,
@@ -41,7 +43,7 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
 
     let ptr = vec.as_mut_ptr();
 
-    let name = "roc-cheaty-lib.dll";
+    let name = APP_DLL;
     let directory = synthetic_image_export_directory(name, virtual_address, custom_names);
 
     unsafe {
