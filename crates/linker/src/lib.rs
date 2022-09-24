@@ -1,4 +1,3 @@
-use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
 use object::{elf, endian, macho};
@@ -14,8 +13,7 @@ use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::fs;
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
@@ -25,7 +23,7 @@ use target_lexicon::Triple;
 mod generate_dylib;
 mod metadata;
 mod pe;
-use metadata::VirtualOffset;
+use metadata::{Metadata, VirtualOffset};
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
 
@@ -68,7 +66,6 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
                 ..
             } => false,
 
-            // windows support is incomplete
             Triple {
                 architecture: target_lexicon::Architecture::X86_64,
                 operating_system: target_lexicon::OperatingSystem::Windows,
@@ -110,9 +107,9 @@ pub fn build_and_preprocess_host(
 
     preprocess(
         target,
-        dynhost.to_str().unwrap(),
-        metadata.to_str().unwrap(),
-        preprocessed_host_path.to_str().unwrap(),
+        &dynhost,
+        &metadata,
+        preprocessed_host_path,
         &dummy_lib,
         false,
         false,
@@ -126,14 +123,7 @@ pub fn link_preprocessed_host(
     binary_path: &Path,
 ) {
     let metadata = host_input_path.with_file_name("metadata");
-    surgery(
-        roc_app_obj.to_str().unwrap(),
-        metadata.to_str().unwrap(),
-        binary_path.to_str().unwrap(),
-        false,
-        false,
-        target,
-    )
+    surgery(roc_app_obj, &metadata, binary_path, false, false, target)
 }
 
 fn generate_dynamic_lib(
@@ -206,11 +196,8 @@ fn dummy_lib_is_up_to_date(
         return false;
     }
 
-    let exec_file = fs::File::open(dummy_lib_path).unwrap_or_else(|e| internal_error!("{}", e));
-    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
-    let exec_data = &*exec_mmap;
-
-    let object = object::File::parse(exec_data).unwrap();
+    let dummy_lib = open_mmap(dummy_lib_path);
+    let object = object::File::parse(&*dummy_lib).unwrap();
 
     // the user may have been cross-compiling.
     // The dynhost on disk must match our current target
@@ -460,11 +447,11 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
-pub fn preprocess(
+fn preprocess(
     target: &Triple,
-    exec_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
+    host_exe_path: &Path,
+    metadata_path: &Path,
+    preprocessed_path: &Path,
     shared_lib: &Path,
     verbose: bool,
     time: bool,
@@ -473,25 +460,60 @@ pub fn preprocess(
         println!("Targeting: {}", target);
     }
 
-    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
-        crate::pe::preprocess_windows(
-            exec_filename,
-            Path::new(metadata_filename),
-            Path::new(out_filename),
-            shared_lib,
-            verbose,
-            time,
-        )
-        .unwrap_or_else(|e| internal_error!("{}", e));
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
+            preprocess_elf_and_macho(
+                target,
+                host_exe_path,
+                metadata_path,
+                preprocessed_path,
+                shared_lib,
+                verbose,
+                time,
+            );
+        }
 
-        return;
+        target_lexicon::BinaryFormat::Coff => {
+            crate::pe::preprocess_windows(
+                host_exe_path,
+                metadata_path,
+                preprocessed_path,
+                verbose,
+                time,
+            )
+            .unwrap_or_else(|e| internal_error!("{}", e));
+        }
+
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            internal_error!("Roc does not support unknown host binary formats!");
+        }
+        other => {
+            internal_error!(
+                concat!(
+                    r"Roc does not yet support the {:?} binary format. ",
+                    r"Please file a bug report for this, describing what operating system you were targeting!"
+                ),
+                other,
+            )
+        }
     }
+}
 
+fn preprocess_elf_and_macho(
+    target: &Triple,
+    host_exe_path: &Path,
+    metadata_path: &Path,
+    preprocessed_path: &Path,
+    shared_lib: &Path,
+    verbose: bool,
+    time: bool,
+) {
     let total_start = Instant::now();
     let exec_parsing_start = total_start;
-    let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
-    let exec_data = &*exec_mmap;
+    let exec_data = &*open_mmap(host_exe_path);
     let exec_obj = match object::File::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
@@ -753,7 +775,7 @@ pub fn preprocess(
     let scanning_dynamic_deps_duration;
     let platform_gen_start;
 
-    let (out_mmap, out_file) = match target.binary_format {
+    let out_mmap = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => match target
             .endianness()
             .unwrap_or(target_lexicon::Endianness::Little)
@@ -778,7 +800,7 @@ pub fn preprocess(
                 gen_elf_le(
                     exec_data,
                     &mut md,
-                    out_filename,
+                    preprocessed_path,
                     &got_app_syms,
                     &got_sections,
                     dynamic_lib_count,
@@ -833,7 +855,7 @@ pub fn preprocess(
                     gen_macho_le(
                         exec_data,
                         &mut md,
-                        out_filename,
+                        preprocessed_path,
                         macho_load_so_offset,
                         target,
                         verbose,
@@ -870,15 +892,7 @@ pub fn preprocess(
     }
 
     let saving_metadata_start = Instant::now();
-    // This block ensure that the metadata is fully written and timed before continuing.
-    {
-        let output =
-            fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-        let output = BufWriter::new(output);
-        if let Err(err) = serialize_into(output, &md) {
-            internal_error!("Failed to serialize metadata: {}", err);
-        };
-    }
+    md.write_to_file(metadata_path);
     let saving_metadata_duration = saving_metadata_start.elapsed();
 
     let flushing_data_start = Instant::now();
@@ -887,7 +901,6 @@ pub fn preprocess(
         .unwrap_or_else(|e| internal_error!("{}", e));
     // Also drop files to to ensure data is fully written here.
     drop(out_mmap);
-    drop(out_file);
     let flushing_data_duration = flushing_data_start.elapsed();
 
     let total_duration = total_start.elapsed();
@@ -923,11 +936,11 @@ pub fn preprocess(
 fn gen_macho_le(
     exec_data: &[u8],
     md: &mut metadata::Metadata,
-    out_filename: &str,
+    out_filename: &Path,
     macho_load_so_offset: usize,
     _target: &Triple,
     _verbose: bool,
-) -> (MmapMut, File) {
+) -> MmapMut {
     // Just adding some extra context/useful info here.
     // I was talking to Jakub from the Zig team about macho linking and here are some useful comments:
     // 1) Macho WILL run fine with multiple text segments (and theoretically data segments).
@@ -975,18 +988,7 @@ fn gen_macho_le(
 
     md.exec_len = exec_data.len() as u64 + md.added_byte_count;
 
-    let out_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(out_filename)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    out_file
-        .set_len(md.exec_len)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    let mut out_mmap =
-        unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
     let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
 
     // "Delete" the dylib load command - by copying all the bytes before it
@@ -1472,20 +1474,20 @@ fn gen_macho_le(
     // cmd_loc should be where the last offset ended
     md.macho_cmd_loc = offset as u64;
 
-    (out_mmap, out_file)
+    out_mmap
 }
 
 #[allow(clippy::too_many_arguments)]
 fn gen_elf_le(
     exec_data: &[u8],
     md: &mut metadata::Metadata,
-    out_filename: &str,
+    preprocessed_path: &Path,
     got_app_syms: &[(String, usize)],
     got_sections: &[(usize, usize)],
     dynamic_lib_count: usize,
     shared_lib_index: usize,
     verbose: bool,
-) -> (MmapMut, File) {
+) -> MmapMut {
     let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
     let ph_offset = exec_header.e_phoff.get(NativeEndian);
     let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
@@ -1513,18 +1515,7 @@ fn gen_elf_le(
     let physical_shift_start = ph_end as u64;
 
     md.exec_len = exec_data.len() as u64 + md.added_byte_count;
-    let out_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(out_filename)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    out_file
-        .set_len(md.exec_len)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    let mut out_mmap =
-        unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let mut out_mmap = open_mmap_mut(preprocessed_path, md.exec_len as usize);
 
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
 
@@ -1800,7 +1791,7 @@ fn gen_elf_le(
     }
     file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + added_header_count as u16);
 
-    (out_mmap, out_file)
+    out_mmap
 }
 
 // fn scan_macho_dynamic_deps(
@@ -1981,17 +1972,58 @@ fn scan_elf_dynamic_deps(
     }
 }
 
-pub fn surgery(
-    app_filename: &str,
-    metadata_filename: &str,
-    out_filename: &str,
+fn surgery(
+    app_filename: &Path,
+    metadata_filename: &Path,
+    out_filename: &Path,
+    verbose: bool,
+    time: bool,
+    target: &Triple,
+) {
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
+            surgery_elf_and_macho(
+                app_filename,
+                metadata_filename,
+                out_filename,
+                verbose,
+                time,
+                target,
+            );
+        }
+
+        target_lexicon::BinaryFormat::Coff => {
+            crate::pe::surgery_pe(out_filename, metadata_filename, app_filename);
+        }
+
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            internal_error!("Roc does not support unknown host binary formats!");
+        }
+        other => {
+            internal_error!(
+                concat!(
+                    r"Roc does not yet support the {:?} binary format. ",
+                    r"Please file a bug report for this, describing what operating system you were targeting!"
+                ),
+                other,
+            )
+        }
+    }
+}
+
+fn surgery_elf_and_macho(
+    app_path: &Path,
+    metadata_path: &Path,
+    executable_path: &Path,
     verbose: bool,
     time: bool,
     target: &Triple,
 ) {
     let app_parsing_start = Instant::now();
-    let app_file = fs::File::open(app_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let app_mmap = unsafe { Mmap::map(&app_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let app_mmap = open_mmap(app_path);
     let app_data = &*app_mmap;
     let app_obj = match object::File::parse(app_data) {
         Ok(obj) => obj,
@@ -2002,38 +2034,15 @@ pub fn surgery(
 
     let app_parsing_duration = app_parsing_start.elapsed();
 
-    if let target_lexicon::BinaryFormat::Coff = target.binary_format {
-        return crate::pe::surgery_pe(out_filename, metadata_filename, app_data, verbose);
-    }
-
     let total_start = Instant::now();
+
     let loading_metadata_start = total_start;
-    let md: metadata::Metadata = {
-        let input = fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-        let input = BufReader::new(input);
-        match deserialize_from(input) {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to deserialize metadata: {}", err);
-            }
-        }
-    };
+    let md = Metadata::read_from_file(metadata_path);
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let exec_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(out_filename)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-
     let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
-    exec_file
-        .set_len(max_out_len)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-
-    let mut exec_mmap =
-        unsafe { MmapMut::map_mut(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
+    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
 
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
     let out_gen_start = Instant::now();
@@ -2044,9 +2053,9 @@ pub fn surgery(
             surgery_elf(verbose, &md, &mut exec_mmap, &mut offset, app_obj)
         }
         target_lexicon::BinaryFormat::Macho => surgery_macho(
-            app_filename,
-            metadata_filename,
-            out_filename,
+            app_path,
+            metadata_path,
+            executable_path,
             verbose,
             time,
             &md,
@@ -2070,10 +2079,6 @@ pub fn surgery(
     // Also drop files to to ensure data is fully written here.
     drop(exec_mmap);
 
-    exec_file
-        .set_len(offset as u64 + 1)
-        .unwrap_or_else(|e| internal_error!("{}", e));
-    drop(exec_file);
     let flushing_data_duration = flushing_data_start.elapsed();
 
     // Make sure the final executable has permision to execute.
@@ -2081,11 +2086,11 @@ pub fn surgery(
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let mut perms = fs::metadata(out_filename)
+        let mut perms = fs::metadata(executable_path)
             .unwrap_or_else(|e| internal_error!("{}", e))
             .permissions();
         perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(out_filename, perms).unwrap_or_else(|e| internal_error!("{}", e));
+        fs::set_permissions(executable_path, perms).unwrap_or_else(|e| internal_error!("{}", e));
     }
 
     let total_duration = total_start.elapsed();
@@ -2111,10 +2116,10 @@ pub fn surgery(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn surgery_macho(
-    _app_filename: &str,
-    _metadata_filename: &str,
-    _out_filename: &str,
+fn surgery_macho(
+    _app_filename: &Path,
+    _metadata_filename: &Path,
+    _out_filename: &Path,
     verbose: bool,
     _time: bool,
     md: &metadata::Metadata,
@@ -2532,7 +2537,7 @@ pub fn surgery_macho(
     *offset_ref = offset;
 }
 
-pub fn surgery_elf(
+fn surgery_elf(
     verbose: bool,
     md: &metadata::Metadata,
     exec_mmap: &mut MmapMut,
@@ -3017,6 +3022,29 @@ fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) ->
     assert_eq!(count, body.len(), "Failed to load all structs");
     assert!(tail.is_empty(), "End of data was not aligned");
     body
+}
+
+pub(crate) fn open_mmap(path: &Path) -> Mmap {
+    let in_file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    unsafe { Mmap::map(&in_file).unwrap_or_else(|e| internal_error!("{e}")) }
+}
+
+pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
+    let out_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+    out_file
+        .set_len(length as u64)
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
 #[cfg(test)]
