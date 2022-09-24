@@ -44,7 +44,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{RenderTarget, Annotation};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -5645,13 +5645,14 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
             let doc = alloc.stack([
                 alloc.reflow(r"I tried to read this file:"),
                 alloc
-                    .parser_suggestion(filename.to_str().unwrap())
+                    .text(filename.to_str().unwrap())
+                    .annotate(Annotation::Error)
                     .indent(4),
-                alloc.concat([
-                    alloc.reflow(r#"But ran into a ""#),
-                    alloc.text(formatted),
-                    alloc.reflow(r#"" problem."#),
-                ]),
+                alloc.reflow(r"But ran into:"),
+                alloc
+                    .text(formatted)
+                    .annotate(Annotation::Error)
+                    .indent(4),
             ]);
 
             Report {
