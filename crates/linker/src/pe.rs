@@ -84,10 +84,10 @@ pub(crate) fn preprocess_windows(
         }
     };
 
-    // -2 because we added 2 sections, -1 because we have a count and want an index
+    // -1 because we have a count and want an index
     let last_host_section = dynhost_obj
         .sections()
-        .nth(dynhost_obj.sections().count() - 2 - 1)
+        .nth(dynhost_obj.sections().count() - new_sections.len() - 1)
         .unwrap();
 
     let dynamic_relocations = DynamicRelocationsPe::new(dynhost_data);
