@@ -48,7 +48,6 @@ struct PeMetadata {
     exports: MutMap<String, i64>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn preprocess_windows(
     host_exe_filename: &str,
     metadata_filename: &Path,
@@ -352,15 +351,12 @@ struct DynamicRelocationsPe {
     section_offset_in_file: u32,
 
     /// Offset in the file of the imports directory
-    #[allow(dead_code)]
     imports_offset_in_file: u32,
 
     /// Offset in the file of the data directories
-    #[allow(dead_code)]
     data_directories_offset_in_file: u32,
 
     /// The dummy .dll is the `dummy_import_index`th import of the host .exe
-    #[allow(dead_code)]
     dummy_import_index: u32,
 }
 
@@ -477,43 +473,12 @@ impl DynamicRelocationsPe {
     }
 }
 
-#[allow(dead_code)]
-fn remove_dummy_dll_import_table_test(
-    data: &mut [u8],
-    data_directories_offset_in_file: u32,
-    imports_offset_in_file: u32,
-    dummy_import_index: u32,
-) {
-    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-    let start = imports_offset_in_file as usize + W * dummy_import_index as usize;
-    for b in data[start..][..W].iter_mut() {
-        *b = 0;
-    }
-
-    // in the data directories, update the length of the imports (there is one fewer now)
-    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
-        data,
-        data_directories_offset_in_file as usize
-            + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
-                * std::mem::size_of::<pe::ImageDataDirectory>(),
-    );
-
-    let current = dir.size.get(LE);
-    dir.size.set(
-        LE,
-        current - std::mem::size_of::<pe::ImageImportDescriptor>() as u32,
-    );
-}
-
 /// Preprocess the host's .exe to make space for extra sections
 ///
 /// We will later take code and data sections from the app and concatenate them with this
 /// preprocessed host. That means we need to do some bookkeeping: add extra entries to the
 /// section table, update the header with the new section count, and (because we added data)
 /// update existing section headers to point to a different (shifted) location in the file
-#[allow(dead_code)]
 struct Preprocessor {
     header_offset: u64,
     additional_length: usize,
@@ -521,7 +486,6 @@ struct Preprocessor {
     extra_sections_width: usize,
     section_count_offset: u64,
     section_table_offset: u64,
-    old_section_count: usize,
     new_section_count: usize,
     old_headers_size: usize,
     new_headers_size: usize,
@@ -530,7 +494,6 @@ struct Preprocessor {
 impl Preprocessor {
     const SECTION_HEADER_WIDTH: usize = std::mem::size_of::<ImageSectionHeader>();
 
-    #[allow(dead_code)]
     fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
         let this = Self::new(data, extra_sections);
         let mut result = mmap_mut(output_path, data.len() + this.additional_length);
@@ -576,7 +539,6 @@ impl Preprocessor {
             // the section count is stored 6 bytes into the header
             section_count_offset: header_offset + 4 + 2,
             section_table_offset,
-            old_section_count: sections.len(),
             new_section_count: sections.len() + extra_sections.len(),
             old_headers_size,
             new_headers_size,
@@ -700,7 +662,6 @@ fn mmap_mut(path: &Path, length: usize) -> MmapMut {
 }
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
-#[allow(dead_code)]
 fn find_thunks_start_offset(
     executable: &[u8],
     dynamic_relocations: &DynamicRelocationsPe,
@@ -775,7 +736,6 @@ fn find_thunks_start_offset(
 }
 
 /// Make the thunks point to our actual roc application functions
-#[allow(dead_code)]
 fn redirect_dummy_dll_functions(
     executable: &mut [u8],
     function_definition_vas: &[(String, u64)],
@@ -812,7 +772,6 @@ enum SectionKind {
     ReadOnlyData,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct AppRelocation {
     offset_in_section: u64,
@@ -820,7 +779,6 @@ struct AppRelocation {
     relocation: object::Relocation,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct Section {
     /// File range of the section (in the app object)
@@ -829,7 +787,6 @@ struct Section {
     relocations: MutMap<String, AppRelocation>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct AppSymbol {
     name: String,
@@ -837,7 +794,6 @@ struct AppSymbol {
     offset_in_section: usize,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 struct AppSections {
     sections: Vec<Section>,
@@ -845,7 +801,6 @@ struct AppSections {
 }
 
 impl AppSections {
-    #[allow(dead_code)]
     fn from_data(data: &[u8]) -> Self {
         use object::ObjectSection;
 
@@ -943,7 +898,6 @@ impl AppSections {
 }
 
 // check on https://github.com/rust-lang/rust/issues/88581 some time in the future
-#[allow(dead_code)]
 pub const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
     match lhs % rhs {
         0 => lhs,
@@ -969,8 +923,8 @@ struct HeaderMetadata {
     section_alignment: usize,
 }
 
-/// NOTE: the numbers must be rounded up to the section and file alignment respectively
-#[allow(dead_code)]
+/// NOTE: the caller must make sure the `*_added` values are rounded
+/// up to the section and file alignment respectively
 fn update_optional_header(
     data: &mut [u8],
     optional_header_offset: usize,
@@ -997,7 +951,6 @@ fn update_optional_header(
     );
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn write_section_header(
     data: &mut [u8],
@@ -1221,6 +1174,35 @@ mod test {
             ],
             imports.as_slice(),
         )
+    }
+
+    fn remove_dummy_dll_import_table_test(
+        data: &mut [u8],
+        data_directories_offset_in_file: u32,
+        imports_offset_in_file: u32,
+        dummy_import_index: u32,
+    ) {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
+        let start = imports_offset_in_file as usize + W * dummy_import_index as usize;
+        for b in data[start..][..W].iter_mut() {
+            *b = 0;
+        }
+
+        // in the data directories, update the length of the imports (there is one fewer now)
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+            data,
+            data_directories_offset_in_file as usize
+                + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
+                    * std::mem::size_of::<pe::ImageDataDirectory>(),
+        );
+
+        let current = dir.size.get(LE);
+        dir.size.set(
+            LE,
+            current - std::mem::size_of::<pe::ImageImportDescriptor>() as u32,
+        );
     }
 
     #[test]
