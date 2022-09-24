@@ -5,7 +5,7 @@ use std::{
 };
 
 use bincode::{deserialize_from, serialize_into};
-use memmap2::{Mmap, MmapMut};
+use memmap2::MmapMut;
 use object::{
     pe::{
         self, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::{generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut};
+use crate::{
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap, open_mmap_mut,
+};
 
 /// The metadata stores information about/from the host .exe because
 ///
@@ -661,30 +663,6 @@ impl Preprocessor {
             offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
         }
     }
-}
-
-fn open_mmap(path: &Path) -> Mmap {
-    let in_file = std::fs::OpenOptions::new()
-        .read(true)
-        .create(true)
-        .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
-
-    unsafe { Mmap::map(&in_file).unwrap_or_else(|e| internal_error!("{e}")) }
-}
-
-fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
-    let out_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
-    out_file
-        .set_len(length as u64)
-        .unwrap_or_else(|e| internal_error!("{e}"));
-
-    unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
