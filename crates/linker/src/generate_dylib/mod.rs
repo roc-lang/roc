@@ -6,6 +6,9 @@ mod pe;
 #[cfg(test)]
 pub(crate) use pe::synthetic_dll;
 
+#[cfg(test)]
+pub(crate) use elf64::create_dylib_elf64;
+
 pub(crate) use pe::APP_DLL;
 
 pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {

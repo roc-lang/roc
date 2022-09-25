@@ -195,10 +195,14 @@ fn preprocess(
         println!("Targeting: {}", target);
     }
 
+    let endianness = target
+        .endianness()
+        .unwrap_or(target_lexicon::Endianness::Little);
+
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             crate::elf::preprocess_elf(
-                target,
+                endianness,
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,

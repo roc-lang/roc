@@ -1480,6 +1480,8 @@ fn surgery_elf_help(
 mod tests {
     use super::*;
 
+    use indoc::indoc;
+
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
 
     #[test]
@@ -1533,5 +1535,145 @@ mod tests {
             ],
             keys.as_slice()
         )
+    }
+
+    fn link_zig_host_and_app_help(dir: &Path) {
+        let host_zig = indoc!(
+            r#"
+            const std = @import("std");
+
+            extern fn roc_magic1() callconv(.C) u64;
+
+            pub fn main() !void {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("Hello {}\n", .{roc_magic1()});
+            }
+            "#
+        );
+
+        let app_zig = indoc!(
+            r#"
+            export fn roc_magic1() u64 {
+                return 42;
+            }
+            "#
+        );
+
+        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+        std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
+        std::fs::write(dir.join("app.zig"), app_zig.as_bytes()).unwrap();
+
+        // we need to compile the app first
+        let output = std::process::Command::new(&zig)
+            .current_dir(dir)
+            .args(&[
+                "build-obj",
+                "app.zig",
+                "-target",
+                "x86_64-linux-gnu",
+                "-OReleaseFast",
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("zig build-obj failed");
+        }
+
+        // open our app object; we'll copy sections from it later
+        let file = std::fs::File::open(dir.join("app.o")).unwrap();
+        let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let names: Vec<String> = {
+            let object = object::File::parse(&*roc_app).unwrap();
+
+            object
+                .symbols()
+                .filter(|s| !s.is_local())
+                .map(|e| e.name().unwrap().to_string())
+                .collect()
+        };
+
+        let dylib_bytes = crate::generate_dylib::create_dylib_elf64(&names).unwrap();
+        std::fs::write(dir.join("libapp.so"), dylib_bytes).unwrap();
+
+        // now we can compile the host (it uses libapp.obj, hence the order here)
+        let output = std::process::Command::new(&zig)
+            .current_dir(dir)
+            .args(&[
+                "build-exe",
+                "libapp.so",
+                "host.zig",
+                "-fPIE",
+                "-lc",
+                "-target",
+                "x86_64-linux-gnu",
+                "-OReleaseFast",
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("zig build-exe failed");
+        }
+
+        preprocess_elf(
+            target_lexicon::Endianness::Little,
+            &dir.join("host"),
+            &dir.join("metadata"),
+            &dir.join("preprocessedhost"),
+            &dir.join("libapp.so"),
+            false,
+            false,
+        );
+
+        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("final")).unwrap();
+
+        surgery_elf(
+            &*roc_app,
+            &dir.join("metadata"),
+            &dir.join("final"),
+            false,
+            false,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_zig_host_and_app_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let dir = Path::new("/tmp/roc/");
+
+        link_zig_host_and_app_help(dir);
+
+        let output = std::process::Command::new(&dir.join("final"))
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("app.exe failed");
+        }
+
+        let output = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!("Hello 42\n", output);
     }
 }
