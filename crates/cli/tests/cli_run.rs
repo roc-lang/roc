@@ -611,6 +611,16 @@ mod cli_run {
                 use_valgrind: false,
             }
         },
+        parse_movies_csv: "parser" => {
+            Example {
+                filename: "parse-movies-csv.roc",
+                executable_filename: "parse-movies-csv",
+                stdin: &[],
+                arguments: &[],
+                expected_ending: "Parse success!\n",
+                use_valgrind: false,
+            }
+        },
     }
 
     macro_rules! benchmarks {

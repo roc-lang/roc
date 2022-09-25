@@ -15,7 +15,7 @@ main =
           |> List.map movieInfoExplanation
           |> Str.joinWith("\n")
         nMovies = List.len movies |> Num.toStr
-        "Parse success! \(nMovies) movies were found:\n\n\(moviesString)\n"
+        "\(nMovies) movies were found:\n\n\(moviesString)\n\nParse success!\n"
     Err problem ->
       when problem is
         ParsingFailure failure ->
