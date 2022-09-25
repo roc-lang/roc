@@ -190,11 +190,10 @@ pub(crate) fn preprocess_windows(
     Ok(())
 }
 
-pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, app_path: &Path) {
+pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
-    let app_bytes = open_mmap(app_path);
 
-    let app_obj_sections = AppSections::from_data(&app_bytes);
+    let app_obj_sections = AppSections::from_data(roc_app_bytes);
     let mut symbols = app_obj_sections.symbols;
 
     let image_base: u64 = md.image_base;
@@ -278,7 +277,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, app_path:
         let mut offset = section_file_offset;
         let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
         for section in it {
-            let slice = &app_bytes[section.file_range.start..section.file_range.end];
+            let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
             for (name, app_relocation) in section.relocations.iter() {

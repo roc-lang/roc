@@ -119,11 +119,11 @@ pub fn build_and_preprocess_host(
 pub fn link_preprocessed_host(
     target: &Triple,
     host_input_path: &Path,
-    roc_app_obj: &Path,
+    roc_app_bytes: &[u8],
     binary_path: &Path,
 ) {
     let metadata = host_input_path.with_file_name("metadata");
-    surgery(roc_app_obj, &metadata, binary_path, false, false, target)
+    surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
 fn generate_dynamic_lib(
@@ -1973,7 +1973,7 @@ fn scan_elf_dynamic_deps(
 }
 
 fn surgery(
-    app_filename: &Path,
+    roc_app_bytes: &[u8],
     metadata_filename: &Path,
     out_filename: &Path,
     verbose: bool,
@@ -1983,7 +1983,7 @@ fn surgery(
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho => {
             surgery_elf_and_macho(
-                app_filename,
+                roc_app_bytes,
                 metadata_filename,
                 out_filename,
                 verbose,
@@ -1993,7 +1993,7 @@ fn surgery(
         }
 
         target_lexicon::BinaryFormat::Coff => {
-            crate::pe::surgery_pe(out_filename, metadata_filename, app_filename);
+            crate::pe::surgery_pe(out_filename, metadata_filename, roc_app_bytes);
         }
 
         target_lexicon::BinaryFormat::Wasm => {
@@ -2015,24 +2015,19 @@ fn surgery(
 }
 
 fn surgery_elf_and_macho(
-    app_path: &Path,
+    roc_app_bytes: &[u8],
     metadata_path: &Path,
     executable_path: &Path,
     verbose: bool,
     time: bool,
     target: &Triple,
 ) {
-    let app_parsing_start = Instant::now();
-    let app_mmap = open_mmap(app_path);
-    let app_data = &*app_mmap;
-    let app_obj = match object::File::parse(app_data) {
+    let app_obj = match object::File::parse(roc_app_bytes) {
         Ok(obj) => obj,
         Err(err) => {
             internal_error!("Failed to parse application file: {}", err);
         }
     };
-
-    let app_parsing_duration = app_parsing_start.elapsed();
 
     let total_start = Instant::now();
 
@@ -2041,19 +2036,17 @@ fn surgery_elf_and_macho(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
+    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
     let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
-
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
-    let out_gen_start = Instant::now();
 
+    let out_gen_start = Instant::now();
     let mut offset = 0;
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             surgery_elf(verbose, &md, &mut exec_mmap, &mut offset, app_obj)
         }
         target_lexicon::BinaryFormat::Macho => surgery_macho(
-            app_path,
             metadata_path,
             executable_path,
             verbose,
@@ -2098,26 +2091,22 @@ fn surgery_elf_and_macho(
     if verbose || time {
         println!("\nTimings");
         report_timing("Loading Metadata", loading_metadata_duration);
-        report_timing("Application Parsing", app_parsing_duration);
         report_timing("Loading and mmap-ing", load_and_mmap_duration);
         report_timing("Output Generation", out_gen_duration);
         report_timing("Flushing Data to Disk", flushing_data_duration);
-        report_timing(
-            "Other",
-            total_duration
-                - loading_metadata_duration
-                - app_parsing_duration
-                - load_and_mmap_duration
-                - out_gen_duration
-                - flushing_data_duration,
-        );
+
+        let sum = loading_metadata_duration
+            + load_and_mmap_duration
+            + out_gen_duration
+            + flushing_data_duration;
+
+        report_timing("Other", total_duration.saturating_sub(sum));
         report_timing("Total", total_duration);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn surgery_macho(
-    _app_filename: &Path,
     _metadata_filename: &Path,
     _out_filename: &Path,
     verbose: bool,
@@ -2752,34 +2741,39 @@ fn surgery_elf(
                         };
                         if verbose {
                             println!(
-                                "\t\tRelocation base location: {:+x} (virt: {:+x})",
-                                base, virt_base
+                                "\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})",
                             );
-                            println!("\t\tFinal relocation target offset: {:+x}", target);
+                            println!("\t\tFinal relocation target offset: {target:+x}");
                         }
                         match rel.1.size() {
                             32 => {
                                 let data = (target as i32).to_le_bytes();
-                                exec_mmap[base..base + 4].copy_from_slice(&data);
+                                exec_mmap[base..][..4].copy_from_slice(&data);
                             }
                             64 => {
                                 let data = target.to_le_bytes();
-                                exec_mmap[base..base + 8].copy_from_slice(&data);
+                                exec_mmap[base..][..8].copy_from_slice(&data);
                             }
-                            x => {
-                                internal_error!("Relocation size not yet supported: {}", x);
+                            other => {
+                                internal_error!("Relocation size not yet supported: {other}");
                             }
                         }
-                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3"].contains(&sym.name().unwrap_or_default()))
-                    {
-                        // Explicitly ignore some symbols that are currently always linked.
-                        continue;
                     } else {
-                        internal_error!(
-                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
-                            rel,
-                            app_obj.symbol_by_index(index)
-                        );
+                        // Explicitly ignore some symbols that are currently always linked.
+                        const ALWAYS_LINKED: &[&str] = &["__divti3", "__udivti3"];
+
+                        match app_obj.symbol_by_index(index) {
+                            Ok(sym) if ALWAYS_LINKED.contains(&sym.name().unwrap_or_default()) => {
+                                continue
+                            }
+                            _ => {
+                                internal_error!(
+                                    "Undefined Symbol in relocation, {:+x?}: {:+x?}",
+                                    rel,
+                                    app_obj.symbol_by_index(index)
+                                );
+                            }
+                        }
                     }
                 }
 
