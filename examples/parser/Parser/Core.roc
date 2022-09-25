@@ -1,32 +1,29 @@
 interface Parser.Core
-  exposes [
-    Parser,
-    ParseResult,
-    parse,
-    parsePartial,
-    fail,
-    const,
-    alt,
-    apply,
-    andThen,
-    # oneOf,
-    map,
-    map2,
-    map3,
-    lazy,
-    maybe,
-    oneOrMore,
-    many,
-    between,
-    sepBy,
-    sepBy1,
-    ignore,
-    buildPrimitiveParser,
-    flatten,
-  ]
-  imports []
-
-
+    exposes [
+        Parser,
+        ParseResult,
+        parse,
+        parsePartial,
+        fail,
+        const,
+        alt,
+        apply,
+        oneOf,
+        map,
+        map2,
+        map3,
+        lazy,
+        maybe,
+        oneOrMore,
+        many,
+        between,
+        sepBy,
+        sepBy1,
+        ignore,
+        buildPrimitiveParser,
+        flatten,
+    ]
+    imports []
 
 ## Opaque type for a parser that will try to parse an `a` from an `input`.
 ##
@@ -39,16 +36,15 @@ interface Parser.Core
 ## How a parser is _actually_ implemented internally is not important
 ## and this might change between versions;
 ## for instance to improve efficiency or error messages on parsing failures.
-Parser input a := (input -> ParseResult input a)
+Parser input a := input -> ParseResult input a
 
-ParseResult input a : Result {val: a, input: input} [ParsingFailure Str]
+ParseResult input a : Result { val : a, input : input } [ParsingFailure Str]
 
 buildPrimitiveParser : (input -> ParseResult input a) -> Parser input a
 buildPrimitiveParser = \fun ->
-  @Parser fun
+    @Parser fun
 
 # -- Generic parsers:
-
 ## Most general way of running a parser.
 ##
 ## Can be tought of turning the recipe of a parser into its actual parsing function
@@ -63,7 +59,7 @@ buildPrimitiveParser = \fun ->
 ## `run` or `Parser.Str.runStr` etc. are more useful in daily usage.
 parsePartial : Parser input a, input -> ParseResult input a
 parsePartial = \@Parser parser, input ->
-  (parser input)
+    parser input
 
 ## Runs a parser on the given input, expecting it to fully consume the input
 ##
@@ -74,14 +70,15 @@ parsePartial = \@Parser parser, input ->
 ## should be considered an error.
 parse : Parser input a, input, (input -> Bool) -> Result a [ParsingFailure Str, ParsingIncomplete input]
 parse = \parser, input, isParsingCompleted ->
-  when (parsePartial parser input) is
-    Ok {val: val, input: leftover} ->
-      if isParsingCompleted leftover then
-        Ok val
-      else
-        Err (ParsingIncomplete leftover)
-    Err (ParsingFailure msg) ->
-      Err (ParsingFailure msg)
+    when parsePartial parser input is
+        Ok { val: val, input: leftover } ->
+            if isParsingCompleted leftover then
+                Ok val
+            else
+                Err (ParsingIncomplete leftover)
+
+        Err (ParsingFailure msg) ->
+            Err (ParsingFailure msg)
 
 ## Parser that can never succeed, regardless of the given input.
 ## It will always fail with the given error message.
@@ -90,37 +87,27 @@ parse = \parser, input, isParsingCompleted ->
 ## in a `oneOf` or `alt` have failed, to provide some more descriptive error message.
 fail : Str -> Parser * *
 fail = \msg ->
-  buildPrimitiveParser \_input -> Err (ParsingFailure msg)
+    buildPrimitiveParser \_input -> Err (ParsingFailure msg)
 
 ## Parser that will always produce the given `val`, without looking at the actual input.
 ## This is useful as basic building block, especially in combination with
 ## `map` and `apply`.
 const : a -> Parser * a
 const = \val ->
-  buildPrimitiveParser \input ->
-    Ok { val: val, input: input }
+    buildPrimitiveParser \input ->
+        Ok { val: val, input: input }
 
-## Try the `left` parser and (only) if it fails, try the `right` parser as fallback.
+## Try the `first` parser and (only) if it fails, try the `second` parser as fallback.
 alt : Parser input a, Parser input a -> Parser input a
-alt = \left, right ->
-  fun = \input ->
-    when (parsePartial left input) is
-      Ok {val: val, input: rest} -> Ok {val: val, input: rest}
-      Err (ParsingFailure leftErr) ->
-        when (parsePartial right input) is
-        Ok {val: val, input: rest} -> Ok {val: val, input: rest}
-        Err (ParsingFailure rightErr) ->
-          Err (ParsingFailure ("\(leftErr) or \(rightErr)"))
-  buildPrimitiveParser fun
-
-#  applyOld : Parser input a, Parser input (a -> b) -> Parser input b
-#  applyOld = \valParser, funParser ->
-#    combined = \input ->
-#      {val: val, input: rest} <- Result.try (parsePartial valParser input)
-#      (parsePartial funParser rest)
-#      |> Result.map \{val: funVal, input: rest2} ->
-#        {val: funVal val, input: rest2}
-#    @Parser combined
+alt = \first, second ->
+    buildPrimitiveParser \input ->
+        when parsePartial first input is
+            Ok { val: val, input: rest } -> Ok { val: val, input: rest }
+            Err (ParsingFailure firstErr) ->
+                when parsePartial second input is
+                    Ok { val: val, input: rest } -> Ok { val: val, input: rest }
+                    Err (ParsingFailure secondErr) ->
+                        Err (ParsingFailure ("\(firstErr) or \(secondErr)"))
 
 ## Runs a parser building a function, then a parser building a value,
 ## and finally returns the result of calling the function with the value.
@@ -147,89 +134,84 @@ alt = \left, right ->
 ## This is because the parameters to the function will be applied one-by-one as parsing continues.
 apply : Parser input (a -> b), Parser input a -> Parser input b
 apply = \funParser, valParser ->
-  combined = \input ->
-    {val: funVal, input: rest} <- Result.try (parsePartial funParser input)
-    (parsePartial valParser rest)
-    |> Result.map \{val: val, input: rest2} ->
-      {val: funVal val, input: rest2}
-  buildPrimitiveParser combined
+    combined = \input ->
+        { val: funVal, input: rest } <- Result.try (parsePartial funParser input)
+        parsePartial valParser rest
+        |> Result.map \{ val: val, input: rest2 } ->
+            { val: funVal val, input: rest2 }
 
-## Runs `firstParser` and (only) if it succeeds,
-## runs the function `buildNextParser` on its result value.
-## This function returns a new parser, which is finally run.
-##
-## `andThen` is usually more flexible than necessary, and less efficient
-## than using `const` with `map` and/or `apply`.
-## Consider using those functions first.
-# TODO I am considering leaving this function out altogether
-# As using it is an anti-pattern.
+    buildPrimitiveParser combined
+
+# Internal utility function. Not exposed to users, since usage is discouraged!
+#
+# Runs `firstParser` and (only) if it succeeds,
+# runs the function `buildNextParser` on its result value.
+# This function returns a new parser, which is finally run.
+#
+# `andThen` is usually more flexible than necessary, and less efficient
+# than using `const` with `map` and/or `apply`.
+# Consider using those functions first.
 andThen : Parser input a, (a -> Parser input b) -> Parser input b
 andThen = \firstParser, buildNextParser ->
-  fun = \input ->
-    {val: firstVal, input: rest} <- Result.try (parsePartial firstParser input)
-    nextParser = (buildNextParser firstVal)
-    parsePartial nextParser rest
-  buildPrimitiveParser fun
+    fun = \input ->
+        { val: firstVal, input: rest } <- Result.try (parsePartial firstParser input)
+        nextParser = buildNextParser firstVal
 
-# NOTE: Using this implementation in an actual program,
-# currently causes a compile-time StackOverflow (c.f. https://github.com/rtfeldman/roc/issues/3444 )
-#  oneOfBroken : List (Parser input a) -> Parser input a
-#  oneOfBroken = \parsers ->
-#    List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
+        parsePartial nextParser rest
 
-# And this one as well
-#  oneOfBroken2 : List (Parser input a) -> Parser input a
-#  oneOfBroken2 = \parsers ->
-#    if List.isEmpty parsers then
-#      fail "(always fail)"
-#    else
-#      firstParser = List.get parsers (List.len parsers - 1) |> Result.withDefault (fail "this should never happen!!")
-#      alt firstParser (oneOfBroken2 (List.dropLast parsers))
+    buildPrimitiveParser fun
+
+## Try a list of parsers in turn, until one of them succeeds
+oneOf : List (Parser input a) -> Parser input a
+oneOf = \parsers ->
+    List.walkBackwards parsers (fail "oneOf: The list of parsers was empty") (\laterParser, earlierParser -> alt earlierParser laterParser)
 
 ## Transforms the result of parsing into something else,
 ## using the given transformation function.
 map : Parser input a, (a -> b) -> Parser input b
 map = \simpleParser, transform ->
-  const transform
-  |> apply simpleParser
+    const transform
+    |> apply simpleParser
 
 ## Transforms the result of parsing into something else,
 ## using the given two-parameter transformation function.
 map2 : Parser input a, Parser input b, (a, b -> c) -> Parser input c
 map2 = \parserA, parserB, transform ->
-  const (\a -> \b -> transform a b)
-  |> apply parserA
-  |> apply parserB
+    const (\a -> \b -> transform a b)
+    |> apply parserA
+    |> apply parserB
 
 ## Transforms the result of parsing into something else,
 ## using the given three-parameter transformation function.
 ##
 ## If you need transformations with more inputs,
 ## take a look at `apply`.
-map3 : Parser input a, Parser input b, Parser input c, (a, b, c-> d) -> Parser input d
+map3 : Parser input a, Parser input b, Parser input c, (a, b, c -> d) -> Parser input d
 map3 = \parserA, parserB, parserC, transform ->
-  const (\a -> \b -> \c -> transform a b c)
-  |> apply parserA
-  |> apply parserB
-  |> apply parserC
+    const (\a -> \b -> \c -> transform a b c)
+    |> apply parserA
+    |> apply parserB
+    |> apply parserC
 
 # ^ And this could be repeated for as high as we want, of course.
-
 # Removes a layer of 'result' from running the parser.
 #
 # This allows for instance to map functions that return a result over the parser,
 # where errors are turned into `ParsingFailure` s.
 flatten : Parser input (Result a Str) -> Parser input a
 flatten = \parser ->
-  buildPrimitiveParser \input ->
-    result = parsePartial parser input
-    when result is
-        Err problem ->
-          Err problem
-        Ok {val: (Ok val), input: inputRest} ->
-          Ok {val: val, input: inputRest}
-        Ok {val: (Err problem), input: _inputRest} ->
-          Err (ParsingFailure problem)
+    buildPrimitiveParser \input ->
+        result = parsePartial parser input
+
+        when result is
+            Err problem ->
+                Err problem
+
+            Ok { val: Ok val, input: inputRest } ->
+                Ok { val: val, input: inputRest }
+
+            Ok { val: Err problem, input: _inputRest } ->
+                Err (ParsingFailure problem)
 
 ## Runs a parser lazily
 ##
@@ -240,20 +222,23 @@ flatten = \parser ->
 ##
 lazy : ({} -> Parser input a) -> Parser input a
 lazy = \thunk ->
-  andThen (const {}) thunk
+    const {}
+    |> andThen thunk
 
 maybe : Parser input a -> Parser input (Result a [Nothing])
 maybe = \parser ->
-  alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
+    alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
 
 manyImpl : Parser input a, List a, input -> ParseResult input (List a)
 manyImpl = \parser, vals, input ->
-  result = parsePartial parser input
-  when result is
-    Err _ ->
-      Ok {val: vals, input: input}
-    Ok {val: val, input: inputRest} ->
-      manyImpl parser (List.append vals val) inputRest
+    result = parsePartial parser input
+
+    when result is
+        Err _ ->
+            Ok { val: vals, input: input }
+
+        Ok { val: val, input: inputRest } ->
+            manyImpl parser (List.append vals val) inputRest
 
 ## A parser which runs the element parser *zero* or more times on the input,
 ## returning a list containing all the parsed elements.
@@ -261,8 +246,8 @@ manyImpl = \parser, vals, input ->
 ## Also see `oneOrMore`.
 many : Parser input a -> Parser input (List a)
 many = \parser ->
-  buildPrimitiveParser \input ->
-    manyImpl parser [] input
+    buildPrimitiveParser \input ->
+        manyImpl parser [] input
 
 ## A parser which runs the element parser *one* or more times on the input,
 ## returning a list containing all the parsed elements.
@@ -270,25 +255,9 @@ many = \parser ->
 ## Also see `many`.
 oneOrMore : Parser input a -> Parser input (List a)
 oneOrMore = \parser ->
-  const (\val -> \vals -> List.prepend vals val)
-  |> apply parser
-  |> apply (many parser)
-  #  moreParser : Parser (a -> (List a))
-  #  moreParser =
-  #      many parser
-  #      |> map (\vals -> (\val -> List.prepend vals val))
-  #  apply parser moreParser
-
-  #  val <- andThen parser
-  #  parser
-  #  |> many
-  #  |> map (\vals -> List.prepend vals val)
-
-#  betweenBraces : Parser input a -> Parser input a
-#  betweenBraces = \parser ->
-#    string "["
-#    |> applyOld (parser |> map (\res -> \_ -> res))
-#    |> applyOld (string "]" |> map (\_ -> \res -> res))
+    const (\val -> \vals -> List.prepend vals val)
+    |> apply parser
+    |> apply (many parser)
 
 ## Runs a parser for an 'opening' delimiter, then your main parser, then the 'closing' delimiter,
 ## and only returns the result of your main parser.
@@ -297,26 +266,27 @@ oneOrMore = \parser ->
 ##
 ## >>> betweenBraces  = \parser -> parser |> between (scalar '[') (scalar ']')
 between : Parser input a, Parser input open, Parser input close -> Parser input a
-between = \parser, open, close->
-  const (\_ -> \val -> \_ -> val)
-  |> apply open
-  |> apply parser
-  |> apply close
+between = \parser, open, close ->
+    const (\_ -> \val -> \_ -> val)
+    |> apply open
+    |> apply parser
+    |> apply close
 
 sepBy1 : Parser input a, Parser input sep -> Parser input (List a)
 sepBy1 = \parser, separator ->
-  parserFollowedBySep =
-    const (\_ -> \val -> val)
-    |> apply separator
+    parserFollowedBySep =
+        const (\_ -> \val -> val)
+        |> apply separator
+        |> apply parser
+
+    const (\val -> \vals -> List.prepend vals val)
     |> apply parser
-  const (\val -> \vals -> List.prepend vals val)
-  |> apply parser
-  |> apply (many parserFollowedBySep)
+    |> apply (many parserFollowedBySep)
 
 sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->
-  alt (sepBy1 parser separator) (const [])
+    alt (sepBy1 parser separator) (const [])
 
 ignore : Parser input a -> Parser input {}
 ignore = \parser ->
-  map parser (\_ -> {})
+    map parser (\_ -> {})
