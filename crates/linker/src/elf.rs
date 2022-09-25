@@ -264,7 +264,7 @@ impl<'a> Surgeries<'a> {
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_elf(
-    target: &Triple,
+    endianness: target_lexicon::Endianness,
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -389,10 +389,7 @@ pub(crate) fn preprocess_elf(
     let scanning_dynamic_deps_duration;
     let platform_gen_start;
 
-    let out_mmap = match target
-        .endianness()
-        .unwrap_or(target_lexicon::Endianness::Little)
-    {
+    let out_mmap = match endianness {
         target_lexicon::Endianness::Little => {
             let scanning_dynamic_deps_start = Instant::now();
 
