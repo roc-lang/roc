@@ -1,9 +1,12 @@
-app "main"
+app "parse-movies-csv"
     packages { pf: "platform/main.roc" }
     imports [Parser.Core.{Parser, map, apply}, Parser.Str.{RawStr}, Parser.CSV.{CSV, record, field, string, nat}]
     provides [main] to pf
 
+input : Str
 input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\""
+
+main : Str
 main =
   when Parser.CSV.parseStr movieInfoParser input is
     Ok movies ->
