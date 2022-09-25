@@ -2,9 +2,9 @@ use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::{elf, endian};
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
-    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
-    SymbolIndex, SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian as LE, NativeEndian, Object,
+    ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
+    SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
@@ -15,7 +15,6 @@ use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use target_lexicon::Triple;
 
 use crate::metadata::{self, Metadata, VirtualOffset};
 
@@ -486,7 +485,7 @@ fn gen_elf_le(
     shared_lib_index: usize,
     verbose: bool,
 ) -> MmapMut {
-    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
+    let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_data, 0);
     let ph_offset = exec_header.e_phoff.get(NativeEndian);
     let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
     let ph_num = exec_header.e_phnum.get(NativeEndian);
@@ -517,7 +516,7 @@ fn gen_elf_le(
 
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
 
-    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
+    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
         &mut out_mmap,
         ph_offset as usize,
         ph_num as usize,
@@ -548,23 +547,17 @@ fn gen_elf_le(
         let p_offset = ph.p_offset.get(NativeEndian);
         if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
             // Extend length for the first segment and the program header.
-            ph.p_filesz = endian::U64::new(
-                LittleEndian,
-                ph.p_filesz.get(NativeEndian) + md.added_byte_count,
-            );
-            ph.p_memsz = endian::U64::new(
-                LittleEndian,
-                ph.p_memsz.get(NativeEndian) + md.added_byte_count,
-            );
+            ph.p_filesz = endian::U64::new(LE, ph.p_filesz.get(NativeEndian) + md.added_byte_count);
+            ph.p_memsz = endian::U64::new(LE, ph.p_memsz.get(NativeEndian) + md.added_byte_count);
         } else {
             // Shift if needed.
             if physical_shift_start <= p_offset {
-                ph.p_offset = endian::U64::new(LittleEndian, p_offset + md.added_byte_count);
+                ph.p_offset = endian::U64::new(LE, p_offset + md.added_byte_count);
             }
             let p_vaddr = ph.p_vaddr.get(NativeEndian);
             if virtual_shift_start <= p_vaddr {
-                ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + md.added_byte_count);
-                ph.p_paddr = endian::U64::new(LittleEndian, p_vaddr + md.added_byte_count);
+                ph.p_vaddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
+                ph.p_paddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
             }
         }
     }
@@ -587,7 +580,7 @@ fn gen_elf_le(
         .copy_from_slice(&exec_data[physical_shift_start as usize..]);
 
     // Update all sections for shift for extra program headers.
-    let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
+    let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         &mut out_mmap,
         sh_offset as usize + md.added_byte_count as usize,
         sh_num as usize,
@@ -599,10 +592,10 @@ fn gen_elf_le(
         let sh_offset = sh.sh_offset.get(NativeEndian);
         let sh_addr = sh.sh_addr.get(NativeEndian);
         if physical_shift_start <= sh_offset {
-            sh.sh_offset = endian::U64::new(LittleEndian, sh_offset + md.added_byte_count);
+            sh.sh_offset = endian::U64::new(LE, sh_offset + md.added_byte_count);
         }
         if virtual_shift_start <= sh_addr {
-            sh.sh_addr = endian::U64::new(LittleEndian, sh_addr + md.added_byte_count);
+            sh.sh_addr = endian::U64::new(LE, sh_addr + md.added_byte_count);
         }
 
         // Record every relocation section.
@@ -628,34 +621,33 @@ fn gen_elf_le(
 
     // Update all relocations for shift for extra program headers.
     for (sec_offset, sec_size) in rel_sections {
-        let relocations = load_structs_inplace_mut::<elf::Rel64<LittleEndian>>(
+        let relocations = load_structs_inplace_mut::<elf::Rel64<LE>>(
             &mut out_mmap,
             sec_offset as usize + md.added_byte_count as usize,
-            sec_size as usize / mem::size_of::<elf::Rel64<LittleEndian>>(),
+            sec_size as usize / mem::size_of::<elf::Rel64<LE>>(),
         );
         for rel in relocations.iter_mut() {
             let r_offset = rel.r_offset.get(NativeEndian);
             if virtual_shift_start <= r_offset {
-                rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
+                rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
             }
         }
     }
     for (sec_offset, sec_size) in rela_sections {
-        let relocations = load_structs_inplace_mut::<elf::Rela64<LittleEndian>>(
+        let relocations = load_structs_inplace_mut::<elf::Rela64<LE>>(
             &mut out_mmap,
             sec_offset as usize + md.added_byte_count as usize,
-            sec_size as usize / mem::size_of::<elf::Rela64<LittleEndian>>(),
+            sec_size as usize / mem::size_of::<elf::Rela64<LE>>(),
         );
         for (i, rel) in relocations.iter_mut().enumerate() {
             let r_offset = rel.r_offset.get(NativeEndian);
             if virtual_shift_start <= r_offset {
-                rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
+                rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
                 // Deal with potential adjusts to absolute jumps.
                 // TODO: Verify other relocation types.
-                if rel.r_type(LittleEndian, false) == elf::R_X86_64_RELATIVE {
-                    let r_addend = rel.r_addend.get(LittleEndian);
-                    rel.r_addend
-                        .set(LittleEndian, r_addend + md.added_byte_count as i64);
+                if rel.r_type(LE, false) == elf::R_X86_64_RELATIVE {
+                    let r_addend = rel.r_addend.get(LE);
+                    rel.r_addend.set(LE, r_addend + md.added_byte_count as i64);
                 }
             }
             // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
@@ -664,9 +656,9 @@ fn gen_elf_le(
                 let r_sym = rel.r_sym(NativeEndian, false);
                 for (name, index) in got_app_syms.iter() {
                     if *index as u32 == r_sym {
-                        rel.set_r_info(LittleEndian, false, 0, elf::R_X86_64_RELATIVE);
+                        rel.set_r_info(LE, false, 0, elf::R_X86_64_RELATIVE);
                         let addend_addr = sec_offset as usize
-                            + i * mem::size_of::<elf::Rela64<LittleEndian>>()
+                            + i * mem::size_of::<elf::Rela64<LE>>()
                             // This 16 skips the first 2 fields and gets to the addend field.
                             + 16;
                         md.surgeries
@@ -686,7 +678,7 @@ fn gen_elf_le(
     // Update dynamic table entries for shift for extra program headers.
     let dyn_offset = md.dynamic_section_offset + md.added_byte_count;
 
-    let dyns = load_structs_inplace_mut::<elf::Dyn64<LittleEndian>>(
+    let dyns = load_structs_inplace_mut::<elf::Dyn64<LE>>(
         &mut out_mmap,
         dyn_offset as usize,
         dynamic_lib_count,
@@ -725,7 +717,7 @@ fn gen_elf_le(
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(NativeEndian);
                 if virtual_shift_start <= d_addr {
-                    d.d_val = endian::U64::new(LittleEndian, d_addr + md.added_byte_count);
+                    d.d_val = endian::U64::new(LE, d_addr + md.added_byte_count);
                 }
             }
             _ => {}
@@ -736,30 +728,30 @@ fn gen_elf_le(
     let symtab_offset = md.symbol_table_section_offset + md.added_byte_count;
     let symtab_size = md.symbol_table_size as usize;
 
-    let symbols = load_structs_inplace_mut::<elf::Sym64<LittleEndian>>(
+    let symbols = load_structs_inplace_mut::<elf::Sym64<LE>>(
         &mut out_mmap,
         symtab_offset as usize,
-        symtab_size / mem::size_of::<elf::Sym64<LittleEndian>>(),
+        symtab_size / mem::size_of::<elf::Sym64<LE>>(),
     );
 
     for sym in symbols {
         let addr = sym.st_value.get(NativeEndian);
         if virtual_shift_start <= addr {
-            sym.st_value = endian::U64::new(LittleEndian, addr + md.added_byte_count);
+            sym.st_value = endian::U64::new(LE, addr + md.added_byte_count);
         }
     }
 
     // Update all data in the global offset table.
     for (offset, size) in got_sections {
-        let global_offsets = load_structs_inplace_mut::<endian::U64<LittleEndian>>(
+        let global_offsets = load_structs_inplace_mut::<endian::U64<LE>>(
             &mut out_mmap,
             *offset + md.added_byte_count as usize,
-            size / mem::size_of::<endian::U64<LittleEndian>>(),
+            size / mem::size_of::<endian::U64<LE>>(),
         );
         for go in global_offsets.iter_mut() {
             let go_addr = go.get(NativeEndian);
             if physical_shift_start <= go_addr {
-                go.set(LittleEndian, go_addr + md.added_byte_count);
+                go.set(LE, go_addr + md.added_byte_count);
             }
         }
     }
@@ -777,17 +769,16 @@ fn gen_elf_le(
     }
 
     // Update main elf header for extra data.
-    let mut file_header =
-        load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
+    let mut file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
     file_header.e_shoff = endian::U64::new(
-        LittleEndian,
+        LE,
         file_header.e_shoff.get(NativeEndian) + md.added_byte_count,
     );
     let e_entry = file_header.e_entry.get(NativeEndian);
     if virtual_shift_start <= e_entry {
-        file_header.e_entry = endian::U64::new(LittleEndian, e_entry + md.added_byte_count);
+        file_header.e_entry = endian::U64::new(LE, e_entry + md.added_byte_count);
     }
-    file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + added_header_count as u16);
+    file_header.e_phnum = endian::U16::new(LE, ph_num + added_header_count as u16);
 
     out_mmap
 }
@@ -1044,7 +1035,7 @@ fn surgery_elf_help(
     if !elf64 || !litte_endian {
         internal_error!("Only 64bit little endian elf currently supported for surgery");
     }
-    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_mmap, 0);
+    let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_mmap, 0);
 
     let ph_offset = exec_header.e_phoff.get(NativeEndian);
     let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
@@ -1308,7 +1299,7 @@ fn surgery_elf_help(
     // Add 2 new sections and segments.
     let new_section_count = 2;
     offset += new_section_count * sh_ent_size as usize;
-    let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
+    let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         exec_mmap,
         new_sh_offset as usize,
         sh_num as usize + new_section_count,
@@ -1322,39 +1313,39 @@ fn surgery_elf_help(
 
     // set the new rodata section header
     section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
-        sh_name: endian::U32::new(LittleEndian, 0),
-        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
-        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64),
-        sh_addr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
-        sh_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
-        sh_size: endian::U64::new(LittleEndian, new_rodata_section_size),
-        sh_link: endian::U32::new(LittleEndian, 0),
-        sh_info: endian::U32::new(LittleEndian, 0),
-        sh_addralign: endian::U64::new(LittleEndian, 16),
-        sh_entsize: endian::U64::new(LittleEndian, 0),
+        sh_name: endian::U32::new(LE, 0),
+        sh_type: endian::U32::new(LE, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LE, (elf::SHF_ALLOC) as u64),
+        sh_addr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
+        sh_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
+        sh_size: endian::U64::new(LE, new_rodata_section_size),
+        sh_link: endian::U32::new(LE, 0),
+        sh_info: endian::U32::new(LE, 0),
+        sh_addralign: endian::U64::new(LE, 16),
+        sh_entsize: endian::U64::new(LE, 0),
     };
 
     // set the new text section header
     section_headers[section_headers.len() - 1] = elf::SectionHeader64 {
-        sh_name: endian::U32::new(LittleEndian, 0),
-        sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS),
-        sh_flags: endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
-        sh_addr: endian::U64::new(LittleEndian, new_text_section_vaddr),
-        sh_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
-        sh_size: endian::U64::new(LittleEndian, new_text_section_size),
-        sh_link: endian::U32::new(LittleEndian, 0),
-        sh_info: endian::U32::new(LittleEndian, 0),
-        sh_addralign: endian::U64::new(LittleEndian, 16),
-        sh_entsize: endian::U64::new(LittleEndian, 0),
+        sh_name: endian::U32::new(LE, 0),
+        sh_type: endian::U32::new(LE, elf::SHT_PROGBITS),
+        sh_flags: endian::U64::new(LE, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
+        sh_addr: endian::U64::new(LE, new_text_section_vaddr),
+        sh_offset: endian::U64::new(LE, new_text_section_offset as u64),
+        sh_size: endian::U64::new(LE, new_text_section_size),
+        sh_link: endian::U32::new(LE, 0),
+        sh_info: endian::U32::new(LE, 0),
+        sh_addralign: endian::U64::new(LE, 16),
+        sh_entsize: endian::U64::new(LE, 0),
     };
 
     // Reload and update file header and size.
-    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(exec_mmap, 0);
-    file_header.e_shoff = endian::U64::new(LittleEndian, new_sh_offset as u64);
-    file_header.e_shnum = endian::U16::new(LittleEndian, sh_num + new_section_count as u16);
+    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(exec_mmap, 0);
+    file_header.e_shoff = endian::U64::new(LE, new_sh_offset as u64);
+    file_header.e_shnum = endian::U16::new(LE, sh_num + new_section_count as u16);
 
     // Add 2 new segments that match the new sections.
-    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
+    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
         exec_mmap,
         ph_offset as usize,
         ph_num as usize,
@@ -1362,27 +1353,27 @@ fn surgery_elf_help(
 
     // set the new rodata section program header
     program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
-        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
-        p_flags: endian::U32::new(LittleEndian, elf::PF_R),
-        p_offset: endian::U64::new(LittleEndian, new_rodata_section_offset as u64),
-        p_vaddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
-        p_paddr: endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64),
-        p_filesz: endian::U64::new(LittleEndian, new_rodata_section_size),
-        p_memsz: endian::U64::new(LittleEndian, new_rodata_section_virtual_size),
-        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+        p_type: endian::U32::new(LE, elf::PT_LOAD),
+        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
+        p_vaddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
+        p_paddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
+        p_filesz: endian::U64::new(LE, new_rodata_section_size),
+        p_memsz: endian::U64::new(LE, new_rodata_section_virtual_size),
+        p_align: endian::U64::new(LE, md.load_align_constraint),
     };
 
     // set the new text section program header
     let new_text_section_index = program_headers.len() - 1;
     program_headers[new_text_section_index] = elf::ProgramHeader64 {
-        p_type: endian::U32::new(LittleEndian, elf::PT_LOAD),
-        p_flags: endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X),
-        p_offset: endian::U64::new(LittleEndian, new_text_section_offset as u64),
-        p_vaddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
-        p_paddr: endian::U64::new(LittleEndian, new_text_section_vaddr),
-        p_filesz: endian::U64::new(LittleEndian, new_text_section_size),
-        p_memsz: endian::U64::new(LittleEndian, new_text_section_size),
-        p_align: endian::U64::new(LittleEndian, md.load_align_constraint),
+        p_type: endian::U32::new(LE, elf::PT_LOAD),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X),
+        p_offset: endian::U64::new(LE, new_text_section_offset as u64),
+        p_vaddr: endian::U64::new(LE, new_text_section_vaddr),
+        p_paddr: endian::U64::new(LE, new_text_section_vaddr),
+        p_filesz: endian::U64::new(LE, new_text_section_size),
+        p_memsz: endian::U64::new(LE, new_text_section_size),
+        p_align: endian::U64::new(LE, md.load_align_constraint),
     };
 
     // Update calls from platform and dynamic symbols.
@@ -1456,14 +1447,14 @@ fn surgery_elf_help(
         }
 
         if let Some(i) = md.dynamic_symbol_indices.get(func_name) {
-            let sym = load_struct_inplace_mut::<elf::Sym64<LittleEndian>>(
+            let sym = load_struct_inplace_mut::<elf::Sym64<LE>>(
                 exec_mmap,
-                dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
+                dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
-            sym.st_shndx = endian::U16::new(LittleEndian, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LittleEndian, func_virt_offset as u64);
+            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
+            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
             sym.st_size = endian::U64::new(
-                LittleEndian,
+                LE,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
                     None => internal_error!("Size missing for: {func_name}"),
@@ -1481,6 +1472,7 @@ mod tests {
     use super::*;
 
     use indoc::indoc;
+    use target_lexicon::Triple;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
 
@@ -1649,7 +1641,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn link_zig_host_and_app_windows() {
         let dir = tempfile::tempdir().unwrap();
