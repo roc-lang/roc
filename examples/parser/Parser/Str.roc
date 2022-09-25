@@ -7,11 +7,11 @@ interface Parser.Str
     parseRawStrPartial,
     string,
     stringRaw,
-    codepoint,
-    codepointSatisfies,
+    codeunit,
+    codeunitSatisfies,
     anyString,
     anyRawString,
-    anyCodepoint,
+    anyCodeunit,
     scalar,
     oneOf,
     digit,
@@ -39,9 +39,9 @@ strFromScalar = \scalarVal ->
   (Str.appendScalar "" (Num.intCast scalarVal))
   |> Result.withDefault  "Unexpected problem while turning a U32 (that was probably originally a scalar constant) into a Str. This should never happen!"
 
-strFromCodepoint : U8 -> Str
-strFromCodepoint = \cp ->
-  strFromRaw [cp]
+strFromCodeunit : U8 -> Str
+strFromCodeunit = \cu ->
+  strFromRaw [cu]
 
 ## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
 parseRawStrPartial : Parser RawStr a, RawStr -> ParseResult RawStr a
@@ -79,41 +79,41 @@ parseStr = \parser, input ->
         ParsingIncomplete leftoverRaw ->
           ParsingIncomplete (strFromRaw leftoverRaw)
 
-codepointSatisfies : (U8 -> Bool) -> Parser RawStr U8
-codepointSatisfies = \check ->
+codeunitSatisfies : (U8 -> Bool) -> Parser RawStr U8
+codeunitSatisfies = \check ->
   buildPrimitiveParser \input ->
     {before: start, others: inputRest} = List.split input 1
     when List.get start 0 is
       Err OutOfBounds ->
-        Err (ParsingFailure "expected a codepoint satisfying a condition, but input was empty.")
-      Ok startCodepoint ->
-        if (check startCodepoint) then
-          Ok {val: startCodepoint, input: inputRest}
+        Err (ParsingFailure "expected a codeunit satisfying a condition, but input was empty.")
+      Ok startCodeunit ->
+        if (check startCodeunit) then
+          Ok {val: startCodeunit, input: inputRest}
         else
-          otherChar = strFromCodepoint startCodepoint
+          otherChar = strFromCodeunit startCodeunit
           inputStr = strFromRaw input
-          Err (ParsingFailure "expected a codepoint satisfying a condition but found `\(otherChar)`.\n While reading: `\(inputStr)`")
+          Err (ParsingFailure "expected a codeunit satisfying a condition but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
-# Implemented manually instead of on top of codepointSatisfies
+# Implemented manually instead of on top of codeunitSatisfies
 # because of better error messages
-codepoint : U8 -> Parser RawStr U8
-codepoint = \expectedCodePoint ->
+codeunit : U8 -> Parser RawStr U8
+codeunit = \expectedCodeUnit ->
   buildPrimitiveParser \input ->
     {before: start, others: inputRest} = List.split input 1
     when List.get start 0 is
       Err OutOfBounds ->
-        errorChar = strFromCodepoint expectedCodePoint
+        errorChar = strFromCodeunit expectedCodeUnit
         Err (ParsingFailure "expected char `\(errorChar)` but input was empty.")
-      Ok startCodepoint ->
-        if startCodepoint == expectedCodePoint then
-          Ok {val: expectedCodePoint, input: inputRest}
+      Ok startCodeunit ->
+        if startCodeunit == expectedCodeUnit then
+          Ok {val: expectedCodeUnit, input: inputRest}
         else
-          errorChar = strFromCodepoint expectedCodePoint
+          errorChar = strFromCodeunit expectedCodeUnit
           otherChar = strFromRaw start
           inputStr = strFromRaw input
           Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
-# Implemented manually instead of a sequence of codepoints
+# Implemented manually instead of a sequence of codeunits
 # because of efficiency and better error messages
 stringRaw : List U8 -> Parser RawStr (List U8)
 stringRaw = \expectedString ->
@@ -140,9 +140,9 @@ scalar = \expectedScalar ->
   |> string
   |> map (\_ -> expectedScalar)
 
-# Matches any codepoint
-anyCodepoint : Parser RawStr U8
-anyCodepoint = codepointSatisfies (\_ -> True)
+# Matches any codeunit
+anyCodeunit : Parser RawStr U8
+anyCodeunit = codeunitSatisfies (\_ -> Bool.true)
 
 # Matches any bytestring
 # and consumes all of it.
@@ -172,7 +172,7 @@ digit =
       List.range 0 10
       |> List.map \digitNum ->
           digitNum + 48
-          |> codepoint
+          |> codeunit
           |> map (\_ -> digitNum)
   oneOf digitParsers
 

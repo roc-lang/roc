@@ -14,7 +14,7 @@ interface Parser.CSV
   ]
   imports [
   Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, maybe, oneorMore, sepBy1, between, ignore, flatten, sepBy},
-  Parser.Str.{RawStr, parseStrPartial, oneOf, codepoint, codepointSatisfies, scalar, digits, strFromRaw}
+  Parser.Str.{RawStr, parseStrPartial, oneOf, codeunit, codeunitSatisfies, scalar, digits, strFromRaw}
   ]
 
 ## This is a CSV parser which follows RFC4180
@@ -171,10 +171,10 @@ twodquotes = Parser.Str.string "\"\""
 
 nonescapedCsvField : Parser RawStr CSVField
 nonescapedCsvField = many textdata
-comma = codepoint 44 # ','
-dquote = codepoint 34 # '"'
+comma = codeunit 44 # ','
+dquote = codeunit 34 # '"'
 endOfLine = alt (ignore crlf) (ignore lf)
-cr = codepoint 13 # '\r'
-lf = codepoint 10 # '\n'
+cr = codeunit 13 # '\r'
+lf = codeunit 10 # '\n'
 crlf = Parser.Str.string "\r\n"
-textdata = codepointSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126)) # Any printable char except " (34) and , (44)
+textdata = codeunitSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126)) # Any printable char except " (34) and , (44)
