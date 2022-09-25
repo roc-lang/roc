@@ -215,14 +215,16 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
         return @bitCast(isize, self.str_capacity) < 0;
     }
 
+    test "isSmallStr: returns true for empty string" {
+        try expect(isSmallStr(RocStr.empty()));
+    }
+
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
-        const as_int = @ptrToInt(&self);
-        const as_ptr = @intToPtr([*]u8, as_int);
+        const as_ptr = @ptrCast([*]const u8, &self);
         const slice = as_ptr[0..@sizeOf(RocStr)];
 
         return slice.*;
@@ -767,7 +769,6 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.split
-
 pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
@@ -791,7 +792,7 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
-    if (str_len > delimiter_len and delimiter_len > 0) {
+    if (str_len >= delimiter_len and delimiter_len > 0) {
         const end_index: usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index: usize = 0;
@@ -893,6 +894,46 @@ test "strSplitHelp: no delimiter" {
     try expect(array[0].eq(expected[0]));
 }
 
+test "strSplitHelp: empty start" {
+    const str_arr = "/a";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "/";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    const array_len: usize = 2;
+    var array: [array_len]RocStr = [_]RocStr{
+        undefined,
+        undefined,
+    };
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str, delimiter);
+
+    const one = RocStr.init("a", 1);
+
+    var expected = [2]RocStr{
+        RocStr.empty(), one,
+    };
+
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit();
+        }
+
+        for (expected) |rocStr| {
+            rocStr.deinit();
+        }
+
+        str.deinit();
+        delimiter.deinit();
+    }
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+}
+
 test "strSplitHelp: empty end" {
     const str_arr = "1---- ---- ---- ---- ----2---- ---- ---- ---- ----";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -934,6 +975,38 @@ test "strSplitHelp: empty end" {
     try expect(array[0].eq(expected[0]));
     try expect(array[1].eq(expected[1]));
     try expect(array[2].eq(expected[2]));
+}
+
+test "strSplitHelp: string equals delimiter" {
+    const str_delimiter_arr = "/";
+    const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
+
+    const array_len: usize = 2;
+    var array: [array_len]RocStr = [_]RocStr{
+        undefined,
+        undefined,
+    };
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str_delimiter, str_delimiter);
+
+    var expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
+
+    defer {
+        for (array) |rocStr| {
+            rocStr.deinit();
+        }
+
+        for (expected) |rocStr| {
+            rocStr.deinit();
+        }
+
+        str_delimiter.deinit();
+    }
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
 }
 
 test "strSplitHelp: delimiter on sides" {
@@ -1032,7 +1105,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
     var count: usize = 1;
 
-    if (str_len > delimiter_len and delimiter_len > 0) {
+    if (str_len >= delimiter_len and delimiter_len > 0) {
         var str_index: usize = 0;
         const end_cond: usize = str_len - delimiter_len + 1;
 
@@ -1118,6 +1191,21 @@ test "countSegments: delimiter interspered" {
     const segments_count = countSegments(str, delimiter);
 
     try expectEqual(segments_count, 3);
+}
+
+test "countSegments: string equals delimiter" {
+    // Str.split "/" "/" == ["", ""]
+    // 2 segments
+    const str_delimiter_arr = "/";
+    const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
+
+    defer {
+        str_delimiter.deinit();
+    }
+
+    const segments_count = countSegments(str_delimiter, str_delimiter);
+
+    try expectEqual(segments_count, 2);
 }
 
 // Str.countGraphemeClusters
@@ -1567,17 +1655,17 @@ pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
 }
 
 inline fn strToBytes(arg: RocStr) RocList {
-    if (arg.isEmpty()) {
+    const length = arg.len();
+    if (length == 0) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
-        const length = arg.len();
         const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
         return RocList{ .length = length, .bytes = ptr, .capacity = length };
     } else {
-        return RocList{ .length = arg.len(), .bytes = arg.str_bytes, .capacity = arg.str_capacity };
+        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity = arg.str_capacity };
     }
 }
 
@@ -2520,4 +2608,37 @@ test "getScalarUnsafe" {
 
     try expectEqual(result.scalar, @intCast(u32, expected));
     try expectEqual(result.bytesParsed, 1);
+}
+
+pub fn strCloneTo(
+    string: RocStr,
+    ptr: [*]u8,
+    offset: usize,
+    extra_offset: usize,
+) callconv(.C) usize {
+    const WIDTH: usize = @sizeOf(RocStr);
+    if (string.isSmallStr()) {
+        const array: [@sizeOf(RocStr)]u8 = @bitCast([@sizeOf(RocStr)]u8, string);
+
+        var i: usize = 0;
+        while (i < WIDTH) : (i += 1) {
+            ptr[offset + i] = array[i];
+        }
+
+        return extra_offset;
+    } else {
+        const slice = string.asSlice();
+
+        var relative = string;
+        relative.str_bytes = @intToPtr(?[*]u8, extra_offset); // i.e. just after the string struct
+
+        // write the string struct
+        const array = relative.asArray();
+        @memcpy(ptr + offset, &array, WIDTH);
+
+        // write the string bytes just after the struct
+        @memcpy(ptr + extra_offset, slice.ptr, slice.len);
+
+        return extra_offset + slice.len;
+    }
 }

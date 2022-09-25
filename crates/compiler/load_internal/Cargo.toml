@@ -1,6 +1,6 @@
 [package]
 name = "roc_load_internal"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -20,18 +20,21 @@ roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
+roc_solve_problem = { path = "../solve_problem" }
 roc_late_solve = { path = "../late_solve" }
 roc_mono = { path = "../mono" }
+roc_intern = { path = "../intern" }
 roc_target = { path = "../roc_target" }
+roc_tracing = { path = "../../tracing" }
 roc_reporting = { path = "../../reporting" }
 roc_debug_flags = { path = "../debug_flags" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 parking_lot = "0.12"
-crossbeam = "0.8.1"
+crossbeam = "0.8.2"
 
 [dev-dependencies]
-pretty_assertions = "1.0.0"
+pretty_assertions = "1.3.0"
 maplit = "1.0.2"
-indoc = "1.0.3"
+indoc = "1.0.7"
 roc_test_utils = { path = "../../test_utils" }

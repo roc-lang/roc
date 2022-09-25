@@ -4,7 +4,6 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -30,13 +29,16 @@ const GREEK_LETTERS: &[char] = &[
 ///     Cannot unify with an Optional field, but can unify with a Required field
 /// - Required: introduced by record literals and type annotations.
 ///     Can unify with Optional and Demanded
-/// - Optional: introduced by pattern matches and annotations.
+/// - Optional: introduced by pattern matches, e.g. { x ? "" } ->
 ///     Can unify with Required, but not with Demanded
+/// - RigidOptional: introduced by annotations, e.g. { x ? Str}
+///     Can only unify with Optional, to prevent a required field being typed as Optional
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub enum RecordField<T> {
-    Optional(T),
-    Required(T),
     Demanded(T),
+    Required(T),
+    Optional(T),
+    RigidOptional(T),
 }
 
 impl<T: Copy> Copy for RecordField<T> {}
@@ -49,6 +51,7 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
             Optional(typ) => write!(f, "Optional({:?})", typ),
             Required(typ) => write!(f, "Required({:?})", typ),
             Demanded(typ) => write!(f, "Demanded({:?})", typ),
+            RigidOptional(typ) => write!(f, "RigidOptional({:?})", typ),
         }
     }
 }
@@ -61,6 +64,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidOptional(t) => t,
         }
     }
 
@@ -71,6 +75,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidOptional(t) => t,
         }
     }
 
@@ -81,6 +86,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidOptional(t) => t,
         }
     }
 
@@ -93,7 +99,15 @@ impl<T> RecordField<T> {
             Optional(t) => Optional(f(t)),
             Required(t) => Required(f(t)),
             Demanded(t) => Demanded(f(t)),
+            RigidOptional(t) => RigidOptional(f(t)),
         }
+    }
+
+    pub fn is_optional(&self) -> bool {
+        matches!(
+            self,
+            RecordField::Optional(..) | RecordField::RigidOptional(..)
+        )
     }
 }
 
@@ -105,6 +119,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute(substitutions),
             Required(typ) => typ.substitute(substitutions),
             Demanded(typ) => typ.substitute(substitutions),
+            RigidOptional(typ) => typ.substitute(substitutions),
         }
     }
 
@@ -120,6 +135,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Required(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Demanded(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            RigidOptional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
         }
     }
 
@@ -138,6 +154,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             Required(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             Demanded(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
+            RigidOptional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
         }
     }
 
@@ -148,6 +165,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_symbol(rep_symbol),
             Required(typ) => typ.contains_symbol(rep_symbol),
             Demanded(typ) => typ.contains_symbol(rep_symbol),
+            RigidOptional(typ) => typ.contains_symbol(rep_symbol),
         }
     }
     pub fn contains_variable(&self, rep_variable: Variable) -> bool {
@@ -157,6 +175,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_variable(rep_variable),
             Required(typ) => typ.contains_variable(rep_variable),
             Demanded(typ) => typ.contains_variable(rep_variable),
+            RigidOptional(typ) => typ.contains_variable(rep_variable),
         }
     }
 }
@@ -565,6 +584,9 @@ impl fmt::Debug for Type {
                         RecordField::Optional(_) => write!(f, "{:?} ? {:?}", label, field_type)?,
                         RecordField::Required(_) => write!(f, "{:?} : {:?}", label, field_type)?,
                         RecordField::Demanded(_) => write!(f, "{:?} : {:?}", label, field_type)?,
+                        RecordField::RigidOptional(_) => {
+                            write!(f, "{:?} ? {:?}", label, field_type)?
+                        }
                     }
 
                     if any_written_yet {
@@ -1323,6 +1345,7 @@ impl Type {
                                 region,
                                 type_got: args.len() as u8,
                                 alias_needs: alias.type_variables.len() as u8,
+                                alias_kind: AliasKind::Structural,
                             });
                             return;
                         }
@@ -1595,6 +1618,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                     Optional(x) => variables_help(x, accum),
                     Required(x) => variables_help(x, accum),
                     Demanded(x) => variables_help(x, accum),
+                    RigidOptional(x) => variables_help(x, accum),
                 };
             }
 
@@ -1736,6 +1760,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                     Optional(x) => variables_help_detailed(x, accum),
                     Required(x) => variables_help_detailed(x, accum),
                     Demanded(x) => variables_help_detailed(x, accum),
+                    RigidOptional(x) => variables_help_detailed(x, accum),
                 };
             }
 
@@ -1980,7 +2005,7 @@ pub enum Category {
     When,
 
     // types
-    Float,
+    Frac,
     Int,
     Num,
     List,
@@ -2029,6 +2054,15 @@ pub enum AliasKind {
     Opaque,
 }
 
+impl AliasKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "alias",
+            AliasKind::Opaque => "opaque",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AliasVar {
     pub name: Lowercase,
@@ -2056,13 +2090,15 @@ impl From<&AliasVar> for OptAbleVar {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum OpaqueSupports {
-    Derived(Symbol),
-    Implemented {
-        ability_name: Symbol,
-        impls: VecMap<Symbol, Symbol>,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberImpl {
+    /// The implementation is claimed to be at the given symbol.
+    /// During solving we validate that the impl is really there.
+    Impl(Symbol),
+    /// The implementation should be derived.
+    Derived,
+    /// The implementation is not present or does not match the expected member type.
+    Error,
 }
 
 #[derive(Clone, Debug)]
@@ -2103,6 +2139,7 @@ pub enum Problem {
         region: Region,
         type_got: u8,
         alias_needs: u8,
+        alias_kind: AliasKind,
     },
     InvalidModule,
     SolvedTypeError,
@@ -2300,7 +2337,7 @@ fn write_error_type_help(
                 buf.push_str(label.as_str());
 
                 let content = match field {
-                    Optional(content) => {
+                    Optional(content) | RigidOptional(content) => {
                         buf.push_str(" ? ");
                         content
                     }
@@ -2454,7 +2491,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push_str(label.as_str());
 
                 let content = match field {
-                    Optional(content) => {
+                    Optional(content) | RigidOptional(content) => {
                         buf.push_str(" ? ");
                         content
                     }
@@ -2565,6 +2602,7 @@ fn write_type_ext(ext: TypeExt, buf: &mut String) {
 
 static THE_LETTER_A: u32 = 'a' as u32;
 
+/// Generates a fresh type variable name, composed of lowercase alphabetic characters in sequence.
 pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
     letters_used: u32,
     taken: &mut impl Iterator<Item = I>,
@@ -2592,6 +2630,28 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
         name_type_var(letters_used + 1, taken, predicate)
     } else {
         (buf.into(), letters_used + 1)
+    }
+}
+
+/// Generates a fresh type variable name given a hint, composed of the hint as a prefix and a
+/// number as a suffix. For example, given hint `a` we'll name the variable `a`, `a1`, or `a27`.
+pub fn name_type_var_with_hint<I, F: FnMut(&I, &str) -> bool>(
+    hint: &str,
+    taken: &mut impl Iterator<Item = I>,
+    mut predicate: F,
+) -> Lowercase {
+    if !taken.any(|item| predicate(&item, hint)) {
+        return hint.into();
+    }
+
+    let mut i = 0;
+    loop {
+        i += 1;
+        let cand = format!("{}{}", hint, i);
+
+        if !taken.any(|item| predicate(&item, &cand)) {
+            return cand.into();
+        }
     }
 }
 
@@ -2632,10 +2692,13 @@ pub fn gather_fields_unsorted_iter(
             }
 
             Structure(EmptyRecord) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(..) => break,
 
             // TODO investigate apparently this one pops up in the reporting tests!
-            RigidVar(_) => break,
+            RigidVar(_) | RigidAbleVar(..) => break,
+
+            // Stop on errors in the record
+            Error => break,
 
             _ => return Err(RecordFieldsError),
         }
@@ -2674,14 +2737,28 @@ pub fn gather_fields(
     })
 }
 
+#[derive(Debug)]
+pub enum GatherTagsError {
+    NotATagUnion(Variable),
+}
+
+/// Gathers tag payloads of a type, assuming it is a tag.
+///
+/// If the given type is unbound or an error, no payloads are returned.
+///
+/// If the given type cannot be seen as a tag, unbound type, or error, this
+/// function returns an error.
 pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
     mut var: Variable,
-) -> (
-    impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
-    Variable,
-) {
+) -> Result<
+    (
+        impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
+        Variable,
+    ),
+    GatherTagsError,
+> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -2697,34 +2774,32 @@ pub fn gather_tags_unsorted_iter(
 
             Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
                 todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
-                //                let sub_fields: UnionTags = (*tag_name_index).into();
-                //                stack.push(sub_fields);
+                // let sub_fields: UnionTags = (*tag_name_index).into();
+                // stack.push(sub_fields);
                 //
-                //                var = *sub_ext;
+                // var = *sub_ext;
             }
 
             Structure(RecursiveTagUnion(_, _sub_fields, _sub_ext)) => {
                 todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
-                //                stack.push(*sub_fields);
+                // stack.push(*sub_fields);
                 //
-                //                var = *sub_ext;
+                // var = *sub_ext;
             }
 
             Alias(_, _, actual_var, _) => {
-                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
 
             Structure(EmptyTagUnion) => break,
-            FlexVar(_) => break,
+            FlexVar(_) | FlexAbleVar(_, _) => break,
 
-            // TODO investigate this likely can happen when there is a type error
-            RigidVar(_) => break,
+            // TODO investigate, this likely can happen when there is a type error
+            RigidVar(_) | RigidAbleVar(_, _) => break,
 
-            other => unreachable!(
-                "something weird ended up in a tag union type: {:?} at {:?}",
-                other, var
-            ),
+            Error => break,
+
+            _ => return Err(GatherTagsError::NotATagUnion(var)),
         }
     }
 
@@ -2738,15 +2813,15 @@ pub fn gather_tags_unsorted_iter(
             (tag_name, subs_slice)
         });
 
-    (it, var)
+    Ok((it, var))
 }
 
 pub fn gather_tags_slices(
     subs: &Subs,
     other_fields: UnionTags,
     var: Variable,
-) -> (Vec<(TagName, VariableSubsSlice)>, Variable) {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+) -> Result<(Vec<(TagName, VariableSubsSlice)>, Variable), GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
@@ -2754,11 +2829,15 @@ pub fn gather_tags_slices(
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    (result, ext)
+    Ok((result, ext))
 }
 
-pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUnionStructure {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+pub fn gather_tags(
+    subs: &Subs,
+    other_fields: UnionTags,
+    var: Variable,
+) -> Result<TagUnionStructure, GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| {
@@ -2768,10 +2847,10 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    TagUnionStructure {
+    Ok(TagUnionStructure {
         fields: result,
         ext,
-    }
+    })
 }
 
 fn instantiate_lambda_sets_as_unspecialized(

@@ -65,6 +65,12 @@ impl TagName {
     }
 }
 
+impl From<&str> for TagName {
+    fn from(string: &str) -> Self {
+        Self(string.into())
+    }
+}
+
 impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
     // add a corresponding ModuleId to there!
@@ -78,6 +84,7 @@ impl ModuleName {
     pub const RESULT: &'static str = "Result";
     pub const BOX: &'static str = "Box";
     pub const ENCODE: &'static str = "Encode";
+    pub const DECODE: &'static str = "Decode";
     pub const JSON: &'static str = "Json";
 
     pub fn as_str(&self) -> &str {
@@ -183,6 +190,20 @@ impl From<String> for Uppercase {
 impl Lowercase {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl From<Lowercase> for String {
+    fn from(lowercase: Lowercase) -> Self {
+        lowercase.0.into()
+    }
+}
+
+impl From<Lowercase> for Box<str> {
+    fn from(lowercase: Lowercase) -> Self {
+        let string: String = lowercase.0.into();
+
+        string.into()
     }
 }
 

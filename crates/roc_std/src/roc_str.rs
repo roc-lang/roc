@@ -1,5 +1,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserializer, Visitor},
+    ser::Serializer,
+    Deserialize, Serialize,
+};
+
 use core::{
     cmp,
     convert::TryFrom,
@@ -10,8 +17,8 @@ use core::{
     ptr,
 };
 
-#[cfg(not(feature = "no_std"))]
-use std::ffi::{CStr, CString};
+#[cfg(feature = "std")]
+use core::ffi::{CStr, CString};
 
 use crate::RocList;
 
@@ -527,7 +534,7 @@ impl Deref for RocStr {
 }
 
 /// This can fail because a CStr may contain invalid UTF-8 characters
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 impl TryFrom<&CStr> for RocStr {
     type Error = core::str::Utf8Error;
 
@@ -537,7 +544,7 @@ impl TryFrom<&CStr> for RocStr {
 }
 
 /// This can fail because a CString may contain invalid UTF-8 characters
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 impl TryFrom<CString> for RocStr {
     type Error = core::str::Utf8Error;
 
@@ -706,5 +713,47 @@ impl DerefMut for SmallString {
 impl Hash for RocStr {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for RocStr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for RocStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // TODO: using deserialize_string here instead of deserialize_str here
+        // because I think we'd "benefit from taking ownership of buffered data
+        // owned by the Deserializer." is that correct?
+        deserializer.deserialize_string(RocStrVisitor {})
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RocStrVisitor {}
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for RocStrVisitor {
+    type Value = RocStr;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(formatter, "a string")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(RocStr::from(value))
     }
 }

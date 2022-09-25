@@ -22,14 +22,14 @@ roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
 roc_reporting = { path = "../reporting" }
 arrayvec = "0.7.2"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 page_size = "0.4.2"
 snafu = { version = "0.7.1", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
-libc = "0.2.106"
+libc = "0.2.133"
 
 [dev-dependencies]
-indoc = "1.0.3"
+indoc = "1.0.7"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["memoryapi"]}

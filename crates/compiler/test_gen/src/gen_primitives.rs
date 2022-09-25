@@ -1,25 +1,15 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to as assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
-#[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 
 use indoc::indoc;
+#[allow(unused_imports)]
+use roc_std::RocList;
 #[allow(unused_imports)]
 use roc_std::RocStr;
 
@@ -528,7 +518,7 @@ fn factorial() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn peano1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -549,7 +539,7 @@ fn peano1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn peano2() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -611,7 +601,7 @@ fn top_level_destructure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_0() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -639,7 +629,7 @@ fn linked_list_len_0() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_twice_0() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -667,7 +657,7 @@ fn linked_list_len_twice_0() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -695,7 +685,7 @@ fn linked_list_len_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_twice_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -723,7 +713,7 @@ fn linked_list_len_twice_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_3() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -752,7 +742,7 @@ fn linked_list_len_3() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_sum_num_a() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -781,7 +771,7 @@ fn linked_list_sum_num_a() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_sum_int() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -809,7 +799,7 @@ fn linked_list_sum_int() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -900,7 +890,7 @@ fn when_nested_maybe() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_peano() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -918,7 +908,7 @@ fn when_peano() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -936,7 +926,7 @@ fn when_peano() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -956,7 +946,13 @@ fn when_peano() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+// This doesn't work on Windows. If you make it return a Result.withDefault 0 (so it's returning
+// an integer instead of a Result), then it works on Windows, suggesting this is a C ABI issue.
+// We should try this out on Windows again after making adjustments to the Result C ABI!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(
@@ -975,8 +971,8 @@ fn overflow_frees_list() {
             List.get myList index
                  "#
         ),
-        3,
-        i64
+        (3, 0),
+        (i64, i8)
     );
 }
 
@@ -987,7 +983,7 @@ fn undefined_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-                 if True then
+                 if Bool.true then
                      x + z
                  else
                      y + z
@@ -1063,8 +1059,10 @@ fn nested_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn closure_in_list() {
+    use roc_std::RocList;
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -1080,11 +1078,11 @@ fn closure_in_list() {
             main =
                 items = foo {}
 
-                List.len items
+                items
             "#
         ),
-        1,
-        i64
+        RocList::from_slice(&[41]),
+        RocList<i64>
     );
 }
 
@@ -1123,7 +1121,7 @@ fn specialize_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn io_poc_effect() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1180,9 +1178,9 @@ fn io_poc_desugared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn return_wrapped_function_pointer() {
-    assert_non_opt_evals_to!(
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn return_wrapped_function_a() {
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1196,16 +1194,15 @@ fn return_wrapped_function_pointer() {
             main = foo
             "#
         ),
-        1,
-        i64,
-        |_| 1
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn return_wrapped_function_pointer_b() {
-    assert_non_opt_evals_to!(
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn return_wrapped_function_b() {
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1218,16 +1215,15 @@ fn return_wrapped_function_pointer_b() {
             main = foo
             "#
         ),
-        1,
-        i64,
-        |_| 1
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn return_wrapped_closure() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1244,16 +1240,15 @@ fn return_wrapped_closure() {
             main = foo
             "#
         ),
-        1,
-        i64,
-        |_| 1
+        5,
+        i64
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_singleton() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1267,10 +1262,10 @@ fn linked_list_is_singleton() {
             isSingleton = \list ->
                 when list is
                     Cons _ Nil ->
-                        True
+                        Bool.true
 
                     _ ->
-                        False
+                        Bool.false
 
             main : Bool
             main =
@@ -1288,7 +1283,7 @@ fn linked_list_is_singleton() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_empty_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1302,10 +1297,10 @@ fn linked_list_is_empty_1() {
             isEmpty = \list ->
                 when list is
                     Cons _ _ ->
-                        False
+                        Bool.false
 
                     Nil ->
-                        True
+                        Bool.true
 
             main : Bool
             main =
@@ -1323,7 +1318,7 @@ fn linked_list_is_empty_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_empty_2() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1334,10 +1329,10 @@ fn linked_list_is_empty_2() {
             isEmpty = \list ->
                 when list is
                     Cons _ _ ->
-                        False
+                        Bool.false
 
                     Nil ->
-                        True
+                        Bool.true
 
             main : Bool
             main =
@@ -1353,10 +1348,10 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1376,7 +1371,7 @@ fn linked_list_singleton() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_function_with_rigid() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1403,7 +1398,7 @@ fn recursive_function_with_rigid() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn rbtree_insert() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1489,9 +1484,12 @@ fn rbtree_insert() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm")
+))]
 fn rbtree_balance_3() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1508,8 +1506,8 @@ fn rbtree_balance_3() {
             "#
         ),
         false,
-        *const i64,
-        |x: *const i64| x.is_null()
+        usize,
+        |x: usize| x == 0
     );
 }
 
@@ -1518,7 +1516,7 @@ fn rbtree_balance_3() {
 #[ignore]
 fn rbtree_layout_issue() {
     // there is a flex var in here somewhere that blows up layout creation
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1565,7 +1563,7 @@ fn rbtree_balance_mono_problem() {
     // problem. As a result, the first argument is dropped and we run into issues down the line
     //
     // concretely, the `rRight` symbol will not be defined
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1612,7 +1610,7 @@ fn rbtree_balance_mono_problem() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn rbtree_balance_full() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1665,7 +1663,7 @@ fn rbtree_balance_full() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_pattern_match_two_ways() {
     // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1691,7 +1689,7 @@ fn nested_pattern_match_two_ways() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1720,7 +1718,7 @@ fn nested_pattern_match_two_ways() {
 fn linked_list_guarded_double_pattern_match() {
     // the important part here is that the first case (with the nested Cons) does not match
     // TODO this also has undefined behavior
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1750,7 +1748,7 @@ fn linked_list_guarded_double_pattern_match() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_double_pattern_match() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1776,7 +1774,7 @@ fn linked_list_double_pattern_match() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn binary_tree_double_pattern_match() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1804,7 +1802,7 @@ fn binary_tree_double_pattern_match() {
 fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1829,7 +1827,7 @@ fn unified_empty_closure_bool() {
 fn unified_empty_closure_byte() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1851,9 +1849,9 @@ fn unified_empty_closure_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn task_always_twice() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1889,16 +1887,16 @@ fn task_always_twice() {
 
             "#
         ),
-        0,
-        i64,
-        |_| 0
+        (),
+        (f64, u8),
+        |_| ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn wildcard_rigid() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1919,16 +1917,15 @@ fn wildcard_rigid() {
             main = always {}
             "#
         ),
-        0,
-        i64,
-        |_| 0
+        (),
+        ()
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alias_of_alias_with_type_arguments() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1948,9 +1945,9 @@ fn alias_of_alias_with_type_arguments() {
             main = always {}
             "#
         ),
-        0,
-        i64,
-        |_| 0
+        (),
+        (f64, u8),
+        |_| ()
     );
 }
 
@@ -1958,7 +1955,7 @@ fn alias_of_alias_with_type_arguments() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn todo_bad_error_message() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2009,9 +2006,9 @@ fn hof_conditional() {
     assert_evals_to!(
         indoc!(
             r#"
-                passTrue = \f -> f True
+                passTrue = \f -> f Bool.true
 
-                passTrue (\trueVal -> if trueVal then False else True)
+                passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
             "#
         ),
         0,
@@ -2061,7 +2058,7 @@ fn unsupported_pattern_str_interp() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn fingertree_basic() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2090,8 +2087,8 @@ fn fingertree_basic() {
             main : Bool
             main =
                 when cons 0x1 Nil is
-                    Unit 1 -> True
-                    _ -> False
+                    Unit 1 -> Bool.true
+                    _ -> Bool.false
             "#
         ),
         true,
@@ -2124,7 +2121,7 @@ fn case_or_pattern() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn rosetree_basic() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2139,8 +2136,8 @@ fn rosetree_basic() {
                 x : Tree F64
                 x = singleton 3
                 when x is
-                    Tree 3.0 _ -> True
-                    _ -> False
+                    Tree 3.0 _ -> Bool.true
+                    _ -> Bool.false
             "#
         ),
         true,
@@ -2212,9 +2209,10 @@ fn nullable_eval_cfold() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_switch() {
     // exposed bug with passing the right symbol/layout down into switch branch generation
+    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
     assert_evals_to!(
         indoc!(
             r#"
@@ -2340,7 +2338,7 @@ fn multiple_increment() {
                 leaf = Leaf
 
                 m : Map
-                m = Node Black (Node Black leaf 10 False leaf) 11 False (Node Black leaf 12 False (Node Red leaf 13 False leaf))
+                m = Node Black (Node Black leaf 10 Bool.false leaf) 11 Bool.false (Node Black leaf 12 Bool.false (Node Red leaf 13 Bool.false leaf))
 
                 when m is
                     Leaf -> 0
@@ -2552,7 +2550,7 @@ fn increment_or_double_closure() {
                     two = 2
 
                     b : Bool
-                    b = True
+                    b = Bool.true
 
                     increment : I64 -> I64
                     increment = \x -> x + one
@@ -2560,7 +2558,7 @@ fn increment_or_double_closure() {
                     double : I64 -> I64
                     double = \x -> if b then x * two else x
 
-                    f = (if True then increment else double)
+                    f = (if Bool.true then increment else double)
 
                     apply f 42
             "#
@@ -2653,12 +2651,12 @@ fn pattern_match_unit_tag() {
     );
 }
 
-// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+// see for why this is disabled on wasm32 https://github.com/roc-lang/roc/issues/1687
 #[cfg(not(feature = "gen-llvm-wasm"))]
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mirror_llvm_alignment_padding() {
-    // see https://github.com/rtfeldman/roc/issues/1569
+    // see https://github.com/roc-lang/roc/issues/1569
     assert_evals_to!(
         indoc!(
             r#"
@@ -2791,7 +2789,7 @@ fn lambda_set_enum_byte_byte() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_until() {
-    // see https://github.com/rtfeldman/roc/issues/1576
+    // see https://github.com/roc-lang/roc/issues/1576
     assert_evals_to!(
         indoc!(
             r#"
@@ -2817,7 +2815,7 @@ fn list_walk_until() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_with_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2845,7 +2843,7 @@ fn int_literal_not_specialized_with_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_literal_not_specialized_no_annotation() {
-    // see https://github.com/rtfeldman/roc/issues/1600
+    // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
@@ -2872,7 +2870,7 @@ fn int_literal_not_specialized_no_annotation() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unresolved_tvar_when_capture_is_unused() {
-    // see https://github.com/rtfeldman/roc/issues/1585
+    // see https://github.com/roc-lang/roc/issues/1585
     assert_evals_to!(
         indoc!(
             r#"
@@ -2881,7 +2879,7 @@ fn unresolved_tvar_when_capture_is_unused() {
                 main : I64
                 main =
                     r : Bool
-                    r = False
+                    r = Bool.false
 
                     p1 = (\_ -> r == (1 == 1))
                     oneOfResult = List.map [p1] (\p -> p Green)
@@ -2918,7 +2916,7 @@ fn value_not_exposed_hits_panic() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2944,7 +2942,7 @@ fn mix_function_and_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mix_function_and_closure_level_of_indirection() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2970,7 +2968,7 @@ fn mix_function_and_closure_level_of_indirection() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
-    // see https://github.com/rtfeldman/roc/pull/1706
+    // see https://github.com/roc-lang/roc/pull/1706
     // the distinction is actually important, dropping that info means some functions just get
     // skipped
     assert_evals_to!(
@@ -3401,7 +3399,7 @@ fn polymorphic_lambda_set_usage() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if True then id1 else id2
+            id = if Bool.true then id1 else id2
 
             id 9u8
             "#
@@ -3419,7 +3417,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if True then id1 else id2
+            id = if Bool.true then id1 else id2
 
             (id 9u8) + Num.toU8 (id 16u16)
             "#
@@ -3430,9 +3428,9 @@ fn polymorphic_lambda_set_multiple_specializations() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_conslist() {
-    // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
+    // this had an RC problem, https://github.com/roc-lang/roc/issues/2968
     assert_evals_to!(
         indoc!(
             r#"
@@ -3451,7 +3449,7 @@ fn list_map2_conslist() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mutual_recursion_top_level_defs() {
     assert_evals_to!(
         indoc!(
@@ -3460,14 +3458,14 @@ fn mutual_recursion_top_level_defs() {
 
             isEven = \n ->
                 when n is
-                    0 -> True
-                    1 -> False
+                    0 -> Bool.true
+                    1 -> Bool.false
                     _ -> isOdd (n - 1)
 
             isOdd = \n ->
                 when n is
-                    0 -> False
-                    1 -> True
+                    0 -> Bool.false
+                    1 -> Bool.true
                     _ -> isEven (n - 1)
 
             main = isOdd 11
@@ -3488,7 +3486,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 
             f1 = \_ -> x
 
-            f = if True then f1 else f1
+            f = if Bool.true then f1 else f1
             f {}
             "#
         ),
@@ -3508,13 +3506,14 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
                 \{} ->
                     Num.toStr val
 
-            x : [True, False]
-            x = True
+            x : Bool
+            x = Bool.true
 
             fun =
-                when x is
-                    True -> capture 123u64
-                    False -> capture 18u8
+                if x then
+                    capture 123u64
+                else
+                    capture 18u8
 
             fun {}
             "#
@@ -3610,12 +3609,13 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 
             fun = \x ->
                 h =
-                    when x is
-                        True -> after (\{} -> "") f
-                        False -> after (\{} -> {s1: "s1"}) g
+                    if x then
+                        after (\{} -> "") f
+                    else
+                        after (\{} -> {s1: "s1"}) g
                 h {}
 
-            {a: fun False, b: fun True}
+            {a: fun Bool.false, b: fun Bool.true}
             "#
         ),
         (RocStr::from("s1"), RocStr::from("fun f")),
@@ -3624,7 +3624,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
@@ -3640,4 +3640,430 @@ fn recursive_call_capturing_function() {
         7,
         i64
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn shared_pattern_variable_in_when_branches() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \t ->
+                when t is
+                    A x | B x -> x
+
+            {a: f (A 15u8), b: (B 31u8)}
+            "#
+        ),
+        (15u8, 31u8),
+        (u8, u8)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \t -> when t is
+                        A x | B y -> 31u8
+
+            {a: f (A 15u8), b: f (B 15u8)}
+            "#
+        ),
+        (31u8, 31u8),
+        (u8, u8),
+        |x| x,
+        true // allow errors
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn symbol_not_bound_in_all_patterns_runs_when_bound_pattern_reached() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when A 15u8 is
+                A x | B y -> x
+            "#
+        ),
+        15u8,
+        u8,
+        |x| x,
+        true // allow errors
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(
+    expected = r#"Roc failed with message: "Hit a branch pattern that does not bind all symbols its body needs"#
+)]
+fn runtime_error_when_degenerate_pattern_reached() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when B 15u8 is
+                A x | B y -> x + 5u8
+            "#
+        ),
+        15u8,
+        u8,
+        |x| x,
+        true // allow errors
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_issue_3444() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            combine = \f, g -> \x -> g (f x)
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res : Str -> Str
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+            res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_toplevel_issue_3444() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            combine = \f, g -> \x -> g (f x)
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res : Str -> Str
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+
+            main = res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_issue_3444_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            combine = \f, g -> \x -> g (f x)
+            const = \x -> (\_y -> x)
+
+            list = [const "a", const "b", const "c"]
+
+            res = List.walk list (const "z") (\c1, c2 -> combine c1 c2)
+            res "hello"
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_toplevel() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclaim = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            main =
+                res: Str -> Str
+                res = List.walk [ exclaim, whisper ] identity compose
+                res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclaim = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            res: Str -> Str
+            res = List.walk [ exclaim, whisper ] identity compose
+            res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            compose = \f, g -> \x -> g (f x)
+
+            identity = \x -> x
+            exclaim = \s -> "\(s)!"
+            whisper = \s -> "(\(s))"
+
+            res = List.walk [ exclaim, whisper ] identity compose
+            res "hello"
+            "#
+        ),
+        RocStr::from("(hello!)"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f : {} -> List a
+            f = \_ -> []
+
+            main : List U8
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::<u8>::from_slice(&[]),
+        RocList<u8>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn local_binding_aliases_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            f = \_ -> []
+
+            main =
+                g = f
+
+                g {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<std::convert::Infallible>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_after_def_ordering() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = \{} -> getX {}
+
+            getX = \{} -> x
+
+            x = "abc"
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            z = "abc"
+
+            getX = \{} -> getY {}
+            getY = \{} -> getZ {}
+            getZ = \{} -> z
+
+            h = \{} -> getX {}
+
+            h {}
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn deep_transient_capture_chain_with_multiple_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            h = "h"
+            x = "x"
+            y = "y"
+            z = "z"
+
+            getX = \{} -> Str.concat x (getY {})
+            getY = \{} -> Str.concat y (getZ {})
+            getZ = \{} -> z
+
+            getH = \{} -> Str.concat h (getX {})
+
+            getH {}
+            "#
+        ),
+        RocStr::from("hxyz"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn transient_captures_from_outer_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = "abc"
+
+            getX = \{} -> x
+
+            innerScope =
+                h = \{} -> getX {}
+                h {}
+
+            innerScope
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mutually_recursive_captures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Bool
+            x = Bool.true
+
+            y : Bool
+            y = Bool.false
+
+            a = "foo"
+            b = "bar"
+
+            foo = \{} -> if x then a else bar {}
+            bar = \{} -> if y then b else foo {}
+
+            bar {}
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn monomorphization_sees_polymorphic_recursion() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            foo : a, Bool -> Str
+            foo = \in, b -> if b then "done" else bar in
+
+            bar = \_ -> foo {} Bool.true
+
+            foo "" Bool.false
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn int_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            manyAux : {} -> I32 
+            manyAux = \_ ->
+                output = \_ -> 42
+
+                output {}
+
+            when manyAux {} is
+                _ -> "done"
+            "#
+        ),
+        RocStr::from("done"),
+        RocStr
+    );
 }

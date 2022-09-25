@@ -2,9 +2,10 @@ use crate::llvm::build::Env;
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
+use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, STLayoutInterner, UnionLayout};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -33,7 +34,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             field_layouts: sorted_fields,
             ..
         } => basic_type_from_record(env, sorted_fields),
-        LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
+        LambdaSet(lambda_set) => {
+            basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
+        }
         Boxed(inner_layout) => {
             let inner_type = basic_type_from_layout(env, inner_layout);
 
@@ -56,37 +59,57 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
 ) -> BasicTypeEnum<'ctx> {
     use UnionLayout::*;
 
-    let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
-
     match union_layout {
         NonRecursive(tags) => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
-            env.context.struct_type(&[data, tag_id_type], false).into()
+            //
+            RocUnion::tagged_from_slices(env.layout_interner, env.context, tags, env.target_info)
+                .struct_type()
+                .into()
         }
         Recursive(tags)
         | NullableWrapped {
             other_tags: tags, ..
         } => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                env.context
-                    .struct_type(&[data, tag_id_type], false)
-                    .ptr_type(AddressSpace::Generic)
-                    .into()
+                RocUnion::tagged_from_slices(
+                    env.layout_interner,
+                    env.context,
+                    tags,
+                    env.target_info,
+                )
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
             } else {
-                data.ptr_type(AddressSpace::Generic).into()
+                RocUnion::untagged_from_slices(
+                    env.layout_interner,
+                    env.context,
+                    tags,
+                    env.target_info,
+                )
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
             }
         }
-        NullableUnwrapped { other_fields, .. } => {
-            let block = block_of_memory_slices(env.context, &[other_fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
-        }
-        NonNullableUnwrapped(fields) => {
-            let block = block_of_memory_slices(env.context, &[fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
-        }
+        NullableUnwrapped { other_fields, .. } => RocUnion::untagged_from_slices(
+            env.layout_interner,
+            env.context,
+            &[other_fields],
+            env.target_info,
+        )
+        .struct_type()
+        .ptr_type(AddressSpace::Generic)
+        .into(),
+        NonNullableUnwrapped(fields) => RocUnion::untagged_from_slices(
+            env.layout_interner,
+            env.context,
+            &[fields],
+            env.target_info,
+        )
+        .struct_type()
+        .ptr_type(AddressSpace::Generic)
+        .into(),
     }
 }
 
@@ -127,13 +150,13 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
 
     match layout {
         LambdaSet(lambda_set) => {
-            argument_type_from_layout(env, &lambda_set.runtime_representation())
+            argument_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
         }
         Union(union_layout) => argument_type_from_union_layout(env, union_layout),
         Builtin(_) => {
             let base = basic_type_from_layout(env, layout);
 
-            if layout.is_passed_by_reference(env.target_info) {
+            if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 base.ptr_type(AddressSpace::Generic).into()
             } else {
                 base
@@ -185,68 +208,199 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
     }
 }
 
-pub fn block_of_memory_slices<'ctx>(
-    context: &'ctx Context,
-    layouts: &[&[Layout<'_>]],
-    target_info: TargetInfo,
-) -> BasicTypeEnum<'ctx> {
-    let mut union_size = 0;
-    for tag in layouts {
-        let mut total = 0;
-        for layout in tag.iter() {
-            total += layout.stack_size(target_info);
+fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
+    match alignment {
+        0 => context.struct_type(&[], false).into(),
+        1 => context.i8_type().into(),
+        2 => context.i16_type().into(),
+        4 => context.i32_type().into(),
+        8 => context.i64_type().into(),
+        16 => context.i128_type().into(),
+        _ => unimplemented!("weird alignment: {alignment}"),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TagType {
+    I8,
+    I16,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RocUnion<'ctx> {
+    struct_type: StructType<'ctx>,
+    data_align: u32,
+    data_width: u32,
+    tag_type: Option<TagType>,
+}
+
+impl<'ctx> RocUnion<'ctx> {
+    pub const TAG_ID_INDEX: u32 = 2;
+    pub const TAG_DATA_INDEX: u32 = 1;
+
+    fn new(
+        context: &'ctx Context,
+        _target_info: TargetInfo,
+        data_align: u32,
+        data_width: u32,
+        tag_type: Option<TagType>,
+    ) -> Self {
+        let bytes = round_up_to_alignment(data_width, data_align);
+        let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
+
+        let alignment_array_type = alignment_type(context, data_align)
+            .array_type(0)
+            .as_basic_type_enum();
+
+        let struct_type = if let Some(tag_type) = tag_type {
+            let tag_width = match tag_type {
+                TagType::I8 => 1,
+                TagType::I16 => 2,
+            };
+
+            let tag_padding = round_up_to_alignment(tag_width, data_align) - tag_width;
+            let tag_padding_type = context
+                .i8_type()
+                .array_type(tag_padding)
+                .as_basic_type_enum();
+
+            context.struct_type(
+                &[
+                    alignment_array_type,
+                    byte_array_type,
+                    match tag_type {
+                        TagType::I8 => context.i8_type().into(),
+                        TagType::I16 => context.i16_type().into(),
+                    },
+                    tag_padding_type,
+                ],
+                false,
+            )
+        } else {
+            context.struct_type(&[alignment_array_type, byte_array_type], false)
+        };
+
+        Self {
+            struct_type,
+            data_align,
+            data_width,
+            tag_type,
+        }
+    }
+
+    pub fn struct_type(&self) -> StructType<'ctx> {
+        self.struct_type
+    }
+
+    pub fn tagged_from_slices(
+        interner: &STLayoutInterner,
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        let tag_type = match layouts.len() {
+            0..=255 => TagType::I8,
+            _ => TagType::I16,
+        };
+
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
+
+        Self::new(context, target_info, data_align, data_width, Some(tag_type))
+    }
+
+    pub fn untagged_from_slices(
+        interner: &STLayoutInterner,
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
+
+        Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn tag_alignment(&self) -> u32 {
+        let tag_id_alignment = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        self.data_align.max(tag_id_alignment)
+    }
+
+    pub fn tag_width(&self) -> u32 {
+        let tag_id_width = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        let mut width = self.data_width;
+
+        // add padding between data and the tag id
+        width = round_up_to_alignment(width, tag_id_width);
+
+        // add tag id
+        width += tag_id_width;
+
+        // add padding after the tag id
+        width = round_up_to_alignment(width, self.tag_alignment());
+
+        width
+    }
+
+    pub fn as_struct_value<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        data: StructValue<'ctx>,
+        tag_id: Option<usize>,
+    ) -> StructValue<'ctx> {
+        debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
+
+        let tag_alloca = env.builder.build_alloca(self.struct_type(), "tag_alloca");
+
+        let data_buffer = env
+            .builder
+            .build_struct_gep(tag_alloca, Self::TAG_DATA_INDEX, "data_buffer")
+            .unwrap();
+
+        let cast_pointer = env.builder.build_pointer_cast(
+            data_buffer,
+            data.get_type().ptr_type(AddressSpace::Generic),
+            "to_data_ptr",
+        );
+
+        // NOTE: the data may be smaller than the buffer, so there might be uninitialized
+        // bytes in the buffer. We should never touch those, but e.g. valgrind might not
+        // realize that. If that comes up, the solution is to just fill it with zeros
+        env.builder.build_store(cast_pointer, data);
+
+        // set the tag id
+        //
+        // NOTE: setting the tag id initially happened before writing the data into it.
+        // That turned out to expose UB. More info at https://github.com/roc-lang/roc/issues/3554
+        if let Some(tag_id) = tag_id {
+            let tag_id_type = match self.tag_type.unwrap() {
+                TagType::I8 => env.context.i8_type(),
+                TagType::I16 => env.context.i16_type(),
+            };
+
+            let tag_id_ptr = env
+                .builder
+                .build_struct_gep(tag_alloca, Self::TAG_ID_INDEX, "tag_id_ptr")
+                .unwrap();
+
+            let tag_id = tag_id_type.const_int(tag_id as u64, false);
+
+            env.builder.build_store(tag_id_ptr, tag_id);
         }
 
-        union_size = union_size.max(total);
-    }
-
-    block_of_memory_help(context, union_size)
-}
-
-pub fn block_of_memory<'ctx>(
-    context: &'ctx Context,
-    layout: &Layout<'_>,
-    target_info: TargetInfo,
-) -> BasicTypeEnum<'ctx> {
-    // TODO make this dynamic
-    let mut union_size = layout.stack_size(target_info);
-
-    if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
-        union_size -= target_info.ptr_width() as u32;
-    }
-
-    block_of_memory_help(context, union_size)
-}
-
-fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_> {
-    // The memory layout of Union is a bit tricky.
-    // We have tags with different memory layouts, that are part of the same type.
-    // For llvm, all tags must have the same memory layout.
-    //
-    // So, we convert all tags to a layout of bytes of some size.
-    // It turns out that encoding to i64 for as many elements as possible is
-    // a nice optimization, the remainder is encoded as bytes.
-
-    let num_i64 = union_size / 8;
-    let num_i8 = union_size % 8;
-
-    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
-    let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
-
-    if num_i64 == 0 {
-        // The object fits perfectly in some number of i8s
-        context.struct_type(&[i8_array_type], false).into()
-    } else if num_i8 == 0 {
-        // The object fits perfectly in some number of i64s
-        // (i.e. the size is a multiple of 8 bytes)
-        context.struct_type(&[i64_array_type], false).into()
-    } else {
-        // There are some trailing bytes at the end
-        let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
-
-        context
-            .struct_type(&[i64_array_type, i8_array_type], false)
-            .into()
+        env.builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value()
     }
 }
 
@@ -264,6 +418,10 @@ pub fn zig_list_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'c
 
 pub fn zig_str_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module.get_struct_type("str.RocStr").unwrap()
+}
+
+pub fn zig_dec_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
+    env.module.get_struct_type("dec.RocDec").unwrap()
 }
 
 pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {

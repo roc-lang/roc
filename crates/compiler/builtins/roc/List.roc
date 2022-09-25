@@ -44,11 +44,17 @@ interface List
         any,
         takeFirst,
         takeLast,
-        find,
-        findIndex,
+        findFirst,
+        findLast,
+        findFirstIndex,
+        findLastIndex,
         sublist,
         intersperse,
         split,
+        splitFirst,
+        splitLast,
+        startsWith,
+        endsWith,
         all,
         dropIf,
         sortAsc,
@@ -387,11 +393,11 @@ contains = \list, needle ->
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
 walk = \list, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
     walkHelp = \currentState, element -> Continue (func currentState element)
 
     when List.iterate list state walkHelp is
         Continue newState -> newState
-        Break void -> List.unreachable void
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -435,7 +441,7 @@ product : List (Num a) -> Num a
 product = \list ->
     List.walk list 1 Num.mul
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
 any = \list, predicate ->
@@ -446,10 +452,10 @@ any = \list, predicate ->
             Continue {}
 
     when List.iterate list {} looper is
-        Continue {} -> False
-        Break {} -> True
+        Continue {} -> Bool.false
+        Break {} -> Bool.true
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
 all = \list, predicate ->
@@ -460,11 +466,11 @@ all = \list, predicate ->
             Break {}
 
     when List.iterate list {} looper is
-        Continue {} -> True
-        Break {} -> False
+        Continue {} -> Bool.true
+        Break {} -> Bool.false
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `True`.
+## elements for which the function returned `Bool.true`.
 ##
 ## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -501,7 +507,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
         List.takeFirst list kept
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `False`.
+## elements for which the function returned `Bool.false`.
 ##
 ## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -770,35 +776,61 @@ maxHelp = \list, initial ->
 ## You may know a similar function named `concatMap` in other languages.
 joinMap : List a, (a -> List b) -> List b
 joinMap = \list, mapper ->
-    List.walk list [] (\state, elem -> List.concat state (mapper elem))
+    List.walk list [] \state, elem -> List.concat state (mapper elem)
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-find : List elem, (elem -> Bool) -> Result elem [NotFound]*
-find = \array, pred ->
+findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findFirst = \list, pred ->
     callback = \_, elem ->
         if pred elem then
             Break elem
         else
             Continue {}
 
-    when List.iterate array {} callback is
-        Continue {} ->
-            Err NotFound
+    when List.iterate list {} callback is
+        Continue {} -> Err NotFound
+        Break found -> Ok found
 
-        Break found ->
-            Ok found
+## Returns the last element of the list satisfying a predicate function.
+## If no satisfying element is found, an `Err NotFound` is returned.
+findLast : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findLast = \list, pred ->
+    callback = \_, elem ->
+        if pred elem then
+            Break elem
+        else
+            Continue {}
+
+    when List.iterateBackwards list {} callback is
+        Continue {} -> Err NotFound
+        Break found -> Ok found
 
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
-findIndex = \list, matcher ->
+findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findFirstIndex = \list, matcher ->
     foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
             Break index
         else
             Continue (index + 1)
+
+    when foundIndex is
+        Break index -> Ok index
+        Continue _ -> Err NotFound
+
+## Returns the last index at which the first element in the list
+## satisfying a predicate function can be found.
+## If no satisfying element is found, an `Err NotFound` is returned.
+findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findLastIndex = \list, matches ->
+    foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
+        if matches elem then
+            Break (prevIndex - 1)
+        else
+            Continue (prevIndex - 1)
 
     when foundIndex is
         Break index -> Ok index
@@ -843,6 +875,33 @@ intersperse = \list, sep ->
 
     List.dropLast newList
 
+## Returns `Bool.true` if the first list starts with the second list.
+##
+## If the second list is empty, this always returns `Bool.true`; every list
+## is considered to "start with" an empty list.
+##
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
+startsWith : List elem, List elem -> Bool
+startsWith = \list, prefix ->
+    # TODO once we have seamless slices, verify that this wouldn't
+    # have better performance with a function like List.compareSublists
+    prefix == List.sublist list { start: 0, len: List.len prefix }
+
+## Returns `Bool.true` if the first list ends with the second list.
+##
+## If the second list is empty, this always returns `Bool.true`; every list
+## is considered to "end with" an empty list.
+##
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
+endsWith : List elem, List elem -> Bool
+endsWith = \list, suffix ->
+    # TODO once we have seamless slices, verify that this wouldn't
+    # have better performance with a function like List.compareSublists
+    length = List.len suffix
+    start = Num.subSaturated (List.len list) length
+
+    suffix == List.sublist list { start, len: length }
+
 ## Splits the list into two lists, around the given index.
 ##
 ## The returned lists are labeled `before` and `others`. The `before` list will
@@ -858,6 +917,36 @@ split = \elements, userSplitIndex ->
     others = List.sublist elements { start: splitIndex, len: length - splitIndex }
 
     { before, others }
+
+## Returns the elements before the first occurrence of a delimiter, as well as the
+## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitFirst = \list, delimiter ->
+    when List.findFirstIndex list (\elem -> elem == delimiter) is
+        Ok index ->
+            before = List.sublist list { start: 0, len: index }
+            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
+
+            Ok { before, after }
+
+        Err NotFound -> Err NotFound
+
+## Returns the elements before the last occurrence of a delimiter, as well as the
+## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitLast = \list, delimiter ->
+    when List.findLastIndex list (\elem -> elem == delimiter) is
+        Ok index ->
+            before = List.sublist list { start: 0, len: index }
+            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
+
+            Ok { before, after }
+
+        Err NotFound -> Err NotFound
 
 ## Like [List.map], except the transformation function returns a [Result].
 ## If that function ever returns `Err`, [mapTry] immediately returns that `Err`.
@@ -895,13 +984,25 @@ iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Contin
 iterHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
-            Continue nextState ->
-                iterHelp list nextState f (index + 1) length
-
-            Break b ->
-                Break b
+            Continue nextState -> iterHelp list nextState f (index + 1) length
+            Break b -> Break b
     else
         Continue state
 
-## useful for typechecking guaranteed-unreachable cases
-unreachable : [] -> a
+## Primitive for iterating over a List from back to front, being able to decide at every
+## element whether to continue
+iterateBackwards : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
+iterateBackwards = \list, init, func ->
+    iterBackwardsHelp list init func (List.len list)
+
+## internal helper
+iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat -> [Continue s, Break b]
+iterBackwardsHelp = \list, state, f, prevIndex ->
+    if prevIndex > 0 then
+        index = prevIndex - 1
+
+        when f state (List.getUnsafe list index) is
+            Continue nextState -> iterBackwardsHelp list nextState f index
+            Break b -> Break b
+    else
+        Continue state

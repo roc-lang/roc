@@ -1,13 +1,13 @@
-interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ Decoder, DecodeProblem }]
+interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ ByteDecoder, DecodeProblem }]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
     Bytes.Decode.decode bytes (decodeBase64 (List.len bytes))
 
-decodeBase64 : Nat -> Decoder Str
+decodeBase64 : Nat -> ByteDecoder Str
 decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: "" }
 
-loopHelp : { remaining : Nat, string : Str } -> Decoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
+loopHelp : { remaining : Nat, string : Str } -> ByteDecoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
         x, y, z <- Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8
@@ -18,7 +18,7 @@ loopHelp = \{ remaining, string } ->
         b = Num.intCast y
         c : U32
         c = Num.intCast z
-        combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)) c
+        combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)) c
 
         Loop {
             remaining: remaining - 3,
@@ -33,7 +33,7 @@ loopHelp = \{ remaining, string } ->
         a = Num.intCast x
         b : U32
         b = Num.intCast y
-        combined = Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)
+        combined = Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)
 
         Done (Str.concat string (bitsToChars combined 1))
     else
@@ -43,7 +43,7 @@ loopHelp = \{ remaining, string } ->
         a : U32
         a = Num.intCast x
 
-        Done (Str.concat string (bitsToChars (Num.shiftLeftBy 16 a) 2))
+        Done (Str.concat string (bitsToChars (Num.shiftLeftBy a 16) 2))
 
 bitsToChars : U32, Int * -> Str
 bitsToChars = \bits, missing ->
@@ -62,17 +62,17 @@ bitsToCharsHelp = \bits, missing ->
     # with `0b111111` (which is 2^6 - 1 or 63) (so, 6 1s) to remove unwanted bits on the left.
     # any 6-bit number is a valid base64 digit, so this is actually safe
     p =
-        Num.shiftRightZfBy 18 bits
+        Num.shiftRightZfBy bits 18
         |> Num.intCast
         |> unsafeToChar
 
     q =
-        Num.bitwiseAnd (Num.shiftRightZfBy 12 bits) lowest6BitsMask
+        Num.bitwiseAnd (Num.shiftRightZfBy bits 12) lowest6BitsMask
         |> Num.intCast
         |> unsafeToChar
 
     r =
-        Num.bitwiseAnd (Num.shiftRightZfBy 6 bits) lowest6BitsMask
+        Num.bitwiseAnd (Num.shiftRightZfBy bits 6) lowest6BitsMask
         |> Num.intCast
         |> unsafeToChar
 

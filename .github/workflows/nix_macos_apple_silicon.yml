@@ -15,9 +15,12 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           clean: "true"
+
+      - name: check formatting with rustfmt
+        run: nix develop -c cargo fmt --all -- --check
 
       - name: check code style with clippy
         run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
@@ -25,9 +28,9 @@ jobs:
       - name: check code style with clippy --release
         run: cargo clippy --workspace --tests --release -- --deny warnings
 
-      # this needs to be done after clippy because of code generation in wasi-libc-sys
-      - name: check formatting with rustfmt
-        run: nix develop -c cargo fmt --all -- --check
-
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
+
+      # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
+      - name: execute llvm wasm tests with --release
+        run: nix develop -c cargo test-gen-llvm-wasm --locked --release

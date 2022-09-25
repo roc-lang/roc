@@ -273,6 +273,30 @@ fn insert_jumps<'a>(
             None => None,
         },
 
+        ExpectFx {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => match insert_jumps(
+            arena,
+            remainder,
+            goal_id,
+            needle,
+            needle_arguments,
+            needle_result,
+        ) {
+            Some(cont) => Some(arena.alloc(ExpectFx {
+                condition: *condition,
+                region: *region,
+                lookups,
+                layouts,
+                remainder: cont,
+            })),
+            None => None,
+        },
+
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,

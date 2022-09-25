@@ -12,17 +12,14 @@ env:
 jobs:
   spell-check:
     name: spell check
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted]
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           clean: "true"
 
-      - name: Earthly version
-        run: earthly --version
-
-      - name: install spell checker, do spell check
-        run: ./ci/safe-earthly.sh +check-typos
+      - name: do spell check with typos-cli 1.0.11 # to reproduce locally: cargo install typos-cli --version 1.0.11
+        run: typos

@@ -6,6 +6,7 @@ The user needs to analyse the Wasm module's memory to decode the result.
 
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_intern::Interner;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 
@@ -14,7 +15,7 @@ use crate::wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
     Signature, ValueType, WasmModule,
 };
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 
 /// Type-driven wrapper generation
 pub trait Wasm32Result {
@@ -36,13 +37,14 @@ pub trait Wasm32Result {
 /// Layout-driven wrapper generation
 pub fn insert_wrapper_for_layout<'a>(
     arena: &'a Bump,
+    interner: &impl Interner<'a, Layout<'a>>,
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
     let mut stack_data_structure = || {
-        let size = layout.stack_size(TargetInfo::default_wasm32());
+        let size = layout.stack_size(interner, TargetInfo::default_wasm32());
         if size == 0 {
             <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         } else {
@@ -186,6 +188,8 @@ wasm_result_primitive!(f64, f64_store, Align::Bytes8);
 
 wasm_result_stack_memory!(u128);
 wasm_result_stack_memory!(i128);
+wasm_result_stack_memory!(U128);
+wasm_result_stack_memory!(I128);
 wasm_result_stack_memory!(RocDec);
 
 impl Wasm32Result for RocStr {
@@ -232,6 +236,14 @@ impl Wasm32Result for () {
     }
 }
 
+impl Wasm32Result for std::convert::Infallible {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        code_builder.call(main_function_index, 0, false);
+        code_builder.get_global(0);
+        code_builder.build_fn_header_and_footer(&[], 0, None);
+    }
+}
+
 impl<T, U> Wasm32Result for (T, U)
 where
     T: Wasm32Result + Wasm32Sized,
@@ -257,6 +269,22 @@ where
             code_builder,
             main_function_index,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W> Wasm32Result for (T, U, V, W)
+where
+    T: Wasm32Result + Wasm32Sized,
+    U: Wasm32Result + Wasm32Sized,
+    V: Wasm32Result + Wasm32Sized,
+    W: Wasm32Result + Wasm32Sized,
+{
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        build_wrapper_body_stack_memory(
+            code_builder,
+            main_function_index,
+            T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH,
         )
     }
 }

@@ -1,10 +1,13 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, PendingDerivesTable, RequestedDeriveKey, Resolved, Unfulfilled,
+    CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::module::Solved;
+use crate::specialize::{
+    compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, DerivedEnv, SolvePhase,
+};
 use bumpalo::Bump;
-use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
+use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
@@ -13,26 +16,26 @@ use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_TRACE_COMPACTION, ROC_VERIFY_RIGID_LET_GENERALIZED};
+use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_derive::SharedDerivedModule;
-use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
-use roc_region::all::{Loc, Region};
+use roc_region::all::Loc;
+use roc_solve_problem::TypeError;
 use roc_types::subs::{
-    self, get_member_lambda_sets_at_region, AliasVariables, Content, Descriptor, FlatType,
-    GetSubsSlice, LambdaSet, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice,
-    UlsOfVar, UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
+    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
-    OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar, Reason,
+    RecordField, TypeExtension, Uls,
 };
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Mode, MustImplementConstraints, Obligated,
+    unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
     SpecializationLsetCollector, Unified::*,
 };
 
@@ -85,32 +88,6 @@ use roc_unify::unify::{
 // Thus instead the inferred type for `id` is generalized (see the `generalize` function) to `a -> a`.
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
-
-#[derive(Debug, Clone)]
-pub enum TypeError {
-    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
-    BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
-    CircularType(Region, Symbol, ErrorType),
-    CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
-    UnexposedLookup(Symbol),
-    UnfulfilledAbility(Unfulfilled),
-    BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
-    BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
-    Exhaustive(roc_exhaustive::Error),
-    StructuralSpecialization {
-        region: Region,
-        typ: ErrorType,
-        ability: Symbol,
-        member: Symbol,
-    },
-    DominatedDerive {
-        opaque: Symbol,
-        ability: Symbol,
-        derive_region: Region,
-        impl_region: Region,
-    },
-}
 
 use roc_types::types::Alias;
 
@@ -524,98 +501,6 @@ impl Pools {
     }
 }
 
-/// What phase in the compiler is reaching out to solve types.
-/// This is important to distinguish subtle differences in the behavior of the solving algorithm.
-//
-// TODO the APIs of this trait suck, this needs a nice cleanup.
-pub trait Phase {
-    /// The regular type-solving phase, or during some later phase of compilation.
-    /// During the solving phase we must anticipate that some information is still unknown and react to
-    /// that; during late phases, we expect that all information is resolved.
-    const IS_LATE: bool;
-
-    fn with_module_abilities_store<T, F>(&self, module: ModuleId, f: F) -> T
-    where
-        F: FnMut(&AbilitiesStore) -> T;
-
-    /// Given a known lambda set's ambient function in an external module, copy that ambient
-    /// function into the given subs.
-    fn copy_lambda_set_ambient_function_to_home_subs(
-        &self,
-        external_lambda_set_var: Variable,
-        external_module_id: ModuleId,
-        home_subs: &mut Subs,
-    ) -> Variable;
-
-    /// Find the ambient function var at a given region for an ability member definition (not a
-    /// specialization!), and copy that into the given subs.
-    fn get_and_copy_ability_member_ambient_function(
-        &self,
-        ability_member: Symbol,
-        region: u8,
-        home_subs: &mut Subs,
-    ) -> Variable;
-}
-
-struct SolvePhase<'a> {
-    abilities_store: &'a AbilitiesStore,
-}
-impl Phase for SolvePhase<'_> {
-    const IS_LATE: bool = false;
-
-    fn with_module_abilities_store<T, F>(&self, _module: ModuleId, mut f: F) -> T
-    where
-        F: FnMut(&AbilitiesStore) -> T,
-    {
-        // During solving we're only aware of our module's abilities store.
-        f(self.abilities_store)
-    }
-
-    fn copy_lambda_set_ambient_function_to_home_subs(
-        &self,
-        external_lambda_set_var: Variable,
-        _external_module_id: ModuleId,
-        home_subs: &mut Subs,
-    ) -> Variable {
-        // During solving we're only aware of our module's abilities store, the var must
-        // be in our module store. Even if the specialization lambda set comes from another
-        // module, we should have taken care to import it before starting solving in this module.
-        let LambdaSet {
-            ambient_function, ..
-        } = home_subs.get_lambda_set(external_lambda_set_var);
-        ambient_function
-    }
-
-    fn get_and_copy_ability_member_ambient_function(
-        &self,
-        ability_member: Symbol,
-        region: u8,
-        home_subs: &mut Subs,
-    ) -> Variable {
-        // During solving we're only aware of our module's abilities store, the var must
-        // be in our module store. Even if the specialization lambda set comes from another
-        // module, we should have taken care to import it before starting solving in this module.
-        let member_def = self
-            .abilities_store
-            .member_def(ability_member)
-            .unwrap_or_else(|| {
-                internal_error!(
-                    "{:?} is not resolved, or not an ability member!",
-                    ability_member
-                )
-            });
-        let member_var = member_def.signature_var();
-
-        let region_lset = get_member_lambda_sets_at_region(home_subs, member_var, region);
-
-        let LambdaSet {
-            ambient_function, ..
-        } = home_subs.get_lambda_set(region_lset);
-
-        ambient_function
-    }
-}
-
 #[derive(Clone)]
 struct State {
     env: Env,
@@ -674,12 +559,20 @@ fn run_in_place(
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
-    let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
-    let mut deferred_obligations = DeferredObligations::new(pending_derives);
+    let mut obligation_cache = ObligationCache::default();
+    let mut awaiting_specializations = AwaitingSpecializations::default();
 
-    // Because we don't know what ability specializations are available until the entire module is
-    // solved, we must wait to solve unspecialized lambda sets then.
-    let mut deferred_uls_to_resolve = UlsOfVar::default();
+    let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
+    let CheckedDerives {
+        legal_derives: _,
+        problems: derives_problems,
+    } = obligation_cache.check_derives(subs, abilities_store, pending_derives);
+    problems.extend(derives_problems);
+
+    let derived_env = DerivedEnv {
+        derived_module: &derived_module,
+        exposed_types: exposed_by_module,
+    };
 
     let state = solve(
         &arena,
@@ -692,27 +585,10 @@ fn run_in_place(
         subs,
         constraint,
         abilities_store,
-        &mut deferred_obligations,
-        &mut deferred_uls_to_resolve,
+        &mut obligation_cache,
+        &mut awaiting_specializations,
+        &derived_env,
     );
-
-    // Now that the module has been solved, we can run through and check all
-    // types claimed to implement abilities. This will also tell us what derives
-    // are legal, which we need to register.
-    let new_must_implement = compact_lambda_sets_of_vars(
-        subs,
-        &derived_module,
-        &arena,
-        &mut pools,
-        deferred_uls_to_resolve,
-        &SolvePhase { abilities_store },
-        exposed_by_module,
-    );
-
-    deferred_obligations.add(new_must_implement, AbilityImplError::IncompleteAbility);
-
-    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
-    problems.extend(obligation_problems);
 
     state.env
 }
@@ -765,8 +641,9 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_obligations: &mut DeferredObligations,
-    deferred_uls_to_resolve: &mut UlsOfVar,
+    obligation_cache: &mut ObligationCache,
+    awaiting_specializations: &mut AwaitingSpecializations,
+    derived_env: &DerivedEnv,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -822,12 +699,13 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
+                        derived_env,
                         pools,
                         rank,
                         abilities_store,
+                        obligation_cache,
+                        awaiting_specializations,
                         problems,
-                        deferred_obligations,
-                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -835,12 +713,13 @@ fn solve(
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 continue;
             }
@@ -930,12 +809,13 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
+                        derived_env,
                         pools,
                         rank,
                         abilities_store,
+                        obligation_cache,
+                        awaiting_specializations,
                         problems,
-                        deferred_obligations,
-                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -952,12 +832,13 @@ fn solve(
 
                 // Now solve the body, using the new vars_by_symbol which includes
                 // the assignments' name-to-variable mappings.
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
+                // Check for infinite types first
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 state = state_for_ret_con;
 
@@ -983,7 +864,7 @@ fn solve(
                 let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
-                match unify(subs, actual, expected, Mode::EQ) {
+                match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -991,13 +872,27 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -1035,37 +930,10 @@ fn solve(
                     aliases,
                     *source_index,
                 );
-                let target = *target;
 
-                match unify(subs, actual, target, Mode::EQ) {
-                    Success {
-                        vars,
-                        // ERROR NOT REPORTED
-                        must_implement_ability: _,
-                        lambda_sets_to_specialize,
-                        extra_metadata: _,
-                    } => {
-                        introduce(subs, rank, pools, &vars);
-
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
-
-                        state
-                    }
-                    Failure(vars, _actual_type, _expected_type, _bad_impls) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        // ERROR NOT REPORTED
-
-                        state
-                    }
-                    BadType(vars, _) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        // ERROR NOT REPORTED
-
-                        state
-                    }
-                }
+                let actual_desc = subs.get(actual);
+                subs.union(*target, actual, actual_desc);
+                state
             }
             Lookup(symbol, expectation_index, region) => {
                 match env.get_var_by_symbol(symbol) {
@@ -1097,7 +965,7 @@ fn solve(
                         let expected =
                             type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
-                        match unify(subs, actual, expected, Mode::EQ) {
+                        match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                             Success {
                                 vars,
                                 must_implement_ability,
@@ -1105,8 +973,11 @@ fn solve(
                                 extra_metadata: _,
                             } => {
                                 introduce(subs, rank, pools, &vars);
+
                                 if !must_implement_ability.is_empty() {
-                                    deferred_obligations.add(
+                                    let new_problems = obligation_cache.check_obligations(
+                                        subs,
+                                        abilities_store,
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
                                             *region,
@@ -1114,8 +985,19 @@ fn solve(
                                             actual,
                                         ),
                                     );
+                                    problems.extend(new_problems);
                                 }
-                                deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                                compact_lambdas_and_check_obligations(
+                                    arena,
+                                    pools,
+                                    problems,
+                                    subs,
+                                    abilities_store,
+                                    obligation_cache,
+                                    awaiting_specializations,
+                                    derived_env,
+                                    lambda_sets_to_specialize,
+                                );
 
                                 state
                             }
@@ -1177,7 +1059,7 @@ fn solve(
                     _ => Mode::EQ,
                 };
 
-                match unify(subs, actual, expected, mode) {
+                match unify(&mut UEnv::new(subs), actual, expected, mode) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1185,13 +1067,27 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -1342,7 +1238,7 @@ fn solve(
                 );
                 let includes = type_to_var(subs, rank, pools, aliases, &tag_ty);
 
-                match unify(subs, actual, includes, Mode::PRESENT) {
+                match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1350,8 +1246,11 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
                                     *region,
@@ -1359,8 +1258,19 @@ fn solve(
                                     actual,
                                 ),
                             );
+                            problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -1446,10 +1356,11 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                let outcome = unify(subs, real_var, branches_var, Mode::EQ);
+                let unify_cond_and_patterns_outcome =
+                    unify(&mut UEnv::new(subs), branches_var, real_var, Mode::EQ);
 
                 let should_check_exhaustiveness;
-                match outcome {
+                match unify_cond_and_patterns_outcome {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1460,9 +1371,23 @@ fn solve(
 
                         introduce(subs, rank, pools, &vars);
 
-                        deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        problems.extend(obligation_cache.check_obligations(
+                            subs,
+                            abilities_store,
+                            must_implement_ability,
+                            AbilityImplError::DoesNotImplement,
+                        ));
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         // Case 1: unify error types, but don't check exhaustiveness.
                         // Case 2: run exhaustiveness to check for redundant branches.
@@ -1477,7 +1402,7 @@ fn solve(
                         // open_tag_union(subs, real_var);
                         open_tag_union(subs, branches_var);
                         let almost_eq = matches!(
-                            unify(subs, real_var, branches_var, Mode::EQ),
+                            unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ),
                             Success { .. }
                         );
 
@@ -1489,7 +1414,7 @@ fn solve(
                         } else {
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
-                            match unify(subs, real_var, branches_var, Mode::EQ) {
+                            match unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
                                     introduce(subs, rank, pools, &vars);
 
@@ -1547,7 +1472,7 @@ fn solve(
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, sketched_rows, context);
+                    } = check(subs, real_var, sketched_rows, context);
 
                     // Store information about whether the "when" is exhaustive, and
                     // which (if any) of its branches are redundant. Codegen may use
@@ -1565,13 +1490,8 @@ fn solve(
 
                 state
             }
-            // TODO: turning off opportunistic specialization for now because it doesn't mesh well with
-            // the polymorphic lambda resolution algorithm. After
-            // https://github.com/rtfeldman/roc/issues/3207 is resolved, this may be redundant
-            // anyway.
             &Resolve(OpportunisticResolve {
                 specialization_variable,
-                specialization_expectation,
                 member,
                 specialization_id,
             }) => {
@@ -1584,18 +1504,6 @@ fn solve(
                     )
                 {
                     abilities_store.insert_resolved(specialization_id, specialization);
-
-                    // We must now refine the current type state to account for this specialization.
-                    let lookup_constr = arena.alloc(Constraint::Lookup(
-                        specialization,
-                        specialization_expectation,
-                        Region::zero(),
-                    ));
-                    stack.push(Work::Constraint {
-                        env,
-                        rank,
-                        constraint: lookup_constr,
-                    });
                 }
 
                 state
@@ -1647,31 +1555,73 @@ fn solve(
     state
 }
 
+#[allow(clippy::too_many_arguments)]
+fn compact_lambdas_and_check_obligations(
+    arena: &Bump,
+    pools: &mut Pools,
+    problems: &mut Vec<TypeError>,
+    subs: &mut Subs,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    awaiting_specialization: &mut AwaitingSpecializations,
+    derived_env: &DerivedEnv,
+    lambda_sets_to_specialize: UlsOfVar,
+) {
+    let CompactionResult {
+        obligations,
+        awaiting_specialization: new_awaiting,
+    } = compact_lambda_sets_of_vars(
+        subs,
+        derived_env,
+        arena,
+        pools,
+        lambda_sets_to_specialize,
+        &SolvePhase { abilities_store },
+    );
+    problems.extend(obligation_cache.check_obligations(
+        subs,
+        abilities_store,
+        obligations,
+        AbilityImplError::DoesNotImplement,
+    ));
+    awaiting_specialization.union(new_awaiting);
+}
+
 fn open_tag_union(subs: &mut Subs, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
 
         let desc = subs.get(var);
-        if let Structure(TagUnion(tags, ext)) = desc.content {
-            if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
-                let new_ext = subs.fresh_unnamed_flex_var();
-                subs.set_rank(new_ext, desc.rank);
-                let new_union = Structure(TagUnion(tags, new_ext));
-                subs.set_content(var, new_union);
+        match desc.content {
+            Structure(TagUnion(tags, ext)) => {
+                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    subs.set_rank(new_ext, desc.rank);
+                    let new_union = Structure(TagUnion(tags, new_ext));
+                    subs.set_content(var, new_union);
+                }
+
+                // Also open up all nested tag unions.
+                let all_vars = tags.variables().into_iter();
+                stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
             }
 
-            // Also open up all nested tag unions.
-            let all_vars = tags.variables().into_iter();
-            stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+            Structure(Record(fields, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            _ => {
+                // Everything else is not a structural type that can be opened
+                // (i.e. cannot be matched in a pattern-match)
+            }
         }
 
         // Today, an "open" constraint doesn't affect any types
         // other than tag unions. Recursive tag unions are constructed
         // at a later time (during occurs checks after tag unions are
         // resolved), so that's not handled here either.
-        // NB: Handle record types here if we add presence constraints
-        // to their type inference as well.
     }
 }
 
@@ -1683,19 +1633,21 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
 fn check_ability_specialization(
     arena: &Bump,
     subs: &mut Subs,
+    derived_env: &DerivedEnv,
     pools: &mut Pools,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    awaiting_specializations: &mut AwaitingSpecializations,
     problems: &mut Vec<TypeError>,
-    deferred_obligations: &mut DeferredObligations,
-    deferred_uls_to_resolve: &mut UlsOfVar,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
     // If the symbol specializes an ability member, we need to make sure that the
     // inferred type for the specialization actually aligns with the expected
     // implementation.
-    if let Some((ability_member, root_data)) = abilities_store.root_name_and_def(symbol) {
+    if let Some((impl_key, root_data)) = abilities_store.impl_key_and_def(symbol) {
+        let ability_member = impl_key.ability_member;
         let root_signature_var = root_data.signature_var();
         let parent_ability = root_data.parent_ability;
 
@@ -1710,17 +1662,17 @@ fn check_ability_specialization(
             deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
         let snapshot = subs.snapshot();
         let unified = unify_introduced_ability_specialization(
-            subs,
+            &mut UEnv::new(subs),
             root_signature_var,
             symbol_loc_var.value,
             Mode::EQ,
         );
 
-        match unified {
+        let resolved_mark = match unified {
             Success {
                 vars,
                 must_implement_ability,
-                lambda_sets_to_specialize: other_lambda_sets_to_specialize,
+                lambda_sets_to_specialize,
                 extra_metadata: SpecializationLsetCollector(specialization_lambda_sets),
             } => {
                 let specialization_type =
@@ -1728,42 +1680,58 @@ fn check_ability_specialization(
 
                 match specialization_type {
                     Some(Obligated::Opaque(opaque)) => {
-                        // This is a specialization for an opaque - that's allowed.
+                        // This is a specialization for an opaque - but is it the opaque the
+                        // specialization was claimed to be for?
+                        if opaque == impl_key.opaque {
+                            // It was! All is good.
 
-                        subs.commit_snapshot(snapshot);
-                        introduce(subs, rank, pools, &vars);
+                            subs.commit_snapshot(snapshot);
+                            introduce(subs, rank, pools, &vars);
 
-                        let specialization_lambda_sets = specialization_lambda_sets
-                            .into_iter()
-                            .map(|((symbol, region), var)| {
-                                debug_assert_eq!(symbol, ability_member);
-                                (region, var)
-                            })
-                            .collect();
+                            let specialization_lambda_sets = specialization_lambda_sets
+                                .into_iter()
+                                .map(|((symbol, region), var)| {
+                                    debug_assert_eq!(symbol, ability_member);
+                                    (region, var)
+                                })
+                                .collect();
 
-                        deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
+                            compact_lambdas_and_check_obligations(
+                                arena,
+                                pools,
+                                problems,
+                                subs,
+                                abilities_store,
+                                obligation_cache,
+                                awaiting_specializations,
+                                derived_env,
+                                lambda_sets_to_specialize,
+                            );
 
-                        let specialization_region = symbol_loc_var.region;
-                        let specialization =
-                            MemberSpecialization::new(symbol, specialization_lambda_sets);
-                        abilities_store.register_specialization_for_type(
-                            ability_member,
-                            opaque,
-                            specialization,
-                        );
+                            let specialization =
+                                MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
 
-                        // Make sure we check that the opaque has specialized all members of the
-                        // ability, after we finish solving the module.
-                        deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
-                        // This specialization dominates any derives that might be present.
-                        deferred_obligations.dominate(
-                            RequestedDeriveKey {
-                                opaque,
-                                ability: parent_ability,
-                            },
-                            specialization_region,
-                        );
+                            Ok(specialization)
+                        } else {
+                            // This def is not specialized for the claimed opaque type, that's an
+                            // error.
+
+                            // Commit so that the bad signature and its error persists in subs.
+                            subs.commit_snapshot(snapshot);
+
+                            let (_typ, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+
+                            let problem = TypeError::WrongSpecialization {
+                                region: symbol_loc_var.region,
+                                ability_member: impl_key.ability_member,
+                                expected_opaque: impl_key.opaque,
+                                found_opaque: opaque,
+                            };
+
+                            problems.push(problem);
+
+                            Err(())
+                        }
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.
@@ -1781,11 +1749,13 @@ fn check_ability_specialization(
                         };
 
                         problems.push(problem);
+
+                        Err(())
                     }
                     None => {
                         // This can happen when every ability constriant on a type variable went
                         // through only another type variable. That means this def is not specialized
-                        // for one concrete type - we won't admit this.
+                        // for one concrete type, and especially not our opaque - we won't admit this currently.
 
                         // Rollback the snapshot so we unlink the root signature with the specialization,
                         // so we can have two separate error types.
@@ -1807,6 +1777,8 @@ fn check_ability_specialization(
                         );
 
                         problems.push(problem);
+
+                        Err(())
                     }
                 }
             }
@@ -1829,530 +1801,43 @@ fn check_ability_specialization(
                 );
 
                 problems.push(problem);
+
+                Err(())
             }
             BadType(vars, problem) => {
                 subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 problems.push(TypeError::BadType(problem));
+
+                Err(())
             }
-        }
-    }
-}
+        };
 
-#[cfg(debug_assertions)]
-fn trace_compaction_step_1(subs: &Subs, c_a: Variable, uls_a: &[Variable]) {
-    let c_a = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(c_a), subs);
-    let uls_a = uls_a
-        .iter()
-        .map(|v| {
-            format!(
-                "{:?}",
-                roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(*v), subs)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    eprintln!("===lambda set compaction===");
-    eprintln!("  concrete type: {:?}", c_a);
-    eprintln!("  step 1:");
-    eprintln!("    uls_a = {{ {} }}", uls_a);
-}
+        abilities_store
+            .mark_implementation(impl_key, resolved_mark)
+            .expect("marked as a custom implementation, but not recorded as such");
 
-#[cfg(debug_assertions)]
-fn trace_compaction_step_2(subs: &Subs, uls_a: &[Variable]) {
-    let uls_a = uls_a
-        .iter()
-        .map(|v| {
-            format!(
-                "{:?}",
-                roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(*v), subs)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    eprintln!("  step 2:");
-    eprintln!("    uls_a' = {{ {} }}", uls_a);
-}
-
-#[cfg(debug_assertions)]
-fn trace_compaction_step_3start() {
-    eprintln!("  step 3:");
-}
-
-#[cfg(debug_assertions)]
-fn trace_compaction_step_3iter_start(
-    subs: &Subs,
-    iteration_lambda_set: Variable,
-    t_f1: Variable,
-    t_f2: Variable,
-) {
-    let iteration_lambda_set = roc_types::subs::SubsFmtContent(
-        subs.get_content_without_compacting(iteration_lambda_set),
-        subs,
-    );
-    let t_f1 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f1), subs);
-    let t_f2 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f2), subs);
-    eprintln!("    - iteration: {:?}", iteration_lambda_set);
-    eprintln!("         {:?}", t_f1);
-    eprintln!("      ~  {:?}", t_f2);
-}
-
-#[cfg(debug_assertions)]
-#[rustfmt::skip]
-fn trace_compaction_step_3iter_end(subs: &Subs, t_f_result: Variable, skipped: bool) {
-    let t_f_result =
-        roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f_result), subs);
-    if skipped {
-    eprintln!("      SKIP");
-    }
-    eprintln!("      =  {:?}\n", t_f_result);
-}
-
-macro_rules! trace_compact {
-    (1. $subs:expr, $c_a:expr, $uls_a:expr) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, {
-            trace_compaction_step_1($subs, $c_a, $uls_a)
-        })
-    }};
-    (2. $subs:expr, $uls_a:expr) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, {
-            trace_compaction_step_2($subs, $uls_a)
-        })
-    }};
-    (3start.) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, { trace_compaction_step_3start() })
-    }};
-    (3iter_start. $subs:expr, $iteration_lset:expr, $t_f1:expr, $t_f2:expr) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, {
-            trace_compaction_step_3iter_start($subs, $iteration_lset, $t_f1, $t_f2)
-        })
-    }};
-    (3iter_end. $subs:expr, $t_f_result:expr) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, {
-            trace_compaction_step_3iter_end($subs, $t_f_result, false)
-        })
-    }};
-    (3iter_end_skipped. $subs:expr, $t_f_result:expr) => {{
-        dbg_do!(ROC_TRACE_COMPACTION, {
-            trace_compaction_step_3iter_end($subs, $t_f_result, true)
-        })
-    }};
-}
-
-#[inline(always)]
-fn iter_concrete_of_unspecialized<'a>(
-    subs: &'a Subs,
-    c_a: Variable,
-    uls: &'a [Uls],
-) -> impl Iterator<Item = &'a Uls> {
-    uls.iter()
-        .filter(move |Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a))
-}
-
-/// Gets the unique unspecialized lambda resolving to concrete type `c_a` in a list of
-/// unspecialized lambda sets.
-#[inline(always)]
-fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Option<Uls> {
-    let mut iter_concrete = iter_concrete_of_unspecialized(subs, c_a, uls);
-    let uls = iter_concrete.next()?;
-    debug_assert!(iter_concrete.next().is_none(), "multiple concrete");
-    Some(*uls)
-}
-
-#[must_use]
-pub fn compact_lambda_sets_of_vars<P: Phase>(
-    subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
-    arena: &Bump,
-    pools: &mut Pools,
-    uls_of_var: UlsOfVar,
-    phase: &P,
-    exposed_by_module: &ExposedByModule,
-) -> MustImplementConstraints {
-    // let mut seen = VecSet::default();
-    let mut must_implement = MustImplementConstraints::default();
-
-    let mut uls_of_var_queue = VecDeque::with_capacity(uls_of_var.len());
-    uls_of_var_queue.extend(uls_of_var.drain());
-
-    // Suppose a type variable `a` with `uls_of_var` mapping `uls_a = {l1, ... ln}` has been instantiated to a concrete type `C_a`.
-    while let Some((c_a, uls_a)) = uls_of_var_queue.pop_front() {
-        let c_a = subs.get_root_key_without_compacting(c_a);
-        // 1. Let each `l` in `uls_a` be of form `[solved_lambdas + ... + C:f:r + ...]`.
-        //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
-        //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
-        //    that is, none of which are now specialized to the type `C`. Then, deconstruct
-        //    `l` such that `l' = [solved_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
-        //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
-        //    TODO: the flattening step described above
-        let uls_a = uls_a.into_vec();
-        trace_compact!(1. subs, c_a, &uls_a);
-
-        // The flattening step - remove lambda sets that don't reference the concrete var, and for
-        // flatten lambda sets that reference it more than once.
-        let mut uls_a: Vec<_> = uls_a
-            .into_iter()
-            .flat_map(|lambda_set| {
-                let LambdaSet {
-                    solved,
-                    recursion_var,
-                    unspecialized,
-                    ambient_function,
-                } = subs.get_lambda_set(lambda_set);
-                let lambda_set_rank = subs.get_rank(lambda_set);
-                let unspecialized = subs.get_subs_slice(unspecialized);
-                // TODO: is it faster to traverse once, see if we only have one concrete lambda, and
-                // bail in that happy-path, rather than always splitting?
-                let (concrete, mut not_concrete): (Vec<_>, Vec<_>) = unspecialized
-                    .iter()
-                    .copied()
-                    .partition(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
-                if concrete.len() == 1 {
-                    // No flattening needs to be done, just return the lambda set as-is
-                    return vec![lambda_set];
-                }
-                // Must flatten
-                concrete
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, concrete_lambda)| {
-                        let (var, unspecialized) = if i == 0 {
-                            // The first lambda set contains one concrete lambda, plus all solved
-                            // lambdas, plus all other unspecialized lambdas.
-                            // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
-                            let unspecialized = SubsSlice::extend_new(
-                                &mut subs.unspecialized_lambda_sets,
-                                not_concrete
-                                    .drain(..)
-                                    .chain(std::iter::once(concrete_lambda)),
-                            );
-                            (lambda_set, unspecialized)
-                        } else {
-                            // All the other lambda sets consists only of their respective concrete
-                            // lambdas.
-                            // ln = [[] + C:fn:rn]
-                            let unspecialized = SubsSlice::extend_new(
-                                &mut subs.unspecialized_lambda_sets,
-                                [concrete_lambda],
-                            );
-                            let var = subs.fresh(Descriptor {
-                                content: Content::Error,
-                                rank: lambda_set_rank,
-                                mark: Mark::NONE,
-                                copy: OptVariable::NONE,
-                            });
-                            (var, unspecialized)
-                        };
-
-                        subs.set_content(
-                            var,
-                            Content::LambdaSet(LambdaSet {
-                                solved,
-                                recursion_var,
-                                unspecialized,
-                                ambient_function,
-                            }),
-                        );
-                        var
-                    })
-                    .collect()
-            })
-            .collect();
-
-        // 2. Now, each `l` in `uls_a` has a unique unspecialized lambda of form `C:f:r`.
-        //    Sort `uls_a` primarily by `f` (arbitrary order), and secondarily by `r` in descending order.
-        uls_a.sort_by(|v1, v2| {
-            let unspec_1 = subs.get_subs_slice(subs.get_lambda_set(*v1).unspecialized);
-            let unspec_2 = subs.get_subs_slice(subs.get_lambda_set(*v2).unspecialized);
-
-            let Uls(_, f1, r1) = unique_unspecialized_lambda(subs, c_a, unspec_1).unwrap();
-            let Uls(_, f2, r2) = unique_unspecialized_lambda(subs, c_a, unspec_2).unwrap();
-
-            match f1.cmp(&f2) {
-                std::cmp::Ordering::Equal => {
-                    // Order by descending order of region.
-                    r2.cmp(&r1)
-                }
-                ord => ord,
-            }
-        });
-
-        trace_compact!(2. subs, &uls_a);
-
-        // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
-        //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
-        //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
-        //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
-        //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, running on example from above.
-        //    3. Unify `t_f1 ~ t_f2`.
-        trace_compact!(3start.);
-        for l in uls_a {
-            // let root_lset = subs.get_root_key_without_compacting(l);
-            // if seen.contains(&root_lset) {
-            //     continue;
-            // }
-
-            let (new_must_implement, new_uls_of_var) = compact_lambda_set(
-                subs,
-                derived_module,
-                arena,
-                pools,
-                c_a,
-                l,
-                phase,
-                exposed_by_module,
-            );
-
-            must_implement.extend(new_must_implement);
-            uls_of_var_queue.extend(new_uls_of_var.drain());
-
-            // seen.insert(root_lset);
-        }
-    }
-
-    must_implement
-}
-
-#[must_use]
-#[allow(clippy::too_many_arguments)]
-fn compact_lambda_set<P: Phase>(
-    subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
-    arena: &Bump,
-    pools: &mut Pools,
-    resolved_concrete: Variable,
-    this_lambda_set: Variable,
-    phase: &P,
-    exposed_by_module: &ExposedByModule,
-) -> (MustImplementConstraints, UlsOfVar) {
-    // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
-    //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
-    //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
-    //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
-    //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, from the algorithm's running example.
-    //    3. Unify `t_f1 ~ t_f2`.
-    let LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized,
-        ambient_function: t_f1,
-    } = subs.get_lambda_set(this_lambda_set);
-    let target_rank = subs.get_rank(this_lambda_set);
-
-    debug_assert!(!unspecialized.is_empty());
-
-    let unspecialized = subs.get_subs_slice(unspecialized);
-
-    // 1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
-    let Uls(c, f, r) = unique_unspecialized_lambda(subs, resolved_concrete, unspecialized).unwrap();
-
-    debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
-
-    // 1b. Remove `C:f:r` from `t_f1`'s lambda set.
-    let new_unspecialized: Vec<_> = unspecialized
-        .iter()
-        .filter(|Uls(v, _, _)| !subs.equivalent_without_compacting(*v, resolved_concrete))
-        .copied()
-        .collect();
-    debug_assert_eq!(new_unspecialized.len(), unspecialized.len() - 1);
-    let t_f1_lambda_set_without_concrete = LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized: SubsSlice::extend_new(
-            &mut subs.unspecialized_lambda_sets,
-            new_unspecialized,
-        ),
-        ambient_function: t_f1,
-    };
-    subs.set_content(
-        this_lambda_set,
-        Content::LambdaSet(t_f1_lambda_set_without_concrete),
-    );
-
-    let specialization_decision = make_specialization_decision(subs, c);
-
-    let specialization_key = match specialization_decision {
-        SpecializeDecision::Specialize(key) => key,
-        SpecializeDecision::Drop => {
-            // Do nothing other than to remove the concrete lambda to drop from the lambda set,
-            // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. subs, t_f1);
-            return (Default::default(), Default::default());
-        }
-    };
-
-    let specialization_ambient_function_var = get_specialization_lambda_set_ambient_function(
-        subs,
-        derived_module,
-        phase,
-        f,
-        r,
-        specialization_key,
-        exposed_by_module,
-        target_rank,
-    );
-
-    let t_f2 = match specialization_ambient_function_var {
-        Ok(lset) => lset,
-        Err(()) => {
-            // Do nothing other than to remove the concrete lambda to drop from the lambda set,
-            // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. subs, t_f1);
-            return (Default::default(), Default::default());
-        }
-    };
-
-    // Ensure the specialized ambient function we'll unify with is not a generalized one, but one
-    // at the rank of the lambda set being compacted.
-    let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
-
-    // 3. Unify `t_f1 ~ t_f2`.
-    trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
-    let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
-        unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
-    trace_compact!(3iter_end. subs, t_f1);
-
-    introduce(subs, target_rank, pools, &vars);
-
-    (new_must_implement_ability, new_lambda_sets_to_specialize)
-}
-
-enum SpecializationTypeKey {
-    Opaque(Symbol),
-    Derived(DeriveKey),
-    Immediate(Symbol),
-}
-
-enum SpecializeDecision {
-    Specialize(SpecializationTypeKey),
-    Drop,
-}
-
-fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecision {
-    use Content::*;
-    use SpecializationTypeKey::*;
-    match subs.get_content_without_compacting(var) {
-        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
-            SpecializeDecision::Specialize(Opaque(*opaque))
-        }
-        Structure(_) | Alias(_, _, _, _) => {
-            // This is a structural type, find the name of the derived ability function it
-            // should use.
-            match roc_derive_key::Derived::encoding(subs, var) {
-                Ok(derived) => match derived {
-                    roc_derive_key::Derived::Immediate(imm) => {
-                        SpecializeDecision::Specialize(Immediate(imm))
-                        // todo!("deal with lambda set extraction from immediates")
-                    }
-                    roc_derive_key::Derived::Key(derive_key) => {
-                        SpecializeDecision::Specialize(Derived(derive_key))
-                    }
-                },
-                Err(DeriveError::UnboundVar) => {
-                    // not specialized yet, but that also means that it can't possibly be derivable
-                    // at this point?
-                    // TODO: is this right? Revisit if it causes us problems in the future.
-                    SpecializeDecision::Drop
-                }
-                Err(DeriveError::Underivable) => {
-                    // we should have reported an error for this; drop the lambda set.
-                    SpecializeDecision::Drop
-                }
-            }
-        }
-        Error => SpecializeDecision::Drop,
-        FlexAbleVar(_, _)
-        | RigidAbleVar(..)
-        | FlexVar(..)
-        | RigidVar(..)
-        | RecursionVar { .. }
-        | LambdaSet(..)
-        | RangedNumber(..) => {
-            internal_error!("unexpected")
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn get_specialization_lambda_set_ambient_function<P: Phase>(
-    subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
-    phase: &P,
-    ability_member: Symbol,
-    lset_region: u8,
-    specialization_key: SpecializationTypeKey,
-    exposed_by_module: &ExposedByModule,
-    target_rank: Rank,
-) -> Result<Variable, ()> {
-    match specialization_key {
-        SpecializationTypeKey::Opaque(opaque) => {
-            let opaque_home = opaque.module_id();
-            let external_specialized_lset =
-                phase.with_module_abilities_store(opaque_home, |abilities_store| {
-                    let opt_specialization =
-                        abilities_store.get_specialization(ability_member, opaque);
-                    match (P::IS_LATE, opt_specialization) {
-                        (false, None) => {
-                            // doesn't specialize, we'll have reported an error for this
-                            Err(())
-                        }
-                        (true, None) => {
-                            internal_error!(
-                            "expected to know a specialization for {:?}#{:?}, but it wasn't found",
-                            opaque,
-                            ability_member,
-                        );
-                        }
-                        (_, Some(specialization)) => {
-                            let specialized_lambda_set = *specialization
-                                .specialization_lambda_sets
-                                .get(&lset_region)
-                                .expect("lambda set region not resolved");
-                            Ok(specialized_lambda_set)
-                        }
-                    }
-                })?;
-
-            let specialized_ambient = phase.copy_lambda_set_ambient_function_to_home_subs(
-                external_specialized_lset,
-                opaque_home,
-                subs,
-            );
-
-            Ok(specialized_ambient)
-        }
-
-        SpecializationTypeKey::Derived(derive_key) => {
-            let mut derived_module = derived_module.lock().unwrap();
-
-            let (_, _, specialization_lambda_sets) =
-                derived_module.get_or_insert(exposed_by_module, derive_key);
-
-            let specialized_lambda_set = *specialization_lambda_sets
-                .get(&lset_region)
-                .expect("lambda set region not resolved");
-
-            let specialized_ambient = derived_module.copy_lambda_set_ambient_function_to_subs(
-                specialized_lambda_set,
-                subs,
-                target_rank,
-            );
-
-            Ok(specialized_ambient)
-        }
-
-        SpecializationTypeKey::Immediate(imm) => {
-            // Immediates are like opaques in that we can simply look up their type definition in
-            // the ability store, there is nothing new to synthesize.
-            //
-            // THEORY: if something can become an immediate, it will always be available in the
-            // local ability store, because the transformation is local (?)
-            let immediate_lambda_set_at_region =
-                phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
-
-            Ok(immediate_lambda_set_at_region)
-        }
+        // Get the lambda sets that are ready for specialization because this ability member
+        // specialization was resolved, and compact them.
+        let new_lambda_sets_to_specialize =
+            awaiting_specializations.remove_for_specialized(subs, impl_key);
+        compact_lambdas_and_check_obligations(
+            arena,
+            pools,
+            problems,
+            subs,
+            abilities_store,
+            obligation_cache,
+            awaiting_specializations,
+            derived_env,
+            new_lambda_sets_to_specialize,
+        );
+        debug_assert!(
+            !awaiting_specializations.waiting_for(impl_key),
+            "still have lambda sets waiting for {:?}, but it was just resolved",
+            impl_key
+        );
     }
 }
 
@@ -2412,7 +1897,6 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -2757,6 +2241,7 @@ fn type_to_variable<'a>(
                             Optional(t) => Optional(helper!(t)),
                             Required(t) => Required(helper!(t)),
                             Demanded(t) => Demanded(helper!(t)),
+                            RigidOptional(t) => RigidOptional(helper!(t)),
                         }
                     };
 
@@ -2807,7 +2292,8 @@ fn type_to_variable<'a>(
                     subs,
                     UnionTags::default(),
                     temp_ext_var,
-                );
+                )
+                .expect("extension var could not be seen as a tag union");
 
                 for _ in it {
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
@@ -3351,7 +2837,8 @@ fn type_to_union_tags<'a>(
                 subs,
                 UnionTags::default(),
                 temp_ext_var,
-            );
+            )
+            .expect("extension var could not be seen as tag union");
 
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 
@@ -3391,28 +2878,34 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    while let Err((recursive, _chain)) = subs.occurs(var) {
-        // try to make a union recursive, see if that helps
-        match subs.get_content_without_compacting(recursive) {
-            &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                subs.mark_tag_union_recursive(recursive, tags, ext_var);
-            }
-            &Content::LambdaSet(subs::LambdaSet {
-                solved,
-                recursion_var: _,
-                unspecialized,
-                ambient_function: ambient_function_var,
-            }) => {
-                subs.mark_lambda_set_recursive(
-                    recursive,
+    'next_occurs_check: while let Err((_, chain)) = subs.occurs(var) {
+        // walk the chain till we find a tag union or lambda set, starting from the variable that
+        // occurred recursively, which is always at the end of the chain.
+        for &var in chain.iter().rev() {
+            match *subs.get_content_without_compacting(var) {
+                Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                    subs.mark_tag_union_recursive(var, tags, ext_var);
+                    continue 'next_occurs_check;
+                }
+                Content::LambdaSet(subs::LambdaSet {
                     solved,
+                    recursion_var: _,
                     unspecialized,
-                    ambient_function_var,
-                );
+                    ambient_function: ambient_function_var,
+                }) => {
+                    subs.mark_lambda_set_recursive(
+                        var,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    continue 'next_occurs_check;
+                }
+                _ => { /* fall through */ }
             }
-
-            _other => circular_error(subs, problems, symbol, &loc_var),
         }
+
+        circular_error(subs, problems, symbol, &loc_var);
     }
 }
 
@@ -3616,17 +3109,32 @@ fn adjust_rank_content(
 
                 EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
-                    Rank::toplevel()
+                    //
+                    // But for us, that theory does not hold, because there might be type variables hidden
+                    // inside a lambda set but not on the left or right of an arrow, and records should not
+                    // force de-generalization in such cases.
+                    //
+                    // See https://github.com/roc-lang/roc/issues/3641 for a longer discussion and
+                    // example.
+                    group_rank
                 }
 
+                // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for index in fields.iter_variables() {
-                        let var = subs[index];
+                    for (_, var_index, field_index) in fields.iter_all() {
+                        let var = subs[var_index];
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+
+                        // When generalizing annotations with rigid optionals, we want to promote
+                        // them to non-rigid, so that usages at specialized sites don't have to
+                        // exactly include the optional field.
+                        if let RecordField::RigidOptional(()) = subs[field_index] {
+                            subs[field_index] = RecordField::Optional(());
+                        }
                     }
 
                     rank
@@ -3807,7 +3315,7 @@ fn adjust_rank_content(
 
 /// Introduce some variables to Pools at the given rank.
 /// Also, set each of their ranks in Subs to be the given rank.
-fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) {
+pub(crate) fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) {
     let pool: &mut Vec<Variable> = pools.get_mut(rank);
 
     for &var in vars.iter() {
@@ -3817,7 +3325,7 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     pool.extend(vars);
 }
 
-fn deep_copy_var_in(
+pub(crate) fn deep_copy_var_in(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3987,11 +3495,35 @@ fn deep_copy_var_help(
                             let new_variables =
                                 copy_sequence!(fields.len(), fields.iter_variables());
 
+                            // When copying a let-generalized record to a specialized region, rigid
+                            // optionals just become optionals.
+                            let field_types = subs.get_subs_slice(fields.record_fields());
+                            let has_rigid_optional_field = field_types
+                                .iter()
+                                .any(|f| matches!(f, RecordField::RigidOptional(..)));
+
+                            let new_field_types_start = if has_rigid_optional_field {
+                                let field_types = field_types.to_vec();
+                                let slice = SubsSlice::extend_new(
+                                    &mut subs.record_fields,
+                                    field_types.into_iter().map(|f| match f {
+                                        RecordField::RigidOptional(()) => internal_error!("RigidOptionals should be generalized to non-rigid by this point"),
+
+                                        RecordField::Demanded(_)
+                                        | RecordField::Required(_)
+                                        | RecordField::Optional(_) => f,
+                                    }),
+                                );
+                                slice.start
+                            } else {
+                                fields.field_types_start
+                            };
+
                             RecordFields {
                                 length: fields.length,
                                 field_names_start: fields.field_names_start,
                                 variables_start: new_variables.start,
-                                field_types_start: fields.field_types_start,
+                                field_types_start: new_field_types_start,
                             }
                         };
 

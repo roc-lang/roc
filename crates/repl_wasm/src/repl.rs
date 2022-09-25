@@ -82,6 +82,15 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
 
         unsafe { std::str::from_utf8_unchecked(str_bytes) }
     }
+
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        let addr_with_id = self.deref_usize(addr);
+        let tag_id_mask = 0b11;
+
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as _, data_addr as _)
+    }
 }
 
 impl<'a> WasmReplApp<'a> {
@@ -108,9 +117,9 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&self, _main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, _main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -135,13 +144,13 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// _main_fn_name and _ret_bytes are only used for the CLI REPL. For Wasm they are compiled-in
     /// to the test_wrapper function of the app itself
     fn call_function_dynamic_size<T, F>(
-        &self,
+        &mut self,
         _main_fn_name: &str,
         _ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -177,6 +186,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         mut interns,
         mut subs,
         exposed_to_host,
+        layout_interner,
         ..
     } = mono;
 
@@ -203,7 +213,9 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
             arena,
+            layout_interner: &layout_interner,
             module_id,
+            stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
                 .values
                 .keys()
@@ -223,6 +235,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
         wasm32_result::insert_wrapper_for_layout(
             arena,
+            &layout_interner,
             &mut module,
             WRAPPER_NAME,
             main_fn_index,
@@ -242,18 +255,19 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         .await
         .map_err(|js| format!("{:?}", js))?;
 
-    let app = WasmReplApp { arena };
+    let mut app = WasmReplApp { arena };
 
     // Run the app and transform the result value to an AST `Expr`
     // Restore type constructor names, and other user-facing info that was erased during compilation.
     let res_answer = jit_to_ast(
         arena,
-        &app,
+        &mut app,
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
         content,
         &subs,
         &interns,
+        layout_interner.into_global().fork(),
         target_info,
     );
 

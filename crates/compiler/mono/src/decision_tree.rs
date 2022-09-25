@@ -4,6 +4,7 @@ use crate::ir::{
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -94,6 +95,23 @@ enum Test<'a> {
         tag_id: TagIdIntType,
         num_alts: usize,
     },
+}
+
+impl<'a> Test<'a> {
+    fn can_be_switch(&self) -> bool {
+        match self {
+            Test::IsCtor { .. } => true,
+            Test::IsInt(_, int_width) => {
+                // llvm does not like switching on 128-bit values
+                !matches!(int_width, IntWidth::U128 | IntWidth::I128)
+            }
+            Test::IsFloat(_, _) => true,
+            Test::IsDecimal(_) => false,
+            Test::IsStr(_) => false,
+            Test::IsBit(_) => true,
+            Test::IsByte { .. } => true,
+        }
+    }
 }
 
 use std::hash::{Hash, Hasher};
@@ -361,7 +379,7 @@ fn flatten<'a>(
             } else {
                 for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
                     let mut new_path = path.clone();
-                    new_path.push(PathInstruction {
+                    new_path.push(PathInstruction::TagIndex {
                         index: index as u64,
                         tag_id,
                     });
@@ -560,6 +578,8 @@ fn test_at_path<'a>(
                     arguments: arguments.to_vec(),
                 },
 
+                Voided { .. } => internal_error!("unreachable"),
+
                 OpaqueUnwrap { opaque, argument } => {
                     let union = Union {
                         render_as: RenderAs::Tag,
@@ -678,6 +698,7 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &CtorName::Tag(TagName(RECORD_TAG_NAME.into())));
+                let destructs_len = destructs.len();
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
@@ -685,10 +706,15 @@ fn to_relevant_branch_help<'a>(
                     };
 
                     let mut new_path = path.to_vec();
-                    new_path.push(PathInstruction {
-                        index: index as u64,
-                        tag_id: *tag_id,
-                    });
+                    let next_instr = if destructs_len == 1 {
+                        PathInstruction::NewType
+                    } else {
+                        PathInstruction::TagIndex {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                        }
+                    };
+                    new_path.push(next_instr);
 
                     (new_path, pattern)
                 });
@@ -710,15 +736,13 @@ fn to_relevant_branch_help<'a>(
                 tag_id,
                 ..
             } => {
+                debug_assert_eq!(*tag_id, 0);
                 debug_assert_eq!(test_opaque_tag_name, &CtorName::Opaque(opaque));
 
                 let (argument, _) = *argument;
 
                 let mut new_path = path.to_vec();
-                new_path.push(PathInstruction {
-                    index: 0,
-                    tag_id: *tag_id,
-                });
+                new_path.push(PathInstruction::NewType);
 
                 start.push((new_path, argument));
                 start.extend(end);
@@ -744,16 +768,22 @@ fn to_relevant_branch_help<'a>(
                 let tag_id = 0;
                 debug_assert_eq!(tag_id, *test_id);
 
+                let num_args = arguments.len();
                 let sub_positions =
                     arguments
                         .into_iter()
                         .enumerate()
                         .map(|(index, (pattern, _))| {
                             let mut new_path = path.to_vec();
-                            new_path.push(PathInstruction {
-                                index: index as u64,
-                                tag_id,
-                            });
+                            let next_instr = if num_args == 1 {
+                                PathInstruction::NewType
+                            } else {
+                                PathInstruction::TagIndex {
+                                    index: index as u64,
+                                    tag_id,
+                                }
+                            };
+                            new_path.push(next_instr);
                             (new_path, pattern)
                         });
                 start.extend(sub_positions);
@@ -809,7 +839,7 @@ fn to_relevant_branch_help<'a>(
                                     .enumerate()
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
-                                        new_path.push(PathInstruction {
+                                        new_path.push(PathInstruction::TagIndex {
                                             index: index as u64,
                                             tag_id,
                                         });
@@ -828,7 +858,7 @@ fn to_relevant_branch_help<'a>(
                                     .enumerate()
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
-                                        new_path.push(PathInstruction {
+                                        new_path.push(PathInstruction::TagIndex {
                                             index: index as u64,
                                             tag_id,
                                         });
@@ -848,6 +878,7 @@ fn to_relevant_branch_help<'a>(
                 _ => None,
             }
         }
+        Voided { .. } => internal_error!("unreachable"),
         StrLiteral(string) => match test {
             IsStr(test_str) if string == *test_str => {
                 start.extend(end);
@@ -972,14 +1003,17 @@ fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) 
     }
 }
 
+/// Does this pattern need a branch test?
+///
+/// Keep up to date with [needs_path_instruction].
 fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
     match pattern {
         Identifier(_) | Underscore => false,
 
-        RecordDestructure(_, _)
-        | NewtypeDestructure { .. }
+        NewtypeDestructure { .. }
+        | RecordDestructure(..)
         | AppliedTag { .. }
         | OpaqueUnwrap { .. }
         | BitLiteral { .. }
@@ -988,6 +1022,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
+
+        Voided { .. } => internal_error!("unreachable"),
     }
 }
 
@@ -1229,9 +1265,9 @@ pub fn optimize_when<'a>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PathInstruction {
-    index: u64,
-    tag_id: TagIdIntType,
+enum PathInstruction {
+    NewType,
+    TagIndex { index: u64, tag_id: TagIdIntType },
 }
 
 fn path_to_expr_help<'a>(
@@ -1246,51 +1282,60 @@ fn path_to_expr_help<'a>(
     let instructions = path;
     let mut it = instructions.iter().peekable();
 
-    while let Some(PathInstruction { index, tag_id }) = it.next() {
-        let index = *index;
-
-        match &layout {
-            Layout::Union(union_layout) => {
-                let inner_expr = Expr::UnionAtIndex {
-                    tag_id: *tag_id,
-                    structure: symbol,
-                    index,
-                    union_layout: *union_layout,
-                };
-
-                let inner_layout = union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
-
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
-
-                layout = inner_layout;
+    while let Some(path_instr) = it.next() {
+        match path_instr {
+            PathInstruction::NewType => {
+                // pass through
             }
 
-            Layout::Struct { field_layouts, .. } => {
-                debug_assert!(field_layouts.len() > 1);
+            PathInstruction::TagIndex { index, tag_id } => {
+                let index = *index;
 
-                let inner_expr = Expr::StructAtIndex {
-                    index,
-                    field_layouts,
-                    structure: symbol,
-                };
+                match &layout {
+                    Layout::Union(union_layout) => {
+                        let inner_expr = Expr::UnionAtIndex {
+                            tag_id: *tag_id,
+                            structure: symbol,
+                            index,
+                            union_layout: *union_layout,
+                        };
 
-                let inner_layout = field_layouts[index as usize];
+                        let inner_layout =
+                            union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
 
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
+                        symbol = env.unique_symbol();
+                        stores.push((symbol, inner_layout, inner_expr));
 
-                layout = inner_layout;
-            }
+                        layout = inner_layout;
+                    }
 
-            _ => {
-                // this MUST be an index into a single-element (hence unwrapped) record
+                    Layout::Struct { field_layouts, .. } => {
+                        debug_assert!(field_layouts.len() > 1);
 
-                debug_assert_eq!(index, 0, "{:?}", &layout);
-                debug_assert_eq!(*tag_id, 0);
-                debug_assert!(it.peek().is_none());
+                        let inner_expr = Expr::StructAtIndex {
+                            index,
+                            field_layouts,
+                            structure: symbol,
+                        };
 
-                break;
+                        let inner_layout = field_layouts[index as usize];
+
+                        symbol = env.unique_symbol();
+                        stores.push((symbol, inner_layout, inner_expr));
+
+                        layout = inner_layout;
+                    }
+
+                    _ => {
+                        // this MUST be an index into a single-element (hence unwrapped) record
+
+                        debug_assert_eq!(index, 0, "{:?}", &layout);
+                        debug_assert_eq!(*tag_id, 0);
+                        debug_assert!(it.peek().is_none());
+
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1343,13 +1388,11 @@ fn test_to_equality<'a>(
                         }),
                     )
                 }
-                _ => unreachable!("{:?}", (cond_layout, union)),
+                _ => unreachable!("{:#?}", (cond_layout, union, test_layout, path)),
             }
         }
 
         Test::IsInt(test_int, precision) => {
-            // TODO don't downcast i128 here
-            debug_assert!(i128::from_ne_bytes(test_int) <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));
@@ -1811,7 +1854,8 @@ fn decide_to_branching<'a>(
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,
-                    other => todo!("other {:?}", other),
+                    Test::IsDecimal(_) => unreachable!("decimals cannot be switched on"),
+                    Test::IsStr(_) => unreachable!("strings cannot be switched on"),
                 };
 
                 // branch info is only useful for refcounted values
@@ -1982,15 +2026,30 @@ fn fanout_decider<'a>(
     edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
 ) -> Decider<'a, u64> {
     let fallback_decider = tree_to_decider(fallback);
-    let necessary_tests = edges
+    let necessary_tests: Vec<_> = edges
         .into_iter()
         .map(|(test, tree)| fanout_decider_help(tree, test))
         .collect();
 
-    Decider::FanOut {
-        path,
-        tests: necessary_tests,
-        fallback: Box::new(fallback_decider),
+    if necessary_tests.iter().all(|(t, _)| t.can_be_switch()) {
+        Decider::FanOut {
+            path,
+            tests: necessary_tests,
+            fallback: Box::new(fallback_decider),
+        }
+    } else {
+        // in llvm, we cannot switch on strings so must chain
+        let mut decider = fallback_decider;
+
+        for (test, branch_decider) in necessary_tests.into_iter().rev() {
+            decider = Decider::Chain {
+                test_chain: vec![(path.clone(), test)],
+                success: Box::new(branch_decider),
+                failure: Box::new(decider),
+            };
+        }
+
+        decider
     }
 }
 

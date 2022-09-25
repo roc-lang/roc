@@ -1,6 +1,6 @@
 [package]
 name = "roc_docs_cli"
-version = "0.1.0"
+version = "0.0.1"
 license = "UPL-1.0"
 authors = ["The Roc Contributors"]
 edition = "2021"
@@ -18,4 +18,7 @@ bench = false
 
 [dependencies]
 roc_docs = { path = "../docs" }
-clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions", "derive"] }
+clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions", "derive"] }
+
+[target.'cfg(windows)'.dependencies]
+libc = "0.2.133"

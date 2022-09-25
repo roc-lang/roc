@@ -126,7 +126,7 @@ pub fn constrain_expr<'a>(
                 region,
             ));
 
-            and_constraints.push(Eq(num_type, expected, Category::Float, region));
+            and_constraints.push(Eq(num_type, expected, Category::Frac, region));
 
             let defs_constraint = And(and_constraints);
 
@@ -2362,7 +2362,7 @@ pub mod test_constrain {
                     \f -> (\a, b -> f b a)
                 "#
             ),
-            "(a, b -> c) -> (b, a -> c)",
+            "(a, b -> d) -> (b, a -> d)",
         );
     }
 
@@ -2400,7 +2400,7 @@ pub mod test_constrain {
                 \{} -> x
                 "#
             ),
-            "{}* -> Num *",
+            "{}* -> Num a",
         )
     }
 
@@ -2614,7 +2614,7 @@ pub mod test_constrain {
     #[test]
     fn inference_var_tag_union_ext() {
         // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
-        // See https://github.com/rtfeldman/roc/issues/2053
+        // See https://github.com/roc-lang/roc/issues/2053
         infer_eq(
             indoc!(
                 r#"
@@ -2705,7 +2705,7 @@ pub mod test_constrain {
                        A _ -> Z
                  "#
             ),
-            "[A [M, N]*] -> [X, Y, Z]*",
+            "[A [M, N]] -> [X, Y, Z]*",
         )
     }
 

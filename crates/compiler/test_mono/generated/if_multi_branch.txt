@@ -1,13 +1,21 @@
+procedure Bool.1 ():
+    let Bool.11 : Int1 = false;
+    ret Bool.11;
+
+procedure Bool.2 ():
+    let Bool.12 : Int1 = true;
+    ret Bool.12;
+
 procedure Test.0 ():
-    let Test.6 : Int1 = true;
-    if Test.6 then
-        let Test.7 : I64 = 1i64;
-        ret Test.7;
+    let Test.4 : Int1 = CallByName Bool.2;
+    if Test.4 then
+        let Test.5 : I64 = 1i64;
+        ret Test.5;
     else
-        let Test.4 : Int1 = false;
-        if Test.4 then
-            let Test.5 : I64 = 2i64;
-            ret Test.5;
-        else
-            let Test.3 : I64 = 3i64;
+        let Test.2 : Int1 = CallByName Bool.1;
+        if Test.2 then
+            let Test.3 : I64 = 2i64;
             ret Test.3;
+        else
+            let Test.1 : I64 = 3i64;
+            ret Test.1;

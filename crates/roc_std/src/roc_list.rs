@@ -7,13 +7,22 @@ use core::{
     fmt::Debug,
     hash::Hash,
     intrinsics::copy_nonoverlapping,
+    iter::FromIterator,
     mem::{self, ManuallyDrop},
     ops::Deref,
     ptr::{self, NonNull},
 };
-use std::iter::FromIterator;
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
+
+#[cfg(feature = "serde")]
+use core::marker::PhantomData;
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserializer, Visitor},
+    ser::{SerializeSeq, Serializer},
+    Deserialize, Serialize,
+};
 
 #[repr(C)]
 pub struct RocList<T> {
@@ -147,6 +156,92 @@ impl<T> RocList<T>
 where
     T: Clone,
 {
+    pub fn from_slice(slice: &[T]) -> Self {
+        let mut list = Self::empty();
+        list.extend_from_slice(slice);
+        list
+    }
+
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        // TODO: Can we do better for ZSTs? Alignment might be a problem.
+        if slice.is_empty() {
+            return;
+        }
+
+        let new_len = self.len() + slice.len();
+        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
+            // Decrement the list's refence count.
+            let mut copy = storage.get();
+            let is_unique = copy.decrease();
+
+            if is_unique {
+                // If we have enough capacity, we can add to the existing elements in-place.
+                if self.capacity() >= slice.len() {
+                    elements
+                } else {
+                    // There wasn't enough capacity, so we need a new allocation.
+                    // Since this is a unique RocList, we can use realloc here.
+                    let new_ptr = unsafe {
+                        roc_realloc(
+                            storage.as_ptr().cast(),
+                            Self::alloc_bytes(new_len),
+                            Self::alloc_bytes(self.capacity),
+                            Self::alloc_alignment(),
+                        )
+                    };
+
+                    self.capacity = new_len;
+
+                    Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
+                        todo!("Reallocation failed");
+                    }))
+                }
+            } else {
+                if !copy.is_readonly() {
+                    // Write the decremented reference count back.
+                    storage.set(copy);
+                }
+
+                // Allocate new memory.
+                let new_elements = Self::elems_with_capacity(slice.len());
+
+                // Copy the old elements to the new allocation.
+                unsafe {
+                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
+                }
+
+                new_elements
+            }
+        } else {
+            Self::elems_with_capacity(slice.len())
+        };
+
+        self.elements = Some(non_null_elements);
+
+        let elements = self.elements.unwrap().as_ptr();
+
+        let append_ptr = unsafe { elements.add(self.len()) };
+
+        // Use .cloned() to increment the elements' reference counts, if needed.
+        for (i, new_elem) in slice.iter().cloned().enumerate() {
+            unsafe {
+                // Write the element into the slot, without dropping it.
+                append_ptr
+                    .add(i)
+                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
+            }
+
+            // It's important that the length is increased one by one, to
+            // make sure that we don't drop uninitialized elements, even when
+            // a incrementing the reference count panics.
+            self.length += 1;
+        }
+
+        self.capacity = self.length
+    }
+}
+
+impl<T> RocList<T> {
     /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new RocList, if the provided one was not unique.
@@ -230,90 +325,6 @@ where
             length: self.length,
             capacity: new_len,
         });
-    }
-
-    pub fn from_slice(slice: &[T]) -> Self {
-        let mut list = Self::empty();
-        list.extend_from_slice(slice);
-        list
-    }
-
-    pub fn extend_from_slice(&mut self, slice: &[T]) {
-        // TODO: Can we do better for ZSTs? Alignment might be a problem.
-        if slice.is_empty() {
-            return;
-        }
-
-        let new_len = self.len() + slice.len();
-        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrement the list's refence count.
-            let mut copy = storage.get();
-            let is_unique = copy.decrease();
-
-            if is_unique {
-                // If we have enough capacity, we can add to the existing elements in-place.
-                if self.capacity() >= slice.len() {
-                    elements
-                } else {
-                    // There wasn't enough capacity, so we need a new allocation.
-                    // Since this is a unique RocList, we can use realloc here.
-                    let new_ptr = unsafe {
-                        roc_realloc(
-                            storage.as_ptr().cast(),
-                            Self::alloc_bytes(new_len),
-                            Self::alloc_bytes(self.capacity),
-                            Self::alloc_alignment(),
-                        )
-                    };
-
-                    self.capacity = new_len;
-
-                    Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
-                        todo!("Reallocation failed");
-                    }))
-                }
-            } else {
-                if !copy.is_readonly() {
-                    // Write the decremented reference count back.
-                    storage.set(copy);
-                }
-
-                // Allocate new memory.
-                let new_elements = Self::elems_with_capacity(slice.len());
-
-                // Copy the old elements to the new allocation.
-                unsafe {
-                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
-                }
-
-                new_elements
-            }
-        } else {
-            Self::elems_with_capacity(slice.len())
-        };
-
-        self.elements = Some(non_null_elements);
-
-        let elements = self.elements.unwrap().as_ptr();
-
-        let append_ptr = unsafe { elements.add(self.len()) };
-
-        // Use .cloned() to increment the elements' reference counts, if needed.
-        for (i, new_elem) in slice.iter().cloned().enumerate() {
-            unsafe {
-                // Write the element into the slot, without dropping it.
-                append_ptr
-                    .add(i)
-                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
-            }
-
-            // It's important that the length is increased one by one, to
-            // make sure that we don't drop uninitialized elements, even when
-            // a incrementing the reference count panics.
-            self.length += 1;
-        }
-
-        self.capacity = self.length
     }
 
     /// Replace self with a new version, without letting `drop` run in between.
@@ -472,64 +483,23 @@ where
     }
 }
 
+impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T> {
+    fn from(array: [T; SIZE]) -> Self {
+        Self::from_iter(array)
+    }
+}
+
 impl<'a, T> IntoIterator for &'a RocList<T> {
     type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = core::slice::Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.as_slice().iter()
     }
 }
 
-impl<T> IntoIterator for RocList<T> {
-    type Item = T;
-    type IntoIter = IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter { list: self, idx: 0 }
-    }
-}
-
-pub struct IntoIter<T> {
-    list: RocList<T>,
-    idx: usize,
-}
-
-impl<T> Iterator for IntoIter<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.list.len() <= self.idx {
-            return None;
-        }
-
-        let elements = self.list.elements?;
-        let element_ptr = unsafe { elements.as_ptr().add(self.idx) };
-        self.idx += 1;
-
-        // Return the element.
-        Some(unsafe { ManuallyDrop::into_inner(element_ptr.read()) })
-    }
-}
-
-impl<T> Drop for IntoIter<T> {
-    fn drop(&mut self) {
-        // If there are any elements left that need to be dropped, drop them.
-        if let Some(elements) = self.list.elements {
-            // Set the list's length to zero to prevent double-frees.
-            // Note that this leaks if dropping any of the elements panics.
-            let len = mem::take(&mut self.list.length);
-
-            // Drop the elements that haven't been returned from the iterator.
-            for i in self.idx..len {
-                mem::drop::<T>(unsafe { ManuallyDrop::take(&mut *elements.as_ptr().add(i)) })
-            }
-        }
-    }
-}
-
 impl<T: Hash> Hash for RocList<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         // This is the same as Rust's Vec implementation, which
         // just delegates to the slice implementation. It's a bit surprising
         // that Hash::hash_slice doesn't automatically incorporate the length,
@@ -544,12 +514,21 @@ impl<T: Hash> Hash for RocList<T> {
     }
 }
 
-impl<T: Clone> FromIterator<T> for RocList<T> {
+impl<T> FromIterator<T> for RocList<T> {
     fn from_iter<I>(into: I) -> Self
     where
         I: IntoIterator<Item = T>,
     {
-        let mut iter = into.into_iter();
+        let iter = into.into_iter();
+
+        if core::mem::size_of::<T>() == 0 {
+            let count = iter.count();
+            return Self {
+                elements: Some(Self::elems_with_capacity(count)),
+                length: count,
+                capacity: count,
+            };
+        }
 
         let mut list = {
             let (min_len, maybe_max_len) = iter.size_hint();
@@ -557,25 +536,96 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
             Self::with_capacity(init_capacity)
         };
 
-        loop {
-            let start = list.length;
-            let elements = list.elements.unwrap().as_ptr();
-            for i in start..list.capacity {
-                if let Some(new_elem) = iter.next() {
-                    unsafe {
-                        elements
-                            .add(i)
-                            .write(ptr::read(&ManuallyDrop::new(new_elem)));
-                    }
-                    list.length += 1;
-                } else {
-                    return list;
-                }
-            }
-
+        let mut elements = list.elements.unwrap().as_ptr();
+        for new_elem in iter {
             // If the size_hint didn't give us a max, we may need to grow. 1.5x seems to be good, based on:
             // https://archive.ph/Z2R8w and https://github.com/facebook/folly/blob/1f2706/folly/docs/FBVector.md
-            list.reserve(list.capacity / 2);
+            if list.length == list.capacity {
+                list.reserve(list.capacity / 2);
+                elements = list.elements.unwrap().as_ptr();
+            }
+
+            unsafe {
+                elements
+                    .add(list.length)
+                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
+            }
+            list.length += 1;
         }
+
+        list
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Serialize> Serialize for RocList<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for item in self {
+            seq.serialize_element(item)?;
+        }
+        seq.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> Deserialize<'de> for RocList<T>
+where
+    // TODO: I'm not sure about requiring clone here. Is that fine? Is that
+    // gonna mean lots of extra allocations?
+    T: Deserialize<'de> + core::clone::Clone,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(RocListVisitor::new())
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RocListVisitor<T> {
+    marker: PhantomData<T>,
+}
+
+#[cfg(feature = "serde")]
+impl<T> RocListVisitor<T> {
+    fn new() -> Self {
+        RocListVisitor {
+            marker: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> Visitor<'de> for RocListVisitor<T>
+where
+    T: Deserialize<'de> + core::clone::Clone,
+{
+    type Value = RocList<T>;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(formatter, "a list of strings")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut out = match seq.size_hint() {
+            Some(hint) => RocList::with_capacity(hint),
+            None => RocList::empty(),
+        };
+
+        while let Some(next) = seq.next_element()? {
+            // TODO: it would be ideal to call `out.push` here, but we haven't
+            // implemented that yet! I think this is also why we need Clone.
+            out.extend_from_slice(&[next])
+        }
+
+        Ok(out)
     }
 }

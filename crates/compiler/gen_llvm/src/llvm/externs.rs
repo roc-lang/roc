@@ -19,6 +19,21 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let usize_type = env.ptr_int();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
+    match env.mode {
+        super::build::LlvmBackendMode::CliTest => {
+            // expose this function
+            if let Some(fn_val) = module.get_function("set_shared_buffer") {
+                fn_val.set_linkage(Linkage::External);
+            }
+        }
+        _ => {
+            // remove this function from the module
+            if let Some(fn_val) = module.get_function("set_shared_buffer") {
+                unsafe { fn_val.delete() };
+            }
+        }
+    }
+
     if !env.mode.has_host() {
         // roc_alloc
         {

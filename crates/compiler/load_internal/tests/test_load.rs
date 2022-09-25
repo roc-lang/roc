@@ -17,8 +17,8 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
-use roc_load_internal::file::Threading;
-use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
+use roc_load_internal::file::{ExecutionMode, LoadConfig, Threading};
+use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_problem::can::Problem;
@@ -41,16 +41,19 @@ fn load_and_typecheck(
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
+    let load_config = LoadConfig {
+        target_info,
+        render: RenderTarget::Generic,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Check,
+    };
 
     match roc_load_internal::file::load(
         arena,
         load_start,
         exposed_types,
-        Phase::SolveTypes,
-        target_info,
         Default::default(), // these tests will re-compile the builtins
-        RenderTarget::Generic,
-        Threading::Single,
+        load_config,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -275,6 +278,10 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                 // at least at the moment this does not happen
                 panic!("Unexpected expectation in module declarations");
             }
+            ExpectationFx => {
+                // at least at the moment this does not happen
+                panic!("Unexpected expectation in module declarations");
+            }
         };
     }
 
@@ -360,7 +367,7 @@ fn interface_with_deps() {
                 def_count += 1;
             }
             MutualRecursion { .. } => { /* do nothing, not a def */ }
-            Expectation => { /* do nothing, not a def */ }
+            Expectation | ExpectationFx => { /* do nothing, not a def */ }
         }
     }
 
@@ -692,7 +699,7 @@ fn platform_parse_error() {
 }
 
 #[test]
-// See https://github.com/rtfeldman/roc/issues/2413
+// See https://github.com/roc-lang/roc/issues/2413
 fn platform_exposes_main_return_by_pointer_issue() {
     let modules = vec![
         (
@@ -854,14 +861,51 @@ fn issue_2863_module_type_does_not_exist() {
 
                         Did you mean one of these?
 
+                            Decoding
                             Result
                             Dict
-                            List
-                            Box
+                            DecodeError
                         "
                       )
                 )
         }
         Ok(_) => unreachable!("we expect failure here"),
     }
+}
+
+#[test]
+fn import_builtin_in_platform_and_check_app() {
+    let modules = vec![
+        (
+            "platform/main.roc",
+            indoc!(
+                r#"
+                    platform "testplatform"
+                        requires {} { main : Str }
+                        exposes []
+                        packages {}
+                        imports [Str]
+                        provides [mainForHost]
+
+                    mainForHost : Str
+                    mainForHost = main
+                    "#
+            ),
+        ),
+        (
+            "Main",
+            indoc!(
+                r#"
+                    app "test"
+                        packages { pf: "platform/main.roc" }
+                        provides [main] to pf
+
+                    main = ""
+                    "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("import_builtin_in_platform_and_check_app", modules);
+    assert!(result.is_ok(), "should check");
 }

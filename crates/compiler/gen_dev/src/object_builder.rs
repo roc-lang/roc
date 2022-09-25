@@ -172,7 +172,7 @@ fn build_object<'a, B: Backend<'a>>(
     let arena = backend.env().arena;
 
     /*
-    // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/rtfeldman/roc/pull/1323
+    // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/roc-lang/roc/pull/1323
     let comment = output.add_section(vec![], b".comment".to_vec(), SectionKind::OtherString);
     output.append_section_data(
         comment,
@@ -420,8 +420,8 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
             }
             Relocation::LinkedFunction { offset, name } => {
-                // If the symbol is an undefined zig builtin, we need to add it here.
-                if output.symbol_id(name.as_bytes()) == None && name.starts_with("roc_builtins.") {
+                // If the symbol is an undefined roc function, we need to add it here.
+                if output.symbol_id(name.as_bytes()) == None && name.starts_with("roc_") {
                     let builtin_symbol = Symbol {
                         name: name.as_bytes().to_vec(),
                         value: 0,

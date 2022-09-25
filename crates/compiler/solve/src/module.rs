@@ -1,15 +1,16 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::{AbilitiesStore, ResolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::{ExposedByModule, RigidVariables};
+use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, MemberImpl};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -32,7 +33,7 @@ impl<T> Solved<T> {
 
 #[derive(Debug)]
 pub struct SolvedModule {
-    pub problems: Vec<solve::TypeError>,
+    pub problems: Vec<TypeError>,
 
     /// all aliases and their definitions. this has to include non-exposed aliases
     /// because exposed aliases can depend on non-exposed ones)
@@ -48,7 +49,7 @@ pub struct SolvedModule {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
 
     /// Used when importing this module into another module
-    pub solved_specializations: ResolvedSpecializations,
+    pub solved_implementations: ResolvedImplementations,
     pub exposed_types: ExposedTypesStorageSubs,
 }
 
@@ -64,12 +65,7 @@ pub fn run_solve(
     pending_derives: PendingDerives,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
-) -> (
-    Solved<Subs>,
-    solve::Env,
-    Vec<solve::TypeError>,
-    AbilitiesStore,
-) {
+) -> (Solved<Subs>, solve::Env, Vec<TypeError>, AbilitiesStore) {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
     }
@@ -108,7 +104,7 @@ pub fn exposed_types_storage_subs(
     home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
-    solved_specializations: &ResolvedSpecializations,
+    solved_implementations: &ResolvedImplementations,
     abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
     let subs = solved_subs.inner_mut();
@@ -121,31 +117,42 @@ pub fn exposed_types_storage_subs(
     }
 
     let mut stored_specialization_lambda_set_vars =
-        VecMap::with_capacity(solved_specializations.len());
+        VecMap::with_capacity(solved_implementations.len());
 
-    for (_, member_specialization) in solved_specializations.iter() {
-        for (_, &lset_var) in member_specialization.specialization_lambda_sets.iter() {
-            let specialization_lset_ambient_function_var =
-                subs.get_lambda_set(lset_var).ambient_function;
+    for (_, member_impl) in solved_implementations.iter() {
+        match member_impl {
+            ResolvedImpl::Impl(member_specialization) => {
+                // Export all the lambda sets and their ambient functions.
+                for (_, &lset_var) in member_specialization.specialization_lambda_sets.iter() {
+                    let specialization_lset_ambient_function_var =
+                        subs.get_lambda_set(lset_var).ambient_function;
 
-            // Import the ambient function of this specialization lambda set; that will import the
-            // lambda set as well. The ambient function is needed for the lambda set compaction
-            // algorithm.
-            let imported_lset_ambient_function_var = storage_subs
-                .import_variable_from(subs, specialization_lset_ambient_function_var)
-                .variable;
+                    // Import the ambient function of this specialization lambda set; that will import the
+                    // lambda set as well. The ambient function is needed for the lambda set compaction
+                    // algorithm.
+                    let imported_lset_ambient_function_var = storage_subs
+                        .import_variable_from(subs, specialization_lset_ambient_function_var)
+                        .variable;
 
-            let imported_lset_var = match storage_subs
-                .as_inner()
-                .get_content_without_compacting(imported_lset_ambient_function_var)
-            {
-                Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
-                content => internal_error!(
-                    "ambient lambda set function import is not a function, found: {:?}",
-                    roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
-                ),
-            };
-            stored_specialization_lambda_set_vars.insert(lset_var, imported_lset_var);
+                    let imported_lset_var = match storage_subs
+                        .as_inner()
+                        .get_content_without_compacting(imported_lset_ambient_function_var)
+                    {
+                        Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
+                        content => internal_error!(
+                            "ambient lambda set function import is not a function, found: {:?}",
+                            roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
+                        ),
+                    };
+                    stored_specialization_lambda_set_vars.insert(lset_var, imported_lset_var);
+                }
+            }
+            ResolvedImpl::Derived => {
+                // nothing to do
+            }
+            ResolvedImpl::Error => {
+                // nothing to do
+            }
         }
     }
 
@@ -170,4 +177,36 @@ pub fn exposed_types_storage_subs(
         stored_specialization_lambda_set_vars,
         stored_ability_member_vars,
     }
+}
+
+/// Extracts the ability member implementations owned by a solved module.
+pub fn extract_module_owned_implementations(
+    module_id: ModuleId,
+    abilities_store: &AbilitiesStore,
+) -> ResolvedImplementations {
+    abilities_store
+        .iter_declared_implementations()
+        .filter_map(|(impl_key, member_impl)| {
+            // This module solved this specialization if either the member or the type comes from the
+            // module.
+            if impl_key.ability_member.module_id() != module_id
+                && impl_key.opaque.module_id() != module_id
+            {
+                return None;
+            }
+
+            let resolved_impl = match member_impl {
+                MemberImpl::Impl(impl_symbol) => {
+                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                        "declared implementations should be resolved conclusively after solving",
+                    );
+                    ResolvedImpl::Impl(specialization.clone())
+                }
+                MemberImpl::Derived => ResolvedImpl::Derived,
+                MemberImpl::Error => ResolvedImpl::Error,
+            };
+
+            Some((impl_key, resolved_impl))
+        })
+        .collect()
 }

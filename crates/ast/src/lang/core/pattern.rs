@@ -8,7 +8,7 @@ use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
 };
 use roc_collections::all::BumpMap;
-use roc_error_macros::todo_opaques;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -171,10 +171,7 @@ pub fn to_pattern2<'a>(
             malformed_pattern(env, problem, region)
         }
 
-        Underscore(_) => match pattern_type {
-            WhenBranch | FunctionArg => Pattern2::Underscore,
-            TopLevelDef | DefExpr => underscore_in_def(env, region),
-        },
+        Underscore(_) => Pattern2::Underscore,
 
         FloatLiteral(ref string) => match pattern_type {
             WhenBranch => match finish_parsing_float(string) {
@@ -275,7 +272,7 @@ pub fn to_pattern2<'a>(
             }
         }
 
-        OpaqueRef(..) => todo_opaques!(),
+        OpaqueRef(..) => internal_error!("opaques not implemented"),
 
         Apply(tag, patterns) => {
             let can_patterns = PoolVec::with_capacity(patterns.len() as u32, env.pool);
@@ -585,16 +582,6 @@ fn unsupported_pattern<'a>(
     use roc_problem::can::BadPattern;
     env.problem(Problem::UnsupportedPattern(
         BadPattern::Unsupported(pattern_type),
-        region,
-    ));
-
-    Pattern2::UnsupportedPattern(region)
-}
-
-fn underscore_in_def<'a>(env: &mut Env<'a>, region: Region) -> Pattern2 {
-    use roc_problem::can::BadPattern;
-    env.problem(Problem::UnsupportedPattern(
-        BadPattern::UnderscoreInDef,
         region,
     ));
 

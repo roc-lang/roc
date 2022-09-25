@@ -3,6 +3,8 @@ use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_intern::SingleThreadedInterner;
+use roc_mono::layout::Layout;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -15,7 +17,7 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::MonomorphizedModule;
+use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
@@ -42,7 +44,7 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
     END_COL,
     "\n\n"
 );
-pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
+pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
@@ -132,9 +134,9 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
-    fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         run_jit_function!(self.lib, main_fn_name, Return, |v| transform(&CliMemory, v))
@@ -142,13 +144,13 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
     fn call_function_dynamic_size<T, F>(
-        &self,
+        &mut self,
         main_fn_name: &str,
         ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, |v| transform(
@@ -190,95 +192,31 @@ impl ReplAppMemory for CliMemory {
         let reference: &RocStr = unsafe { std::mem::transmute(addr) };
         reference.as_str()
     }
-}
 
-pub fn expect_mono_module_to_dylib<'a>(
-    arena: &'a Bump,
-    target: Triple,
-    loaded: MonomorphizedModule<'a>,
-    opt_level: OptLevel,
-    mode: LlvmBackendMode,
-) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
-    let target_info = TargetInfo::from(&target);
+    fn deref_pointer_with_tag_id(&self, addr: usize) -> (u16, u64) {
+        let addr_with_id = self.deref_usize(addr);
+        let tag_id_mask = 0b111;
 
-    let MonomorphizedModule {
-        toplevel_expects,
-        procedures,
-        entry_point,
-        interns,
-        ..
-    } = loaded;
-
-    let context = Context::create();
-    let builder = context.create_builder();
-    let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-        &target, &context, "",
-    ));
-
-    let module = arena.alloc(module);
-    let (module_pass, _function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
-
-    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-
-    // Compile and add all the Procs before adding main
-    let env = roc_gen_llvm::llvm::build::Env {
-        arena,
-        builder: &builder,
-        dibuilder: &dibuilder,
-        compile_unit: &compile_unit,
-        context: &context,
-        interns,
-        module,
-        target_info,
-        mode,
-        // important! we don't want any procedures to get the C calling convention
-        exposed_to_host: MutSet::default(),
-    };
-
-    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-    // platform to provide them.
-    add_default_roc_externs(&env);
-
-    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
-        &env,
-        opt_level,
-        &toplevel_expects,
-        procedures,
-        entry_point,
-    );
-
-    env.dibuilder.finalize();
-
-    // we don't use the debug info, and it causes weird errors.
-    module.strip_debug_info();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    module_pass.run_on(env.module);
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        env.module.print_to_file("/tmp/test.ll").unwrap();
-        panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `/tmp/test.ll`",
-            errors.to_string()
-        );
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as _, data_addr as _)
     }
-
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
 }
 
 pub fn mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
-    loaded: MonomorphizedModule,
+    loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<(libloading::Library, &'a str, Subs), libloading::Error> {
+) -> Result<
+    (
+        libloading::Library,
+        &'a str,
+        Subs,
+        SingleThreadedInterner<'a, Layout<'a>>,
+    ),
+    libloading::Error,
+> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -286,6 +224,7 @@ pub fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
+        layout_interner,
         ..
     } = loaded;
 
@@ -304,6 +243,7 @@ pub fn mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -319,6 +259,15 @@ pub fn mono_module_to_dylib<'a>(
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
     add_default_roc_externs(&env);
+
+    let entry_point = match entry_point {
+        EntryPoint::Executable { symbol, layout, .. } => {
+            roc_mono::ir::EntryPoint { symbol, layout }
+        }
+        EntryPoint::Test => {
+            unreachable!()
+        }
+    };
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
@@ -354,7 +303,8 @@ pub fn mono_module_to_dylib<'a>(
         );
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, main_fn_name, subs))
+    llvm_module_to_dylib(env.module, &target, opt_level)
+        .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }
 
 fn gen_and_eval_llvm<'a>(
@@ -399,19 +349,20 @@ fn gen_and_eval_llvm<'a>(
 
     let interns = loaded.interns.clone();
 
-    let (lib, main_fn_name, subs) =
+    let (lib, main_fn_name, subs, layout_interner) =
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
-    let app = CliApp { lib };
+    let mut app = CliApp { lib };
 
     let res_answer = jit_to_ast(
         &arena,
-        &app,
+        &mut app,
         main_fn_name,
         main_fn_layout,
         &content,
         &subs,
         &interns,
+        layout_interner.into_global().fork(),
         target_info,
     );
 
@@ -486,12 +437,9 @@ pub fn main() -> io::Result<()> {
                         }
                     }
                     ":help" => {
-                        println!("Use :exit or :q to exit.");
+                        println!("Use :exit or :quit or :q to exit.");
                     }
-                    ":exit" => {
-                        break;
-                    }
-                    ":q" => {
+                    ":exit" | ":quit" | ":q" => {
                         break;
                     }
                     _ => {

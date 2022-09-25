@@ -16,7 +16,6 @@ pub struct CycleEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BadPattern {
-    UnderscoreInDef,
     Unsupported(PatternType),
 }
 
@@ -36,8 +35,10 @@ pub enum Problem {
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
+    /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
-    UnusedArgument(Symbol, Symbol, Region),
+    UnusedArgument(Symbol, bool, Symbol, Region),
+    UnusedBranchDef(Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
@@ -46,12 +47,13 @@ pub enum Problem {
         shadow: Loc<Ident>,
         kind: ShadowKind,
     },
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
+    CyclicAlias(Symbol, Region, Vec<Symbol>, AliasKind),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
         typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
+        alias_kind: AliasKind,
     },
     UnboundTypeVariable {
         typ: Symbol,
@@ -130,7 +132,7 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
-    IllegalClaimedAbility(Region),
+    IllegalDerivedAbility(Region),
     ImplementationNotFound {
         member: Symbol,
         region: Region,
@@ -149,6 +151,31 @@ pub enum Problem {
     },
     AbilityImplNotIdent {
         region: Region,
+    },
+    DuplicateImpl {
+        original: Region,
+        duplicate: Region,
+    },
+    NotAnAbility(Region),
+    ImplementsNonRequired {
+        region: Region,
+        ability: Symbol,
+        not_required: Vec<Symbol>,
+    },
+    DoesNotImplementAbility {
+        region: Region,
+        ability: Symbol,
+        not_implemented: Vec<Symbol>,
+    },
+    NotBoundInAllPatterns {
+        unbound_symbol: Symbol,
+        region: Region,
+    },
+    NoIdentifiersIntroduced(Region),
+    OverloadedSpecialization {
+        overload: Region,
+        original_opaque: Symbol,
+        ability_member: Symbol,
     },
 }
 
@@ -310,6 +337,24 @@ pub enum RuntimeError {
     EmptySingleQuote(Region),
     /// where 'aa'
     MultipleCharsInSingleQuote(Region),
+
+    DegenerateBranch(Region),
+}
+
+impl RuntimeError {
+    pub fn runtime_message(self) -> String {
+        use RuntimeError::*;
+
+        match self {
+            DegenerateBranch(region) => {
+                format!(
+                    "Hit a branch pattern that does not bind all symbols its body needs, at {:?}",
+                    region
+                )
+            }
+            err => format!("{:?}", err),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

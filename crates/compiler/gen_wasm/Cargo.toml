@@ -1,17 +1,18 @@
 [package]
 name = "roc_gen_wasm"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [dependencies]
 bitvec = "1"
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }
+roc_intern = { path = "../intern" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std", default-features = false }
+roc_std = { path = "../../roc_std" }
 roc_error_macros = { path = "../../error_macros" }

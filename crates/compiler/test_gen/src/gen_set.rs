@@ -273,6 +273,7 @@ fn from_list_result() {
                 |> Set.fromList
                 |> Set.toList
                 |> List.len
+                |> Num.toI64
             "#
         ),
         1,

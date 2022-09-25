@@ -173,8 +173,8 @@ mod test_parse {
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
-        pass/malformed_pattern_field_access.expr, // See https://github.com/rtfeldman/roc/issues/399
-        pass/malformed_pattern_module_name.expr, // See https://github.com/rtfeldman/roc/issues/399
+        pass/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
+        pass/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
         pass/minimal_app_header.header,
         pass/minus_twelve_minus_five.expr,
         pass/mixed_docs.expr,
@@ -191,7 +191,7 @@ mod test_parse {
         pass/nested_def_annotation.module,
         pass/nested_if.expr,
         pass/nested_module.header,
-        pass/newline_after_equals.expr, // Regression test for https://github.com/rtfeldman/roc/issues/51
+        pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
@@ -204,11 +204,13 @@ mod test_parse {
         pass/not_docs.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
+        pass/multiline_string.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_destructure_first_item_in_body.expr,
         pass/opaque_has_abilities.expr,
         pass/opaque_reference_expr_with_arguments.expr,
         pass/opaque_reference_expr.expr,
@@ -227,8 +229,9 @@ mod test_parse {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
-        pass/pattern_with_space_in_parens.expr, // https://github.com/rtfeldman/roc/issues/929
+        pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/plus_if.expr,
+        pass/plus_when.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
@@ -248,6 +251,7 @@ mod test_parse {
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
         pass/standalone_module_defs.module,
+        pass/expect_fx.module,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
@@ -259,13 +263,14 @@ mod test_parse {
         pass/two_branch_when.expr,
         pass/two_spaced_def.expr,
         pass/type_decl_with_underscore.expr,
-        pass/unary_negation_access.expr, // Regression test for https://github.com/rtfeldman/roc/issues/509
+        pass/unary_negation_access.expr, // Regression test for https://github.com/roc-lang/roc/issues/509
         pass/unary_negation_arg.expr,
         pass/unary_negation_with_parens.expr,
         pass/unary_negation.expr,
         pass/unary_not_with_parens.expr,
         pass/unary_not.expr,
         pass/underscore_backpassing.expr,
+        pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
         pass/var_if.expr,
         pass/var_is.expr,

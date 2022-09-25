@@ -2,7 +2,7 @@
 
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::{subs::Variable, types::MemberImpl};
 
 use crate::{
     abilities::AbilitiesStore,
@@ -48,6 +48,11 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                 }
             }
             Expectation => {
+                let loc_condition = &decls.expressions[index];
+
+                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+            }
+            ExpectationFx => {
                 let loc_condition = &decls.expressions[index];
 
                 visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
@@ -114,6 +119,12 @@ fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         }
 
         Declaration::Expects(expects) => {
+            let it = expects.regions.iter().zip(expects.conditions.iter());
+            for (region, condition) in it {
+                visitor.visit_expr(condition, *region, Variable::BOOL);
+            }
+        }
+        Declaration::ExpectsFx(expects) => {
             let it = expects.regions.iter().zip(expects.conditions.iter());
             for (region, condition) in it {
                 visitor.visit_expr(condition, *region, Variable::BOOL);
@@ -233,7 +244,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             walk_record_fields(visitor, updates.iter());
         }
         Expr::Tag {
-            variant_var: _,
+            tag_union_var: _,
             ext_var: _,
             name: _,
             arguments,
@@ -253,6 +264,19 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_expr(&le.value, le.region, *var);
         }
         Expr::Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            // TODO: what type does an expect have? bool
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
+        }
+        Expr::ExpectFx {
             loc_condition,
             loc_continuation,
             lookups_in_cond: _,
@@ -323,9 +347,13 @@ pub fn walk_when_branch<V: Visitor>(
         redundant: _,
     } = branch;
 
-    patterns
-        .iter()
-        .for_each(|pat| visitor.visit_pattern(&pat.value, pat.region, pat.value.opt_var()));
+    patterns.iter().for_each(|pat| {
+        visitor.visit_pattern(
+            &pat.pattern.value,
+            pat.pattern.region,
+            pat.pattern.value.opt_var(),
+        )
+    });
     visitor.visit_expr(&value.value, value.region, expr_var);
     if let Some(guard) = guard {
         visitor.visit_expr(&guard.value, guard.region, Variable::BOOL);
@@ -587,9 +615,9 @@ pub fn find_ability_member_and_owning_type_at(
         abilities_store: &AbilitiesStore,
     ) -> Option<Symbol> {
         abilities_store
-            .iter_specializations()
-            .find(|(_, ms)| ms.symbol == symbol)
-            .map(|(spec, _)| spec.1)
+            .iter_declared_implementations()
+            .find(|(_, member_impl)| matches!(member_impl, MemberImpl::Impl(sym) if *sym == symbol))
+            .map(|(impl_key, _)| impl_key.opaque)
     }
 }
 

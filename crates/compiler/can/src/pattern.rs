@@ -205,7 +205,7 @@ pub fn canonicalize_def_header_pattern<'a>(
                         }
                         // Likely a specialization of an ability.
                         Some(ability_member_name) => {
-                            output.references.insert_value_lookup(ability_member_name);
+                            output.references.insert_bound(symbol);
                             Pattern::AbilityMemberSpecialization {
                                 ident: symbol,
                                 specializes: ability_member_name,
@@ -227,10 +227,26 @@ pub fn canonicalize_def_header_pattern<'a>(
                 }
             }
         }
-        _ => canonicalize_pattern(env, var_store, scope, output, pattern_type, pattern, region),
+        _ => canonicalize_pattern(
+            env,
+            var_store,
+            scope,
+            output,
+            pattern_type,
+            pattern,
+            region,
+            PermitShadows(false),
+        ),
     }
 }
 
+/// Allow binding of symbols that appear shadowed.
+///
+/// For example, in the branch `A x | B x -> ...`, both pattern bind `x`; that's not a shadow!
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct PermitShadows(pub bool);
+
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -239,6 +255,7 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
+    permit_shadows: PermitShadows,
 ) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
@@ -250,15 +267,21 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow, new_symbol)) => {
-                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                    original_region,
-                    shadow: shadow.clone(),
-                    kind: ShadowKind::Variable,
-                }));
-                output.references.insert_bound(new_symbol);
+            Err((shadowed_symbol, shadow, new_symbol)) => {
+                if permit_shadows.0 {
+                    output.references.insert_bound(shadowed_symbol.value);
 
-                Pattern::Shadowed(original_region, shadow, new_symbol)
+                    Pattern::Identifier(shadowed_symbol.value)
+                } else {
+                    env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                        original_region: shadowed_symbol.region,
+                        shadow: shadow.clone(),
+                        kind: ShadowKind::Variable,
+                    }));
+                    output.references.insert_bound(new_symbol);
+
+                    Pattern::Shadowed(shadowed_symbol.region, shadow, new_symbol)
+                }
             }
         },
         Tag(name) => {
@@ -289,6 +312,7 @@ pub fn canonicalize_pattern<'a>(
                     pattern_type,
                     &loc_pattern.value,
                     loc_pattern.region,
+                    permit_shadows,
                 );
 
                 can_patterns.push((var_store.fresh(), can_pattern));
@@ -360,10 +384,7 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        Underscore(_) => match pattern_type {
-            WhenBranch | FunctionArg => Pattern::Underscore,
-            TopLevelDef | DefExpr => bad_underscore(env, region),
-        },
+        Underscore(_) => Pattern::Underscore,
 
         &NumLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_num(str) {
@@ -457,6 +478,7 @@ pub fn canonicalize_pattern<'a>(
                 pattern_type,
                 sub_pattern,
                 region,
+                permit_shadows,
             )
         }
         RecordDestructure(patterns) => {
@@ -482,9 +504,9 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow, new_symbol)) => {
+                            Err((shadowed_symbol, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region,
+                                    original_region: shadowed_symbol.region,
                                     shadow: shadow.clone(),
                                     kind: ShadowKind::Variable,
                                 }));
@@ -493,8 +515,11 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous =
-                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
+                                opt_erroneous = Some(Pattern::Shadowed(
+                                    shadowed_symbol.region,
+                                    shadow,
+                                    new_symbol,
+                                ));
                             }
                         };
                     }
@@ -511,6 +536,7 @@ pub fn canonicalize_pattern<'a>(
                             pattern_type,
                             &loc_guard.value,
                             loc_guard.region,
+                            permit_shadows,
                         );
 
                         destructs.push(Loc {
@@ -550,9 +576,9 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow, new_symbol)) => {
+                            Err((shadowed_symbol, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region,
+                                    original_region: shadowed_symbol.region,
                                     shadow: shadow.clone(),
                                     kind: ShadowKind::Variable,
                                 }));
@@ -561,8 +587,11 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous =
-                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
+                                opt_erroneous = Some(Pattern::Shadowed(
+                                    shadowed_symbol.region,
+                                    shadow,
+                                    new_symbol,
+                                ));
                             }
                         };
                     }
@@ -614,16 +643,6 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
     use roc_problem::can::BadPattern;
     env.problem(Problem::UnsupportedPattern(
         BadPattern::Unsupported(pattern_type),
-        region,
-    ));
-
-    Pattern::UnsupportedPattern(region)
-}
-
-fn bad_underscore(env: &mut Env, region: Region) -> Pattern {
-    use roc_problem::can::BadPattern;
-    env.problem(Problem::UnsupportedPattern(
-        BadPattern::UnderscoreInDef,
         region,
     ));
 

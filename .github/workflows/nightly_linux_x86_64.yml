@@ -3,29 +3,50 @@ on:
     - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
-
+    
 jobs:
   build:
     name: Rust tests, build and package nightly release
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
-    env:
-      FORCE_COLOR: 1 # for earthly logging
     steps:
-      - uses: actions/checkout@v2
-      - name: Earthly print version
-        run: earthly --version
-      - name: install dependencies, build, run tests, build release
-        run: ./ci/safe-earthly.sh +build-nightly-release
-      - name: Create pre-release with test_archive.tar.gz
-        uses: Anton-4/deploy-nightly@1609d8dfe211b078674801113ab7a2ec2938b2a9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
-        with:
-          upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
-          release_id: 51880579
-          asset_path: ./roc_linux_x86_64.tar.gz
-          asset_name: roc_nightly-linux_x86_64-$$.tar.gz # $$ inserts 6 char commit hash and date (YYYY-MM-DD)
-          asset_content_type: application/gzip
-          max_releases: 3
+      - uses: actions/checkout@v3
 
+      - name: create version.txt
+        run: ./ci/write_version.sh
+
+      - name: build release
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
+        # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
+
+      - name: get commit SHA
+        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        
+      - name: get date
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+        
+      - name: build file name
+        env:
+            DATE: ${{ env.DATE }}
+            SHA: ${{ env.SHA }}
+        run: echo "RELEASE_TAR_FILENAME=roc_nightly-linux_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+       
+      - name: Make nightly release tar archive
+        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
+
+      - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v3
+        with:
+           name: ${{ env.RELEASE_TAR_FILENAME }}
+           path: ${{ env.RELEASE_TAR_FILENAME }}
+           retention-days: 4
+
+      - name: build wasm repl
+        run: ./ci/www-repl.sh
+
+      - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v3
+        with:
+           name: roc_repl_wasm.tar.gz
+           path: roc_repl_wasm.tar.gz
+           retention-days: 4

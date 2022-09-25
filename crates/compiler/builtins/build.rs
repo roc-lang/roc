@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::str;
 
@@ -43,8 +44,12 @@ fn main() {
     }
 
     generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
-
     generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
+    generate_bc_file(
+        &bitcode_path,
+        "ir-windows-x86_64",
+        "builtins-windows-x86_64",
+    );
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -53,19 +58,15 @@ fn main() {
     #[cfg(not(windows))]
     const BUILTINS_HOST_FILE: &str = "builtins-host.o";
 
-    generate_object_file(
-        &bitcode_path,
-        "BUILTINS_HOST_O",
-        "object",
-        BUILTINS_HOST_FILE,
-    );
+    generate_object_file(&bitcode_path, "object", BUILTINS_HOST_FILE);
 
     generate_object_file(
         &bitcode_path,
-        "BUILTINS_WASM32_O",
-        "wasm32-object",
-        "builtins-wasm32.o",
+        "windows-x86_64-object",
+        "builtins-windows-x86_64.obj",
     );
+
+    generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
 
     copy_zig_builtins_to_target_dir(&bitcode_path);
 
@@ -84,20 +85,9 @@ fn main() {
         .expect("Failed to delete temp dir zig_cache_dir.");
 }
 
-fn generate_object_file(
-    bitcode_path: &Path,
-    env_var_name: &str,
-    zig_object: &str,
-    object_file_name: &str,
-) {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-
-    let dest_obj_path = Path::new(&out_dir).join(object_file_name);
+fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name: &str) {
+    let dest_obj_path = get_lib_dir().join(object_file_name);
     let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
-
-    // set the variable (e.g. BUILTINS_HOST_O) that is later used in
-    // `compiler/builtins/src/bitcode.rs` to load the object file
-    println!("cargo:rustc-env={}={}", env_var_name, dest_obj);
 
     let src_obj_path = bitcode_path.join(object_file_name);
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
@@ -109,6 +99,7 @@ fn generate_object_file(
             &bitcode_path,
             &zig_executable(),
             &["build", zig_object, "-Drelease=true"],
+            0,
         );
 
         println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
@@ -143,35 +134,36 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
         &bitcode_path,
         &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
+        0,
     );
 }
 
-fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
-    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
-    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
-
+pub fn get_lib_dir() -> PathBuf {
     // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
     // So we just need to shed a 3 of the outer layers to get `/target/debug/` and then add `lib`.
     let out_dir = env::var_os("OUT_DIR").unwrap();
-    let target_profile_dir = Path::new(&out_dir)
+
+    let lib_path = Path::new(&out_dir)
         .parent()
         .and_then(|path| path.parent())
         .and_then(|path| path.parent())
         .unwrap()
         .join("lib");
 
+    // create dir of it does not exist
+    fs::create_dir_all(lib_path.clone()).expect("Failed to make lib dir.");
+
+    lib_path
+}
+
+fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
+    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
+    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
+    let target_profile_dir = get_lib_dir();
+
     let zig_src_dir = bitcode_path.join("src");
 
-    std::fs::create_dir_all(&target_profile_dir).unwrap_or_else(|err| {
-        panic!(
-            "Failed to create output library directory for zig bitcode {:?}: {:?}",
-            target_profile_dir, err
-        );
-    });
-    let mut options = fs_extra::dir::CopyOptions::new();
-    options.content_only = true;
-    options.overwrite = true;
-    fs_extra::dir::copy(&zig_src_dir, &target_profile_dir, &options).unwrap_or_else(|err| {
+    cp_unless_zig_cache(&zig_src_dir, &target_profile_dir).unwrap_or_else(|err| {
         panic!(
             "Failed to copy zig bitcode files {:?} to {:?}: {:?}",
             zig_src_dir, target_profile_dir, err
@@ -179,8 +171,45 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
     });
 }
 
-fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
-where
+// recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
+fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
+    // Make sure the destination directory exists before we try to copy anything into it.
+    std::fs::create_dir_all(&target_dir).unwrap_or_else(|err| {
+        panic!(
+            "Failed to create output library directory for zig bitcode {:?}: {:?}",
+            target_dir, err
+        );
+    });
+
+    for entry in fs::read_dir(src_dir)? {
+        let src_path = entry?.path();
+        let src_filename = src_path.file_name().unwrap();
+
+        // Only copy individual files if they have the .zig extension
+        if src_path.extension().unwrap_or_default() == "zig" {
+            let dest = target_dir.join(src_filename);
+
+            fs::copy(&src_path, &dest).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to copy zig bitcode file {:?} to {:?}: {:?}",
+                    src_path, dest, err
+                );
+            });
+        } else if src_path.is_dir() && src_filename != "zig-cache" {
+            // Recursively copy all directories except zig-cache
+            cp_unless_zig_cache(&src_path, &target_dir.join(src_filename))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(
+    path: P,
+    command_str: &str,
+    args: I,
+    flaky_fail_counter: usize,
+) where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
@@ -199,10 +228,14 @@ where
                 };
 
                 // flaky test error that only occurs sometimes inside MacOS ci run
-                if error_str.contains("unable to build stage1 zig object: FileNotFound")
+                if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
                 {
-                    run_command(path, command_str, args)
+                    if flaky_fail_counter == 10 {
+                        panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                    } else {
+                        run_command(path, command_str, args, flaky_fail_counter + 1)
+                    }
                 } else {
                     panic!("{} failed: {}", command_str, error_str);
                 }

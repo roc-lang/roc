@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::procedure::References;
-use crate::scope::Scope;
+use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -18,7 +18,7 @@ pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
     pub references: VecSet<Symbol>,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
 }
 
 impl Annotation {
@@ -267,11 +267,11 @@ pub fn canonicalize_annotation(
     annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
-    let mut aliases = SendMap::default();
+    let mut aliases = VecMap::default();
 
     let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
@@ -475,7 +475,7 @@ fn can_annotation_help(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
@@ -566,6 +566,7 @@ fn can_annotation_help(
                             region,
                             alias_needs: alias.type_variables.len() as u8,
                             type_got: args.len() as u8,
+                            alias_kind: alias.kind,
                         });
                         return error;
                     }
@@ -621,11 +622,11 @@ fn can_annotation_help(
             let symbol = match scope.introduce(name.value.into(), region) {
                 Ok(symbol) => symbol,
 
-                Err((original_region, shadow, _new_symbol)) => {
-                    let problem = Problem::Shadowed(original_region, shadow.clone());
+                Err((shadowed_symbol, shadow, _new_symbol)) => {
+                    let problem = Problem::Shadowed(shadowed_symbol.region, shadow.clone());
 
                     env.problem(roc_problem::can::Problem::Shadowing {
-                        original_region,
+                        original_region: shadowed_symbol.region,
                         shadow,
                         kind: ShadowKind::Variable,
                     });
@@ -908,7 +909,7 @@ fn canonicalize_has_clause(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
@@ -929,7 +930,7 @@ fn canonicalize_has_clause(
             let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
 
             // Ability defined locally, whose members we are constructing right now...
-            if !pending_abilities_in_scope.contains(&symbol)
+            if !pending_abilities_in_scope.contains_key(&symbol)
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
             {
@@ -975,7 +976,7 @@ fn can_extension_type<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
@@ -1168,7 +1169,7 @@ fn can_assigned_fields<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
@@ -1219,7 +1220,7 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
-                    field_types.insert(label.clone(), Optional(field_type));
+                    field_types.insert(label.clone(), RigidOptional(field_type));
 
                     break 'inner label;
                 }
@@ -1281,7 +1282,7 @@ fn can_tags<'a>(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    local_aliases: &mut SendMap<Symbol, Alias>,
+    local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());

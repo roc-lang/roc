@@ -12,14 +12,20 @@ mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
     use lazy_static::lazy_static;
     use regex::Regex;
-    use roc_can::traverse::{find_ability_member_and_owning_type_at, find_type_at};
+    use roc_can::{
+        abilities::ImplKey,
+        traverse::{find_ability_member_and_owning_type_at, find_type_at},
+    };
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
-    use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
+    use roc_solve_problem::TypeError;
+    use roc_types::{
+        pretty_print::{name_and_print_var, DebugPrint},
+        types::MemberImpl,
+    };
     use std::path::PathBuf;
 
     // HELPERS
@@ -176,7 +182,13 @@ mod solve_expr {
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
-        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
+        can_problems.retain(|prob| {
+            !matches!(
+                prob,
+                roc_problem::can::Problem::UnusedDef(_, _)
+                    | roc_problem::can::Problem::UnusedBranchDef(..)
+            )
+        });
 
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
@@ -245,7 +257,13 @@ mod solve_expr {
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), print_only_under_alias: bool) {
+    #[derive(Default)]
+    struct InferOptions {
+        print_only_under_alias: bool,
+        allow_errors: bool,
+    }
+
+    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
         let (
             LoadedModule {
                 module_id: home,
@@ -269,12 +287,14 @@ mod solve_expr {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        assert!(
-            can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
-        );
-        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        if !options.allow_errors {
+            assert!(
+                can_problems.is_empty(),
+                "Canonicalization problems: {}",
+                can_problems
+            );
+            assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        }
 
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
@@ -295,7 +315,7 @@ mod solve_expr {
                 &interns,
                 DebugPrint {
                     print_lambda_sets: true,
-                    print_only_under_alias,
+                    print_only_under_alias: options.print_only_under_alias,
                 },
             );
             subs.rollback_to(snapshot);
@@ -325,11 +345,10 @@ mod solve_expr {
     }
 
     macro_rules! infer_queries {
-        ($program:expr, @$queries:literal $(,)?) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), false)
-        };
-        ($program:expr, @$queries:literal, print_only_under_alias=true $(,)?) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), true)
+        ($program:expr, @$queries:literal $($option:ident: $value:expr)*) => {
+            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
+                $($option: $value,)* ..InferOptions::default()
+            })
         };
     }
 
@@ -356,17 +375,32 @@ mod solve_expr {
             panic!();
         }
 
-        let known_specializations = abilities_store.iter_specializations();
+        let known_specializations = abilities_store.iter_declared_implementations().filter_map(
+            |(impl_key, member_impl)| match member_impl {
+                MemberImpl::Impl(impl_symbol) => {
+                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                        "declared implementations should be resolved conclusively after solving",
+                    );
+                    Some((impl_key, specialization.clone()))
+                }
+                MemberImpl::Derived | MemberImpl::Error => None,
+            },
+        );
+
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|((member, typ), _)| {
-                let member_data = abilities_store.member_def(member).unwrap();
-                let member_str = member.as_str(&interns);
+            .map(|(impl_key, _)| {
+                let ImplKey {
+                    opaque,
+                    ability_member,
+                } = impl_key;
+                let member_data = abilities_store.member_def(ability_member).unwrap();
+                let member_str = ability_member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
                 (
                     format!("{}:{}", ability_str, member_str),
-                    typ.as_str(&interns),
+                    opaque.as_str(&interns),
                 )
             })
             .collect::<HashSet<_>>();
@@ -1351,7 +1385,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    if True then
+                    if Bool.true then
                         42
                     else
                         24
@@ -1486,14 +1520,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    # technically, an empty record can be destructured
-                    {} = {}
-                    thunk = \{} -> 42
+                # technically, an empty record can be destructured
+                thunk = \{} -> 42
 
-                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+                xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
-                    when xEmpty is
-                        { x: {} } -> {}
+                when xEmpty is
+                    { x: {} } -> {}
                 "#
             ),
             "{}",
@@ -3424,7 +3457,7 @@ mod solve_expr {
                 { id1, id2 }
                 "#
             ),
-            "{ id1 : q -> q, id2 : a -> a }",
+            "{ id1 : q -> q, id2 : q1 -> q1 }",
         );
     }
 
@@ -3779,7 +3812,7 @@ mod solve_expr {
                     when x is
                         2 | 3 -> 0
                         a if a < 20 ->  1
-                        3 | 4 if False -> 2
+                        3 | 4 if Bool.false -> 2
                         _ -> 3
                 "#
             ),
@@ -3939,7 +3972,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num a } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c1 } }",
         );
     }
 
@@ -3970,7 +4003,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
         );
     }
 
@@ -4021,13 +4054,12 @@ mod solve_expr {
                 r#"
                 \rec ->
                     { x, y } : { x : I64, y ? Bool }*
-                    { x, y ? False } = rec
+                    { x, y ? Bool.false } = rec
 
                     { x, y }
                 "#
             ),
-            // TODO: when structural types unify with alias, they should take the alias name
-            "{ x : I64, y ? [False, True] }* -> { x : I64, y : Bool }",
+            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
         );
     }
 
@@ -4243,7 +4275,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[Empty, Foo Bar I64]",
+            "[Empty, Foo [Bar] I64]",
         );
     }
 
@@ -4890,7 +4922,7 @@ mod solve_expr {
 
     #[test]
     fn rigid_type_variable_problem() {
-        // see https://github.com/rtfeldman/roc/issues/1162
+        // see https://github.com/roc-lang/roc/issues/1162
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -4983,7 +5015,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                badComics: Bool -> [CowTools _, Thagomizer _]
+                badComics: [True, False] -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -4991,14 +5023,14 @@ mod solve_expr {
                 badComics
                 "#
             ),
-            "Bool -> [CowTools Str, Thagomizer Str]",
+            "[False, True] -> [CowTools Str, Thagomizer Str]",
         )
     }
 
     #[test]
     fn inference_var_tag_union_ext() {
         // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
-        // See https://github.com/rtfeldman/roc/issues/2053
+        // See https://github.com/roc-lang/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -5465,7 +5497,7 @@ mod solve_expr {
         )
     }
 
-    // https://github.com/rtfeldman/roc/issues/2379
+    // https://github.com/roc-lang/roc/issues/2379
     #[test]
     fn copy_vars_referencing_copied_vars() {
         infer_eq_without_problem(
@@ -5840,7 +5872,7 @@ mod solve_expr {
     }
 
     #[test]
-    // https://github.com/rtfeldman/roc/issues/2702
+    // https://github.com/roc-lang/roc/issues/2702
     fn tag_inclusion_behind_opaque() {
         infer_eq_without_problem(
             indoc!(
@@ -5897,7 +5929,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                if True then List.first [] else Str.toI64 ""
+                if Bool.true then List.first [] else Str.toI64 ""
                 "#
             ),
             "Result I64 [InvalidNumStr, ListWasEmpty]*",
@@ -6130,7 +6162,7 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, b -> Bool | a has Hash, b has Hash",
+            "a, a1 -> Bool | a has Hash, a1 has Hash",
         )
     }
 
@@ -6188,7 +6220,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [foo] to "./platform"
 
-                foo : Bool -> Str
+                foo : [True, False] -> Str
                 foo = \ob ->
                 #      ^^
                     when ob is
@@ -6200,8 +6232,8 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        ob : Bool
-        ob : Bool
+        ob : [False, True]
+        ob : [False, True]
         True : [False, True]
         False : [False, True]
         "###
@@ -6298,14 +6330,14 @@ mod solve_expr {
                 r#"
                 app "test" provides [zeroEncoder] to "./platform"
 
-                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+                MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
                 Format has it : fmt -> {} | fmt has Format
 
-                zeroEncoder = @Encoder \lst, _ -> lst
+                zeroEncoder = @MEncoder \lst, _ -> lst
                 "#
             ),
-            "Encoder a | a has Format",
+            "MEncoder a | a has Format",
         )
     }
 
@@ -6316,27 +6348,27 @@ mod solve_expr {
                 r#"
                 app "test" provides [myU8Bytes] to "./platform"
 
-                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+                MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-                Encoding has
-                  toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+                MEncoding has
+                  toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
 
                 Format has
-                  u8 : U8 -> Encoder fmt | fmt has Format
+                  u8 : U8 -> MEncoder fmt | fmt has Format
 
-                appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
-                appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
+                appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt has Format
+                appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-                toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+                toBytes : val, fmt -> List U8 | val has MEncoding, fmt has Format
                 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
                 Linear := {} has [Format {u8}]
 
-                u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+                u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
                 #^^{-1}
 
-                MyU8 := U8 has [Encoding {toEncoder}]
+                MyU8 := U8 has [MEncoding {toEncoder}]
 
                 toEncoder = \@MyU8 n -> u8 n
                 #^^^^^^^^^{-1}
@@ -6346,8 +6378,8 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        Linear#u8(10) : U8 -[[u8(10)]]-> Encoder Linear
-        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> Encoder fmt | fmt has Format
+        Linear#u8(10) : U8 -[[u8(10)]]-> MEncoder Linear
+        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> MEncoder fmt | fmt has Format
         myU8Bytes : List U8
         "###
         )
@@ -6360,21 +6392,21 @@ mod solve_expr {
                 r#"
                 app "test" provides [myU8] to "./platform"
 
-                DecodeError : [TooShort, Leftover (List U8)]
+                MDecodeError : [TooShort, Leftover (List U8)]
 
-                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
 
-                Decoding has
-                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+                MDecoding has
+                    decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
 
-                DecoderFormatting has
-                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+                MDecoderFormatting has
+                    u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
 
-                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
-                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+                decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+                decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
-                fromBytes : List U8, fmt -> Result val DecodeError
-                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes : List U8, fmt -> Result val MDecodeError
+                            | fmt has MDecoderFormatting, val has MDecoding
                 fromBytes = \lst, fmt ->
                     when decodeWith lst decoder fmt is
                         { result, rest } ->
@@ -6383,17 +6415,17 @@ mod solve_expr {
                                 Err e -> Err e
 
 
-                Linear := {} has [DecoderFormatting {u8}]
+                Linear := {} has [MDecoderFormatting {u8}]
 
-                u8 = @Decoder \lst, @Linear {} ->
+                u8 = @MDecoder \lst, @Linear {} ->
                 #^^{-1}
                         when List.first lst is
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8 has [Decoder {decoder}]
+                MyU8 := U8 has [MDecoding {decoder}]
 
-                decoder = @Decoder \lst, fmt ->
+                decoder = @MDecoder \lst, fmt ->
                 #^^^^^^^{-1}
                     when decodeWith lst u8 fmt is
                         { result, rest } ->
@@ -6404,11 +6436,11 @@ mod solve_expr {
                 #^^^^{-1}
                 "#
             ),
-            @r#"
-            Linear#u8(11) : Decoder U8 Linear
-            MyU8#decoder(12) : Decoder MyU8 fmt | fmt has DecoderFormatting
-            myU8 : Result MyU8 DecodeError
-            "#
+            @r###"
+        Linear#u8(11) : MDecoder U8 Linear
+        MyU8#decoder(12) : MDecoder MyU8 fmt | fmt has MDecoderFormatting
+        myU8 : Result MyU8 MDecodeError
+        "###
         )
     }
 
@@ -6462,7 +6494,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ Encoding, toEncoder }, Json]
+                    imports [Json]
                     provides [main] to "./platform"
 
                 HelloWorld := {} has [Encoding {toEncoder}]
@@ -6483,7 +6515,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record() {
         infer_queries!(
             indoc!(
@@ -6496,32 +6527,27 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record_with_nested_custom_impl() {
         infer_queries!(
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ toEncoder, Encoding, custom }]
+                    imports [Encode.{ toEncoder, custom }]
                     provides [main] to "./platform"
 
-                A := {}
+                A := {} has [Encoding {toEncoder}]
                 toEncoder = \@A _ -> custom \b, _ -> b
 
                 main = toEncoder { a: @A {} }
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
@@ -6662,7 +6688,7 @@ mod solve_expr {
             A#id(4) : A -[[id(4)]]-> A
             idChoice : a -[[] + a:id(2):1]-> a | a has Id
             idChoice : A -[[id(4)]]-> A
-            "#,
+            "#
         )
     }
 
@@ -6694,10 +6720,10 @@ mod solve_expr {
             ),
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            Id#id(3) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
             alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6726,8 +6752,8 @@ mod solve_expr {
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             it : {} -[[8(8)]]-> {}
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6757,8 +6783,8 @@ mod solve_expr {
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6772,6 +6798,8 @@ mod solve_expr {
                 Diverge has diverge : a -> a | a has Diverge
 
                 A := {} has [Diverge {diverge}]
+
+                diverge : A -> A
                 diverge = \@A {} -> diverge (@A {})
                 #^^^^^^^{-1}        ^^^^^^^
 
@@ -6785,7 +6813,7 @@ mod solve_expr {
             ),
             @r###"
         A#diverge(4) : A -[[diverge(4)]]-> A
-        Diverge#diverge(2) : A -[[diverge(4)]]-> A
+        A#diverge(4) : A -[[diverge(4)]]-> A
         A#diverge(4) : A -[[diverge(4)]]-> A
         "###
         )
@@ -6793,6 +6821,43 @@ mod solve_expr {
 
     #[test]
     fn resolve_mutually_recursive_ability_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {} has [Bounce {ping: pingA, pong: pongA}]
+
+                pingA = \@A {} -> pong (@A {})
+                #^^^^^{-1}        ^^^^
+
+                pongA = \@A {} -> ping (@A {})
+                #^^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            @r###"
+        pingA : A -[[pingA(5)]]-> A
+        A#pong(6) : A -[[pongA(6)]]-> A
+        pongA : A -[[pongA(6)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
+        "###
+        )
+    }
+
+    #[test]
+    fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
         infer_queries!(
             indoc!(
                 r#"
@@ -6820,7 +6885,7 @@ mod solve_expr {
             ),
             @r###"
         A#ping(5) : A -[[ping(5)]]-> A
-        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
         A#pong(6) : A -[[pong(6)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
@@ -6847,7 +6912,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 f : _ -> _
-                f = \_ -> if False then "" else f ""
+                f = \_ -> if Bool.false then "" else f ""
 
                 f
                 "#
@@ -6863,7 +6928,7 @@ mod solve_expr {
                 r#"
                 f : _ -> Str
                 f = \s -> g s
-                g = \s -> if True then s else f s
+                g = \s -> if Bool.true then s else f s
 
                 g
                 "#
@@ -6895,8 +6960,8 @@ mod solve_expr {
             Named name outerList : [Named Str (List a)] as a
             name : Str
             outerList : List ([Named Str (List a)] as a)
-            "#,
-            print_only_under_alias = true
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -7012,8 +7077,8 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#,
-            print_only_under_alias = true,
+            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            print_only_under_alias: true
         );
     }
 
@@ -7188,24 +7253,11 @@ mod solve_expr {
                 #   ^
                 "#
             ),
-            // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
-            // Two problems:
-            //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
-            //        of the type to the toplevel, but that is NOT correct here!
-            //   - 2. During solving lambda set compaction cannot happen until an entire module
-            //        is solved, which forces resolved-but-not-yet-compacted lambdas in
-            //        unspecialized lambda sets to pull the rank into a lower, non-generalized
-            //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
-            //        poorly with (1)
-            //
-            // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
-            // correctly!
-            // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : Go -[[g(8)]]-> {}
-        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        h : b -[[] + b:g(4):1]-> {} | b has G
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         h : Go -[[g(8)]]-> {}
         "###
         );
@@ -7273,6 +7325,169 @@ mod solve_expr {
         Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
         Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
         Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+                #^{-1}
+
+                f = \flag, a, b ->
+                #          ^  ^
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                            #    ^
+                    it
+                #   ^^
+
+                main = (f A (@C {}) (@D {})) (@E {})
+                #       ^
+                #       ^^^^^^^^^^^^^^^^^^^
+                #^^^^{-1}
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(8)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        E#k(10) : E -[[k(10)]]-> {}
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        f : [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
+        f A (@C {}) (@D {}) : E -[[k(10)]]-> {}
+        main : {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables_two_results() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k: kE}]
+                kE = \@E _ -> {}
+                #^^{-1}
+
+                F := {} has [K {k: kF}]
+                kF = \@F _ -> {}
+                #^^{-1}
+
+                f = \flag, a, b ->
+                #          ^  ^
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                            #    ^
+                    it
+                #   ^^
+
+                main =
+                #^^^^{-1}
+                    it =
+                #   ^^
+                        (f A (@C {}) (@D {}))
+                #        ^
+                    if Bool.true
+                        then it (@E {})
+                        #    ^^
+                        else it (@F {})
+                        #    ^^
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        kE : E -[[kE(11)]]-> {}
+        kF : F -[[kF(12)]]-> {}
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+        it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+        main : {}
+        it : k -[[] + k:k(4):1]-> {} | k has K
+        f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        it : E -[[kE(11)]]-> {}
+        it : F -[[kF(12)]]-> {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_branching_over_single_variable() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [f] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+
+                f = \flag, a, c ->
+                    it =
+                        when flag is
+                            A -> j a
+                            B -> j a
+                    it c
+                #   ^^ ^
+                "#
+            ),
+            @r###"
+        it : k -[[] + j:j(2):2]-> {} | j has J, k has K
+        c : k | k has K
         "###
         );
     }
@@ -7355,6 +7570,257 @@ mod solve_expr {
                 "#
             ),
             "List (A U8)",
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_multiple_branch_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                    C x | D x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str, C Str, D Str]
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn catchall_branch_for_pattern_not_last() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        A B _ -> ""
+                        A _ C -> ""
+                "#
+            ),
+            @r#"x : [A [B]* [C]*]"#
+            allow_errors: true
+        );
+    }
+
+    #[test]
+    fn catchall_branch_walk_into_nested_types() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        { a: A { b: B } } -> ""
+                        _ -> ""
+                "#
+            ),
+            @r#"x : { a : [A { b : [B]* }*]* }*"#
+        );
+    }
+
+    #[test]
+    fn infer_type_with_underscore_destructure_assignment() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Pair x _ = Pair 0 1
+
+                x
+                "#
+            ),
+            "Num *",
+        );
+    }
+
+    #[test]
+    fn issue_3444() {
+        infer_queries!(
+            indoc!(
+                r#"
+                compose = \f, g ->
+                    closCompose = \x -> g (f x)
+                    closCompose
+
+                const = \x ->
+                    closConst = \_ -> x
+                    closConst
+
+                list = []
+
+                res : Str -> Str
+                res = List.walk list (const "z") (\c1, c2 -> compose c1 c2)
+                #                     ^^^^^                  ^^^^^^^
+                #                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+                #^^^{-1}
+
+                res "hello"
+                #^^^{-1}
+                "#
+            ),
+            @r###"
+        const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
+        compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
+        res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
+        "###
+        );
+    }
+
+    #[test]
+    fn transient_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = "abc"
+
+                getX = \{} -> x
+
+                h = \{} -> (getX {})
+                #^{-1}
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(3) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn transient_captures_after_def_ordering() {
+        infer_queries!(
+            indoc!(
+                r#"
+                h = \{} -> (getX {})
+                #^{-1}
+
+                getX = \{} -> x
+
+                x = "abc"
+
+                h {}
+                "#
+            ),
+        @"h : {}* -[[h(1) Str]]-> Str"
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_captures() {
+        infer_queries!(
+            indoc!(
+                r#"
+                x = Bool.true
+                y = Bool.false
+
+                a = "foo"
+                b = "bar"
+
+                foo = \{} -> if x then a else bar {}
+                #^^^{-1}
+                bar = \{} -> if y then b else foo {}
+                #^^^{-1}
+
+                bar {}
+                "#
+            ),
+        @r###"
+        foo : {} -[[foo(5) Bool Bool Str Str]]-> Str
+        bar : {} -[[bar(6) Bool Bool Str Str]]-> Str
+        "###
+        );
+    }
+
+    #[test]
+    fn unify_optional_record_fields_in_two_closed_records() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : { x ? Str, y ? Str } -> {}
+                
+                f {x : ""}
+                "#
+            ),
+            "{}",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_branch() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                when x is
+                    Ok s -> s
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str []
+                x = Ok "abc"
+
+                Ok str = x
+
+                str
+                "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : Result Str [] -> Str
+                x = \Ok s -> s
+
+                x
+                "#
+            ),
+            "Result Str [] -> Str",
         );
     }
 }

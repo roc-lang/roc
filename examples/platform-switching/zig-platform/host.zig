@@ -86,30 +86,21 @@ pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    // start time
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    var timer = std.time.Timer.start() catch unreachable;
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
     roc__mainForHost_1_exposed_generic(&callresult);
 
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
+    const nanos = timer.read();
+    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;
 
     callresult.deinit();
 
-    const delta = to_seconds(ts2) - to_seconds(ts1);
-
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
 }

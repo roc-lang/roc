@@ -14,7 +14,7 @@ pub enum NumLiteral<'a> {
 
 pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes().get(0) {
+        match state.bytes().first() {
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
                 parse_number_base(false, state.bytes(), state)
             }
@@ -28,7 +28,7 @@ pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber>
 
 pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes().get(0) {
+        match state.bytes().first() {
             Some(first_byte) if *first_byte == b'-' => {
                 // drop the minus
                 parse_number_base(true, &state.bytes()[1..], state)
@@ -92,7 +92,7 @@ fn chomp_number_dec<'a>(
         return Err((Progress::NoProgress, ENumber::End, state));
     }
 
-    if !bytes.get(0).copied().unwrap_or_default().is_ascii_digit() {
+    if !bytes.first().copied().unwrap_or_default().is_ascii_digit() {
         // we're probably actually looking at unary negation here
         return Err((Progress::NoProgress, ENumber::End, state));
     }
@@ -117,7 +117,7 @@ fn chomp_number(mut bytes: &[u8]) -> (bool, usize) {
     let start_bytes_len = bytes.len();
     let mut is_float = false;
 
-    while let Some(byte) = bytes.get(0) {
+    while let Some(byte) = bytes.first() {
         match byte {
             b'.' => {
                 // skip, fix multiple `.`s in canonicalization

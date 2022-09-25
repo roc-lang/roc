@@ -1,9 +1,9 @@
 interface Stdin
     exposes [line]
-    imports [pf.Effect, Task.{ Task }, InternalTask]
+    imports [Effect, Task.{ Task }, InternalTask]
 
 line : Task Str * [Read [Stdin]*]*
 line =
-    Effect.getLine
+    Effect.stdinLine
     |> Effect.map Ok
     |> InternalTask.fromEffect

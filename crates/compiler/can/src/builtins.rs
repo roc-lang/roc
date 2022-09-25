@@ -55,9 +55,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
 
-                Symbol::NUM_DIV_FRAC => Some(lowlevel_2(Symbol::NUM_DIV_FRAC, LowLevel::NumDivUnchecked, var_store)),
-                Symbol::NUM_DIV_TRUNC => Some(lowlevel_2(Symbol::NUM_DIV_TRUNC, LowLevel::NumDivUnchecked, var_store)),
-
                 _ => None,
             }
         }
@@ -81,7 +78,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::NumToFloatCast => unreachable!(),
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
-                LowLevel::NumDivUnchecked => unreachable!(),
 
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
@@ -162,6 +158,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumLt; NUM_LT; 2,
     NumLte; NUM_LTE; 2,
     NumCompare; NUM_COMPARE; 2,
+    NumDivFrac; NUM_DIV_FRAC; 2,
+    NumDivTruncUnchecked; NUM_DIV_TRUNC; 2,
     NumDivCeilUnchecked; NUM_DIV_CEIL; 2,
     NumRemUnchecked; NUM_REM; 2,
     NumIsMultipleOf; NUM_IS_MULTIPLE_OF; 2,
@@ -444,7 +442,7 @@ fn no_region<T>(value: T) -> Loc<T> {
 #[inline(always)]
 fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
-        variant_var: var_store.fresh(),
+        tag_union_var: var_store.fresh(),
         ext_var: var_store.fresh(),
         name: TagName(name.into()),
         arguments: args

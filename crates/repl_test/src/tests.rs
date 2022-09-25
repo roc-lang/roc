@@ -523,7 +523,7 @@ fn list_of_2_field_records() {
 
 #[test]
 fn three_element_record() {
-    // if this tests turns out to fail on 32-bit platforms, look at jit_to_ast_help
+    // if this tests turns out to fail on 32-bit targets, look at jit_to_ast_help
     expect_success(
         "{ a: 1, b: 2, c: 3 }",
         "{ a: 1, b: 2, c: 3 } : { a : Num *, b : Num *, c : Num * }",
@@ -532,7 +532,7 @@ fn three_element_record() {
 
 #[test]
 fn four_element_record() {
-    // if this tests turns out to fail on 32-bit platforms, look at jit_to_ast_help
+    // if this tests turns out to fail on 32-bit targets, look at jit_to_ast_help
     expect_success(
         "{ a: 1, b: 2, c: 3, d: 4 }",
         "{ a: 1, b: 2, c: 3, d: 4 } : { a : Num *, b : Num *, c : Num *, d : Num * }",
@@ -542,7 +542,18 @@ fn four_element_record() {
 #[test]
 fn multiline_string() {
     // If a string contains newlines, format it as a multiline string in the output
-    expect_success(r#""\n\nhi!\n\n""#, "\"\n\nhi!\n\n\" : Str");
+    expect_success(
+        r#""\n\nhi!\n\n""#,
+        indoc!(
+            r#""""
+
+            
+                hi!
+            
+
+                """ : Str"#
+        ),
+    );
 }
 
 #[test]
@@ -600,16 +611,16 @@ fn type_problem() {
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The 2nd argument to add is not what I expect:
+                This 2nd argument to add has an unexpected type:
 
                 4│      1 + ""
                             ^^
 
-                This argument is a string of type:
+                The argument is a string of type:
 
                     Str
 
-                But add needs the 2nd argument to be:
+                But add needs its 2nd argument to be:
 
                     Num a
                 "#
@@ -1190,5 +1201,41 @@ fn opaque_wrap_function() {
             "#
         ),
         "[@A 1, @A 2, @A 3] : List (A U8)",
+    );
+}
+
+#[test]
+fn dict_get_single() {
+    expect_success(
+        indoc!(
+            r#"
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0
+            "#
+        ),
+        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
+    )
+}
+
+#[test]
+fn record_of_poly_function() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a" }
+            "#
+        ),
+        r#"{ a: <function> } : { a : * -> Str }"#,
+    );
+}
+
+#[test]
+fn record_of_poly_function_and_string() {
+    expect_success(
+        indoc!(
+            r#"
+            { a: \_ -> "a", b: "b" }
+            "#
+        ),
+        r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
     );
 }

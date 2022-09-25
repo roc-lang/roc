@@ -5,12 +5,13 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
+    ResolvedImplementations,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -22,6 +23,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -29,10 +31,12 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
+    UpdateModeIds,
 };
-use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{
+    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -40,9 +44,9 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::RenderTarget;
-use roc_solve::module::{Solved, SolvedModule};
-use roc_solve::solve;
+use roc_reporting::report::{Annotation, RenderTarget};
+use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
+use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
@@ -61,9 +65,9 @@ use crate::work::Dependencies;
 pub use crate::work::Phase;
 
 #[cfg(target_family = "wasm")]
-use crate::wasm_system_time::{Duration, SystemTime};
+use crate::wasm_instant::{Duration, Instant};
 #[cfg(not(target_family = "wasm"))]
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -76,6 +80,8 @@ const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// TODO: how can we populate these at compile/runtime from the standard library?
+/// Consider updating the macro in symbol to do this?
 const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("Num", Symbol::NUM_NUM),
     ("Int", Symbol::NUM_INT),
@@ -112,8 +118,48 @@ const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("Dec", Symbol::NUM_DEC),
 ];
 
+const MODULE_ENCODE_TYPES: &[(&str, Symbol)] = &[
+    ("Encoder", Symbol::ENCODE_ENCODER),
+    ("Encoding", Symbol::ENCODE_ENCODING),
+    ("EncoderFormatting", Symbol::ENCODE_ENCODERFORMATTING),
+];
+
+const MODULE_DECODE_TYPES: &[(&str, Symbol)] = &[
+    ("DecodeError", Symbol::DECODE_DECODE_ERROR),
+    ("DecodeResult", Symbol::DECODE_DECODE_RESULT),
+    ("Decoder", Symbol::DECODE_DECODER_OPAQUE),
+    ("Decoding", Symbol::DECODE_DECODING),
+    ("DecoderFormatting", Symbol::DECODE_DECODERFORMATTING),
+];
+
 macro_rules! log {
     ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
+}
+
+#[derive(Debug)]
+pub struct LoadConfig {
+    pub target_info: TargetInfo,
+    pub render: RenderTarget,
+    pub threading: Threading,
+    pub exec_mode: ExecutionMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExecutionMode {
+    Test,
+    Check,
+    Executable,
+    /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
+    ExecutableIfCheck,
+}
+
+impl ExecutionMode {
+    fn goal_phase(&self) -> Phase {
+        match self {
+            ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
+            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck => Phase::SolveTypes,
+        }
+    }
 }
 
 /// Struct storing various intermediate stages by their ModuleId
@@ -138,9 +184,25 @@ struct ModuleCache<'a> {
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+}
+
+impl<'a> ModuleCache<'a> {
+    pub fn total_problems(&self) -> usize {
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        total
+    }
 }
 
 impl Default for ModuleCache<'_> {
@@ -166,6 +228,7 @@ impl Default for ModuleCache<'_> {
             NUM,
             BOX,
             ENCODE,
+            DECODE,
             JSON,
         }
 
@@ -417,6 +480,9 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
+                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
+                    && state.module_cache.expectations.contains_key(&module_id);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
@@ -430,6 +496,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    build_expects,
                 }
             }
             Phase::MakeSpecializations => {
@@ -461,8 +528,8 @@ fn start_phase<'a>(
                             IdentIds::default(),
                             Subs::default(),
                             ProcsBase::default(),
-                            LayoutCache::new(state.target_info),
-                            ModuleTiming::new(SystemTime::now()),
+                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
+                            ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
                         let found_specializations = state
@@ -555,14 +622,14 @@ pub struct LoadedModule {
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Declarations>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub exposed_types_storage: ExposedTypesStorageSubs,
-    pub resolved_specializations: ResolvedSpecializations,
+    pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -662,22 +729,38 @@ struct LateSpecializationsModule<'a> {
     procs_base: ProcsBase<'a>,
 }
 
+#[derive(Debug, Default)]
+pub struct ToplevelExpects {
+    pub pure: VecMap<Symbol, Region>,
+    pub fx: VecMap<Symbol, Region>,
+}
+
 #[derive(Debug)]
 pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
     pub output_path: Box<Path>,
-    pub platform_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: Vec<Symbol>,
+    pub toplevel_expects: ToplevelExpects,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
+}
+
+#[derive(Debug)]
+pub enum EntryPoint<'a> {
+    Executable {
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        platform_path: Box<Path>,
+    },
+    Test,
 }
 
 #[derive(Debug)]
@@ -754,7 +837,7 @@ enum Msg<'a> {
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         exposed_types_storage: ExposedTypesStorageSubs,
-        resolved_specializations: ResolvedSpecializations,
+        resolved_implementations: ResolvedImplementations,
         dep_idents: IdentIdsByModule,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
@@ -767,7 +850,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
-        toplevel_expects: std::vec::Vec<Symbol>,
+        toplevel_expects: ToplevelExpects,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -785,6 +868,9 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
+        /// The layout interner after all passes in mono are done.
+        /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
+        layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
     },
 
@@ -846,7 +932,6 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub platform_data: Option<PlatformData>,
-    pub goal_phase: Phase,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
@@ -855,7 +940,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: Vec<Symbol>,
+    pub toplevel_expects: ToplevelExpects,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -884,6 +969,7 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub render: RenderTarget,
+    pub exec_mode: ExecutionMode,
 
     /// All abilities across all modules.
     pub world_abilities: WorldAbilities,
@@ -892,39 +978,44 @@ struct State<'a> {
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
+
+    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
 }
 
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
+    fn goal_phase(&self) -> Phase {
+        self.exec_mode.goal_phase()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
-        goal_phase: Phase,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
         number_of_workers: usize,
+        exec_mode: ExecutionMode,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
-        let dependencies = Dependencies::new(goal_phase);
+        let dependencies = Dependencies::new(exec_mode.goal_phase());
 
         Self {
             root_id,
             root_subs: None,
             target_info,
             platform_data: None,
-            goal_phase,
             output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
             dependencies,
             procedures: MutMap::default(),
-            toplevel_expects: Vec::new(),
+            toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -938,8 +1029,10 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
+            exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
+            layout_interner: GlobalInterner::with_capacity(128),
         }
     }
 }
@@ -958,12 +1051,12 @@ pub struct ModuleTiming {
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
-    start_time: SystemTime,
-    end_time: SystemTime,
+    start_time: Instant,
+    end_time: Instant,
 }
 
 impl ModuleTiming {
-    pub fn new(start_time: SystemTime) -> Self {
+    pub fn new(start_time: Instant) -> Self {
         ModuleTiming {
             read_roc_file: Duration::default(),
             parse_header: Duration::default(),
@@ -979,7 +1072,7 @@ impl ModuleTiming {
     }
 
     pub fn total(&self) -> Duration {
-        self.end_time.duration_since(self.start_time).unwrap()
+        self.end_time.duration_since(self.start_time)
     }
 
     /// Subtract all the other fields from total_start_to_finish
@@ -997,10 +1090,10 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        let calculate = |t: Result<Duration, _>| -> Option<Duration> {
+        let calculate = |d: Option<Duration>| -> Option<Duration> {
             make_specializations
                 .iter()
-                .fold(t.ok(), |t, pass_time| t?.checked_sub(*pass_time))?
+                .fold(d, |d, pass_time| d?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
@@ -1010,7 +1103,7 @@ impl ModuleTiming {
                 .checked_sub(*read_roc_file)
         };
 
-        calculate(end_time.duration_since(*start_time)).unwrap_or_default()
+        calculate(Some(end_time.duration_since(*start_time))).unwrap_or_default()
     }
 }
 
@@ -1062,6 +1155,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        build_expects: bool,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1144,16 +1238,14 @@ pub fn load_and_typecheck_str<'a>(
     // where we want to regenerate the cached data
     let cached_subs = MutMap::default();
 
-    match load(
-        arena,
-        load_start,
-        exposed_types,
-        Phase::SolveTypes,
+    let load_config = LoadConfig {
         target_info,
-        cached_subs,
         render,
         threading,
-    )? {
+        exec_mode: ExecutionMode::Check,
+    };
+
+    match load(arena, load_start, exposed_types, cached_subs, load_config)? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
@@ -1186,7 +1278,7 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {
-            let root_start_time = SystemTime::now();
+            let root_start_time = Instant::now();
 
             let res_loaded = load_filename(
                 arena,
@@ -1273,7 +1365,7 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {
-            let root_start_time = SystemTime::now();
+            let root_start_time = Instant::now();
 
             load_from_str(
                 arena,
@@ -1362,11 +1454,8 @@ pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
-    target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
-    render: RenderTarget,
-    threading: Threading,
+    load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
@@ -1383,7 +1472,7 @@ pub fn load<'a>(
                 Err(_) => Threads::Single,
                 Ok(0) => unreachable!("NonZeroUsize"),
                 Ok(1) => Threads::Single,
-                Ok(reported) => match threading {
+                Ok(reported) => match load_config.threading {
                     Threading::Single => Threads::Single,
                     Threading::AllAvailable => Threads::Many(reported),
                     Threading::AtMost(at_most) => Threads::Many(Ord::min(reported, at_most)),
@@ -1397,20 +1486,20 @@ pub fn load<'a>(
             arena,
             load_start,
             exposed_types,
-            goal_phase,
-            target_info,
+            load_config.target_info,
             cached_subs,
-            render,
+            load_config.render,
+            load_config.exec_mode,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
             load_start,
             exposed_types,
-            goal_phase,
-            target_info,
+            load_config.target_info,
             cached_subs,
-            render,
+            load_config.render,
             threads,
+            load_config.exec_mode,
         ),
     }
 }
@@ -1421,10 +1510,10 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1445,13 +1534,13 @@ pub fn load_single_threaded<'a>(
     let mut state = State::new(
         root_id,
         target_info,
-        goal_phase,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
         cached_subs,
         render,
         number_of_workers,
+        exec_mode,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1513,7 +1602,7 @@ fn state_thread_step<'a>(
                     exposed_vars_by_symbol,
                     exposed_aliases_by_symbol,
                     exposed_types_storage,
-                    resolved_specializations,
+                    resolved_implementations,
                     dep_idents,
                     documentation,
                     abilities_store,
@@ -1532,7 +1621,7 @@ fn state_thread_step<'a>(
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
                         exposed_types_storage,
-                        resolved_specializations,
+                        resolved_implementations,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -1542,12 +1631,14 @@ fn state_thread_step<'a>(
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
+                    layout_interner,
                     exposed_to_host,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+                    let monomorphized =
+                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -1622,11 +1713,11 @@ fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
     available_threads: usize,
+    exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1662,13 +1753,13 @@ fn load_multi_threaded<'a>(
     let mut state = State::new(
         root_id,
         target_info,
-        goal_phase,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
         cached_subs,
         render,
         num_workers,
+        exec_mode,
     );
 
     // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work
@@ -1923,12 +2014,12 @@ fn start_tasks<'a>(
 }
 
 macro_rules! debug_print_ir {
-    ($state:expr, $flag:path) => {
+    ($state:expr, $interner:expr, $flag:path) => {
         dbg_do!($flag, {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty(200))
+                .map(|proc| proc.to_pretty($interner, 200))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
@@ -2166,6 +2257,7 @@ fn update<'a>(
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
 
+                // ENCODE
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
@@ -2173,6 +2265,27 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::ENCODE, Region::zero());
+
+                for (type_name, symbol) in MODULE_ENCODE_TYPES {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
+                }
+
+                // DECODE
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::DECODE));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::DECODE, Region::zero());
+
+                for (type_name, symbol) in MODULE_DECODE_TYPES {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
+                }
             }
 
             state
@@ -2190,7 +2303,7 @@ fn update<'a>(
             work.extend(state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
-                state.goal_phase,
+                state.exec_mode.goal_phase(),
             ));
 
             state.module_cache.headers.insert(header.module_id, header);
@@ -2291,14 +2404,21 @@ fn update<'a>(
             loc_expects,
         } => {
             log!("solved types for {:?}", module_id);
-            module_timing.end_time = SystemTime::now();
+            module_timing.end_time = Instant::now();
 
             state
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            if !loc_expects.is_empty() {
+            let should_include_expects = !loc_expects.is_empty() && {
+                let modules = state.arc_modules.lock();
+                modules
+                    .package_eq(module_id, state.root_id)
+                    .expect("root or this module is not yet known - that's a bug!")
+            };
+
+            if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
                 let expectations = Expectations {
@@ -2323,7 +2443,11 @@ fn update<'a>(
                 Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
-            if is_host_exposed {
+            let add_to_host_exposed = is_host_exposed &&
+                // During testing, we don't need to expose anything to the host.
+                !matches!(state.exec_mode, ExecutionMode::Test);
+
+            if add_to_host_exposed {
                 state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol
@@ -2343,11 +2467,34 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
+            let finish_type_checking = is_host_exposed &&
+                (state.goal_phase() == Phase::SolveTypes)
+                // If we're running in check-and-then-build mode, only exit now there are errors.
+                && (!matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) || state.module_cache.total_problems() > 0);
+
+            if finish_type_checking {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 
                 state.timings.insert(module_id, module_timing);
+
+                if matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) {
+                    // We there may outstanding modules in the typecheked cache whose ident IDs
+                    // aren't registered; transfer all of their idents over to the state, since
+                    // we're now done and ready to report errors.
+                    for (
+                        module_id,
+                        TypeCheckedModule {
+                            ident_ids,
+                            module_timing,
+                            ..
+                        },
+                    ) in state.module_cache.typechecked.drain()
+                    {
+                        state.constrained_ident_ids.insert(module_id, ident_ids);
+                        state.timings.insert(module_id, module_timing);
+                    }
+                }
 
                 let documentation = {
                     let mut empty = MutMap::default();
@@ -2362,7 +2509,7 @@ fn update<'a>(
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         exposed_types_storage: solved_module.exposed_types,
-                        resolved_specializations: solved_module.solved_specializations,
+                        resolved_implementations: solved_module.solved_implementations,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2381,15 +2528,16 @@ fn update<'a>(
                     module_id,
                     ExposedModuleTypes {
                         exposed_types_storage_subs: solved_module.exposed_types,
-                        resolved_specializations: solved_module.solved_specializations,
+                        resolved_implementations: solved_module.solved_implementations,
                     },
                 );
 
-                if state.goal_phase > Phase::SolveTypes {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                if state.goal_phase() > Phase::SolveTypes
+                    || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
+                {
+                    let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info)
+                    });
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -2410,6 +2558,25 @@ fn update<'a>(
                     state.timings.insert(module_id, module_timing);
                 }
 
+                let work = if is_host_exposed
+                    && matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
+                {
+                    debug_assert!(
+                        work.is_empty(),
+                        "work left over after host exposed is checked"
+                    );
+
+                    // Update the goal phase to target full codegen.
+                    state.exec_mode = ExecutionMode::Executable;
+
+                    // Load the find + make specializations portion of the dependency graph.
+                    state
+                        .dependencies
+                        .load_find_and_make_specializations_after_check()
+                } else {
+                    work
+                };
+
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
 
@@ -2429,7 +2596,8 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            state.toplevel_expects.extend(toplevel_expects);
+            state.toplevel_expects.pure.extend(toplevel_expects.pure);
+            state.toplevel_expects.fx.extend(toplevel_expects.fx);
 
             state
                 .module_cache
@@ -2472,7 +2640,7 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
-            debug_assert!(state.goal_phase == Phase::MakeSpecializations);
+            debug_assert!(state.goal_phase() == Phase::MakeSpecializations);
 
             log!("made specializations for {:?}", module_id);
 
@@ -2554,7 +2722,7 @@ fn update<'a>(
                             ident_ids,
                             subs,
                             module_timing,
-                            layout_cache: _,
+                            layout_cache: _layout_cache,
                             procs_base: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
@@ -2564,11 +2732,25 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+
+                        #[cfg(debug_assertions)]
+                        {
+                            log_layout_stats(module_id, &_layout_cache);
+                        }
                     }
+
+                    let layout_interner = {
+                        let mut taken = GlobalInterner::with_capacity(0);
+                        std::mem::swap(&mut state.layout_interner, &mut taken);
+                        taken
+                    };
+                    let layout_interner = layout_interner
+                        .unwrap()
+                        .expect("outstanding references to global layout interener, but we just drained all layout caches");
 
                     log!("specializations complete from {:?}", module_id);
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -2580,17 +2762,18 @@ fn update<'a>(
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     Proc::insert_refcount_operations(
                         arena,
+                        &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
@@ -2608,7 +2791,7 @@ fn update<'a>(
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
-                            // TODO thread through mono problems
+                            layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2708,11 +2891,35 @@ fn update<'a>(
     }
 }
 
-fn finish_specialization(
-    state: State,
+#[cfg(debug_assertions)]
+fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
+    let (cache_stats, raw_function_cache_stats) = layout_cache.statistics();
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = cache_stats.insertions,
+        hits = cache_stats.hits,
+        misses = cache_stats.misses,
+        non_insertable = cache_stats.non_insertable,
+        non_reusable = cache_stats.non_reusable,
+        "cache stats"
+    );
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = raw_function_cache_stats.insertions,
+        hits = raw_function_cache_stats.hits,
+        misses = raw_function_cache_stats.misses,
+        non_insertable = raw_function_cache_stats.non_insertable,
+        non_reusable = raw_function_cache_stats.non_reusable,
+        "raw function cache stats"
+    );
+}
+
+fn finish_specialization<'a>(
+    state: State<'a>,
     subs: Subs,
+    layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
-) -> Result<MonomorphizedModule, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
             "total Type clones: {} ",
@@ -2747,6 +2954,7 @@ fn finish_specialization(
         output_path,
         platform_path,
         platform_data,
+        exec_mode,
         ..
     } = state;
 
@@ -2763,53 +2971,60 @@ fn finish_specialization(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
-    let path_to_platform = {
-        use PlatformPath::*;
-        let package_name = match platform_path {
-            Valid(To::ExistingPackage(shorthand)) => {
-                match (*state.arc_shorthands).lock().get(shorthand) {
-                    Some(p_or_p) => *p_or_p,
-                    None => unreachable!(),
-                }
-            }
-            Valid(To::NewPackage(p_or_p)) => p_or_p,
-            other => {
-                let buf = to_missing_platform_report(state.root_id, other);
-                return Err(LoadingProblem::FormattedReport(buf));
-            }
-        };
-
-        package_name.into()
-    };
-
-    let platform_path = Path::new(path_to_platform).into();
-
     let entry_point = {
-        let symbol = match platform_data {
-            None => {
-                debug_assert_eq!(exposed_to_host.values.len(), 1);
-                *exposed_to_host.values.iter().next().unwrap().0
-            }
-            Some(PlatformData { provides, .. }) => provides,
-        };
+        match exec_mode {
+            ExecutionMode::Test => EntryPoint::Test,
+            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
+                let path_to_platform = {
+                    use PlatformPath::*;
+                    let package_name = match platform_path {
+                        Valid(To::ExistingPackage(shorthand)) => {
+                            match (*state.arc_shorthands).lock().get(shorthand) {
+                                Some(p_or_p) => *p_or_p,
+                                None => unreachable!(),
+                            }
+                        }
+                        Valid(To::NewPackage(p_or_p)) => p_or_p,
+                        other => {
+                            let buf = to_missing_platform_report(state.root_id, other);
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
+                    };
 
-        match procedures.keys().find(|(s, _)| *s == symbol) {
-            Some((_, layout)) => EntryPoint {
-                layout: *layout,
-                symbol,
-            },
-            None => {
-                // the entry point is not specialized. This can happen if the repl output
-                // is a function value
-                EntryPoint {
-                    layout: roc_mono::ir::ProcLayout {
-                        arguments: &[],
-                        result: Layout::struct_no_name_order(&[]),
-                        captures_niche: CapturesNiche::no_niche(),
+                    package_name.into()
+                };
+
+                let platform_path = Path::new(path_to_platform).into();
+                let symbol = match platform_data {
+                    None => {
+                        debug_assert_eq!(exposed_to_host.values.len(), 1);
+                        *exposed_to_host.values.iter().next().unwrap().0
+                    }
+                    Some(PlatformData { provides, .. }) => provides,
+                };
+
+                match procedures.keys().find(|(s, _)| *s == symbol) {
+                    Some((_, layout)) => EntryPoint::Executable {
+                        layout: *layout,
+                        symbol,
+                        platform_path,
                     },
-                    symbol,
+                    None => {
+                        // the entry point is not specialized. This can happen if the repl output
+                        // is a function value
+                        EntryPoint::Executable {
+                            layout: roc_mono::ir::ProcLayout {
+                                arguments: &[],
+                                result: Layout::struct_no_name_order(&[]),
+                                captures_niche: CapturesNiche::no_niche(),
+                            },
+                            symbol,
+                            platform_path,
+                        }
+                    }
                 }
             }
+            ExecutionMode::Check => unreachable!(),
         }
     };
 
@@ -2822,17 +3037,17 @@ fn finish_specialization(
         can_problems,
         type_problems,
         output_path,
-        platform_path,
+        expectations,
         exposed_to_host,
         module_id: state.root_id,
         subs,
         interns,
+        layout_interner,
         procedures,
         entry_point,
         sources,
         timings: state.timings,
         toplevel_expects,
-        expectations,
     })
 }
 
@@ -2843,7 +3058,7 @@ fn finish(
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
-    resolved_specializations: ResolvedSpecializations,
+    resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
@@ -2890,7 +3105,7 @@ fn finish(
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
-        resolved_specializations,
+        resolved_implementations,
         sources,
         timings: state.timings,
         documentation,
@@ -2907,18 +3122,18 @@ fn load_platform_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
-    let module_start_time = SystemTime::now();
-    let file_io_start = SystemTime::now();
+    let module_start_time = Instant::now();
+    let file_io_start = Instant::now();
     let file = fs::read(&filename);
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_duration = file_io_start.elapsed();
 
     match file {
         Ok(bytes_vec) => {
-            let parse_start = SystemTime::now();
+            let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
             let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
-            let parse_header_duration = parse_start.elapsed().unwrap();
+            let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
             let mut pkg_module_timing = ModuleTiming::new(module_start_time);
@@ -3047,10 +3262,10 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let module_start_time = SystemTime::now();
+    let module_start_time = Instant::now();
 
-    let parse_start = SystemTime::now();
-    let parse_header_duration = parse_start.elapsed().unwrap();
+    let parse_start = Instant::now();
+    let parse_header_duration = parse_start.elapsed();
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(module_start_time);
@@ -3087,6 +3302,7 @@ fn load_module<'a>(
         "Bool", ModuleId::BOOL
         "Box", ModuleId::BOX
         "Encode", ModuleId::ENCODE
+        "Decode", ModuleId::DECODE
         "Json", ModuleId::JSON
     }
 
@@ -3188,12 +3404,12 @@ fn parse_header<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
-    start_time: SystemTime,
+    start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let parse_start = SystemTime::now();
+    let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
-    let parse_header_duration = parse_start.elapsed().unwrap();
+    let parse_header_duration = parse_start.elapsed();
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -3375,11 +3591,11 @@ fn load_filename<'a>(
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    module_start_time: SystemTime,
+    module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let file_io_start = SystemTime::now();
+    let file_io_start = Instant::now();
     let file = fs::read(&filename);
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_duration = file_io_start.elapsed();
 
     match file {
         Ok(bytes) => parse_header(
@@ -3409,10 +3625,10 @@ fn load_from_str<'a>(
     src: &'a str,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    module_start_time: SystemTime,
+    module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let file_io_start = SystemTime::now();
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_start = Instant::now();
+    let file_io_duration = file_io_start.elapsed();
 
     parse_header(
         arena,
@@ -3733,14 +3949,21 @@ fn send_header_two<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = match qualified_module_name.opt_package {
-                None => match opt_shorthand {
-                    Some(shorthand) => {
-                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                    }
-                    None => PQModuleName::Unqualified(qualified_module_name.module),
-                },
-                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+            let pq_module_name = if qualified_module_name.is_builtin() {
+                // If this is a builtin, it must be unqualified, and we should *never* prefix it
+                // with the package shorthand! The user intended to import the module as-is here.
+                debug_assert!(qualified_module_name.opt_package.is_none());
+                PQModuleName::Unqualified(qualified_module_name.module)
+            } else {
+                match qualified_module_name.opt_package {
+                    None => match opt_shorthand {
+                        Some(shorthand) => {
+                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
+                        }
+                        None => PQModuleName::Unqualified(qualified_module_name.module),
+                    },
+                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+                }
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -3766,7 +3989,7 @@ fn send_header_two<'a>(
 
         {
             // If we don't have an app module id (e.g. because we're doing
-            // `roc check myplatform.roc` or because we're doing bindgen),
+            // `roc check myplatform.roc` or because we're generating glue code),
             // insert the `requires` symbols into the platform module's IdentIds.
             //
             // Otherwise, get them from the app module's IdentIds, because it
@@ -3991,7 +4214,7 @@ pub fn add_imports(
             match $exposed_by_module.get(&module_id) {
                 Some(ExposedModuleTypes {
                     exposed_types_storage_subs: exposed_types,
-                    resolved_specializations: _,
+                    resolved_implementations: _,
                 }) => {
                     let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
                         None => {
@@ -4050,8 +4273,8 @@ pub fn add_imports(
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
     for (_, module_types) in exposed_for_module.exposed_by_module.iter_all() {
-        for ((member, typ), specialization) in module_types.resolved_specializations.iter() {
-            pending_abilities.import_specialization(*member, *typ, specialization)
+        for (impl_key, resolved_impl) in module_types.resolved_implementations.iter() {
+            pending_abilities.import_implementation(*impl_key, resolved_impl);
         }
     }
 
@@ -4081,7 +4304,7 @@ pub fn add_imports(
         |ctx, module, lset_var| match ctx.exposed_by_module.get(&module) {
             Some(ExposedModuleTypes {
                 exposed_types_storage_subs: exposed_types,
-                resolved_specializations: _,
+                resolved_implementations: _,
             }) => {
                 let var = exposed_types
                     .stored_specialization_lambda_set_vars
@@ -4112,9 +4335,9 @@ fn run_solve_solve(
     derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
-    ResolvedSpecializations,
+    ResolvedImplementations,
     Vec<(Symbol, Variable)>,
-    Vec<solve::TypeError>,
+    Vec<TypeError>,
     AbilitiesStore,
 ) {
     let Module {
@@ -4148,7 +4371,7 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         let module_id = module.module_id;
 
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
@@ -4164,19 +4387,17 @@ fn run_solve_solve(
             derived_module,
         );
 
-        // Figure out what specializations belong to this module
-        let solved_specializations: ResolvedSpecializations = abilities_store
-            .iter_specializations()
-            .filter(|((member, typ), _)| {
-                // This module solved this specialization if either the member or the type comes from the
-                // module.
-                member.module_id() == module_id || typ.module_id() == module_id
-            })
-            .map(|(key, specialization)| (key, specialization.clone()))
-            .collect();
+        let solved_implementations =
+            extract_module_owned_implementations(module_id, &abilities_store);
 
-        let is_specialization_symbol =
-            |sym| solved_specializations.values().any(|ms| ms.symbol == sym);
+        let is_specialization_symbol = |sym| {
+            solved_implementations
+                .values()
+                .any(|resolved_impl| match resolved_impl {
+                    ResolvedImpl::Impl(specialization) => specialization.symbol == sym,
+                    ResolvedImpl::Derived | ResolvedImpl::Error => false,
+                })
+        };
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
@@ -4187,7 +4408,7 @@ fn run_solve_solve(
 
         (
             solved_subs,
-            solved_specializations,
+            solved_implementations,
             exposed_vars_by_symbol,
             problems,
             abilities_store,
@@ -4196,7 +4417,7 @@ fn run_solve_solve(
 
     (
         solved_subs,
-        solved_specializations,
+        solved_implementations,
         exposed_vars_by_symbol,
         problems,
         abilities_store,
@@ -4218,7 +4439,7 @@ fn run_solve<'a>(
     cached_subs: CachedSubs,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
-    let solve_start = SystemTime::now();
+    let solve_start = Instant::now();
 
     let module_id = module.module_id;
 
@@ -4229,7 +4450,7 @@ fn run_solve<'a>(
     let loc_expects = std::mem::take(&mut module.loc_expects);
     let module = module;
 
-    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -4271,7 +4492,7 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
-        &solved_specializations,
+        &solved_implementations,
         &abilities_store,
     );
 
@@ -4279,13 +4500,13 @@ fn run_solve<'a>(
         exposed_vars_by_symbol,
         problems,
         aliases,
-        solved_specializations,
+        solved_implementations,
         exposed_types,
     };
 
     // Record the final timings
-    let solve_end = SystemTime::now();
-    module_timing.solve = solve_end.duration_since(solve_start).unwrap();
+    let solve_end = Instant::now();
+    module_timing.solve = solve_end.duration_since(solve_start);
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
@@ -4363,7 +4584,7 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
 ) -> CanAndCon {
-    let canonicalize_start = SystemTime::now();
+    let canonicalize_start = Instant::now();
 
     let ParsedModule {
         module_id,
@@ -4412,9 +4633,9 @@ fn canonicalize_and_constrain<'a>(
         _after
     );
 
-    let canonicalize_end = SystemTime::now();
+    let canonicalize_end = Instant::now();
 
-    module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
+    module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start);
 
     // Generate documentation information
     // TODO: store timing information?
@@ -4478,7 +4699,7 @@ fn canonicalize_and_constrain<'a>(
             Vacant(vacant) => {
                 let should_include_builtin = matches!(
                     name.module_id(),
-                    ModuleId::ENCODE | ModuleId::DICT | ModuleId::SET
+                    ModuleId::ENCODE | ModuleId::DECODE | ModuleId::DICT | ModuleId::SET
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -4522,7 +4743,7 @@ fn canonicalize_and_constrain<'a>(
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
-    let parse_start = SystemTime::now();
+    let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
@@ -4536,9 +4757,9 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
-    let parse_end = SystemTime::now();
+    let parse_end = Instant::now();
 
-    module_timing.parse_body = parse_end.duration_since(parse_start).unwrap();
+    module_timing.parse_body = parse_end.duration_since(parse_start);
 
     let imported_modules = header.imported_modules;
 
@@ -4632,7 +4853,7 @@ fn make_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
-    let make_specializations_start = SystemTime::now();
+    let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
@@ -4676,12 +4897,10 @@ fn make_specializations<'a>(
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
-    let make_specializations_end = SystemTime::now();
-    module_timing.make_specializations.push(
-        make_specializations_end
-            .duration_since(make_specializations_start)
-            .unwrap(),
-    );
+    let make_specializations_end = Instant::now();
+    module_timing
+        .make_specializations
+        .push(make_specializations_end.duration_since(make_specializations_start));
 
     Msg::MadeSpecializations {
         module_id: home,
@@ -4711,11 +4930,12 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    build_expects: bool,
 ) -> Msg<'a> {
-    let find_specializations_start = SystemTime::now();
+    let find_specializations_start = Instant::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
-    let mut toplevel_expects = std::vec::Vec::new();
+    let mut toplevel_expects = ToplevelExpects::default();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -4956,6 +5176,11 @@ fn build_pending_specializations<'a>(
                 // the declarations of this group will be treaded individually by later iterations
             }
             Expectation => {
+                // skip expectations if we're not going to run them
+                if !build_expects {
+                    continue;
+                }
+
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
@@ -5000,7 +5225,7 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
-                let body = roc_can::expr::toplevel_expect_to_inline_expect(body);
+                let body = roc_can::expr::toplevel_expect_to_inline_expect_pure(body);
 
                 let proc = PartialProc {
                     annotation: expr_var,
@@ -5014,7 +5239,86 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
-                toplevel_expects.push(symbol);
+                // extend the region of the expect expression with the region of the preceding
+                // comment, so it is shown in failure/panic messages
+                let name_region = declarations.symbols[index].region;
+                let expr_region = declarations.expressions[index].region;
+                let region = Region::span_across(&name_region, &expr_region);
+
+                toplevel_expects.pure.insert(symbol, region);
+                procs_base.partial_procs.insert(symbol, proc);
+            }
+            ExpectationFx => {
+                // skip expectations if we're not going to run them
+                if !build_expects {
+                    continue;
+                }
+
+                // mark this symbol as a top-level thunk before any other work on the procs
+                module_thunks.push(symbol);
+
+                let expr_var = Variable::EMPTY_RECORD;
+
+                let is_host_exposed = true;
+
+                // If this is an exposed symbol, we need to
+                // register it as such. Otherwise, since it
+                // never gets called by Roc code, it will never
+                // get specialized!
+                if is_host_exposed {
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+
+                    // cannot specialize when e.g. main's type contains type variables
+                    if let Err(e) = layout_result {
+                        match e {
+                            LayoutProblem::Erroneous => {
+                                let message = "top level function has erroneous type";
+                                procs_base.runtime_errors.insert(symbol, message);
+                                continue;
+                            }
+                            LayoutProblem::UnresolvedTypeVar(v) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs_base
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                continue;
+                            }
+                        }
+                    }
+
+                    procs_base.host_specializations.insert_host_exposed(
+                        mono_env.subs,
+                        LambdaName::no_niche(symbol),
+                        annotation,
+                        expr_var,
+                    );
+                }
+
+                let body = roc_can::expr::toplevel_expect_to_inline_expect_fx(body);
+
+                let proc = PartialProc {
+                    annotation: expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: body.value,
+                    body_var: expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                };
+
+                // extend the region of the expect expression with the region of the preceding
+                // comment, so it is shown in failure/panic messages
+                let name_region = declarations.symbols[index].region;
+                let expr_region = declarations.expressions[index].region;
+                let region = Region::span_across(&name_region, &expr_region);
+
+                toplevel_expects.fx.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
@@ -5022,10 +5326,9 @@ fn build_pending_specializations<'a>(
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
-    let find_specializations_end = SystemTime::now();
-    module_timing.find_specializations = find_specializations_end
-        .duration_since(find_specializations_start)
-        .unwrap();
+    let find_specializations_end = Instant::now();
+    module_timing.find_specializations =
+        find_specializations_end.duration_since(find_specializations_start);
 
     Msg::FoundSpecializations {
         module_id: home,
@@ -5058,7 +5361,7 @@ fn load_derived_partial_procs<'a>(
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
-    let load_derived_procs_start = SystemTime::now();
+    let load_derived_procs_start = Instant::now();
 
     let mut new_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
@@ -5074,7 +5377,7 @@ fn load_derived_partial_procs<'a>(
 
     // TODO: we can be even lazier here if we move `add_def_to_module` to happen in mono. Also, the
     // timings would be more accurate.
-    for (derived_symbol, derived_expr) in derives_to_add.into_iter() {
+    for (derived_symbol, (derived_expr, derived_expr_var)) in derives_to_add.into_iter() {
         let mut mono_env = roc_mono::ir::Env {
             arena,
             subs,
@@ -5113,7 +5416,22 @@ fn load_derived_partial_procs<'a>(
                     return_type,
                 )
             }
-            _ => internal_error!("Expected only functions to be derived"),
+            _ => {
+                // mark this symbols as a top-level thunk before any other work on the procs
+                new_module_thunks.push(derived_symbol);
+
+                PartialProc {
+                    annotation: derived_expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: derived_expr,
+                    body_var: derived_expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                }
+            }
         };
 
         procs_base
@@ -5126,11 +5444,10 @@ fn load_derived_partial_procs<'a>(
         procs_base.module_thunks = new_module_thunks.into_bump_slice();
     }
 
-    let load_derived_procs_end = SystemTime::now();
+    let load_derived_procs_end = Instant::now();
 
-    module_timing.find_specializations = load_derived_procs_end
-        .duration_since(load_derived_procs_start)
-        .unwrap();
+    module_timing.find_specializations =
+        load_derived_procs_end.duration_since(load_derived_procs_start);
 }
 
 fn run_task<'a>(
@@ -5219,6 +5536,7 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            build_expects,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -5233,6 +5551,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            build_expects,
         )),
         MakeSpecializations {
             module_id,
@@ -5323,10 +5642,14 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{}", error);
-            let doc = alloc.concat([
-                alloc.reflow(r"I tried to read this file, but ran into a "),
-                alloc.text(formatted),
-                alloc.reflow(r" problem."),
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file:"),
+                alloc
+                    .text(filename.to_str().unwrap())
+                    .annotate(Annotation::Error)
+                    .indent(4),
+                alloc.reflow(r"But ran into:"),
+                alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
@@ -5420,11 +5743,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsInterface => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is an interface module, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is an `interface` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify an interface module like this one."),
                 ]);
 
                 Report {
@@ -5436,11 +5758,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsHosted => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is a hosted module, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is a `hosted` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify a hosted module like this one."),
                 ]);
 
                 Report {
@@ -5452,11 +5773,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsPlatformModule => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is a package config file, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is a `platform` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify a platform module like this one."),
                 ]);
 
                 Report {

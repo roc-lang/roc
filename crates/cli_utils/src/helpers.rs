@@ -65,20 +65,16 @@ where
     run_with_stdin(&roc_binary_path, args, stdin_vals)
 }
 
-pub fn run_bindgen<I, S>(args: I) -> Out
+pub fn run_glue<I, S>(args: I) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_bindgen_binary(), args, &[])
+    run_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
     path_to_binary("roc")
-}
-
-pub fn path_to_bindgen_binary() -> PathBuf {
-    path_to_binary("roc-bindgen")
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {
@@ -168,7 +164,7 @@ where
 pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
     cmd_name: &str,
     stdin_vals: I,
-    args: &[&str],
+    args: &[String],
 ) -> Out {
     let mut cmd = Command::new(cmd_name);
 
@@ -206,7 +202,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
 
 pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
     stdin_vals: I,
-    args: &[&str],
+    args: &[String],
 ) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
@@ -218,7 +214,7 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
     cmd.arg("--xml=yes");
 
     // If you are having valgrind issues on MacOS, you may need to suppress some
-    // of the errors. Read more here: https://github.com/rtfeldman/roc/issues/746
+    // of the errors. Read more here: https://github.com/roc-lang/roc/issues/746
     if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
         match suppressions_file_os_str.to_str() {
             None => {
@@ -355,6 +351,11 @@ pub fn root_dir() -> PathBuf {
     path.pop();
     path.pop();
 
+    // running cargo with --target will put us in the target dir
+    if path.ends_with("target") {
+        path.pop();
+    }
+
     path
 }
 
@@ -364,7 +365,7 @@ pub fn examples_dir(dir_name: &str) -> PathBuf {
 
     // Descend into examples/{dir_name}
     path.push("examples");
-    path.extend(dir_name.split("/")); // Make slashes cross-platform
+    path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }
@@ -387,7 +388,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.extend(dir_name.split("/")); // Make slashes cross-platform
+    path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }

@@ -143,6 +143,7 @@ comptime {
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimLeft, "trim_left");
     exportStrFn(str.strTrimRight, "trim_right");
+    exportStrFn(str.strCloneTo, "clone_to");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
@@ -167,7 +168,9 @@ comptime {
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
-        exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+
+        // sets the buffer used for expect failures
+        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
@@ -178,7 +181,7 @@ comptime {
 
 // Utils continued - SJLJ
 // For tests (in particular test_gen), roc_panic is implemented in terms of
-// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/rtfeldman/roc/issues/2965),
+// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),
 // so instead we ask Zig to please provide implementations for us, which is does
 // (seemingly via musl).
 pub extern fn setjmp([*c]c_int) c_int;
@@ -250,7 +253,9 @@ test "" {
 
 // Export it as weak incase it is already linked in by something else.
 comptime {
-    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    if (builtin.target.os.tag != .windows) {
+        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    }
 }
 fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
     // @setRuntimeSafety(std.builtin.is_test);

@@ -3,6 +3,7 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
+use roc_utils::get_lib_path;
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -66,12 +67,13 @@ pub fn link(
 
 fn find_zig_str_path() -> PathBuf {
     // First try using the lib path relative to the executable location.
-    let exe_relative_str_path = std::env::current_exe()
-        .ok()
-        .and_then(|path| Some(path.parent()?.join("lib").join("str.zig")));
-    if let Some(exe_relative_str_path) = exe_relative_str_path {
-        if std::path::Path::exists(&exe_relative_str_path) {
-            return exe_relative_str_path;
+    let lib_path_opt = get_lib_path();
+
+    if let Some(lib_path) = lib_path_opt {
+        let zig_str_path = lib_path.join("str.zig");
+
+        if std::path::Path::exists(&zig_str_path) {
+            return zig_str_path;
         }
     }
 
@@ -87,7 +89,7 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
+    panic!("cannot find `str.zig`. Check the source code in find_zig_str_path() to show all the paths I tried.")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
@@ -100,7 +102,7 @@ fn find_wasi_libc_path() -> PathBuf {
     panic!("cannot find `wasi-libc.a`")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -111,23 +113,102 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-    _target_valgrind: bool,
 ) -> Output {
     let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home);
+
+    if let Some(shared_lib_path) = shared_lib_path {
+        // with LLVM, the builtins are already part of the roc app,
+        // but with the dev backend, they are missing. To minimize work,
+        // we link them as part of the host executable
+        let builtins_obj = if target.contains("windows") {
+            bitcode::get_builtins_windows_obj_path()
+        } else {
+            bitcode::get_builtins_host_obj_path()
+        };
+
+        command.args(&[
+            "build-exe",
+            "-fPIE",
+            "-rdynamic", // make sure roc_alloc and friends are exposed
+            shared_lib_path.to_str().unwrap(),
+            &builtins_obj,
+        ]);
+    } else {
+        command.args(&["build-obj", "-fPIC"]);
+    }
+
+    command.args(&[
+        zig_host_src,
+        emit_bin,
+        "--pkg-begin",
+        "str",
+        zig_str_path,
+        "--pkg-end",
+        // include libc
+        "-lc",
+        // cross-compile?
+        "-target",
+        target,
+    ]);
+
+    // some examples need the compiler-rt in the app object file.
+    // but including it on windows causes weird crashes, at least
+    // when we use zig 0.9. It looks like zig 0.10 is going to fix
+    // this problem for us, so this is a temporary workaround
+    if !target.contains("windows") {
+        command.args(&[
+            // include the zig runtime
+            "-fcompiler-rt",
+        ]);
+    }
+
+    // valgrind does not yet support avx512 instructions, see #1963.
+    if env::var("NO_AVX512").is_ok() {
+        command.args(&["-mcpu", "x86_64"]);
+    }
+
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
+    }
+
+    command.output().unwrap()
+}
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn build_zig_host_native(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+    target: &str,
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+) -> Output {
+    let mut command = Command::new(&zig_executable());
+    command
+        .env_clear()
+        .env("PATH", env_path)
+        .env("HOME", env_home);
+
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
+
     command.args(&[
         zig_host_src,
         emit_bin,
@@ -136,7 +217,7 @@ pub fn build_zig_host_native(
         zig_str_path,
         "--pkg-end",
         // include the zig runtime
-        "-fcompiler-rt",
+        // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
         "--library",
         "c",
@@ -145,19 +226,12 @@ pub fn build_zig_host_native(
         target,
     ]);
 
-    // use single threaded testing for cli_run and enable this code if valgrind fails with unhandled instruction bytes, see #1963.
-    /*if target_valgrind {
-        command.args(&[
-        "-mcpu",
-        "x86_64"
-        ]);
-    }*/
-
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
         command.args(&["-O", "ReleaseSmall"]);
     }
+
     command.output().unwrap()
 }
 
@@ -173,7 +247,6 @@ pub fn build_zig_host_native(
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
     // For compatibility with the non-macOS def above. Keep these in sync.
-    _target_valgrind: bool,
 ) -> Output {
     use serde_json::Value;
 
@@ -228,7 +301,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -320,7 +393,9 @@ pub fn build_zig_host_wasm32(
     command.output().unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_c_host_native(
+    target: &Triple,
     env_path: &str,
     env_home: &str,
     env_cpath: &str,
@@ -338,17 +413,38 @@ pub fn build_c_host_native(
         .args(sources)
         .args(&["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&[
-            shared_lib_path.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
-            "-fPIE",
-            "-pie",
-            "-lm",
-            "-lpthread",
-            "-ldl",
-            "-lrt",
-            "-lutil",
-        ]);
+        match target.operating_system {
+            OperatingSystem::Windows => {
+                // just use zig as a C compiler
+
+                // I think we only ever have one C source file in practice
+                assert_eq!(sources.len(), 1);
+
+                return build_zig_host_native(
+                    env_path,
+                    env_home,
+                    &format!("-femit-bin={}", dest),
+                    sources[0],
+                    find_zig_str_path().to_str().unwrap(),
+                    "x86_64-windows-gnu",
+                    opt_level,
+                    Some(shared_lib_path),
+                );
+            }
+            _ => {
+                command.args(&[
+                    shared_lib_path.to_str().unwrap(),
+                    &bitcode::get_builtins_host_obj_path(),
+                    "-fPIE",
+                    "-pie",
+                    "-lm",
+                    "-lpthread",
+                    "-ldl",
+                    "-lrt",
+                    "-lutil",
+                ]);
+            }
+        }
     } else {
         command.args(&["-fPIC", "-c"]);
     }
@@ -360,6 +456,7 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_swift_host_native(
     env_path: &str,
     env_home: &str,
@@ -368,16 +465,25 @@ pub fn build_swift_host_native(
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
     objc_header_path: Option<&str>,
+    arch: Architecture,
 ) -> Output {
     if shared_lib_path.is_some() {
         unimplemented!("Linking a shared library to Swift not yet implemented");
     }
 
-    let mut command = Command::new("xcrun"); // xcrun helps swiftc to find the right header files
+    let mut command = Command::new("arch");
     command
         .env_clear()
         .env("PATH", &env_path)
-        .env("HOME", &env_home)
+        .env("HOME", &env_home);
+
+    match arch {
+        Architecture::Aarch64(_) => command.arg("-arm64"),
+        _ => command.arg(format!("-{}", arch)),
+    };
+
+    command
+        .arg("xcrun") // xcrun helps swiftc to find the right header files
         .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
@@ -402,7 +508,6 @@ pub fn rebuild_host(
     target: &Triple,
     host_input_path: &Path,
     shared_lib_path: Option<&Path>,
-    target_valgrind: bool,
 ) -> PathBuf {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
@@ -420,11 +525,29 @@ pub fn rebuild_host(
             host_input_path.with_file_name("host.bc")
         }
     } else {
-        host_input_path.with_file_name(if shared_lib_path.is_some() {
-            "dynhost"
+        let os = roc_target::OperatingSystem::from(target.operating_system);
+
+        if shared_lib_path.is_some() {
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "exe",
+                roc_target::OperatingSystem::Unix => "",
+                roc_target::OperatingSystem::Wasi => "",
+            };
+
+            host_input_path
+                .with_file_name("dynhost")
+                .with_extension(extension)
         } else {
-            "host.o"
-        })
+            let extension = match os {
+                roc_target::OperatingSystem::Windows => "obj",
+                roc_target::OperatingSystem::Unix => "o",
+                roc_target::OperatingSystem::Wasi => "o",
+            };
+
+            host_input_path
+                .with_file_name("host")
+                .with_extension(extension)
+        }
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -461,16 +584,21 @@ pub fn rebuild_host(
             }
             Architecture::X86_64 => {
                 let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+
+                let target = match target.operating_system {
+                    OperatingSystem::Windows => "x86_64-windows-gnu",
+                    _ => "native",
+                };
+
                 build_zig_host_native(
                     &env_path,
                     &env_home,
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    "native",
+                    target,
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
             Architecture::X86_32(_) => {
@@ -484,7 +612,6 @@ pub fn rebuild_host(
                     "i386-linux-musl",
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
 
@@ -499,7 +626,6 @@ pub fn rebuild_host(
                     target_zig_str(target),
                     opt_level,
                     shared_lib_path,
-                    target_valgrind,
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
@@ -542,6 +668,7 @@ pub fn rebuild_host(
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -594,6 +721,7 @@ pub fn rebuild_host(
         if shared_lib_path.is_some() {
             // If compiling to executable, let c deal with linking as well.
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -608,6 +736,7 @@ pub fn rebuild_host(
             validate_output("host.c", "clang", output);
         } else {
             let output = build_c_host_native(
+                target,
                 &env_path,
                 &env_home,
                 &env_cpath,
@@ -644,6 +773,7 @@ pub fn rebuild_host(
     } else if c_host_src.exists() {
         // Compile host.c, if it exists
         let output = build_c_host_native(
+            target,
             &env_path,
             &env_home,
             &env_cpath,
@@ -665,6 +795,7 @@ pub fn rebuild_host(
             swift_host_header_src
                 .exists()
                 .then(|| swift_host_header_src.to_str().unwrap()),
+            target.architecture,
         );
         validate_output("host.swift", "swiftc", output);
     }
@@ -906,7 +1037,7 @@ fn link_linux(
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args(&[
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
             "-lm",
@@ -989,7 +1120,7 @@ fn link_macos(
     }
 
     ld_command.args(&[
-        // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+        // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
         "-lresolv",
@@ -1014,7 +1145,7 @@ fn link_macos(
         "QuartzCore",
         // "-lrt", // TODO shouldn't we need this?
         // "-lc_nonshared", // TODO shouldn't we need this?
-        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/roc-lang/roc/pull/554#discussion_r496370840
         "-framework",
         "Security",
         // Output
@@ -1093,11 +1224,53 @@ fn link_wasm32(
 
 fn link_windows(
     _target: &Triple,
-    _output_path: PathBuf,
-    _input_paths: &[&str],
-    _link_type: LinkType,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    todo!("Add windows support to the surgical linker. See issue #2608.")
+    let zig_str_path = find_zig_str_path();
+
+    match link_type {
+        LinkType::Dylib => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-lib"])
+                .args(input_paths)
+                .args([
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                    "-target",
+                    "native",
+                    "--pkg-begin",
+                    "str",
+                    zig_str_path.to_str().unwrap(),
+                    "--pkg-end",
+                    "--strip",
+                    "-O",
+                    "Debug",
+                    "-dynamic",
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::Executable => {
+            let child = Command::new(&zig_executable())
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args([
+                    "-target",
+                    "x86_64-windows-gnu",
+                    "--subsystem",
+                    "console",
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                ])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        LinkType::None => todo!(),
+    }
 }
 
 pub fn llvm_module_to_dylib(
@@ -1172,7 +1345,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     let mut command = Command::new(&zig_executable());
     let args = &[
         "wasm-ld",
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &bitcode::get_builtins_wasm32_obj_path(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti

@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
@@ -37,14 +37,9 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
             _ => Err({
-                let raw = unsafe { CString::from_raw(call_result.error_msg) };
+                let raw = unsafe { CStr::from_ptr(call_result.error_msg) };
 
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
+                raw.to_str().unwrap().to_owned()
             }),
         }
     }
@@ -52,7 +47,7 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
 
 #[macro_export]
 macro_rules! run_roc_dylib {
-    ($lib:expr, $main_fn_name:expr, $argument_type:ty, $return_type:ty, $errors:expr) => {{
+    ($lib:expr, $main_fn_name:expr, $argument_type:ty, $return_type:ty) => {{
         use inkwell::context::Context;
         use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
@@ -74,16 +69,16 @@ macro_rules! run_roc_dylib {
 }
 
 #[macro_export]
-macro_rules! run_jit_function {
+macro_rules! try_run_jit_function {
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
         let v: String = String::new();
-        run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
-        run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, &[])
     }};
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
         use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
@@ -99,15 +94,33 @@ macro_rules! run_jit_function {
             let mut main_result = MaybeUninit::uninit();
             main(main_result.as_mut_ptr());
 
-            match main_result.assume_init().into() {
-                Ok(success) => {
-                    // only if there are no exceptions thrown, check for errors
-                    assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
+            main_result.assume_init().into()
+        }
+    }};
+}
 
-                    $transform(success)
-                }
-                Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
+#[macro_export]
+macro_rules! run_jit_function {
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+        let v: String = String::new();
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
+    }};
+
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    }};
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
+        let result =
+            $crate::try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $expect_failures);
+
+        match result {
+            Ok(success) => {
+                // only if there are no exceptions thrown, check for errors
+                assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
+
+                $transform(success)
             }
+            Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
         }
     }};
 }
@@ -149,7 +162,7 @@ macro_rules! run_jit_function_dynamic_type {
                 // first field is a char pointer (to the error message)
                 // read value, and transmute to a pointer
                 let ptr_as_int = *(result as *const u64).offset(1);
-                let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
+                let ptr = ptr_as_int as *mut c_char;
 
                 // make CString (null-terminated)
                 let raw = CString::from_raw(ptr);

@@ -3,7 +3,7 @@ use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
     UpdateModeIds,
 };
-use crate::layout::Layout;
+use crate::layout::{Layout, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -111,9 +111,22 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
             Expect {
                 condition,
                 remainder,
+                lookups,
                 ..
             } => {
                 result.insert(*condition);
+                result.extend(lookups.iter().copied());
+                stack.push(remainder);
+            }
+
+            ExpectFx {
+                condition,
+                remainder,
+                lookups,
+                ..
+            } => {
+                result.insert(*condition);
+                result.extend(lookups.iter().copied());
                 stack.push(remainder);
             }
 
@@ -225,8 +238,9 @@ pub type LiveVarSet = MutSet<Symbol>;
 pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
-struct Context<'a> {
+struct Context<'a, 'i> {
     arena: &'a Bump,
+    layout_interner: &'i STLayoutInterner<'a>,
     vars: VarMap,
     jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
@@ -300,8 +314,12 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
-impl<'a> Context<'a> {
-    pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
+impl<'a, 'i> Context<'a, 'i> {
+    pub fn new(
+        arena: &'a Bump,
+        layout_interner: &'i STLayoutInterner<'a>,
+        param_map: &'a ParamMap<'a>,
+    ) -> Self {
         let mut vars = MutMap::default();
 
         for symbol in param_map.iter_symbols() {
@@ -318,6 +336,7 @@ impl<'a> Context<'a> {
 
         Self {
             arena,
+            layout_interner,
             vars,
             jp_live_vars: MutMap::default(),
             param_map,
@@ -328,11 +347,13 @@ impl<'a> Context<'a> {
         match self.vars.get(&symbol) {
             Some(info) => *info,
             None => {
-                eprintln!(
-                    "Symbol {:?} {} has no info in self.vars",
-                    symbol,
-                    symbol, // self.vars
-                );
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "Symbol {:?} {} has no info in self.vars",
+                        symbol,
+                        symbol, // self.vars
+                    );
+                }
 
                 VarInfo {
                     persistent: true,
@@ -517,7 +538,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn visit_call<'i>(
+    fn visit_call(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -587,7 +608,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn visit_higher_order_lowlevel<'i>(
+    fn visit_higher_order_lowlevel(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -667,8 +688,8 @@ impl<'a> Context<'a> {
 
                     match ownership {
                         DataBorrowedFunctionOwns => {
-                            // the data is borrowed;
-                            // increment it to own the values so the function can use them
+                            // the data is borrowed; increment it to own the values so the function
+                            // can use them
                             let rc = Stmt::Refcounting(ModifyRc::Inc(argument, 1), stmt);
 
                             stmt = self.arena.alloc(rc);
@@ -686,8 +707,8 @@ impl<'a> Context<'a> {
             }};
         }
 
-        // incrementing/consuming the closure (if needed) is done by the zig implementation.
-        // We don't want to touch the RC on the roc side, so treat these as borrowed.
+        // incrementing/consuming the closure (if needed) is done by the zig implementation. We
+        // don't want to touch the RC on the roc side, so treat these as borrowed.
         const FUNCTION: bool = BORROWED;
         const CLOSURE_DATA: bool = BORROWED;
 
@@ -749,9 +770,9 @@ impl<'a> Context<'a> {
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListSortWith { xs } => {
-                // NOTE: we may apply the function to the same argument multiple times.
-                // for that to be valid, the function must borrow its argument. This is not
-                // enforced at the moment
+                // NOTE: we may apply the function to the same argument multiple times. for that to
+                // be valid, the function must borrow its argument. This is not enforced at the
+                // moment
                 //
                 // we also don't check that both arguments have the same ownership characteristics
                 let ownerships = [(xs, function_ps[0])];
@@ -764,7 +785,8 @@ impl<'a> Context<'a> {
 
                     match ownership {
                         DataOwnedFunctionOwns => {
-                            // if non-unique, elements have been consumed, must still consume the list itself
+                            // if non-unique, elements have been consumed, must still consume the
+                            // list itself
                             let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), b);
 
                             let condition_stmt = branch_on_list_uniqueness(
@@ -815,7 +837,7 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::many_single_char_names)]
-    fn visit_variable_declaration<'i>(
+    fn visit_variable_declaration(
         &self,
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
@@ -910,8 +932,7 @@ impl<'a> Context<'a> {
             }
 
             EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated
-                // function pointers are persistent
+                // EmptyArray is always stack-allocated function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
         };
@@ -920,8 +941,7 @@ impl<'a> Context<'a> {
     }
 
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
-        // is this value a constant?
-        // TODO do function pointers also fall into this category?
+        // is this value a constant? TODO do function pointers also fall into this category?
         let persistent = false;
 
         // must this value be consumed?
@@ -941,7 +961,7 @@ impl<'a> Context<'a> {
         reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
-        let reference = layout.contains_refcounted();
+        let reference = layout.contains_refcounted(self.layout_interner);
 
         let info = VarInfo {
             reference,
@@ -962,7 +982,7 @@ impl<'a> Context<'a> {
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: p.layout.contains_refcounted(),
+                reference: p.layout.contains_refcounted(self.layout_interner),
                 consume: !p.borrow,
                 persistent: false,
                 reset: false,
@@ -975,9 +995,7 @@ impl<'a> Context<'a> {
 
     // Add `dec` instructions for parameters that are
     //
-    //  - references
-    //  - not alive in `b`
-    //  - not borrow.
+    //  - references - not alive in `b` - not borrow.
     //
     // That is, we must make sure these parameters are consumed.
     fn add_dec_for_dead_params(
@@ -987,7 +1005,10 @@ impl<'a> Context<'a> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow && p.layout.contains_refcounted() && !b_live_vars.contains(&p.symbol) {
+            if !p.borrow
+                && p.layout.contains_refcounted(self.layout_interner)
+                && !b_live_vars.contains(&p.symbol)
+            {
                 b = self.add_dec(p.symbol, b)
             }
         }
@@ -1010,16 +1031,16 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_stmt<'i>(
+    fn visit_stmt(
         &self,
         codegen: &mut CodegenTools<'i>,
         stmt: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
-        // let-chains can be very long, especially for large (list) literals
-        // in (rust) debug mode, this function can overflow the stack for such values
-        // so we have to write an explicit loop.
+        // let-chains can be very long, especially for large (list) literals in (rust) debug mode,
+        // this function can overflow the stack for such values so we have to write an explicit
+        // loop.
         {
             let mut cont = stmt;
             let mut triples = Vec::new_in(self.arena);
@@ -1178,7 +1199,7 @@ impl<'a> Context<'a> {
                 lookups,
                 layouts,
             } => {
-                let (b, b_live_vars) = self.visit_stmt(codegen, remainder);
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
                 let expect = self.arena.alloc(Stmt::Expect {
                     condition: *condition,
@@ -1187,6 +1208,34 @@ impl<'a> Context<'a> {
                     layouts,
                     remainder: b,
                 });
+
+                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
+
+                b_live_vars.extend(lookups.iter().copied());
+
+                (expect, b_live_vars)
+            }
+
+            ExpectFx {
+                remainder,
+                condition,
+                region,
+                lookups,
+                layouts,
+            } => {
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::ExpectFx {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                });
+
+                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
+
+                b_live_vars.extend(lookups.iter().copied());
 
                 (expect, b_live_vars)
             }
@@ -1297,9 +1346,22 @@ pub fn collect_stmt(
         Expect {
             condition,
             remainder,
+            lookups,
             ..
         } => {
             vars.insert(*condition);
+            vars.extend(lookups.iter().copied());
+            collect_stmt(remainder, jp_live_vars, vars)
+        }
+
+        ExpectFx {
+            condition,
+            remainder,
+            lookups,
+            ..
+        } => {
+            vars.insert(*condition);
+            vars.extend(lookups.iter().copied());
             collect_stmt(remainder, jp_live_vars, vars)
         }
 
@@ -1372,13 +1434,14 @@ struct CodegenTools<'i> {
 
 pub fn visit_procs<'a, 'i>(
     arena: &'a Bump,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
     param_map: &'a ParamMap<'a>,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
-    let ctx = Context::new(arena, param_map);
+    let ctx = Context::new(arena, layout_interner, param_map);
 
     let mut codegen = CodegenTools {
         home,
@@ -1395,7 +1458,7 @@ fn visit_proc<'a, 'i>(
     arena: &'a Bump,
     codegen: &mut CodegenTools<'i>,
     param_map: &'a ParamMap<'a>,
-    ctx: &Context<'a>,
+    ctx: &Context<'a, 'i>,
     proc: &mut Proc<'a>,
     layout: ProcLayout<'a>,
 ) {

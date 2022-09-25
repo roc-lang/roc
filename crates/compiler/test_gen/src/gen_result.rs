@@ -1,10 +1,8 @@
-#![cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -16,20 +14,24 @@ use roc_std::{RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn with_default() {
+fn with_default_ok() {
     assert_evals_to!(
         indoc!(
             r#"
             result : Result I64 {}
-            result = Ok 2
+            result = Ok 12345
 
             Result.withDefault result 0
             "#
         ),
-        2,
+        12345,
         i64
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_default_err() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -224,7 +226,7 @@ fn is_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_ok() {
     assert_evals_to!(
         indoc!(
@@ -241,7 +243,7 @@ fn roc_result_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_err() {
     assert_evals_to!(
         indoc!(
@@ -262,7 +264,7 @@ fn roc_result_err() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
-        if True then List.first [15] else Str.toI64 ""
+        if Bool.true then List.first [15] else Str.toI64 ""
         "#,
         RocResult::ok(15i64),
         RocResult<i64, bool>
@@ -304,15 +306,17 @@ fn roc_result_after_on_err() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_result_after_err() {
-    assert_evals_to!(indoc!(
-        r#"
+    assert_evals_to!(
+        indoc!(
+            r#"
             result : Result Str I64
             result =
               Result.onErr (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
-            "#),
+            "#
+        ),
         RocResult::ok(RocStr::from("already a string")),
         RocResult<RocStr, i64>
     );

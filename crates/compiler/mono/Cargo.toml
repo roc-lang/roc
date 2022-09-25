@@ -1,6 +1,6 @@
 [package]
 name = "roc_mono"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -12,15 +12,19 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
+roc_derive_key = { path = "../derive_key" }
 roc_derive = { path = "../derive" }
+roc_intern = { path = "../intern" }
 roc_late_solve = { path = "../late_solve" }
-roc_std = { path = "../../roc_std", default-features = false }
+roc_std = { path = "../../roc_std" }
 roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = {path="../../error_macros"}
 roc_debug_flags = {path="../debug_flags"}
+roc_tracing = { path = "../../tracing" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
-hashbrown = { version = "0.12.1", features = [ "bumpalo" ] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
+hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
 static_assertions = "1.1.0"
+bitvec = "1.0.1"

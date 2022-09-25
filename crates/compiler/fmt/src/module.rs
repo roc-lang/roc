@@ -190,8 +190,9 @@ impl<'a> Formattable for TypedIdent<'a> {
         buf.indent(indent);
         buf.push_str(self.ident.value);
         fmt_default_spaces(buf, self.spaces_before_colon, indent);
-        buf.push_str(":");
+        buf.push(':');
         buf.spaces(1);
+
         self.ann.value.format(buf, indent);
     }
 }

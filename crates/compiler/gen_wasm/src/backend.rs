@@ -82,11 +82,7 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        // TODO: get this from a CLI parameter with some default
-        const STACK_SIZE: u32 = 1024 * 1024;
-        let can_relocate_heap = Self::set_memory_layout(env, &mut module, STACK_SIZE);
-
-        Self::export_globals(&mut module);
+        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok();
 
         // We don't want to import any Memory or Tables
         module.import.imports.retain(|import| {
@@ -140,8 +136,8 @@ impl<'a> WasmBackend<'a> {
     /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
     /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
     /// TODO: Detect stack overflow in function prologue... at least in Roc code...
-    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) -> bool {
-        let mut stack_heap_boundary = module.data.end_addr + stack_size;
+    fn set_memory_layout(&mut self, stack_size: u32) {
+        let mut stack_heap_boundary = self.module.data.end_addr + stack_size;
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
         // Stack pointer
@@ -155,12 +151,12 @@ impl<'a> WasmBackend<'a> {
             // Check that __stack_pointer is the only imported global
             // If there were more, we'd have to relocate them, and we don't
             let imported_globals = Vec::from_iter_in(
-                module
+                self.module
                     .import
                     .imports
                     .iter()
                     .filter(|import| matches!(import.description, ImportDesc::Global { .. })),
-                env.arena,
+                self.env.arena,
             );
             if imported_globals.len() != 1
                 || imported_globals[0]
@@ -173,49 +169,55 @@ impl<'a> WasmBackend<'a> {
                 panic!("I can't link this host file. I expected it to have one imported Global called env.__stack_pointer")
             }
         }
-        module
+        self.module
             .import
             .imports
             .retain(|import| !matches!(import.description, ImportDesc::Global { .. }));
-        module.global.append(Global {
+
+        self.module.global.append(Global {
             ty: sp_type,
             init: ConstExpr::I32(stack_heap_boundary as i32),
         });
 
         // Set the initial size of the memory
-        module.memory =
-            MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
+        self.module.memory = MemorySection::new(
+            self.env.arena,
+            stack_heap_boundary + MemorySection::PAGE_SIZE,
+        );
 
         // Export the memory so that JS can interact with it
-        module.export.append(Export {
+        self.module.export.append(Export {
             name: MEMORY_NAME,
             ty: ExportType::Mem,
             index: 0,
         });
 
         // Set the constant that malloc uses to know where the heap begins
-        module
-            .relocate_internal_symbol("__heap_base", stack_heap_boundary)
-            .is_ok()
+        // this should be done after we know how much constant data we have (e.g. string literals)
+        if self.can_relocate_heap {
+            self.module
+                .relocate_internal_symbol("__heap_base", stack_heap_boundary)
+                .unwrap();
+        }
     }
 
     /// If the host has some `extern` global variables, we need to create them in the final binary
     /// and make them visible to JavaScript by exporting them
-    fn export_globals(module: &mut WasmModule<'a>) {
-        for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
+    fn export_globals(&mut self) {
+        for (sym_index, sym) in self.module.linking.symbol_table.iter().enumerate() {
             match sym {
                 SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
-                    let global_value_addr = module.data.end_addr;
-                    module.data.end_addr += PTR_SIZE;
+                    let global_value_addr = self.module.data.end_addr;
+                    self.module.data.end_addr += PTR_SIZE;
 
-                    module.reloc_code.apply_relocs_u32(
-                        &mut module.code.preloaded_bytes,
+                    self.module.reloc_code.apply_relocs_u32(
+                        &mut self.module.code.preloaded_bytes,
                         sym_index as u32,
                         global_value_addr,
                     );
 
-                    let global_index = module.global.count;
-                    module.global.append(Global {
+                    let global_index = self.module.global.count;
+                    self.module.global.append(Global {
                         ty: GlobalType {
                             value_type: ValueType::I32,
                             is_mutable: false,
@@ -223,7 +225,7 @@ impl<'a> WasmBackend<'a> {
                         init: ConstExpr::I32(global_value_addr as i32),
                     });
 
-                    module.export.append(Export {
+                    self.module.export.append(Export {
                         name,
                         ty: ExportType::Global,
                         index: global_index,
@@ -253,8 +255,6 @@ impl<'a> WasmBackend<'a> {
             .to_symbol_string(symbol, self.interns);
         let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
-        // dbg!(name);
-
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
             layout,
@@ -272,6 +272,9 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
+        self.set_memory_layout(self.env.stack_bytes);
+        self.export_globals();
+
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
@@ -397,7 +400,7 @@ impl<'a> WasmBackend<'a> {
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
         use ReturnMethod::*;
-        let ret_layout = WasmLayout::new(&proc.ret_layout);
+        let ret_layout = WasmLayout::new(self.env.layout_interner, &proc.ret_layout);
 
         let ret_type = match ret_layout.return_method(CallConv::C) {
             Primitive(ty, _) => Some(ty),
@@ -415,8 +418,12 @@ impl<'a> WasmBackend<'a> {
         // We never use the `return` instruction. Instead, we break from this block.
         self.start_block();
 
-        self.storage
-            .allocate_args(proc.args, &mut self.code_builder, self.env.arena);
+        self.storage.allocate_args(
+            self.env.layout_interner,
+            proc.args,
+            &mut self.code_builder,
+            self.env.arena,
+        );
 
         if let Some(ty) = ret_type {
             let ret_var = self.storage.create_anonymous_local(ty);
@@ -490,7 +497,7 @@ impl<'a> WasmBackend<'a> {
         // Our convention is that the last arg of the wrapper is the heap return pointer
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts.last() {
-            Some(Layout::Boxed(inner)) => WasmLayout::new(inner),
+            Some(Layout::Boxed(inner)) => WasmLayout::new(self.env.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -514,7 +521,7 @@ impl<'a> WasmBackend<'a> {
 
         // Load all the arguments for the inner function
         for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
-            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner)
+            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner). We'll handle it below.
             let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
             if is_closure_data || is_return_pointer {
                 continue;
@@ -524,7 +531,7 @@ impl<'a> WasmBackend<'a> {
                 Layout::Boxed(inner) => inner,
                 x => internal_error!("Expected a Boxed layout, got {:?}", x),
             };
-            if inner_layout.stack_size(TARGET_INFO) == 0 {
+            if inner_layout.stack_size(self.env.layout_interner, TARGET_INFO) == 0 {
                 continue;
             }
 
@@ -536,8 +543,24 @@ impl<'a> WasmBackend<'a> {
 
         // If the inner function has closure data, it's the last arg of the inner fn
         let closure_data_layout = wrapper_arg_layouts[0];
-        if closure_data_layout.stack_size(TARGET_INFO) > 0 {
+        if closure_data_layout.stack_size(self.env.layout_interner, TARGET_INFO) > 0 {
+            // The closure data exists, and will have been passed in to the wrapper as a
+            // one-element struct.
+            let inner_closure_data_layout = match closure_data_layout {
+                Layout::Struct {
+                    field_layouts: [inner],
+                    ..
+                } => inner,
+                other => internal_error!(
+                    "Expected a boxed layout for wrapped closure data, got {:?}",
+                    other
+                ),
+            };
             self.code_builder.get_local(LocalId(0));
+            // Since the closure data is wrapped in a one-element struct, we've been passed in the
+            // pointer to that struct in the stack memory. To get the closure data we just need to
+            // dereference the pointer.
+            self.dereference_boxed_value(inner_closure_data_layout);
         }
 
         // Call the wrapped inner function
@@ -595,7 +618,7 @@ impl<'a> WasmBackend<'a> {
         let value_layout = wrapper_proc_layout.arguments[1];
 
         let mut n_inner_args = 2;
-        if closure_data_layout.stack_size(TARGET_INFO) > 0 {
+        if closure_data_layout.stack_size(self.env.layout_interner, TARGET_INFO) > 0 {
             self.code_builder.get_local(LocalId(0));
             n_inner_args += 1;
         }
@@ -689,6 +712,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
 
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
             Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
         }
@@ -717,7 +741,7 @@ impl<'a> WasmBackend<'a> {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
             if DEBUG_SETTINGS.let_stmt_ir {
-                println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+                print!("\nlet {:?} = {}", sym, expr.to_pretty(200));
             }
 
             let kind = match following {
@@ -740,7 +764,9 @@ impl<'a> WasmBackend<'a> {
         expr: &Expr<'a>,
         kind: StoredVarKind,
     ) {
-        let sym_storage = self.storage.allocate_var(*layout, sym, kind);
+        let sym_storage = self
+            .storage
+            .allocate_var(self.env.layout_interner, *layout, sym, kind);
 
         self.expr(sym, expr, layout, &sym_storage);
 
@@ -817,7 +843,8 @@ impl<'a> WasmBackend<'a> {
         }
 
         let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
-        let cond_type = WasmLayout::new(cond_layout).arg_types(CallConv::C)[0];
+        let cond_type =
+            WasmLayout::new(self.env.layout_interner, cond_layout).arg_types(CallConv::C)[0];
 
         // then, we jump whenever the value under scrutiny is equal to the value of a branch
         for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -879,6 +906,7 @@ impl<'a> WasmBackend<'a> {
         let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
         for parameter in parameters.iter() {
             let mut param_storage = self.storage.allocate_var(
+                self.env.layout_interner,
                 parameter.layout,
                 parameter.symbol,
                 StoredVarKind::Variable,
@@ -941,7 +969,11 @@ impl<'a> WasmBackend<'a> {
 
         if false {
             self.register_symbol_debug_names();
-            println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
+            println!(
+                "## rc_stmt:\n{}\n{:?}",
+                rc_stmt.to_pretty(self.env.layout_interner, 200),
+                rc_stmt
+            );
         }
 
         // If any new specializations were created, register their symbol data
@@ -1213,7 +1245,7 @@ impl<'a> WasmBackend<'a> {
                 ret_layout,
             } => {
                 let name = foreign_symbol.as_str();
-                let wasm_layout = WasmLayout::new(ret_layout);
+                let wasm_layout = WasmLayout::new(self.env.layout_interner, ret_layout);
                 let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
                     self.storage.load_symbols_for_call(
                         self.env.arena,
@@ -1238,7 +1270,7 @@ impl<'a> WasmBackend<'a> {
         ret_layout: &Layout<'a>,
         ret_storage: &StoredValue,
     ) {
-        let wasm_layout = WasmLayout::new(ret_layout);
+        let wasm_layout = WasmLayout::new(self.env.layout_interner, ret_layout);
 
         // If this function is just a lowlevel wrapper, then inline it
         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
@@ -1394,9 +1426,12 @@ impl<'a> WasmBackend<'a> {
                     }
                 };
             }
-            Layout::LambdaSet(lambdaset) => {
-                self.expr_struct(sym, &lambdaset.runtime_representation(), storage, fields)
-            }
+            Layout::LambdaSet(lambdaset) => self.expr_struct(
+                sym,
+                &lambdaset.runtime_representation(self.env.layout_interner),
+                storage,
+                fields,
+            ),
             _ => {
                 if !fields.is_empty() {
                     // Struct expression but not Struct layout => single element. Copy it.
@@ -1444,7 +1479,7 @@ impl<'a> WasmBackend<'a> {
             }
         };
         for field in field_layouts.iter().take(index as usize) {
-            offset += field.stack_size(TARGET_INFO);
+            offset += field.stack_size(self.env.layout_interner, TARGET_INFO);
         }
         self.storage
             .copy_value_from_memory(&mut self.code_builder, sym, from_addr_val, offset);
@@ -1462,11 +1497,12 @@ impl<'a> WasmBackend<'a> {
         elems: &'a [ListLiteralElement<'a>],
     ) {
         if let StoredValue::StackMemory { location, .. } = storage {
-            let size = elem_layout.stack_size(TARGET_INFO) * (elems.len() as u32);
+            let size = elem_layout.stack_size(self.env.layout_interner, TARGET_INFO)
+                * (elems.len() as u32);
 
             // Allocate heap space and store its address in a local variable
             let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
-            let heap_alignment = elem_layout.alignment_bytes(TARGET_INFO);
+            let heap_alignment = elem_layout.alignment_bytes(self.env.layout_interner, TARGET_INFO);
             self.allocate_with_refcount(Some(size), heap_alignment, 1);
             self.code_builder.set_local(heap_local_id);
 
@@ -1481,7 +1517,14 @@ impl<'a> WasmBackend<'a> {
             // length of the list
             self.code_builder.get_local(stack_local_id);
             self.code_builder.i32_const(elems.len() as i32);
-            self.code_builder.i32_store(Align::Bytes4, stack_offset + 4);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_LEN);
+
+            // capacity of the list
+            self.code_builder.get_local(stack_local_id);
+            self.code_builder.i32_const(elems.len() as i32);
+            self.code_builder
+                .i32_store(Align::Bytes4, stack_offset + 4 * Builtin::WRAPPER_CAPACITY);
 
             let mut elem_offset = 0;
 
@@ -1523,12 +1566,14 @@ impl<'a> WasmBackend<'a> {
         if let StoredValue::StackMemory { location, .. } = storage {
             let (local_id, offset) = location.local_and_offset(self.storage.stack_frame_pointer);
 
-            // This is a minor cheat.
-            // What we want to write to stack memory is { elements: null, length: 0 }
-            // But instead of two 32-bit stores, we can do a single 64-bit store.
+            // Store 12 bytes of zeros { elements: null, length: 0, capacity: 0 }
+            debug_assert_eq!(Builtin::LIST_WORDS, 3);
             self.code_builder.get_local(local_id);
             self.code_builder.i64_const(0);
             self.code_builder.i64_store(Align::Bytes4, offset);
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(0);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
         } else {
             internal_error!("Unexpected storage for {:?}", sym)
         }
@@ -1554,7 +1599,8 @@ impl<'a> WasmBackend<'a> {
 
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
-        let (data_size, data_alignment) = union_layout.data_size_and_alignment(TARGET_INFO);
+        let (data_size, data_alignment) =
+            union_layout.data_size_and_alignment(self.env.layout_interner, TARGET_INFO);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1568,13 +1614,24 @@ impl<'a> WasmBackend<'a> {
             StoredValue::Local { local_id, .. } => {
                 // Tag is stored as a heap pointer.
                 if let Some(reused) = maybe_reused {
-                    // Reuse an existing heap allocation
+                    // Reuse an existing heap allocation, if one is available (not NULL at runtime)
                     self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                    self.code_builder.if_();
+                    {
+                        self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.else_();
+                    {
+                        self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                        self.code_builder.set_local(local_id);
+                    }
+                    self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
                     self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                    self.code_builder.set_local(local_id);
                 }
-                self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
             StoredValue::VirtualMachineStack { .. } => {
@@ -1595,10 +1652,12 @@ impl<'a> WasmBackend<'a> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset =
-                data_offset + union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
+            let id_offset = data_offset
+                + union_layout
+                    .tag_id_offset(self.env.layout_interner, TARGET_INFO)
+                    .unwrap();
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
+            let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
@@ -1621,7 +1680,7 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.i64_store(id_align, id_offset);
                 }
             }
-        } else if stores_tag_id_in_pointer {
+        } else if stores_tag_id_in_pointer && tag_id != 0 {
             self.code_builder.get_local(local_id);
             self.code_builder.i32_const(tag_id as i32);
             self.code_builder.i32_or();
@@ -1679,22 +1738,20 @@ impl<'a> WasmBackend<'a> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
+            let id_offset = union_layout
+                .tag_id_offset(self.env.layout_interner, TARGET_INFO)
+                .unwrap();
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
+            let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
 
-            match union_layout.tag_id_builtin() {
-                Builtin::Bool | Builtin::Int(IntWidth::U8) => {
-                    self.code_builder.i32_load8_u(id_align, id_offset)
-                }
-                Builtin::Int(IntWidth::U16) => self.code_builder.i32_load16_u(id_align, id_offset),
-                Builtin::Int(IntWidth::U32) => self.code_builder.i32_load(id_align, id_offset),
-                Builtin::Int(IntWidth::U64) => self.code_builder.i64_load(id_align, id_offset),
-                x => internal_error!("Unexpected layout for tag union id {:?}", x),
+            use roc_mono::layout::Discriminant::*;
+            match union_layout.discriminant() {
+                U0 | U1 | U8 => self.code_builder.i32_load8_u(id_align, id_offset),
+                U16 => self.code_builder.i32_load16_u(id_align, id_offset),
             }
         } else if union_layout.stores_tag_id_in_pointer(TARGET_INFO) {
             self.storage
@@ -1743,7 +1800,7 @@ impl<'a> WasmBackend<'a> {
         let field_offset: u32 = field_layouts
             .iter()
             .take(index as usize)
-            .map(|field_layout| field_layout.stack_size(TARGET_INFO))
+            .map(|field_layout| field_layout.stack_size(self.env.layout_interner, TARGET_INFO))
             .sum();
 
         // Get pointer and offset to the tag's data
@@ -1809,7 +1866,8 @@ impl<'a> WasmBackend<'a> {
             Layout::Boxed(arg) => *arg,
             _ => internal_error!("ExprBox should always produce a Boxed layout"),
         };
-        let (size, alignment) = arg_layout.stack_size_and_alignment(TARGET_INFO);
+        let (size, alignment) =
+            arg_layout.stack_size_and_alignment(self.env.layout_interner, TARGET_INFO);
         self.allocate_with_refcount(Some(size), alignment, 1);
 
         // store the pointer value from the value stack into the local variable

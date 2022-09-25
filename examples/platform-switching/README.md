@@ -9,7 +9,7 @@ roc run
 This will run `main.roc` because, unless you explicitly give it a filename, `roc run`
 defaults to running a file named `main.roc`. Other `roc` commands (like `roc build`, `roc test`, and so on) also default to `main.roc` unless you explicitly give them a filename.
 
-# About this example
+## About this example
 
 This uses a very simple platform which does nothing more than printing the string you give it.
 

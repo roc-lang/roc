@@ -1,6 +1,6 @@
 #![cfg(test)]
 #![warn(clippy::dbg_macro)]
-// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+// See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 // we actually want to compare against the literal float bits
 #![allow(clippy::float_cmp)]
@@ -13,6 +13,8 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use roc_load::ExecutionMode;
+use roc_load::LoadConfig;
 use test_mono_macros::*;
 
 use roc_collections::all::MutMap;
@@ -20,6 +22,7 @@ use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
+use roc_mono::layout::STLayoutInterner;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
@@ -91,15 +94,19 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info: TARGET_INFO,
+        threading: Threading::Single,
+        render: roc_reporting::report::RenderTarget::Generic,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        TARGET_INFO,
-        roc_reporting::report::RenderTarget::Generic,
-        Threading::Single,
+        load_config,
     );
 
     let mut loaded = match loaded {
@@ -116,6 +123,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_id: home,
         procedures,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
@@ -132,13 +140,14 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
-    verify_procedures(test_name, procedures, main_fn_symbol);
+    verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
 }
 
 #[cfg(debug_assertions)]
-fn verify_procedures(
+fn verify_procedures<'a>(
     test_name: &str,
-    procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
+    interner: STLayoutInterner<'a>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     main_fn_symbol: Symbol,
 ) {
     let index = procedures
@@ -148,7 +157,7 @@ fn verify_procedures(
 
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(200))
+        .map(|proc| proc.to_pretty(&interner, 200))
         .collect::<Vec<_>>();
 
     let main_fn = procs_string.swap_remove(index);
@@ -163,6 +172,7 @@ fn verify_procedures(
     std::fs::write(&path, result).unwrap();
 
     use std::process::Command;
+
     let is_tracked = Command::new("git")
         .args(&["ls-files", "--error-unmatch", &path])
         .output()
@@ -197,6 +207,7 @@ fn verify_procedures(
 #[cfg(not(debug_assertions))]
 fn verify_procedures(
     _expected: &str,
+    _interner: STLayoutInterner<'_>,
     _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     _main_fn_symbol: Symbol,
 ) {
@@ -314,7 +325,7 @@ fn guard_pattern_true() {
     r#"
     wrapper = \{} ->
         when 2 is
-            2 if False -> 42
+            2 if Bool.false -> 42
             _ -> 0
 
     wrapper {}
@@ -409,7 +420,7 @@ fn when_joinpoint() {
 #[mono_test]
 fn simple_if() {
     r#"
-    if True then
+    if Bool.true then
         1
     else
         2
@@ -419,9 +430,9 @@ fn simple_if() {
 #[mono_test]
 fn if_multi_branch() {
     r#"
-    if True then
+    if Bool.true then
         1
-    else if False then
+    else if Bool.false then
         2
     else
         3
@@ -719,8 +730,8 @@ fn is_nil() {
     isNil : ConsList a -> Bool
     isNil = \list ->
         when list is
-            Nil -> True
-            Cons _ _ -> False
+            Nil -> Bool.true
+            Cons _ _ -> Bool.false
 
     isNil (Cons 0x2 Nil)
     "#
@@ -736,8 +747,8 @@ fn has_none() {
     hasNone : ConsList (Maybe a) -> Bool
     hasNone = \list ->
         when list is
-            Nil -> False
-            Cons Nothing _ -> True
+            Nil -> Bool.false
+            Cons Nothing _ -> Bool.true
             Cons (Just _) xs -> hasNone xs
 
     hasNone (Cons (Just 3) Nil)
@@ -1013,7 +1024,7 @@ fn somehow_drops_definitions() {
         apply = \f, x -> f x
 
         main =
-            apply (if True then increment else double) 42
+            apply (if Bool.true then increment else double) 42
         "#
     )
 }
@@ -1036,7 +1047,7 @@ fn specialize_closures() {
             two = 2
 
             b : Bool
-            b = True
+            b = Bool.true
 
             increment : I64 -> I64
             increment = \x -> x + one
@@ -1044,7 +1055,7 @@ fn specialize_closures() {
             double : I64 -> I64
             double = \x -> if b then x * two else x
 
-            apply (if True then increment else double) 42
+            apply (if Bool.true then increment else double) 42
         "#
     )
 }
@@ -1071,14 +1082,14 @@ fn specialize_lowlevel() {
              double : I64 -> I64
              double = \x -> x * two
 
-             (if True then increment else double) 42
+             (if Bool.true then increment else double) 42
          "#
     )
 }
 
 #[mono_test]
 fn empty_list_of_function_type() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     indoc!(
         r#"
          app "test" provides [main] to "./platform"
@@ -1091,7 +1102,7 @@ fn empty_list_of_function_type() {
             myClosure = \_ -> "bar"
 
             choose =
-                if False then
+                if Bool.false then
                     myList
                 else
                     [myClosure]
@@ -1169,8 +1180,8 @@ fn monomorphized_tag() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = False
-            f : Bool, [True, False, Idk] -> U8
+            b = Bar
+            f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
             f b b
         "#
@@ -1184,8 +1195,8 @@ fn monomorphized_tag_with_aliased_args() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = False
-            c = False
+            b = Bool.false
+            c = Bool.false
             a = A b c
             f : [A Bool Bool] -> Nat
             f = \_ -> 1
@@ -1275,7 +1286,7 @@ fn issue_2725_alias_polymorphic_lambda() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     indoc!(
         r#"
-        if True then List.first [] else Str.toI64 ""
+        if Bool.true then List.first [] else Str.toI64 ""
         "#
     )
 }
@@ -1350,26 +1361,26 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-        Encoding has
-          toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+        MEncoding has
+          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
 
         Format has
-          u8 : U8 -> Encoder fmt | fmt has Format
+          u8 : U8 -> MEncoder fmt | fmt has Format
 
 
         Linear := {} has [Format {u8}]
 
-        u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+        u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [Encoding {toEncoder}]
+        MyU8 := U8 has [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
         myU8Bytes =
             when toEncoder (@MyU8 15) is
-                @Encoder doEncode -> doEncode [] (@Linear {})
+                @MEncoder doEncode -> doEncode [] (@Linear {})
         "#
     )
 }
@@ -1705,7 +1716,7 @@ fn recursive_call_capturing_function() {
         a = \b ->
             c : U32 -> U32
             c = \d ->
-                if True then d else c (d+b)
+                if Bool.true then d else c (d+b)
             c 0
 
         a 6
@@ -1881,6 +1892,111 @@ fn encode_derived_tag_two_payloads_string() {
             when result is
                 Ok s -> s
                 _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    indoc!(
+        r#"
+        when Wrapper (Payload "err") is
+            Wrapper (Payload str) -> str
+            Wrapper (AlternatePayload str) -> str
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_3669() {
+    indoc!(
+        r#"
+        Peano a := [
+            Zero,
+            Successor (Peano a)
+        ]
+
+        unwrap : Peano a -> {}
+        unwrap = \@Peano p ->
+            when p is
+                Zero -> {}
+                Successor inner -> unwrap inner
+
+        when unwrap (@Peano Zero) == {} is
+            _ -> ""
+        "#
+    )
+}
+
+#[mono_test]
+fn num_width_gt_u8_layout_as_float() {
+    indoc!(
+        r#"
+        1 / 200
+        "#
+    )
+}
+
+#[mono_test]
+fn match_on_result_with_uninhabited_error_branch() {
+    indoc!(
+        r#"
+        x : Result Str []
+        x = Ok "abc"
+
+        when x is
+            Ok s -> s
+        "#
+    )
+}
+
+#[mono_test]
+fn unreachable_void_constructor() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        x : []
+
+        main = if Bool.true then Ok x else Err "abc" 
+        "#
+    )
+}
+
+#[mono_test]
+fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        provideThunk = \x ->
+            when x is
+                Ok _ ->
+                    t1 = \{} -> "t1"
+                    t1
+                # During specialization of `main` we specialize this function,
+                # which leads to elimination of this branch, because it is unreachable
+                # (it can only match the uninhabited type `Err []`).
+                #
+                # However, naive elimination of this branch would mean we don't traverse
+                # the branch body. If we don't do so, we will fail to see and specialize `t2`,
+                # which is problematic - while `t2` won't ever be reached in this specialization,
+                # it is still part of the lambda set, and `thunk {}` (in main) will match over
+                # it before calling.
+                #
+                # So, this test verifies that we eliminate this branch, but still specialize
+                # everything we need.
+                Err _ ->
+                    t2 = \{} -> "t2"
+                    t2
+
+        main =
+            x : Result Str []
+            x = Ok "abc"
+
+            thunk = provideThunk x
+
+            thunk {}
         "#
     )
 }

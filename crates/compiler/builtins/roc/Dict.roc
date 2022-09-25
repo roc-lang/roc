@@ -69,7 +69,7 @@ interface Dict
 ##
 ## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
 ## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
-## `fn dict1 == fn dict2` also being `True`, even if `fn` relies on the dictionary's ordering.
+## `fn dict1 == fn dict2` also being `Bool.true`, even if `fn` relies on the dictionary's ordering.
 Dict k v := List [Pair k v]
 
 ## An empty dictionary.
@@ -81,7 +81,7 @@ withCapacity = \n -> @Dict (List.withCapacity n)
 
 get : Dict k v, k -> Result v [KeyNotFound]*
 get = \@Dict list, needle ->
-    when List.find list (\Pair key _ -> key == needle) is
+    when List.findFirst list (\Pair key _ -> key == needle) is
         Ok (Pair _ v) ->
             Ok v
 
@@ -94,7 +94,7 @@ walk = \@Dict list, initialState, transform ->
 
 insert : Dict k v, k, v -> Dict k v
 insert = \@Dict list, k, v ->
-    when List.findIndex list (\Pair key _ -> key == k) is
+    when List.findFirstIndex list (\Pair key _ -> key == k) is
         Err NotFound ->
             insertFresh (@Dict list) k v
 
@@ -109,7 +109,7 @@ len = \@Dict list ->
 
 remove : Dict k v, k -> Dict k v
 remove = \@Dict list, key ->
-    when List.findIndex list (\Pair k _ -> k == key) is
+    when List.findFirstIndex list (\Pair k _ -> k == key) is
         Err NotFound ->
             @Dict list
 
@@ -130,8 +130,8 @@ contains = \@Dict list, needle ->
             Continue {}
 
     when List.iterate list {} step is
-        Continue _ -> False
-        Break _ -> True
+        Continue _ -> Bool.false
+        Break _ -> Bool.true
 
 single : k, v -> Dict k v
 single = \key, value ->

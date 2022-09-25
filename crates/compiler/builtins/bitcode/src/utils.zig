@@ -131,18 +131,16 @@ const RC_TYPE = Refcount.normal;
 
 pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
-    var refcount = ptr_to_refcount.*;
-    if (refcount < REFCOUNT_MAX_ISIZE) {
+    // Ensure that the refcount is not whole program lifetime.
+    if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
+        // Note: we assume that a refcount will never overflow.
+        // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
-                ptr_to_refcount.* = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
+                ptr_to_refcount.* += amount;
             },
             Refcount.atomic => {
-                var next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
-                while (@cmpxchgWeak(isize, ptr_to_refcount, refcount, next, Monotonic, Monotonic)) |found| {
-                    refcount = found;
-                    next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
-                }
+                _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
             },
             Refcount.none => unreachable,
         }
@@ -194,24 +192,24 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
-    switch (RC_TYPE) {
-        Refcount.normal => {
-            const refcount: isize = refcount_ptr[0];
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
-            } else if (refcount < REFCOUNT_MAX_ISIZE) {
-                refcount_ptr[0] = refcount - 1;
-            }
-        },
-        Refcount.atomic => {
-            if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) {
+    // Ensure that the refcount is not whole program lifetime.
+    const refcount: isize = refcount_ptr[0];
+    if (refcount != REFCOUNT_MAX_ISIZE) {
+        switch (RC_TYPE) {
+            Refcount.normal => {
+                refcount_ptr[0] = refcount -% 1;
+                if (refcount == REFCOUNT_ONE_ISIZE) {
+                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                }
+            },
+            Refcount.atomic => {
                 var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
                     dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
                 }
-            }
-        },
-        Refcount.none => unreachable,
+            },
+            Refcount.none => unreachable,
+        }
     }
 }
 
@@ -256,7 +254,7 @@ pub fn unsafeReallocate(
     const old_width = align_width + old_length * element_width;
     const new_width = align_width + new_length * element_width;
 
-    if (old_width == new_width) {
+    if (old_width >= new_width) {
         return source_ptr;
     }
 

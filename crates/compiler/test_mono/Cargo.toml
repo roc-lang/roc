@@ -1,6 +1,6 @@
 [package]
 name = "test_mono"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -18,6 +18,7 @@ roc_can = { path = "../can" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
+roc_tracing = { path = "../../tracing" }
 test_mono_macros = { path = "../test_mono_macros" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
-indoc = "1.0.3"
+bumpalo = { version = "3.11.0", features = ["collections"] }
+indoc = "1.0.7"

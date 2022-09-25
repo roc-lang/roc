@@ -1,8 +1,8 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -15,8 +15,6 @@ use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocResult, RocStr};
 
-use core::convert::Infallible;
-
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_list_construction() {
@@ -25,25 +23,25 @@ fn roc_list_construction() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_literal() {
     assert_evals_to!("[]", RocList::<i64>::from_slice(&[]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_literal_empty_record() {
     assert_evals_to!("[{}]", RocList::from_slice(&[()]), RocList<()>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_list_literal() {
     assert_evals_to!("[12, 9]", RocList::from_slice(&[12, 9]), RocList<i64>);
     assert_evals_to!(
@@ -56,15 +54,10 @@ fn int_list_literal() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bool_list_literal() {
-    // NOTE: make sure to explicitly declare the elements to be of type bool, or
-    // use both True and False; only using one of them causes the list to in practice be
-    // of type `List [True]` or `List [False]`, those are tag unions with one constructor
-    // and not fields, and don't have a runtime representation.
     assert_evals_to!(
         indoc!(
             r#"
-               false : Bool
-               false = False
+               false = Bool.false
 
                [false]
                "#
@@ -74,7 +67,7 @@ fn bool_list_literal() {
     );
 
     assert_evals_to!(
-        "[True, False, True]",
+        "[Bool.true, Bool.false, Bool.true]",
         RocList::from_slice(&[true, false, true]),
         RocList<bool>
     );
@@ -83,7 +76,7 @@ fn bool_list_literal() {
         indoc!(
             r#"
                false : Bool
-               false = False
+               false = Bool.false
 
                [false]
                "#
@@ -96,7 +89,7 @@ fn bool_list_literal() {
         indoc!(
             r#"
                true : Bool
-               true = True
+               true = Bool.true
 
                List.repeat true 23
                "#
@@ -109,7 +102,7 @@ fn bool_list_literal() {
         indoc!(
             r#"
                true : Bool
-               true = True
+               true = Bool.true
 
                List.repeat { x: true, y: true } 23
                "#
@@ -122,7 +115,7 @@ fn bool_list_literal() {
         indoc!(
             r#"
                true : Bool
-               true = True
+               true = Bool.true
 
                List.repeat { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true } 23
                "#
@@ -133,7 +126,7 @@ fn bool_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn variously_sized_list_literals() {
     assert_evals_to!("[]", RocList::<i64>::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
@@ -264,8 +257,9 @@ fn list_map_try_ok() {
         r#"
             List.mapTry [1, 2, 3] \elem -> Ok elem
         "#,
-        RocResult::ok(RocList::<i64>::from_slice(&[1, 2, 3])),
-        RocResult<RocList<i64>, ()>
+        // Result I64 [] is unwrapped to just I64
+        RocList::<i64>::from_slice(&[1, 2, 3]),
+        RocList<i64>
     );
     assert_evals_to!(
         // Transformation
@@ -275,18 +269,21 @@ fn list_map_try_ok() {
 
                 Ok "\(str)!"
         "#,
-        RocResult::ok(RocList::<RocStr>::from_slice(&[
+        // Result Str [] is unwrapped to just Str
+        RocList::<RocStr>::from_slice(&[
             RocStr::from("2!"),
             RocStr::from("4!"),
             RocStr::from("6!"),
-        ])),
-        RocResult<RocList<RocStr>, ()>
+        ]),
+        RocList<RocStr>
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_try_err() {
+    use core::convert::Infallible;
+
     assert_evals_to!(
         r#"
             List.mapTry [1, 2, 3] \_ -> Err -1
@@ -357,6 +354,72 @@ fn list_split() {
             RocList::<i64>::from_slice(&[]),
         ),
         (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_first() {
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[4, 0, 6, 0, 8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_last() {
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3, 0, 4, 0, 6])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
     );
 }
 
@@ -435,7 +498,7 @@ fn list_drop_at_shared() {
         indoc!(
             r#"
                list : List I64
-               list = [if True then 4 else 4, 5, 6]
+               list = [if Bool.true then 4 else 4, 5, 6]
 
                { newList: List.dropAt list 0, original: list }
                "#
@@ -459,7 +522,7 @@ fn list_drop_if_empty_list_of_int() {
             empty : List I64
             empty = []
 
-            List.dropIf empty \_ -> True
+            List.dropIf empty \_ -> Bool.true
             "#
         ),
         RocList::<i64>::from_slice(&[]),
@@ -474,7 +537,7 @@ fn list_drop_if_empty_list() {
         indoc!(
             r#"
             alwaysTrue : I64 -> Bool
-            alwaysTrue = \_ -> True
+            alwaysTrue = \_ -> Bool.true
 
             List.dropIf [] alwaysTrue
             "#
@@ -490,7 +553,7 @@ fn list_drop_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> False)
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> Bool.false)
             "#
         ),
         RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
@@ -504,7 +567,7 @@ fn list_drop_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> Bool.true)
             "#
         ),
         RocList::<i64>::from_slice(&[]),
@@ -567,7 +630,7 @@ fn list_drop_last_mutable() {
         indoc!(
             r#"
                list : List I64
-               list = [if True then 4 else 4, 5, 6]
+               list = [if Bool.true then 4 else 4, 5, 6]
 
                { newList: List.dropLast list, original: list }
                "#
@@ -666,7 +729,7 @@ fn list_append_to_empty_list_of_int() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_append_bools() {
     assert_evals_to!(
-        "List.append [True, False] True",
+        "List.append [Bool.true, Bool.false] Bool.true",
         RocList::from_slice(&[true, false, true]),
         RocList<bool>
     );
@@ -725,7 +788,7 @@ fn list_prepend() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_prepend_bools() {
     assert_evals_to!(
-        "List.prepend [True, False] True",
+        "List.prepend [Bool.true, Bool.false] Bool.true",
         RocList::from_slice(&[true, true, false]),
         RocList<bool>
     );
@@ -903,7 +966,7 @@ fn list_keep_if_empty_list_of_int() {
             empty =
                 []
 
-            List.keepIf empty \_ -> True
+            List.keepIf empty \_ -> Bool.true
             "#
         ),
         RocList::<i64>::from_slice(&[]),
@@ -919,7 +982,7 @@ fn list_keep_if_empty_list() {
             r#"
             alwaysTrue : I64 -> Bool
             alwaysTrue = \_ ->
-                True
+                Bool.true
 
 
             List.keepIf [] alwaysTrue
@@ -938,7 +1001,7 @@ fn list_keep_if_always_true_for_non_empty_list() {
             r#"
             alwaysTrue : I64 -> Bool
             alwaysTrue = \_ ->
-                True
+                Bool.true
 
             oneThroughEight : List I64
             oneThroughEight =
@@ -960,7 +1023,7 @@ fn list_keep_if_always_false_for_non_empty_list() {
             r#"
             alwaysFalse : I64 -> Bool
             alwaysFalse = \_ ->
-                False
+                Bool.false
 
             List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
             "#
@@ -2240,7 +2303,7 @@ fn quicksort() {
                    partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
                    partitionHelp = \i, j, list, high, pivot ->
                        # if j < high then
-                       if False then
+                       if Bool.false then
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
@@ -2723,7 +2786,7 @@ fn list_any() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_any_empty_with_unknown_element_type() {
-    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+    assert_evals_to!("List.any [] (\\_ -> Bool.true)", false, bool);
 }
 
 #[test]
@@ -2738,11 +2801,16 @@ fn list_all() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_all_empty_with_unknown_element_type() {
-    assert_evals_to!("List.all [] (\\_ -> True)", true, bool);
+    assert_evals_to!("List.all [] (\\_ -> Bool.true)", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// then it works. We don't know what the problem is here!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(
@@ -2752,7 +2820,7 @@ fn lists_with_incompatible_type_param_in_if() {
 
             list2 = [""]
 
-            x = if True then list1 else list2
+            x = if Bool.true then list1 else list2
 
             ""
             "#
@@ -2765,7 +2833,7 @@ fn lists_with_incompatible_type_param_in_if() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn map_with_index_multi_record() {
-    // see https://github.com/rtfeldman/roc/issues/1700
+    // see https://github.com/roc-lang/roc/issues/1700
     assert_evals_to!(
         indoc!(
             r#"
@@ -2780,7 +2848,7 @@ fn map_with_index_multi_record() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_of_function_type() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
             r#"
@@ -2791,7 +2859,7 @@ fn empty_list_of_function_type() {
             myClosure = \_ -> "bar"
 
             choose =
-                if False then
+                if Bool.false then
                     myList
                 else
                     [myClosure]
@@ -2846,12 +2914,24 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
         ),
         RocStr::from("bc"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("def"),
         RocStr
     );
 }
@@ -2862,7 +2942,19 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2878,7 +2970,19 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2890,16 +2994,29 @@ fn list_find_empty_typed_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "Fails because monomorphization can't be done if we don't have a concrete element type!"]
 fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.find [] (\_ -> True)
+            List.findFirst [] \_ -> Bool.true
             "#
         ),
-        0,
-        i64
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.findLast [] \_ -> Bool.true
+            "#
+        ),
+        // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
+        // which is the unit!
+        (),
+        ()
     );
 }
 
@@ -2909,12 +3026,24 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         1,
+        usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        2,
         usize
     );
 }
@@ -2925,7 +3054,19 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -2941,13 +3082,181 @@ fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         999,
         usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["bc", "def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a", "bc"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
     );
 }
 
@@ -2973,7 +3282,7 @@ fn monomorphized_lists() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn with_capacity() {
-    // see https://github.com/rtfeldman/roc/issues/1732
+    // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
             r#"
@@ -3018,4 +3327,71 @@ fn call_function_in_empty_list_unbound() {
         RocList::from_slice(&[]),
         RocList<()>
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            apply : List (a -> b), List a -> List b
+            apply = \funs, vals ->
+              initial = List.withCapacity ((List.len funs) * (List.len vals))
+              List.walk funs initial \state, fun ->
+                mappedVals = List.map vals fun
+                List.concat state mappedVals
+
+            add2 : Str -> Str
+            add2 = \x -> "added \(x)"
+
+            mul2 : Str -> Str
+            mul2 = \x -> "multiplied \(x)"
+
+            foo = [add2, mul2]
+            bar = ["1", "2", "3", "4"]
+
+            main = foo |> apply bar |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("added 1, added 2, added 3, added 4, multiplied 1, multiplied 2, multiplied 3, multiplied 4"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3530_uninitialized_capacity_in_list_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [11,22,33]
+            "#
+        ),
+        3,
+        (usize, usize, usize),
+        |(_, _, cap)| cap
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_let_generalization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List a
+            empty = []
+
+            xs : List Str
+            xs = List.append empty "foo"
+
+            List.len xs
+            "#
+        ),
+        1,
+        usize
+    );
 }

@@ -1,18 +1,18 @@
 procedure Bool.7 (#Attr.2, #Attr.3):
-    let Bool.9 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.9;
+    let Bool.11 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.11;
 
 procedure Num.39 (#Attr.2, #Attr.3):
-    let Num.263 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-    ret Num.263;
+    let Num.259 : I64 = lowlevel NumDivTruncUnchecked #Attr.2 #Attr.3;
+    ret Num.259;
 
 procedure Num.40 (Num.229, Num.230):
-    let Num.262 : I64 = 0i64;
-    let Num.259 : Int1 = CallByName Bool.7 Num.230 Num.262;
-    if Num.259 then
-        let Num.261 : {} = Struct {};
-        let Num.260 : [C {}, C I64] = TagId(0) Num.261;
-        ret Num.260;
+    let Num.263 : I64 = 0i64;
+    let Num.260 : Int1 = CallByName Bool.7 Num.230 Num.263;
+    if Num.260 then
+        let Num.262 : {} = Struct {};
+        let Num.261 : [C {}, C I64] = TagId(0) Num.262;
+        ret Num.261;
     else
         let Num.258 : I64 = CallByName Num.39 Num.229 Num.230;
         let Num.257 : [C {}, C I64] = TagId(1) Num.258;

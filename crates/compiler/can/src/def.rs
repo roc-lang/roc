@@ -1,4 +1,5 @@
 use crate::abilities::AbilityMemberData;
+use crate::abilities::ImplKey;
 use crate::abilities::MemberVariables;
 use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
@@ -19,6 +20,7 @@ use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
+use roc_collections::VecSet;
 use roc_collections::{ImSet, MutMap, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
@@ -41,7 +43,7 @@ use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
-use roc_types::types::OpaqueSupports;
+use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
@@ -77,7 +79,7 @@ impl Def {
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
     pub region: Region,
 }
 
@@ -85,6 +87,7 @@ pub struct Annotation {
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     expects: Expects,
+    expects_fx: Expects,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
@@ -103,6 +106,12 @@ impl Expects {
             regions: Vec::with_capacity(capacity),
             preceding_comment: Vec::with_capacity(capacity),
         }
+    }
+
+    fn push(&mut self, loc_can_condition: Loc<Expr>, preceding_comment: Region) {
+        self.conditions.push(loc_can_condition.value);
+        self.regions.push(loc_can_condition.region);
+        self.preceding_comment.push(preceding_comment);
     }
 }
 
@@ -223,7 +232,7 @@ impl PendingTypeDef<'_> {
     }
 }
 
-// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+// See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {
@@ -231,6 +240,7 @@ pub enum Declaration {
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
     Expects(Expects),
+    ExpectsFx(Expects),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -245,6 +255,7 @@ impl Declaration {
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
             Expects(_) => 0,
+            ExpectsFx(_) => 0,
         }
     }
 
@@ -260,7 +271,7 @@ impl Declaration {
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,
             ),
-            Declaration::Expects(expects) => Region::span_across(
+            Declaration::Expects(expects) | Declaration::ExpectsFx(expects) => Region::span_across(
                 expects.regions.first().unwrap(),
                 expects.regions.last().unwrap(),
             ),
@@ -302,7 +313,7 @@ fn canonicalize_alias<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -367,6 +378,7 @@ fn canonicalize_alias<'a>(
                         typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
+                        alias_kind: AliasKind::Structural,
                     });
                 }
                 AliasKind::Opaque => {
@@ -450,16 +462,53 @@ fn canonicalize_claimed_ability_impl<'a>(
                     }
                 };
 
-            match scope.lookup_ability_member_shadow(member_symbol) {
-                Some(impl_symbol) => {
-                    // TODO: get rid of register_specializing_symbol
-                    scope
-                        .abilities_store
-                        .register_specializing_symbol(impl_symbol, member_symbol);
+            // There are two options for how the implementation symbol is defined.
+            //
+            // OPTION-1: The implementation identifier is the only identifier of that name in the
+            //           scope. For example,
+            //
+            //               interface F imports [] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we just do a simple lookup in the scope to find our
+            //           `toEncoder` impl.
+            //
+            // OPTION-2: The implementation identifier is a unique shadow of the ability member,
+            //           which has also been explicitly imported. For example,
+            //
+            //               interface F imports [Encoding.{ toEncoder }] exposes []
+            //
+            //               Hello := {} has [Encoding.{ toEncoder }]
+            //
+            //               toEncoder = \@Hello {} -> ...
+            //
+            //           In this case, we allow the `F` module's `toEncoder` def to shadow
+            //           `toEncoder` only to define this specialization's `toEncoder`.
+            //
+            // To handle both cases, try checking for a shadow first, then check for a direct
+            // reference. We want to check for a direct reference second so that if there is a
+            // shadow, we won't accidentally grab the imported symbol.
+            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
+                .or_else(|| scope.lookup_str(label_str, region).ok());
 
+            match opt_impl_symbol {
+                // It's possible that even if we find a symbol it is still only the member
+                // definition symbol, for example when the ability is defined in the same
+                // module as an implementer:
+                //
+                //   Eq has eq : a, a -> U64 | a has Eq
+                //
+                //   A := U8 has [Eq {eq}]
+                //
+                // So, do a final check that the implementation symbol is not resolved directly
+                // to the member.
+                Some(impl_symbol) if impl_symbol != member_symbol => {
                     Ok((member_symbol, impl_symbol))
                 }
-                None => {
+                _ => {
                     env.problem(Problem::ImplementationNotFound {
                         member: member_symbol,
                         region: label.region,
@@ -514,11 +563,6 @@ fn canonicalize_claimed_ability_impl<'a>(
                 }
             };
 
-            // TODO: get rid of register_specializing_symbol
-            scope
-                .abilities_store
-                .register_specializing_symbol(impl_symbol, member_symbol);
-
             Ok((member_symbol, impl_symbol))
         }
         AssignedField::OptionalValue(_, _, _) => {
@@ -538,6 +582,65 @@ fn canonicalize_claimed_ability_impl<'a>(
     }
 }
 
+struct SeparatedMembers {
+    not_required: Vec<Symbol>,
+    not_implemented: Vec<Symbol>,
+}
+
+/// Partitions ability members in a `has [ Ability {...members} ]` clause into the members the
+/// opaque type claims to implement but are not part of the ability, and the ones it does not
+/// implement.
+fn separate_implemented_and_required_members(
+    implemented: VecSet<Symbol>,
+    required: VecSet<Symbol>,
+) -> SeparatedMembers {
+    use std::cmp::Ordering;
+
+    let mut implemented = implemented.into_vec();
+    let mut required = required.into_vec();
+
+    implemented.sort();
+    required.sort();
+
+    let mut implemented = implemented.into_iter().peekable();
+    let mut required = required.into_iter().peekable();
+
+    let mut not_required = vec![];
+    let mut not_implemented = vec![];
+
+    loop {
+        // Equal => both required and implemented
+        // Less => implemented but not required
+        // Greater => required but not implemented
+
+        let ord = match (implemented.peek(), required.peek()) {
+            (Some(implemented), Some(required)) => Some(implemented.cmp(required)),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match ord {
+            Some(Ordering::Less) => {
+                not_required.push(implemented.next().unwrap());
+            }
+            Some(Ordering::Greater) => {
+                not_implemented.push(required.next().unwrap());
+            }
+            Some(Ordering::Equal) => {
+                _ = implemented.next().unwrap();
+                _ = required.next().unwrap();
+            }
+            None => break,
+        }
+    }
+
+    SeparatedMembers {
+        not_required,
+        not_implemented,
+    }
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
@@ -545,7 +648,7 @@ fn canonicalize_opaque<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -568,7 +671,6 @@ fn canonicalize_opaque<'a>(
         let has_abilities = has_abilities.value.collection();
 
         let mut derived_abilities = vec![];
-        let mut supported_abilities = vec![];
 
         for has_ability in has_abilities.items {
             let region = has_ability.region;
@@ -577,10 +679,27 @@ fn canonicalize_opaque<'a>(
                 _ => internal_error!("spaces not extracted"),
             };
 
-            let ability = match ability.value {
+            let ability_region = ability.region;
+
+            let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
-                        Ok(ability) => ability,
+                        Ok(ability) => {
+                            let opt_members = scope
+                                .abilities_store
+                                .members_of_ability(ability)
+                                .map(|members| members.iter().copied().collect())
+                                .or_else(|| pending_abilities_in_scope.get(&ability).cloned());
+
+                            if let Some(members) = opt_members {
+                                // This is an ability we already imported into the scope,
+                                // or which is also undergoing canonicalization at the moment.
+                                (ability, members)
+                            } else {
+                                env.problem(Problem::NotAnAbility(ability_region));
+                                continue;
+                            }
+                        }
                         Err(_) => {
                             // This is bad apply; an error will have been reported for it
                             // already.
@@ -590,42 +709,119 @@ fn canonicalize_opaque<'a>(
                 }
                 _ => {
                     // Register the problem but keep going.
-                    env.problem(Problem::IllegalClaimedAbility(region));
+                    env.problem(Problem::NotAnAbility(ability_region));
                     continue;
                 }
             };
 
             if let Some(impls) = opt_impls {
-                let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
+                let mut impl_map: VecMap<Symbol, Loc<MemberImpl>> = VecMap::default();
 
+                // First up canonicalize all the claimed implementations, building a map of ability
+                // member -> implementation.
                 for loc_impl in impls.extract_spaces().item.items {
-                    match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
-                        Ok((member, opaque_impl)) => {
-                            impl_map.insert(member, opaque_impl);
+                    let (member, impl_symbol) =
+                        match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
+                            Ok((member, impl_symbol)) => (member, impl_symbol),
+                            Err(()) => continue,
+                        };
+
+                    // Did the user claim this implementation for a specialization of a different
+                    // type? e.g.
+                    //
+                    //   A has [Hash {hash: myHash}]
+                    //   B has [Hash {hash: myHash}]
+                    //
+                    // If so, that's an error and we drop the impl for this opaque type.
+                    let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
+                        Some(ImplKey {
+                            opaque,
+                            ability_member,
+                        }) => {
+                            env.problem(Problem::OverloadedSpecialization {
+                                overload: loc_impl.region,
+                                original_opaque: *opaque,
+                                ability_member: *ability_member,
+                            });
+                            MemberImpl::Error
                         }
-                        Err(()) => continue,
+                        None => MemberImpl::Impl(impl_symbol),
+                    };
+
+                    // Did the user already claim an implementation for the ability member for this
+                    // type previously? (e.g. Hash {hash: hash1, hash: hash2})
+                    let opt_old_impl_symbol =
+                        impl_map.insert(member, Loc::at(loc_impl.region, member_impl));
+
+                    if let Some(old_impl_symbol) = opt_old_impl_symbol {
+                        env.problem(Problem::DuplicateImpl {
+                            original: old_impl_symbol.region,
+                            duplicate: loc_impl.region,
+                        });
                     }
                 }
 
-                supported_abilities.push(OpaqueSupports::Implemented {
-                    ability_name: ability,
-                    impls: impl_map,
-                });
-            } else if ability.is_builtin_ability() {
-                derived_abilities.push(Loc::at(region, ability));
-                supported_abilities.push(OpaqueSupports::Derived(ability));
+                // Check that the members this opaque claims to implement corresponds 1-to-1 with
+                // the members the ability offers.
+                let SeparatedMembers {
+                    not_required,
+                    not_implemented,
+                } = separate_implemented_and_required_members(
+                    impl_map.iter().map(|(member, _)| *member).collect(),
+                    members,
+                );
+
+                if !not_required.is_empty() {
+                    // Implementing something that's not required is a recoverable error, we don't
+                    // need to skip association of the implemented abilities. Just remove the
+                    // unneeded members.
+                    for sym in not_required.iter() {
+                        impl_map.remove(sym);
+                    }
+
+                    env.problem(Problem::ImplementsNonRequired {
+                        region,
+                        ability,
+                        not_required,
+                    });
+                }
+
+                if !not_implemented.is_empty() {
+                    // We'll generate runtime errors for the members that are needed but
+                    // unspecified.
+                    for sym in not_implemented.iter() {
+                        impl_map.insert(*sym, Loc::at_zero(MemberImpl::Error));
+                    }
+
+                    env.problem(Problem::DoesNotImplementAbility {
+                        region,
+                        ability,
+                        not_implemented,
+                    });
+                }
+
+                let impls = impl_map
+                    .into_iter()
+                    .map(|(member, def)| (member, def.value));
+
+                scope
+                    .abilities_store
+                    .register_declared_implementations(name.value, impls);
+            } else if let Some((_, members)) = ability.derivable_ability() {
+                let impls = members.iter().map(|member| (*member, MemberImpl::Derived));
+                scope
+                    .abilities_store
+                    .register_declared_implementations(name.value, impls);
+
+                derived_abilities.push(Loc::at(ability_region, ability));
             } else {
                 // There was no record specified of functions to use for
                 // members, but also this isn't a builtin ability, so we don't
                 // know how to auto-derive it.
-                //
-                // Register the problem but keep going, we may still be able to compile the
-                // program even if a derive is missing.
-                env.problem(Problem::IllegalClaimedAbility(region));
+                env.problem(Problem::IllegalDerivedAbility(region));
             }
         }
 
-        // TODO: properly validate all supported_abilities
         if !derived_abilities.is_empty() {
             // Fresh instance of this opaque to be checked for derivability during solving.
             let fresh_inst = Type::DelayedAlias(AliasCommon {
@@ -645,6 +841,7 @@ fn canonicalize_opaque<'a>(
             let old = output
                 .pending_derives
                 .insert(name.value, (fresh_inst, derived_abilities));
+
             debug_assert!(old.is_none());
         }
     }
@@ -724,8 +921,14 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
-    let (aliases, symbols_introduced) =
-        canonicalize_type_defs(env, &mut output, var_store, scope, pending_type_defs);
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        &pending_abilities_in_scope,
+        pending_type_defs,
+    );
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -757,6 +960,7 @@ fn canonicalize_value_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
+    let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
 
     for loc_pending_def in value_defs {
         match loc_pending_def.value {
@@ -771,13 +975,27 @@ fn canonicalize_value_defs<'a>(
             PendingValue::Expect(pending_expect) => {
                 pending_expects.push(pending_expect);
             }
+
+            PendingValue::ExpectFx(pending_expect) => {
+                pending_expect_fx.push(pending_expect);
+            }
         }
     }
 
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
+            .into_iter()
+            .peekable();
+
+        if new_bindings.peek().is_none() {
+            env.problem(Problem::NoIdentifiersIntroduced(
+                pending_def.loc_pattern().region,
+            ));
+        }
+
+        for (s, r) in new_bindings {
             // store the top-level defs, used to ensure that closures won't capture them
             if let PatternType::TopLevelDef = pattern_type {
                 env.top_level_symbols.insert(s);
@@ -819,6 +1037,7 @@ fn canonicalize_value_defs<'a>(
     }
 
     let mut expects = Expects::with_capacity(pending_expects.len());
+    let mut expects_fx = Expects::with_capacity(pending_expects.len());
 
     for pending in pending_expects {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -829,9 +1048,21 @@ fn canonicalize_value_defs<'a>(
             &pending.condition.value,
         );
 
-        expects.conditions.push(loc_can_condition.value);
-        expects.regions.push(loc_can_condition.region);
-        expects.preceding_comment.push(pending.preceding_comment);
+        expects.push(loc_can_condition, pending.preceding_comment);
+
+        output.union(can_output);
+    }
+
+    for pending in pending_expect_fx {
+        let (loc_can_condition, can_output) = canonicalize_expr(
+            env,
+            var_store,
+            scope,
+            pending.condition.region,
+            &pending.condition.value,
+        );
+
+        expects_fx.push(loc_can_condition, pending.preceding_comment);
 
         output.union(can_output);
     }
@@ -839,6 +1070,7 @@ fn canonicalize_value_defs<'a>(
     let can_defs = CanDefs {
         defs,
         expects,
+        expects_fx,
         def_ordering,
         aliases,
     };
@@ -851,6 +1083,7 @@ fn canonicalize_type_defs<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     pending_type_defs: Vec<PendingTypeDef<'a>>,
 ) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
     enum TypeDef<'a> {
@@ -869,8 +1102,6 @@ fn canonicalize_type_defs<'a>(
     }
 
     let mut type_defs = MutMap::default();
-    let mut pending_abilities_in_scope = Vec::new();
-
     let mut referenced_type_symbols = VecMap::default();
 
     // Determine which idents we introduced in the course of this process.
@@ -916,7 +1147,6 @@ fn canonicalize_type_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
-                pending_abilities_in_scope.push(name.value);
             }
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
@@ -938,7 +1168,7 @@ fn canonicalize_type_defs<'a>(
                     output,
                     var_store,
                     scope,
-                    &pending_abilities_in_scope,
+                    pending_abilities_in_scope,
                     name,
                     ann,
                     &vars,
@@ -956,7 +1186,7 @@ fn canonicalize_type_defs<'a>(
                     output,
                     var_store,
                     scope,
-                    &pending_abilities_in_scope,
+                    pending_abilities_in_scope,
                     name,
                     ann,
                     &vars,
@@ -997,7 +1227,7 @@ fn canonicalize_type_defs<'a>(
         var_store,
         scope,
         abilities,
-        &pending_abilities_in_scope,
+        pending_abilities_in_scope,
     );
 
     (aliases, symbols_introduced)
@@ -1011,7 +1241,7 @@ fn resolve_abilities<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     abilities: MutMap<Symbol, Vec<PendingAbilityMember>>,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 ) {
     for (ability, members) in abilities {
         let mut can_members = Vec::with_capacity(members.len());
@@ -1224,6 +1454,7 @@ pub(crate) fn sort_can_defs_new(
     let CanDefs {
         defs,
         expects,
+        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -1231,7 +1462,41 @@ pub(crate) fn sort_can_defs_new(
     // TODO: inefficient, but I want to make this what CanDefs contains in the future
     let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
 
+    // symbols are put in declarations in dependency order, from "main" up, so
+    //
+    // x = 3
+    // y = x + 1
+    //
+    // will get ordering [ y, x ]
     let mut declarations = Declarations::with_capacity(defs.len());
+
+    // because of the ordering of declarations, expects should come first because they are
+    // independent, but can rely on all other top-level symbols in the module
+    let it = expects
+        .conditions
+        .into_iter()
+        .zip(expects.regions)
+        .zip(expects.preceding_comment);
+
+    for ((condition, region), preceding_comment) in it {
+        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
+        let name = scope.gen_unique_symbol();
+
+        declarations.push_expect(preceding_comment, name, Loc::at(region, condition));
+    }
+
+    let it = expects_fx
+        .conditions
+        .into_iter()
+        .zip(expects_fx.regions)
+        .zip(expects_fx.preceding_comment);
+
+    for ((condition, region), preceding_comment) in it {
+        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
+        let name = scope.gen_unique_symbol();
+
+        declarations.push_expect_fx(preceding_comment, name, Loc::at(region, condition));
+    }
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -1397,12 +1662,6 @@ pub(crate) fn sort_can_defs_new(
         }
     }
 
-    for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
-        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
-        let name = scope.gen_unique_symbol();
-        declarations.push_expect(name, Loc::at(region, condition));
-    }
-
     (declarations, output)
 }
 
@@ -1416,6 +1675,7 @@ pub(crate) fn sort_can_defs(
     let CanDefs {
         mut defs,
         expects,
+        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -1528,6 +1788,10 @@ pub(crate) fn sort_can_defs(
 
     if !expects.conditions.is_empty() {
         declarations.push(Declaration::Expects(expects));
+    }
+
+    if !expects_fx.conditions.is_empty() {
+        declarations.push(Declaration::ExpectsFx(expects_fx));
     }
 
     (declarations, output)
@@ -1664,7 +1928,7 @@ fn canonicalize_pending_value_def<'a>(
     use PendingValueDef::*;
 
     // All abilities should be resolved by the time we're canonicalizing value defs.
-    let pending_abilities_in_scope = &[];
+    let pending_abilities_in_scope = &Default::default();
 
     let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
@@ -2022,6 +2286,10 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
             // Expects should only be added to top-level decls, not to let-exprs!
             unreachable!("{:?}", &expects)
         }
+        Declaration::ExpectsFx(expects) => {
+            // Expects should only be added to top-level decls, not to let-exprs!
+            unreachable!("{:?}", &expects)
+        }
     }
 }
 
@@ -2186,9 +2454,9 @@ fn to_pending_type_def<'a>(
 
                 let member_sym = match scope.introduce(member_name.into(), name_region) {
                     Ok(sym) => sym,
-                    Err((original_region, shadow, _new_symbol)) => {
+                    Err((shadowed_symbol, shadow, _new_symbol)) => {
                         env.problem(roc_problem::can::Problem::Shadowing {
-                            original_region,
+                            original_region: shadowed_symbol.region,
                             shadow,
                             kind: ShadowKind::Variable,
                         });
@@ -2218,6 +2486,7 @@ fn to_pending_type_def<'a>(
 enum PendingValue<'a> {
     Def(PendingValueDef<'a>),
     Expect(PendingExpect<'a>),
+    ExpectFx(PendingExpect<'a>),
     SignatureDefMismatch,
 }
 
@@ -2323,9 +2592,20 @@ fn to_pending_value_def<'a>(
             }
         }
 
-        Expect(condition) => PendingValue::Expect(PendingExpect {
+        Expect {
             condition,
-            preceding_comment: Region::zero(),
+            preceding_comment,
+        } => PendingValue::Expect(PendingExpect {
+            condition,
+            preceding_comment: *preceding_comment,
+        }),
+
+        ExpectFx {
+            condition,
+            preceding_comment,
+        } => PendingValue::ExpectFx(PendingExpect {
+            condition,
+            preceding_comment: *preceding_comment,
         }),
     }
 }
@@ -2513,6 +2793,7 @@ fn correct_mutual_recursive_type_alias<'a>(
                 env,
                 &mut alias.typ,
                 alias_name,
+                alias.kind,
                 alias.region,
                 rest,
                 can_still_report_error,
@@ -2695,7 +2976,15 @@ fn make_tag_union_recursive_help<'a, 'b>(
         }
         _ => {
             // take care to report a cyclic alias only once (not once for each alias in the cycle)
-            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_cyclic_error);
+            mark_cyclic_alias(
+                env,
+                typ,
+                symbol,
+                alias_kind,
+                region,
+                others,
+                *can_report_cyclic_error,
+            );
             *can_report_cyclic_error = false;
 
             Cyclic
@@ -2707,6 +2996,7 @@ fn mark_cyclic_alias<'a>(
     env: &mut Env<'a>,
     typ: &mut Type,
     symbol: Symbol,
+    alias_kind: AliasKind,
     region: Region,
     others: Vec<Symbol>,
     report: bool,
@@ -2715,7 +3005,7 @@ fn mark_cyclic_alias<'a>(
     *typ = Type::Erroneous(problem);
 
     if report {
-        let problem = Problem::CyclicAlias(symbol, region, others);
+        let problem = Problem::CyclicAlias(symbol, region, others, alias_kind);
         env.problems.push(problem);
     }
 }

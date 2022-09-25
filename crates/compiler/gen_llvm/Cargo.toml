@@ -1,7 +1,7 @@
 [package]
 name = "roc_gen_llvm"
 description = "The LLVM backend for the Roc compiler"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -14,9 +14,10 @@ roc_builtins = { path = "../builtins" }
 roc_error_macros = { path = "../../error_macros" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std", default-features = false }
+roc_std = { path = "../../roc_std" }
 roc_debug_flags = { path = "../debug_flags" }
+roc_region = { path = "../region" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"

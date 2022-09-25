@@ -2,171 +2,24 @@
 
 use std::iter::once;
 
-use roc_can::abilities::SpecializationLambdaSets;
-use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch};
-use roc_can::module::ExposedByModule;
+use roc_can::expr::{
+    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_derive_key::encoding::FlatEncodableKey;
-use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable,
-    RecordFields, RedundantMark, Subs, SubsSlice, UnionLambdas, UnionTags, Variable,
-    VariableSubsSlice,
+    Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
+    RedundantMark, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::RecordField;
 
-use crate::{synth_var, DerivedBody, DERIVED_SYNTH};
-
-pub(crate) struct Env<'a> {
-    /// NB: This **must** be subs for the derive module!
-    pub subs: &'a mut Subs,
-    pub exposed_types: &'a ExposedByModule,
-    pub derived_ident_ids: &'a mut IdentIds,
-}
-
-impl Env<'_> {
-    fn new_symbol(&mut self, name_hint: &str) -> Symbol {
-        if cfg!(any(
-            debug_assertions,
-            test,
-            feature = "debug-derived-symbols"
-        )) {
-            let mut i = 0;
-            let debug_name = loop {
-                i += 1;
-                let name = if i == 1 {
-                    name_hint.to_owned()
-                } else {
-                    format!("{}{}", name_hint, i)
-                };
-                if self.derived_ident_ids.get_id(&name).is_none() {
-                    break name;
-                }
-            };
-
-            let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
-
-            Symbol::new(DERIVED_SYNTH, ident_id)
-        } else {
-            self.unique_symbol()
-        }
-    }
-
-    fn unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.derived_ident_ids.gen_unique();
-        Symbol::new(DERIVED_SYNTH, ident_id)
-    }
-
-    fn import_encode_symbol(&mut self, symbol: Symbol) -> Variable {
-        debug_assert_eq!(symbol.module_id(), ModuleId::ENCODE);
-
-        let encode_types = &self
-            .exposed_types
-            .get(&ModuleId::ENCODE)
-            .unwrap()
-            .exposed_types_storage_subs;
-        let storage_var = encode_types.stored_vars_by_symbol.get(&symbol).unwrap();
-        let imported = encode_types
-            .storage_subs
-            .export_variable_to_directly_to_use_site(self.subs, *storage_var);
-
-        instantiate_rigids(self.subs, imported.variable);
-
-        imported.variable
-    }
-
-    fn unify(&mut self, left: Variable, right: Variable) {
-        use roc_unify::unify::{unify, Mode, Unified};
-
-        let unified = unify(self.subs, left, right, Mode::EQ);
-
-        match unified {
-            Unified::Success {
-                vars: _,
-                must_implement_ability: _,
-                lambda_sets_to_specialize,
-                extra_metadata: _,
-            } => {
-                if !lambda_sets_to_specialize.is_empty() {
-                    internal_error!("Did not expect derivers to need to specialize unspecialized lambda sets, but we got some: {:?}", lambda_sets_to_specialize)
-                }
-            }
-            Unified::Failure(..) | Unified::BadType(..) => {
-                internal_error!("Unification failed in deriver - that's a deriver bug!")
-            }
-        }
-    }
-
-    fn get_specialization_lambda_sets(
-        &mut self,
-        specialization_type: Variable,
-        ability_member: Symbol,
-    ) -> SpecializationLambdaSets {
-        use roc_unify::unify::{unify_introduced_ability_specialization, Mode, Unified};
-
-        let member_signature = self.import_encode_symbol(ability_member);
-
-        let unified = unify_introduced_ability_specialization(
-            self.subs,
-            member_signature,
-            specialization_type,
-            Mode::EQ,
-        );
-
-        match unified {
-            Unified::Success {
-                vars: _,
-                must_implement_ability: _,
-                lambda_sets_to_specialize: _lambda_sets_to_specialize,
-                extra_metadata: specialization_lsets,
-            } => {
-                let specialization_lsets: SpecializationLambdaSets = specialization_lsets
-                    .0
-                    .into_iter()
-                    .map(|((spec_member, region), var)| {
-                        debug_assert_eq!(spec_member, ability_member);
-                        (region, var)
-                    })
-                    .collect();
-
-                // Since we're doing `{foo} ~ a | a has Encoding`, we may see "lambda sets to
-                // specialize" for e.g. `{foo}:toEncoder:1`, but these are actually just the
-                // specialization lambda sets, so we don't need to do any extra work!
-                //
-                // If there are other lambda sets to specialize in here, that's unexpected, because
-                // that means we would have been deriving something like `toEncoder {foo: bar}`,
-                // and now seen that we needed `toEncoder bar` where `bar` is a concrete type. But
-                // we only expect `bar` to polymorphic at this stage!
-                //
-                // TODO: it would be better if `unify` could prune these for us. See also
-                // https://github.com/rtfeldman/roc/issues/3207; that is a blocker for this TODO.
-                #[cfg(debug_assertions)]
-                {
-                    for (spec_var, lambda_sets) in _lambda_sets_to_specialize.drain() {
-                        for lambda_set in lambda_sets {
-                            let belongs_to_specialized_lambda_sets =
-                                specialization_lsets.iter().any(|(_, var)| {
-                                    self.subs.get_root_key_without_compacting(*var)
-                                        == self.subs.get_root_key_without_compacting(lambda_set)
-                                });
-                            debug_assert!(belongs_to_specialized_lambda_sets,
-                                "Did not expect derivers to need to specialize unspecialized lambda sets, but we got one: {:?} for {:?}", lambda_set, spec_var)
-                        }
-                    }
-                }
-                specialization_lsets
-            }
-            Unified::Failure(..) | Unified::BadType(..) => {
-                internal_error!("Unification failed in deriver - that's a deriver bug!")
-            }
-        }
-    }
-}
+use crate::util::Env;
+use crate::{synth_var, DerivedBody};
 
 pub(crate) fn derive_to_encoder(
     env: &mut Env<'_>,
@@ -251,7 +104,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
 
     // build `toEncoder elem` type
     // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
-    let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
+    let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
     // elem -[clos]-> t1
     let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
@@ -331,7 +184,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
 
     // build `Encode.list lst (\elem -> Encode.toEncoder elem)` type
     // List e, (e -> Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
-    let encode_list_fn_var = env.import_encode_symbol(Symbol::ENCODE_LIST);
+    let encode_list_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_LIST);
 
     // List elem, to_elem_encoder_fn_var -[clos]-> t1
     let this_encode_list_args_slice =
@@ -467,7 +320,7 @@ fn to_encoder_record(
 
             // build `toEncoder rcd.a` type
             // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
-            let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
+            let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
             // (typeof rcd.a) -[clos]-> t1
             let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
@@ -547,7 +400,7 @@ fn to_encoder_record(
 
     // build `Encode.record [ { key: .., value: ..}, .. ]` type
     // List { key : Str, value : Encoder fmt } -[uls]-> Encoder fmt | fmt has EncoderFormatting
-    let encode_record_fn_var = env.import_encode_symbol(Symbol::ENCODE_RECORD);
+    let encode_record_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_RECORD);
 
     // fields_list_var -[clos]-> t1
     let fields_list_var_slice =
@@ -672,6 +525,10 @@ fn to_encoder_tag_union(
                     .map(|(var, sym)| (*var, Loc::at_zero(Pattern::Identifier(*sym))))
                     .collect(),
             };
+            let branch_pattern = WhenBranchPattern {
+                pattern: Loc::at_zero(pattern),
+                degenerate: false,
+            };
 
             // whole type of the elements in [ Encode.toEncoder v1, Encode.toEncoder v2 ]
             let whole_payload_encoders_var = env.subs.fresh_unnamed_flex_var();
@@ -681,7 +538,8 @@ fn to_encoder_tag_union(
                 .map(|(&sym, &sym_var)| {
                     // build `toEncoder v1` type
                     // expected: val -[uls]-> Encoder fmt | fmt has EncoderFormatting
-                    let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
+                    let to_encoder_fn_var =
+                        env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
                     // wanted: t1 -[clos]-> t'
                     let var_slice_of_sym_var =
@@ -741,7 +599,7 @@ fn to_encoder_tag_union(
 
             // build `Encode.tag "A" [ ... ]` type
             // expected: Str, List (Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
-            let encode_tag_fn_var = env.import_encode_symbol(Symbol::ENCODE_TAG);
+            let encode_tag_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TAG);
 
             // wanted: Str, List whole_encoders_var -[clos]-> t'
             let this_encode_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
@@ -792,7 +650,7 @@ fn to_encoder_tag_union(
             env.unify(this_encoder_var, whole_tag_encoders_var);
 
             WhenBranch {
-                patterns: vec![Loc::at_zero(pattern)],
+                patterns: vec![branch_pattern],
                 value: Loc::at_zero(encode_tag_call),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
@@ -898,7 +756,7 @@ fn wrap_in_encode_custom(
 
     // build `Encode.appendWith bytes encoder fmt` type
     // expected: Encode.appendWith : List U8, Encoder fmt, fmt -[appendWith]-> List U8 | fmt has EncoderFormatting
-    let append_with_fn_var = env.import_encode_symbol(Symbol::ENCODE_APPEND_WITH);
+    let append_with_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_APPEND_WITH);
 
     // wanted: Encode.appendWith : List U8, encoder_var, fmt -[clos]-> List U8 | fmt has EncoderFormatting
     let this_append_with_args_var_slice =
@@ -989,7 +847,7 @@ fn wrap_in_encode_custom(
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt
     //
     // expected: Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt has EncoderFormatting
-    let custom_fn_var = env.import_encode_symbol(Symbol::ENCODE_CUSTOM);
+    let custom_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_CUSTOM);
 
     // wanted: Encode.custom : fn_var -[clos]-> t'
     let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);

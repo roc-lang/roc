@@ -1,6 +1,6 @@
 [package]
 name = "test_derive"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -16,7 +16,7 @@ roc_builtins = { path = "../builtins" }
 roc_load_internal = { path = "../load_internal" }
 roc_can = { path = "../can" }
 roc_derive_key = { path = "../derive_key" }
-roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
+roc_derive = { path = "../derive", features = ["debug-derived-symbols", "open-extension-vars"] }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
 roc_reporting = { path = "../../reporting" }
@@ -24,9 +24,9 @@ roc_constrain = { path = "../constrain" }
 roc_region = { path = "../region" }
 roc_solve = { path = "../solve" }
 roc_debug_flags = { path = "../debug_flags" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 lazy_static = "1.4.0"
-indoc = "1.0.3"
+indoc = "1.0.7"
 ven_pretty = { path = "../../vendor/pretty" }
-pretty_assertions = "1.0.0"
-insta = "1.15.0"
+pretty_assertions = "1.3.0"
+insta = "1.19.0"

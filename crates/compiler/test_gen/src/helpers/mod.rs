@@ -18,6 +18,33 @@ pub fn zig_executable() -> String {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn src_hash(src: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hash_state = DefaultHasher::new();
+    src.hash(&mut hash_state);
+    hash_state.finish()
+}
+
+#[allow(dead_code)]
+pub(crate) fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
+    use std::path::Path;
+
+    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
+    let debug_dir_path = Path::new(&debug_dir_str);
+    let final_wasm_file = debug_dir_path.join("final.wasm");
+
+    std::fs::create_dir_all(debug_dir_path).unwrap();
+    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
+
+    println!(
+        "Debug command:\n\twasm-objdump -dx {}",
+        final_wasm_file.to_str().unwrap()
+    );
+}
+
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
 /// run out of stack space in debug builds (but don't in --release builds)
 #[allow(dead_code)]

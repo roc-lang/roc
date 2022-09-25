@@ -66,7 +66,7 @@ impl Constraints {
             Category::StrInterpolation,
             Category::If,
             Category::When,
-            Category::Float,
+            Category::Frac,
             Category::Int,
             Category::Num,
             Category::List,
@@ -199,7 +199,7 @@ impl Constraints {
             Category::StrInterpolation => Self::CATEGORY_STRINTERPOLATION,
             Category::If => Self::CATEGORY_IF,
             Category::When => Self::CATEGORY_WHEN,
-            Category::Float => Self::CATEGORY_FLOAT,
+            Category::Frac => Self::CATEGORY_FLOAT,
             Category::Int => Self::CATEGORY_INT,
             Category::Num => Self::CATEGORY_NUM,
             Category::List => Self::CATEGORY_LIST,
@@ -713,7 +713,6 @@ pub struct PatternEq(
 pub struct OpportunisticResolve {
     /// The specialized type of this lookup, to try to resolve.
     pub specialization_variable: Variable,
-    pub specialization_expectation: Index<Expected<Type>>,
 
     /// The ability member to try to resolve.
     pub member: Symbol,

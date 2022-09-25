@@ -1700,7 +1700,7 @@ fn to_scalar_4_byte() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_first() {
+fn str_split_first_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1716,7 +1716,49 @@ fn str_split_first() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_last() {
+fn str_split_first_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("bar//baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1730,7 +1772,50 @@ fn str_split_last() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("baz"), RocStr::from("foo//bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_walk_utf8_with_index() {
+    #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
         indoc!(
             r#"
@@ -1739,6 +1824,17 @@ fn str_walk_utf8_with_index() {
         ),
         RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
         RocList<(u64, u8)>
+    );
+
+    #[cfg(feature = "gen-llvm-wasm")]
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            "#
+        ),
+        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
+        RocList<(u32, char)>
     );
 }
 
@@ -1767,5 +1863,70 @@ fn str_walk_scalars() {
         ),
         RocList::from_slice(&['a', 'b', 'c', 'd']),
         RocList<char>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "hello"
+                |> Str.reserve 42
+            "#
+        ),
+        [0, 5, 42],
+        [u32; 3],
+        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout_small() {
+    // exposed an error in using bitcast instead of zextend
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "𒀀𒀁"
+                |> Str.trim
+            "#
+        ),
+        [-2139057424, -2122280208, -2013265920],
+        [i32; 3]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when "Deyr fé, deyja frændr" is
+                "Deyr fé, deyja frændr" -> 42
+                "deyr sjalfr it sama" -> 1
+                "en orðstírr deyr aldregi" -> 2
+                "hveim er sér góðan getr" -> 3
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when "Deyr fé, deyja frændr" is
+                "deyr sjalfr it sama" -> 1
+                "en orðstírr deyr aldregi" -> 2
+                "hveim er sér góðan getr" -> 3
+                _ -> 4
+            "#
+        ),
+        4,
+        i64
     );
 }

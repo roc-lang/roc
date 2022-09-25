@@ -5,11 +5,13 @@
 ### 1. Build the Roc website
 
 For a minimal build (when just working on the web REPL)
+
 ```bash
 cp -r www/public www/build
 ```
 
 Or, for a full build (with std lib documentation, downloadable source code, etc.)
+
 ```bash
 www/build.sh
 ```
@@ -36,7 +38,8 @@ python3 -m http.server
 ```
 
 ### 3. Open your browser
-You should be able to find the Roc REPL at http://127.0.0.1:8000/repl (or whatever port your web server mentioned when it started up.)
+
+You should be able to find the Roc REPL at <http://127.0.0.1:8000/repl> (or whatever port your web server mentioned when it started up.)
 
 **Warning:** This is work in progress! Not all language features are implemented yet, error messages don't look nice yet, up/down arrows don't work for history, etc.
 

@@ -19,6 +19,9 @@
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
     Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval';"
     X-Content-Type-Options = "nosniff"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
 
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo
 #
@@ -26,10 +29,6 @@
 # for a list of authors!
 [[redirects]]
   from = "/authors"
-  to = "https://github.com/rtfeldman/roc/blob/trunk/AUTHORS"
+  to = "https://raw.githubusercontent.com/roc-lang/roc/main/AUTHORS"
   force = true
-  status = 302 # TODO once the repo is public, use status = 200 and this URL:
-               # https://raw.githubusercontent.com/rtfeldman/roc/trunk/AUTHORS
-               #
-               # This way, roc-lang.org/authors will show the authors directly,
-               # proxied from the current AUTHORS file on GitHub, no redirects.
+  status = 200

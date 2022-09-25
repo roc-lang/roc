@@ -540,7 +540,20 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
-            Expect(a) => Expect(arena.alloc(a.remove_spaces(arena))),
+            Expect {
+                condition,
+                preceding_comment: _,
+            } => Expect {
+                condition: arena.alloc(condition.remove_spaces(arena)),
+                preceding_comment: Region::zero(),
+            },
+            ExpectFx {
+                condition,
+                preceding_comment: _,
+            } => ExpectFx {
+                condition: arena.alloc(condition.remove_spaces(arena)),
+                preceding_comment: Region::zero(),
+            },
         }
     }
 }

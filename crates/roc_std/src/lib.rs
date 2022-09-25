@@ -1,6 +1,7 @@
+#![no_std]
 #![crate_type = "lib"]
-#![cfg_attr(feature = "no_std", no_std)]
 
+use arrayvec::ArrayString;
 use core::cmp::Ordering;
 use core::ffi::c_void;
 use core::fmt::{self, Debug};
@@ -9,20 +10,21 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
 
-use arrayvec::ArrayString;
-
 mod roc_box;
+mod roc_dict;
 mod roc_list;
+mod roc_set;
 mod roc_str;
 mod storage;
 
 pub use roc_box::RocBox;
+pub use roc_dict::RocDict;
 pub use roc_list::RocList;
+pub use roc_set::RocSet;
 pub use roc_str::{InteriorNulError, RocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported
-#[cfg(feature = "platform")]
 extern "C" {
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
@@ -35,57 +37,6 @@ extern "C" {
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
     pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
-}
-
-/// # Safety
-/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
-    unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
-}
-
-/// # Safety
-/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub unsafe extern "C" fn roc_realloc(
-    _ptr: *mut c_void,
-    _new_size: usize,
-    _old_size: usize,
-    _alignment: u32,
-) -> *mut c_void {
-    unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
-}
-
-/// # Safety
-/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
-    unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
-}
-
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
-}
-
-/// # Safety
-/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
-    unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
-}
-
-/// # Safety
-/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
-#[cfg(not(feature = "platform"))]
-#[no_mangle]
-pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
-    unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
 pub fn roc_alloc_refcounted<T>() -> *mut T {
@@ -200,15 +151,16 @@ impl<T, E> RocResult<T, E> {
         matches!(self.tag, RocResultTag::RocErr)
     }
 
-    fn into_payload(mut self) -> RocResultPayload<T, E> {
+    fn into_payload(self) -> RocResultPayload<T, E> {
         let mut value = MaybeUninit::uninit();
-        let ref_mut_value = unsafe { &mut *value.as_mut_ptr() };
 
-        // move the value into our MaybeUninit memory
-        core::mem::swap(&mut self.payload, ref_mut_value);
+        // copy the value into our MaybeUninit memory
+        unsafe {
+            core::ptr::copy_nonoverlapping(&self.payload, value.as_mut_ptr(), 1);
+        }
 
-        // don't run the destructor on self; the `payload` has been moved out
-        // and replaced by uninitialized memory
+        // don't run the destructor on self; the `payload` briefly has two owners
+        // but only `value` is allowed to drop it (after initialization)
         core::mem::forget(self);
 
         unsafe { value.assume_init() }
@@ -373,7 +325,7 @@ impl RocDec {
     }
 
     fn to_str_helper(self, string: &mut ArrayString<{ Self::MAX_STR_LENGTH }>) -> &str {
-        use std::fmt::Write;
+        use core::fmt::Write;
 
         if self.as_i128() == 0 {
             return "0";

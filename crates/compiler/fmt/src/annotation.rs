@@ -206,7 +206,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         use roc_parse::ast::TypeAnnotation::*;
 
         match self {
-            Function(arguments, result) => {
+            Function(args, ret) => {
                 let needs_parens = parens != Parens::NotNeeded;
 
                 buf.indent(indent);
@@ -215,7 +215,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.push('(')
                 }
 
-                let mut it = arguments.iter().enumerate().peekable();
+                let mut it = args.iter().enumerate().peekable();
                 let should_add_newlines = newlines == Newlines::Yes;
 
                 while let Some((index, argument)) = it.next() {
@@ -251,12 +251,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.push_str("->");
                 buf.spaces(1);
 
-                (&result.value).format_with_options(
-                    buf,
-                    Parens::InFunctionType,
-                    Newlines::No,
-                    indent,
-                );
+                (&ret.value).format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
 
                 if needs_parens {
                     buf.push(')')
@@ -345,8 +340,10 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     Newlines::No
                 };
 
-                buf.newline();
-                buf.indent(indent);
+                if !buf.ends_with_newline() {
+                    buf.newline();
+                    buf.indent(indent);
+                }
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, next_newlines, indent)
             }
@@ -439,7 +436,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
             }
 
             buf.spaces(separator_spaces);
-            buf.push_str(":");
+            buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
@@ -524,7 +521,12 @@ impl<'a> Formattable for Tag<'a> {
 
                     for arg in *args {
                         buf.newline();
-                        arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                        arg.value.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::No,
+                            arg_indent,
+                        );
                     }
                 } else {
                     for arg in *args {
@@ -544,7 +546,7 @@ impl<'a> Formattable for Tag<'a> {
 
 impl<'a> Formattable for HasClause<'a> {
     fn is_multiline(&self) -> bool {
-        self.var.value.is_multiline() || self.ability.is_multiline()
+        self.ability.is_multiline()
     }
 
     fn format_with_options<'buf>(

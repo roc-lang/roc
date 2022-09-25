@@ -107,30 +107,6 @@ fn fn_record() {
             r#"
                     rec = { x: 15, y: 17, z: 19 }
 
-                    rec.y
-                "#
-        ),
-        17,
-        i64
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    rec = { x: 15, y: 17, z: 19 }
-
-                    rec.z
-                "#
-        ),
-        19,
-        i64
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    rec = { x: 15, y: 17, z: 19 }
-
                     rec.z + rec.x
                 "#
         ),
@@ -333,7 +309,7 @@ fn f64_record2_literal() {
 //         indoc!(
 //             r#"
 //                record : { a : Bool, b : Bool, c : Bool, d : Bool }
-//                record = { a: True, b: True, c : True, d : Bool }
+//                record = { a: Bool.true, b: Bool.true, c : Bool.true, d : Bool }
 
 //                record
 //             "#
@@ -390,7 +366,7 @@ fn bool_literal() {
         indoc!(
             r#"
                 x : Bool
-                x = True
+                x = Bool.true
 
                 x
                 "#
@@ -560,7 +536,7 @@ fn optional_field_let_no_use_default_nested() {
                     { x ? 10, y } = r
                     x + y
 
-                f { x: 4, y: 9 }
+                f { y: 9, x: 4 }
                 "#
         ),
         13,
@@ -918,7 +894,9 @@ fn booleans_in_record() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_record() {
     assert_evals_to!(
-        indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),
+        indoc!(
+            "{ c: 32, b: if Bool.true then Red else if Bool.true then Green else Blue, a: 1 == 1 }"
+        ),
         (32i64, true, 2u8),
         (i64, bool, u8)
     );
@@ -988,7 +966,7 @@ fn update_the_only_field() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/1513
+// https://github.com/roc-lang/roc/issues/1513
 fn both_have_unique_fields() {
     assert_evals_to!(
         indoc!(
@@ -1009,7 +987,7 @@ fn both_have_unique_fields() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// https://github.com/rtfeldman/roc/issues/2535
+// https://github.com/roc-lang/roc/issues/2535
 fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
         indoc!(
@@ -1038,28 +1016,8 @@ fn different_proc_types_specialized_to_same_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(
-    // TODO: something upstream is escaping the '
-    // NOTE: Are we sure it's upstream? It's not escaped in gen-wasm version below!
-    expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
-)]
-fn call_with_bad_record_runtime_error() {
-    expect_runtime_error_panic!(indoc!(
-        r#"
-            app "test" provides [main] to "./platform"
-
-            main =
-                get : {a: Bool} -> Bool
-                get = \{a} -> a
-                get {b: ""}
-            "#
-    ))
-}
-
-#[test]
-#[cfg(any(feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout""#)]
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
@@ -1085,6 +1043,46 @@ fn generalized_accessor() {
             "#
         ),
         RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn update_record_that_is_a_thunk() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = Num.toStr fromOriginal.birds
+            
+            original = { birds: 5, iguanas: 7, zebras: 2, goats: 1 }
+            
+            fromOriginal = { original & birds: 4, iguanas: 3 }
+            "#
+        ),
+        RocStr::from("4"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn update_record_that_is_a_thunk_single_field() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = Num.toStr fromOriginal.birds
+            
+            original = { birds: 5 }
+            
+            fromOriginal = { original & birds: 4 }
+            "#
+        ),
+        RocStr::from("4"),
         RocStr
     );
 }

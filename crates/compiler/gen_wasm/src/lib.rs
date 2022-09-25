@@ -16,7 +16,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
-use roc_mono::layout::LayoutIds;
+use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
 use wasm_module::parse::ParseError;
 
@@ -43,8 +43,14 @@ pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
+    pub stack_bytes: u32,
+}
+
+impl Env<'_> {
+    pub const DEFAULT_STACK_BYTES: u32 = 1024 * 1024;
 }
 
 /// Parse the preprocessed host binary
@@ -126,13 +132,18 @@ pub fn build_app_module<'a>(
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+        CodeGenHelp::new(
+            env.arena,
+            env.layout_interner,
+            TargetInfo::default_wasm32(),
+            env.module_id,
+        ),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:?}", proc);
         }
     }
@@ -150,7 +161,7 @@ pub fn build_app_module<'a>(
     if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(200));
+            println!("{}", proc.to_pretty(env.layout_interner, 200));
             // println!("{:#?}", proc);
         }
     }
@@ -256,7 +267,7 @@ pub struct WasmDebugSettings {
 
 pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     proc_start_end: false && cfg!(debug_assertions),
-    user_procs_ir: false && cfg!(debug_assertions), // Note: we also have `ROC_PRINT_IR_AFTER_SPECIALIZATION=1 cargo test-gen-wasm`
+    user_procs_ir: false && cfg!(debug_assertions), // Note: we also have `ROC_PRINT_IR_AFTER_REFCOUNT=1 cargo test-gen-wasm`
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
@@ -264,3 +275,51 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     keep_test_binary: false && cfg!(debug_assertions),
     skip_dead_code_elim: false && cfg!(debug_assertions),
 };
+
+#[cfg(test)]
+mod dummy_platform_functions {
+    // `cargo test` produces an executable. At least on Windows, this means that extern symbols must be defined. This crate imports roc_std which
+    // defines a bunch of externs, and uses the three below. We provide dummy implementations because these functions are not called.
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
+        unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_realloc(
+        _ptr: *mut c_void,
+        _new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    /// # Safety
+    /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
+        unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_panic(_c_ptr: *mut c_void, _tag_id: u32) {
+        unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
+        unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
+        unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+}

@@ -1,4 +1,4 @@
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;
@@ -22,9 +22,8 @@ macro_rules! wasm32_sized_primitive {
     }
 }
 
-wasm32_sized_primitive!(
-    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
-);
+wasm32_sized_primitive!(u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool,);
+wasm32_sized_primitive!(RocDec, RocOrder, I128, U128,);
 
 impl Wasm32Sized for () {
     const SIZE_OF_WASM: usize = 0;
@@ -47,8 +46,8 @@ impl<T: Wasm32Sized> Wasm32Sized for RocList<T> {
 }
 
 impl<T: Wasm32Sized, E: Wasm32Sized> Wasm32Sized for RocResult<T, E> {
-    const ALIGN_OF_WASM: usize = max2(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM);
-    const SIZE_OF_WASM: usize = max2(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH) + 1;
+    const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, E::ALIGN_OF_WASM]);
+    const SIZE_OF_WASM: usize = max(&[T::ACTUAL_WIDTH, E::ACTUAL_WIDTH]) + 1;
 }
 
 impl<T: Wasm32Sized> Wasm32Sized for &'_ T {
@@ -66,24 +65,46 @@ impl Wasm32Sized for usize {
     const ALIGN_OF_WASM: usize = 4;
 }
 
+impl Wasm32Sized for isize {
+    const SIZE_OF_WASM: usize = 4;
+    const ALIGN_OF_WASM: usize = 4;
+}
+
 impl<T: Wasm32Sized, U: Wasm32Sized> Wasm32Sized for (T, U) {
     const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max2(T::SIZE_OF_WASM, U::SIZE_OF_WASM);
+    const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM]);
 }
 
 impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized> Wasm32Sized for (T, U, V) {
     const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max3(T::SIZE_OF_WASM, U::SIZE_OF_WASM, V::SIZE_OF_WASM);
+    const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM, V::ALIGN_OF_WASM]);
 }
 
-const fn max2(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
+impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized, W: Wasm32Sized> Wasm32Sized for (T, U, V, W) {
+    const SIZE_OF_WASM: usize =
+        T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM + W::SIZE_OF_WASM;
+    const ALIGN_OF_WASM: usize = max(&[
+        T::ALIGN_OF_WASM,
+        U::ALIGN_OF_WASM,
+        V::ALIGN_OF_WASM,
+        W::ALIGN_OF_WASM,
+    ]);
+}
+
+const fn max(alignments: &[usize]) -> usize {
+    assert!(!alignments.is_empty());
+
+    let mut largest = 0;
+    let mut i = 0;
+    while i < alignments.len() {
+        largest = if largest > alignments[i] {
+            largest
+        } else {
+            alignments[i]
+        };
+
+        i += 1;
     }
-}
 
-const fn max3(a: usize, b: usize, c: usize) -> usize {
-    max2(max2(a, b), c)
+    largest
 }

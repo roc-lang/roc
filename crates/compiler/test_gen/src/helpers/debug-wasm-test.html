@@ -31,6 +31,10 @@
         font-weight: bold;
         padding: 4px 12px;
       }
+      select {
+        font-size: 18px;
+        padding: 4px 12px;
+      }
       small {
         font-style: italic;
       }
@@ -69,7 +73,7 @@
           In <code>gen_wasm/src/lib.rs</code>, set
           <code>DEBUG_LOG_SETTINGS.keep_test_binary = true</code>
         </li>
-        <li>Run <code>cargo test-gen-wasm -- my_test --nocapture</code></li>
+        <li>Run <code>cargo test-gen-wasm my_test_function_name</code></li>
         <li>
           Look for the path written to the console for
           <code>final.wasm</code> and select it in the file picker below
@@ -79,45 +83,62 @@
           <small> Control+Shift+I or Command+Option+I or F12 </small>
         </li>
         <li>
-          Click one of the buttons below, depending on what kind of test it is.
-          <br />
-          <small>
-            Only one of them will work. The other will probably crash or
-            something.
-          </small>
+          If your test is from <code>gen_refcount.rs</code>
         </li>
         <li>
           The debugger should pause just before entering the first Wasm call.
           Step into a couple of Wasm calls until you reach your test code in
-          <code>$#UserApp_main_1</code>
+          <code>$main</code>
         </li>
         <li>
-          Chrome DevTools now has a Memory Inspector panel! In the debugger,
+          Chrome DevTools has a handy Memory Inspector panel. In the debugger,
           find <code>Module -> memories -> $memory</code>. Right click and
           select "Reveal in Memory Inspector"
         </li>
       </ul>
 
       <div class="controls">
+        <div class="row">
+          <label>
+            <input type="checkbox" id="refcount-test">
+            Check box if test is from <code>gen_refcount.rs</code>
+          </label>
+        </div>
         <div class="row row-file">
           <label for="wasm-file">Select final.wasm</label>
           <input id="wasm-file" type="file" />
         </div>
         <div id="error" class="row"></div>
         <div class="row">
-          <button id="button-expression">Run as Roc expression test</button>
-          <button id="button-refcount">Run as reference counting test</button>
+          <button id="button-run">RUN</button>
         </div>
       </div>
     </section>
     <script>
       const file_input = document.getElementById("wasm-file");
-      const button_expression = document.getElementById("button-expression");
-      const button_refcount = document.getElementById("button-refcount");
+      const refcount_checkbox = document.getElementById("refcount-test");
+      const button = document.getElementById("button-run");
       const error_box = document.getElementById("error");
 
-      button_expression.onclick = runExpressionTest;
-      button_refcount.onclick = runRefcountTest;
+      if (localStorage.getItem("refcount-test")) {
+        refcount_checkbox.checked = true;
+      }
+      refcount_checkbox.onchange = function (ev) {
+        if (ev.target.checked) {
+          localStorage.setItem("refcount-test", "true");
+        } else {
+          localStorage.removeItem("refcount-test");
+        }
+      }
+
+      button.onclick = function () {
+        if (refcount_checkbox.checked) {
+          runRefcountTest();
+        } else {
+          runExpressionTest();
+        }
+      }
+
       file_input.onchange = function () {
         error_box.innerHTML = "";
       };
@@ -126,7 +147,7 @@
         const file = getFile();
         const instance = await compileFileToInstance(file);
 
-        debugger; // Next call is Wasm! Step into test_wrapper, then $#UserApp_main_1
+        debugger; // Next call is Wasm! Step into test_wrapper, then $main
         instance.exports.test_wrapper();
       }
 
@@ -137,7 +158,7 @@
         const refcount_vector_addr =
           instance.exports.init_refcount_test(MAX_ALLOCATIONS);
 
-        debugger; // Next call is Wasm! Step into test_wrapper, then $#UserApp_main_1
+        debugger; // Next call is Wasm! Step into test_wrapper, then $main
         instance.exports.test_wrapper();
 
         const words = new Uint32Array(instance.exports.memory.buffer);
@@ -297,6 +318,11 @@
           throw new Error(`Wasm exited with code ${exit_code}`);
         }
 
+        // send_panic_msg_to_rust (i32, i32) => {}
+        function send_panic_msg_to_rust(msg, length) {
+          throw new Error("Wasm hit a panic");
+        }
+
         // Signatures from wasm_test_platform.o
         const sig2 = (i32) => {};
         const sig6 = (i32a, i32b) => 0;
@@ -318,6 +344,9 @@
         const sig22 = () => 0;
 
         return {
+          env: {
+            send_panic_msg_to_rust,
+          },
           wasi_snapshot_preview1: {
             args_get: sig6,
             args_sizes_get: sig6,

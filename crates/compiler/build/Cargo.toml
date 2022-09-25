@@ -1,6 +1,6 @@
 [package]
 name = "roc_build"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
@@ -16,7 +16,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
+roc_solve_problem = { path = "../solve_problem" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_target = { path = "../roc_target" }
@@ -25,8 +25,9 @@ roc_gen_wasm = { path = "../gen_wasm" }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../../reporting" }
 roc_error_macros = { path = "../../error_macros" }
-roc_std = { path = "../../roc_std", default-features = false }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+roc_std = { path = "../../roc_std" }
+roc_utils = { path = "../../utils" }
+bumpalo = { version = "3.11.0", features = ["collections"] }
 libloading = "0.7.1"
 tempfile = "3.2.0"
 inkwell = { path = "../../vendor/inkwell" }
@@ -34,7 +35,7 @@ target-lexicon = "0.12.3"
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-serde_json = "1.0.69"
+serde_json = "1.0.85"
 
 [features]
 target-arm = []

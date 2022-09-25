@@ -118,17 +118,17 @@ pub fn float_literal(
         precision_var,
         bound,
         region,
-        Category::Float,
+        Category::Frac,
     );
 
     constrs.extend([
         constraints.equal_types(
             num_type.clone(),
             ForReason(reason, num_float(Type::Variable(precision_var)), region),
-            Category::Float,
+            Category::Frac,
             region,
         ),
-        constraints.equal_types(num_type, expected, Category::Float, region),
+        constraints.equal_types(num_type, expected, Category::Frac, region),
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);

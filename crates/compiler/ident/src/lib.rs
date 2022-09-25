@@ -203,6 +203,30 @@ impl From<&str> for IdentStr {
     }
 }
 
+impl From<IdentStr> for String {
+    fn from(ident_str: IdentStr) -> Self {
+        if ident_str.is_small_str() {
+            // Copy it to a heap allocation
+            ident_str.as_str().to_string()
+        } else {
+            // Reuse the existing heap allocation
+            let string = unsafe {
+                String::from_raw_parts(
+                    ident_str.as_ptr() as *mut u8,
+                    ident_str.len(),
+                    ident_str.len(),
+                )
+            };
+
+            // Make sure not to drop the IdentStr, since now there's
+            // a String referencing its heap-allocated contents.
+            std::mem::forget(ident_str);
+
+            string
+        }
+    }
+}
+
 impl From<String> for IdentStr {
     fn from(string: String) -> Self {
         if string.len() <= Self::SMALL_STR_BYTES {

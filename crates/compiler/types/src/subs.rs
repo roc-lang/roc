@@ -2,11 +2,11 @@
 use crate::types::{
     name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
 };
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use std::fmt;
 use std::iter::{once, Iterator, Map};
 
@@ -66,6 +66,7 @@ struct ErrorTypeState {
     recursive_tag_unions_seen: Vec<Variable>,
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
     utable: u64,
@@ -99,10 +100,12 @@ impl SubsHeader {
     }
 
     fn to_array(self) -> [u8; std::mem::size_of::<Self>()] {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(self) }
     }
 
     fn from_array(array: [u8; std::mem::size_of::<Self>()]) -> Self {
+        // Safety: With repr(c) all fields are in order and properly aligned without padding.
         unsafe { std::mem::transmute(array) }
     }
 }
@@ -360,6 +363,21 @@ impl UlsOfVar {
 
     fn rollback_to(&mut self, snapshot: UlsOfVarSnapshot) {
         *self = snapshot.0;
+    }
+
+    pub fn remove_dependent_unspecialized_lambda_sets<'a>(
+        &'a mut self,
+        subs: &'a Subs,
+        var: Variable,
+    ) -> impl Iterator<Item = Variable> + 'a {
+        let utable = &subs.utable;
+        let root_var = utable.root_key_without_compacting(var);
+
+        self.0
+            .drain_filter(move |cand_var, _| {
+                utable.root_key_without_compacting(*cand_var) == root_var
+            })
+            .flat_map(|(_, lambda_set_vars)| lambda_set_vars.into_iter())
     }
 }
 
@@ -906,11 +924,21 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             let (it, new_ext) = fields.sorted_iterator_and_ext(subs, *ext);
             for (name, content) in it {
                 let separator = match content {
-                    RecordField::Optional(_) => '?',
-                    RecordField::Required(_) => ':',
-                    RecordField::Demanded(_) => ':',
+                    RecordField::Optional(_) => "?",
+                    RecordField::RigidOptional(_) => "r?",
+                    RecordField::Required(_) => ":",
+                    RecordField::Demanded(_) => ":",
                 };
-                write!(f, "{:?} {} {:?}, ", name, separator, content)?;
+                write!(
+                    f,
+                    "{:?} {} {:?}, ",
+                    name,
+                    separator,
+                    SubsFmtContent(
+                        subs.get_content_without_compacting(*content.as_inner()),
+                        subs
+                    )
+                )?;
             }
 
             write!(f, "}}<{:?}>", new_ext)
@@ -1029,6 +1057,12 @@ impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
 
     #[inline(always)]
+    pub fn some(v: Variable) -> OptVariable {
+        debug_assert_ne!(v, Variable::NULL);
+        OptVariable(v.0)
+    }
+
+    #[inline(always)]
     pub const fn is_none(self) -> bool {
         self.0 == Self::NONE.0
     }
@@ -1066,6 +1100,15 @@ impl OptVariable {
             .map(f)
             .map(OptVariable::from)
             .unwrap_or(OptVariable::NONE)
+    }
+
+    #[inline(always)]
+    pub fn or(self, other: Self) -> Self {
+        if self.is_none() {
+            other
+        } else {
+            self
+        }
     }
 }
 
@@ -1703,7 +1746,7 @@ impl Subs {
                 Symbol::BOOL_BOOL,
                 AliasVariables::default(),
                 Variable::BOOL_ENUM,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
 
@@ -2074,6 +2117,11 @@ impl Subs {
             })
             .flat_map(|(_, lambda_set_vars)| lambda_set_vars.into_iter())
     }
+
+    /// Returns true iff the given type is inhabited by at least one value.
+    pub fn is_inhabited(&self, var: Variable) -> bool {
+        is_inhabited(self, var)
+    }
 }
 
 #[inline(always)]
@@ -2233,13 +2281,13 @@ pub struct LambdaSet {
     ///
     /// ```text
     /// XEffect : A -> B
-    ///                                                   
+    ///
     /// after : ({} -> XEffect) -> XEffect
     /// after =
     ///     \cont ->
     ///         f = \A -[`f (typeof cont)]-> when cont {} is A -> B
     ///         f
-    ///                                                   
+    ///
     /// nestForever : {} -> XEffect
     /// nestForever = \{} -[`nestForever]-> after nestForever
     /// ^^^^^^^^^^^ {} -[`nestForever]-> A -[`f ({} -[`nestForever]-> A -[`f ...]-> B)]-> B
@@ -2341,10 +2389,6 @@ impl AliasVariables {
         subs.variables.extend(unnamed_arguments);
 
         let all_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
-
-        if type_variables_len == 3 {
-            panic!();
-        }
 
         Self {
             variables_start,
@@ -2460,6 +2504,26 @@ pub trait Label: Sized + Clone {
 
 pub type UnionTags = UnionLabels<TagName>;
 pub type UnionLambdas = UnionLabels<Symbol>;
+
+impl UnionTags {
+    pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
+        let ok_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
+
+            ("Ok".into(), variables_slice)
+        };
+
+        let err_tuple = {
+            let variables_slice =
+                VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
+
+            ("Err".into(), variables_slice)
+        };
+
+        UnionTags::insert_slices_into_subs(subs, [err_tuple, ok_tuple])
+    }
+}
 
 impl Label for TagName {
     fn index_subs(subs: &Subs, idx: SubsIndex<Self>) -> &Self {
@@ -2702,7 +2766,8 @@ impl UnionTags {
         subs: &'a Subs,
         ext: Variable,
     ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
-        let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+        let (it, _) =
+            crate::types::gather_tags_unsorted_iter(subs, *self, ext).expect("not a tag union");
 
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
 
@@ -2715,7 +2780,8 @@ impl UnionTags {
         subs: &'a Subs,
         ext: Variable,
     ) -> (UnsortedUnionLabels<'a, TagName>, Variable) {
-        let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+        let (it, ext) =
+            crate::types::gather_tags_unsorted_iter(subs, *self, ext).expect("not a tag union");
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
         let it = it.map(f);
 
@@ -2741,7 +2807,8 @@ impl UnionTags {
                 ext,
             )
         } else {
-            let union_structure = crate::types::gather_tags(subs, *self, ext);
+            let union_structure =
+                crate::types::gather_tags(subs, *self, ext).expect("not a tag union");
 
             (
                 Box::new(union_structure.fields.into_iter()),
@@ -2767,7 +2834,8 @@ impl UnionTags {
                 ext,
             )
         } else {
-            let (fields, ext) = crate::types::gather_tags_slices(subs, *self, ext);
+            let (fields, ext) =
+                crate::types::gather_tags_slices(subs, *self, ext).expect("not a tag union");
 
             (Box::new(fields.into_iter()), ext)
         }
@@ -2815,7 +2883,7 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
 
     loop {
         match subs.get_content_without_compacting(var) {
-            FlexVar(_) => return true,
+            FlexVar(_) | FlexAbleVar(..) => return true,
             Structure(EmptyTagUnion) => return true,
             Structure(TagUnion(sub_fields, sub_ext)) => {
                 if !sub_fields.is_empty() {
@@ -2970,7 +3038,7 @@ impl RecordFields {
         (it, ext)
     }
 
-    /// Get a sorted iterator over the fields of this record type
+    /// get a sorted iterator over the fields of this record type
     ///
     /// Implementation: When the record has an `ext` variable that is the empty record, then
     /// we read the (assumed sorted) fields directly from Subs. Otherwise we have to chase the
@@ -3765,6 +3833,7 @@ fn flat_type_to_err_type(
                     Optional(_) => Optional(error_type),
                     Required(_) => Required(error_type),
                     Demanded(_) => Demanded(error_type),
+                    RigidOptional(_) => RigidOptional(error_type),
                 };
 
                 err_fields.insert(label, err_record_field);
@@ -3950,6 +4019,25 @@ struct StorageSubsOffsets {
     problems: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct VariableMapCache(pub Vec<FnvMap<Variable, Variable>>);
+
+impl Default for VariableMapCache {
+    fn default() -> Self {
+        Self(vec![Default::default()])
+    }
+}
+
+impl VariableMapCache {
+    fn get(&self, v: &Variable) -> Option<&Variable> {
+        self.0.iter().rev().find_map(|cache| cache.get(v))
+    }
+
+    fn insert(&mut self, key: Variable, value: Variable) -> Option<Variable> {
+        self.0.last_mut().unwrap().insert(key, value)
+    }
+}
+
 impl StorageSubs {
     pub fn new(subs: Subs) -> Self {
         Self { subs }
@@ -3967,8 +4055,13 @@ impl StorageSubs {
         &self.subs
     }
 
-    pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
-        storage_copy_var_to(source, &mut self.subs, variable)
+    pub fn extend_with_variable(&mut self, source: &Subs, variable: Variable) -> Variable {
+        storage_copy_var_to(
+            &mut VariableMapCache::default(),
+            source,
+            &mut self.subs,
+            variable,
+        )
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
@@ -4262,7 +4355,8 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 pub fn storage_copy_var_to(
-    source: &mut Subs, // mut to set the copy
+    copy_table: &mut VariableMapCache,
+    source: &Subs,
     target: &mut Subs,
     var: Variable,
 ) -> Variable {
@@ -4275,26 +4369,13 @@ pub fn storage_copy_var_to(
 
         let mut env = StorageCopyVarToEnv {
             visited,
+            copy_table,
             source,
             target,
             max_rank: rank,
         };
 
-        let copy = storage_copy_var_to_help(&mut env, var);
-
-        // we have tracked all visited variables, and can now traverse them
-        // in one go (without looking at the UnificationTable) and clear the copy field
-        for var in env.visited {
-            env.source.modify(var, |descriptor| {
-                if descriptor.copy.is_some() {
-                    descriptor.rank = Rank::NONE;
-                    descriptor.mark = Mark::NONE;
-                    descriptor.copy = OptVariable::NONE;
-                }
-            });
-        }
-
-        copy
+        storage_copy_var_to_help(&mut env, var)
     };
 
     arena.reset();
@@ -4305,7 +4386,8 @@ pub fn storage_copy_var_to(
 
 struct StorageCopyVarToEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
-    source: &'a mut Subs,
+    copy_table: &'a mut VariableMapCache,
+    source: &'a Subs,
     target: &'a mut Subs,
     max_rank: Rank,
 }
@@ -4346,9 +4428,10 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
     use Content::*;
     use FlatType::*;
 
+    let var = env.source.get_root_key_without_compacting(var);
     let desc = env.source.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
@@ -4373,16 +4456,13 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         copy: OptVariable::NONE,
     };
 
-    let copy = env.target.fresh_unnamed_flex_var();
+    let copy = env.target.fresh(make_descriptor(unnamed_flex_var()));
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    env.source.modify(var, |descriptor| {
-        descriptor.mark = Mark::NONE;
-        descriptor.copy = copy.into();
-    });
+    env.copy_table.insert(var, copy);
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
@@ -5330,4 +5410,66 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
     }
 
     internal_error!("No lambda set at region {} found", target_region);
+}
+
+/// Returns true iff the given type is inhabited by at least one value.
+fn is_inhabited(subs: &Subs, var: Variable) -> bool {
+    let mut stack = vec![var];
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            // We don't need to look into recursion vars here, because if they show up in this
+            // position, they *must* belong to an inhabited type. That's because
+            //   - if the recursion var was inferred from a value, then we know there is a value of
+            //     the given type.
+            //   - if the recursion var comes from an explicit annotation, then it must be an a tag
+            //     union of the form `Rec : [ R1 Rec, R2 Rec, ..., Rn Rec ]`. However, such annotations
+            //     are determined as illegal and reported during canonicalization, because you
+            //     cannot have a tag union without a non-recursive variant.
+            | Content::RecursionVar { .. } => {}
+            Content::LambdaSet(_) => {}
+            Content::Structure(structure) => match structure {
+                FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
+                FlatType::Func(args, _, ret) => {
+                    stack.extend(subs.get_subs_slice(*args));
+                    stack.push(*ret);
+                }
+                FlatType::Record(fields, ext) => {
+                    if let Ok(iter) = fields.unsorted_iterator(subs, *ext) {
+                        let field_vars = iter.map(|(_, field)| *field.as_inner());
+                        stack.extend(field_vars)
+                    }
+                }
+                FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
+                    let mut is_uninhabited = true;
+                    // If any tag is inhabited, the union is inhabited!
+                    for (_tag, vars) in tags.unsorted_iterator(subs, *ext) {
+                        // Sadly we must recurse here...
+                        let this_tag_is_inhabited = vars.iter().all(|v| is_inhabited(subs, *v));
+                        if this_tag_is_inhabited {
+                            is_uninhabited = false;
+                        }
+                    }
+                    if is_uninhabited {
+                        return false;
+                    }
+                }
+                FlatType::FunctionOrTagUnion(_, _, _) => {}
+                FlatType::Erroneous(_) => {}
+                FlatType::EmptyRecord => {}
+                FlatType::EmptyTagUnion => {
+                    return false;
+                }
+            },
+            Content::Alias(name, _, _, _) if name.module_id() == ModuleId::NUM => {},
+            Content::Alias(_, _, var, _) => stack.push(*var),
+            Content::RangedNumber(_) => {}
+            Content::Error => {}
+        }
+    }
+
+    true
 }

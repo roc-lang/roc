@@ -377,8 +377,8 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().any(|problem| matches!(
             problem,
             Problem::RuntimeError(RuntimeError::Shadowing { .. })
         )));
@@ -398,8 +398,8 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().any(|problem| matches!(
             problem,
             Problem::RuntimeError(RuntimeError::Shadowing { .. })
         )));
@@ -419,9 +419,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         println!("{:#?}", problems);
-        assert!(problems.iter().all(|problem| matches!(
+        assert!(problems.iter().any(|problem| matches!(
             problem,
             Problem::RuntimeError(RuntimeError::Shadowing { .. })
         )));
@@ -1023,7 +1023,7 @@ mod test_can {
                 # There was a bug where annotating a def meant that its
                 # references no longer got reported.
                 #
-                # https://github.com/rtfeldman/roc/issues/298
+                # https://github.com/roc-lang/roc/issues/298
                 x : List Booly
                 x = [y]
 

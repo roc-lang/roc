@@ -1,0 +1,54 @@
+on: [pull_request]
+
+name: CI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-zig-rust-wasm:
+    name: test zig, rust, wasm...
+    runs-on: [self-hosted, i5-4690K]
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: Check for duplicate AUTHORS
+        run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
+
+      - name: zig fmt check, zig tests
+        run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+
+      - name: zig wasm tests
+        run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+
+      - name: regular rust tests
+        run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
+
+      - name: test the dev backend # these tests require an explicit feature flag
+        run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+
+      - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
+        run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+
+      - name: run `roc test` on Str builtins
+        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
+
+      #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
+      - name: wasm repl test
+        run: crates/repl_test/test_wasm.sh && sccache --show-stats
+
+      #TODO i386 (32-bit linux) cli tests
+
+      #TODO verify-no-git-changes
+
+      - name: test website build script
+        run: REPL_DEBUG=1 bash www/build.sh

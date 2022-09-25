@@ -17,6 +17,7 @@ use roc_types::types::{
     RecordField,
 };
 use roc_unify::unify::unify;
+use roc_unify::unify::Env as UEnv;
 use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
 
@@ -227,7 +228,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, Mode::EQ) {
+            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -326,7 +327,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected, Mode::EQ) {
+                    match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                         Success {
                             vars,
                             must_implement_ability: _,
@@ -403,7 +404,7 @@ fn solve<'a>(
             );
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
-            match unify(subs, actual, expected, Mode::EQ) {
+            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -717,7 +718,7 @@ fn solve<'a>(
             );
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::PRESENT) {
+            match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -834,6 +835,15 @@ fn type_to_variable<'a>(
                         mempool.get(*type_id),
                     )),
                     Optional(type_id) => Optional(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
+                    )),
+                    RigidOptional(type_id) => RigidOptional(type_to_variable(
                         arena,
                         mempool,
                         subs,
@@ -1084,7 +1094,8 @@ fn type_to_union_tags<'a>(
 
     let ext = {
         let (it, ext) =
-            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
+            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var)
+                .expect("not a tag union");
 
         tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
         tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));

@@ -1,25 +1,43 @@
 [package]
 name = "roc_repl_expect"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = {version = "3.11.0", features = ["collections"]}
 target-lexicon = "0.12.2"
 
 roc_builtins = {path = "../compiler/builtins"}
 roc_collections = {path = "../compiler/collections"}
+roc_intern = {path = "../compiler/intern"}
 roc_load = {path = "../compiler/load"}
 roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
 roc_module = {path = "../compiler/module"}
 roc_repl_eval = {path = "../repl_eval"}
 roc_reporting = {path = "../reporting"}
-roc_std = {path = "../roc_std", default-features = false}
+roc_std = {path = "../roc_std"}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
+roc_gen_llvm = {path = "../compiler/gen_llvm"}
+roc_region = { path = "../compiler/region" }
+roc_build = { path = "../compiler/build" }
+
+libloading = "0.7.1"
+inkwell = { path = "../vendor/inkwell" }
+signal-hook = "0.3.14"
+libc = "0.2.133"
+
+[dev-dependencies]
+test_gen = { path = "../compiler/test_gen" }
+roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
+tempfile = "3.2.0"
+indoc = "1.0.7"
+pretty_assertions = "1.3.0"
+strip-ansi-escapes = "0.1.1"
+
 
 [lib]
 name = "roc_repl_expect"

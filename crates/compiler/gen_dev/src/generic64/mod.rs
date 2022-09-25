@@ -8,7 +8,9 @@ use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
-use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
+use roc_mono::ir::{
+    BranchInfo, JoinPointId, ListLiteralElement, Literal, Param, ProcLayout, SelfRecursive, Stmt,
+};
 use roc_mono::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
@@ -19,8 +21,9 @@ mod disassembler_test_macro;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 
-use storage::StorageManager;
+use storage::{RegStorage, StorageManager};
 
+const REFCOUNT_ONE: u64 = i64::MIN as u64;
 // TODO: on all number functions double check and deal with over/underflow.
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
@@ -121,6 +124,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn add_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
     fn add_freg64_freg64_freg64(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -128,6 +137,27 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: FloatReg,
     );
     fn add_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn and_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn or_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn xor_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src1: GeneralReg,
@@ -201,12 +231,64 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn mul_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn mul_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn div_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn div_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
+
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -259,6 +341,8 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
+    fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: GeneralReg);
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -279,6 +363,7 @@ pub struct Backend64Bit<
     // They are likely to be small enough that it is faster to use a vec and linearly scan it or keep it sorted and binary search.
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
+    target_info: TargetInfo,
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -313,9 +398,15 @@ pub fn new_backend_64bit<
     Backend64Bit {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
+        target_info,
         env,
         interns,
-        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
+        helper_proc_gen: CodeGenHelp::new(
+            env.arena,
+            env.layout_interner,
+            target_info,
+            env.module_id,
+        ),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
@@ -328,6 +419,19 @@ pub fn new_backend_64bit<
         join_map: MutMap::default(),
         storage_manager: storage::new_storage_manager(env, target_info),
     }
+}
+
+macro_rules! quadword_and_smaller {
+    () => {
+        IntWidth::I64
+            | IntWidth::U64
+            | IntWidth::I32
+            | IntWidth::U32
+            | IntWidth::I16
+            | IntWidth::U16
+            | IntWidth::I8
+            | IntWidth::U8
+    };
 }
 
 impl<
@@ -690,7 +794,7 @@ impl<
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
         match layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -706,13 +810,72 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumAdd: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_add_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
+    ) {
+        use Builtin::Int;
+
+        let buf = &mut self.buf;
+
+        let struct_size = return_layout.stack_size(self.env.layout_interner, self.target_info);
+
+        let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
+
+        match num_layout {
+            Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
+                let dst_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP);
+
+                let overflow_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+                ASM::set_if_overflow(buf, overflow_reg);
+
+                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
+                todo!("addChecked for unsigned integers")
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                todo!("addChecked for f64")
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                todo!("addChecked for f32")
+            }
             x => todo!("NumAdd: layout, {:?}", x),
         }
     }
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
+        use Builtin::Int;
+
         match layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -722,7 +885,92 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            Layout::Builtin(Int(IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+
+                ASM::umul_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
             x => todo!("NumMul: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
+        match layout {
+            Layout::Builtin(Builtin::Int(
+                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
+            )) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+
+                ASM::idiv_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+            }
+            Layout::Builtin(Builtin::Int(
+                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
+            )) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+
+                ASM::udiv_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::div_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::div_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumDiv: layout, {:?}", x),
         }
     }
 
@@ -921,7 +1169,8 @@ impl<
         let index_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, index);
-        let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
+        let ret_stack_size =
+            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
         // TODO: This can be optimized with smarter instructions.
         // Also can probably be moved into storage manager at least partly.
         self.storage_manager.with_tmp_general_reg(
@@ -963,7 +1212,8 @@ impl<
         let elem_layout = arg_layouts[2];
 
         let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
-        let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
+        let list_alignment = list_layout
+            .alignment_bytes(self.env.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP,
             u32_layout,
@@ -982,7 +1232,8 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load the elements size.
-        let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
+        let elem_stack_size =
+            elem_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP3,
             u64_layout,
@@ -992,7 +1243,7 @@ impl<
         // Setup the return location.
         let base_offset = self.storage_manager.claim_stack_area(
             dst,
-            ret_layout.stack_size(self.storage_manager.target_info()),
+            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info()),
         );
 
         let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
@@ -1009,13 +1260,19 @@ impl<
 
         let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
             (
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset
+                    + ret_fields[0]
+                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        as i32,
                 base_offset,
             )
         } else {
             (
                 base_offset,
-                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset
+                    + ret_fields[0]
+                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        as i32,
             )
         };
 
@@ -1073,6 +1330,138 @@ impl<
             .ensure_symbol_on_stack(&mut self.buf, src);
         let (offset, _) = self.storage_manager.stack_offset_and_size(src);
         ASM::add_reg64_reg64_imm32(&mut self.buf, dst_reg, CC::BASE_PTR_REG, offset);
+    }
+
+    fn create_empty_array(&mut self, sym: &Symbol) {
+        let base_offset = self.storage_manager.claim_stack_area(sym, 24);
+        self.storage_manager
+            .with_tmp_general_reg(&mut self.buf, |_storage_manager, buf, reg| {
+                ASM::mov_reg64_imm64(buf, reg, 0);
+                ASM::mov_base32_reg64(buf, base_offset, reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+                ASM::mov_base32_reg64(buf, base_offset + 16, reg);
+            });
+    }
+
+    fn create_array(
+        &mut self,
+        sym: &Symbol,
+        elem_layout: &Layout<'a>,
+        elems: &'a [ListLiteralElement<'a>],
+    ) {
+        // Allocate
+        // This requires at least 8 for the refcount alignment.
+        let allocation_alignment = std::cmp::max(
+            8,
+            elem_layout.allocation_alignment_bytes(
+                self.env.layout_interner,
+                self.storage_manager.target_info(),
+            ) as u64,
+        );
+
+        let elem_size = elem_layout
+            .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+            as u64;
+        let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
+        let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &u64_layout,
+            &Literal::Int((allocation_size as i128).to_ne_bytes()),
+        );
+        let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u32_layout,
+            &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
+        );
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP3,
+            "roc_alloc".to_string(),
+            &[Symbol::DEV_TMP, Symbol::DEV_TMP2],
+            &[u64_layout, u32_layout],
+            &u64_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+
+        // Fill pointer with elems
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
+        // Point to first element of array.
+        ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, allocation_alignment as i32);
+
+        // fill refcount at -8.
+        self.storage_manager.with_tmp_general_reg(
+            &mut self.buf,
+            |_storage_manager, buf, tmp_reg| {
+                ASM::mov_reg64_imm64(buf, tmp_reg, REFCOUNT_ONE as i64);
+                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, -8, tmp_reg);
+            },
+        );
+
+        // Copy everything into output array.
+        let mut elem_offset = 0;
+        for elem in elems {
+            // TODO: this could be a lot faster when loading large lists
+            // if we move matching on the element layout to outside this loop.
+            // It also greatly bloats the code here.
+            // Refactor this and switch to one external match.
+            // We also could make loadining indivitual literals much faster
+            let elem_sym = match elem {
+                ListLiteralElement::Symbol(sym) => sym,
+                ListLiteralElement::Literal(lit) => {
+                    self.load_literal(&Symbol::DEV_TMP, elem_layout, lit);
+                    &Symbol::DEV_TMP
+                }
+            };
+            // TODO: Expand to all types.
+            match elem_layout {
+                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                    let sym_reg = self
+                        .storage_manager
+                        .load_to_general_reg(&mut self.buf, elem_sym);
+                    ASM::mov_mem64_offset32_reg64(&mut self.buf, ptr_reg, elem_offset, sym_reg);
+                }
+                _ if elem_size == 0 => {}
+                _ if elem_size > 8 => {
+                    let (from_offset, size) = self.storage_manager.stack_offset_and_size(elem_sym);
+                    debug_assert!(from_offset % 8 == 0);
+                    debug_assert!(size % 8 == 0);
+                    debug_assert_eq!(size as u64, elem_size);
+                    self.storage_manager.with_tmp_general_reg(
+                        &mut self.buf,
+                        |_storage_manager, buf, tmp_reg| {
+                            for i in (0..size as i32).step_by(8) {
+                                ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
+                                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, elem_offset, tmp_reg);
+                            }
+                        },
+                    );
+                }
+                x => todo!("copying data to list with layout, {:?}", x),
+            }
+            elem_offset += elem_size as i32;
+            if elem_sym == &Symbol::DEV_TMP {
+                self.free_symbol(elem_sym);
+            }
+        }
+
+        // Setup list on stack.
+        self.storage_manager.with_tmp_general_reg(
+            &mut self.buf,
+            |storage_manager, buf, tmp_reg| {
+                let base_offset = storage_manager.claim_stack_area(sym, 24);
+                ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
+
+                ASM::mov_reg64_imm64(buf, tmp_reg, elems.len() as i64);
+                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
+            },
+        );
+        self.free_symbol(&Symbol::DEV_TMP3);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
@@ -1231,6 +1620,66 @@ impl<
             inst_size: self.buf.len() as u64 - inst_loc,
             offset,
         });
+    }
+
+    fn build_int_bitwise_and(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+                ASM::and_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+            }
+        }
+    }
+
+    fn build_int_bitwise_or(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+                ASM::or_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+            }
+        }
+    }
+
+    fn build_int_bitwise_xor(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+                ASM::xor_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+            }
+        }
     }
 }
 

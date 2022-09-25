@@ -118,6 +118,10 @@ impl<K: PartialEq, V> VecMap<K, V> {
         (self.keys, self.values)
     }
 
+    pub fn unzip_slices(&self) -> (&[K], &[V]) {
+        (&self.keys, &self.values)
+    }
+
     /// # Safety
     ///
     /// keys and values must have the same length, and there must not
@@ -135,6 +139,12 @@ impl<K: PartialEq, V> VecMap<K, V> {
             predicate,
             cur_idx: 0,
         }
+    }
+
+    /// Removes all key/value pairs from the map, without affecting its allocated capacity.
+    pub fn clear(&mut self) {
+        self.keys.clear();
+        self.values.clear();
     }
 }
 
@@ -200,7 +210,7 @@ impl<K, V> ExactSizeIterator for IntoIter<K, V> {
     }
 }
 
-impl<K: Ord, V> std::iter::FromIterator<(K, V)> for VecMap<K, V> {
+impl<K: PartialEq, V> std::iter::FromIterator<(K, V)> for VecMap<K, V> {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);

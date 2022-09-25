@@ -1,9 +1,10 @@
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
-    CMD_EDIT, CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK,
-    FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
+    build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
+    CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION,
+    DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, GLUE_FILE,
+    ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -24,6 +25,8 @@ use std::ffi::{OsStr, OsString};
 use roc_cli::build;
 
 fn main() -> io::Result<()> {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
     let matches = build_app().get_matches();
 
     let exit_code = match matches.subcommand() {
@@ -60,6 +63,32 @@ fn main() -> io::Result<()> {
                 test(matches, Triple::host())
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
+
+                Ok(1)
+            }
+        }
+        Some((CMD_DEV, matches)) => {
+            if matches.is_present(ROC_FILE) {
+                build(
+                    matches,
+                    BuildConfig::BuildAndRunIfNoErrors,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
+                eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
+
+                Ok(1)
+            }
+        }
+        Some((CMD_GLUE, matches)) => {
+            let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
+            let output_path = Path::new(matches.value_of_os(GLUE_FILE).unwrap());
+
+            if Some("rs") == output_path.extension().and_then(OsStr::to_str) {
+                roc_glue::generate(input_path, output_path)
+            } else {
+                eprintln!("Currently, `roc glue` only supports generating Rust glue files (with the .rs extension). In the future, the plan is to decouple `roc glue` from any particular output format, by having it accept a second .roc file which gets executed as a plugin to generate glue code for any desired language. However, this has not yet been implemented, and for now only .rs is supported.");
 
                 Ok(1)
             }

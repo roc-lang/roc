@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::BUILTIN_ABILITIES;
+use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
@@ -50,9 +50,13 @@ const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 const ILLEGAL_DERIVE: &str = "ILLEGAL DERIVE";
 const IMPLEMENTATION_NOT_FOUND: &str = "IMPLEMENTATION NOT FOUND";
 const NOT_AN_ABILITY_MEMBER: &str = "NOT AN ABILITY MEMBER";
+const NOT_AN_ABILITY: &str = "NOT AN ABILITY";
 const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
 const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
 const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT IDENTIFIER";
+const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
+const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
+const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -132,12 +136,16 @@ pub fn can_problem<'b>(
             title = UNKNOWN_GENERATES_WITH.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
+        Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.symbol_unqualified(closure_symbol),
+                    if is_anonymous {
+                        alloc.reflow("This function")
+                    } else {
+                        alloc.symbol_unqualified(closure_symbol)
+                    },
                     alloc.reflow(" doesn't use "),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.text("."),
@@ -149,7 +157,11 @@ pub fn can_problem<'b>(
                     alloc.reflow(", then you can just remove it. However, if you really do need "),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(" as an argument of "),
-                    alloc.symbol_unqualified(closure_symbol),
+                    if is_anonymous {
+                        alloc.reflow("this function")
+                    } else {
+                        alloc.symbol_unqualified(closure_symbol)
+                    },
                     alloc.reflow(", prefix it with an underscore, like this: \"_"),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(line),
@@ -157,6 +169,27 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ARG.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::UnusedBranchDef(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" is not used in this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch."),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("If you don't need to use "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(", prefix it with an underscore, like \"_"),
+                    alloc.reflow(symbol.as_str(alloc.interns)),
+                    alloc.reflow("\", or replace it with just an \"_\"."),
+                ]),
+            ]);
+
+            title = UNUSED_DEF.to_string();
             severity = Severity::Warning;
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
@@ -182,15 +215,6 @@ pub fn can_problem<'b>(
                         )),
                     ])
                 },
-                alloc.region(lines.convert_region(region)),
-            ]);
-
-            title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
-        }
-        Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => {
-            doc = alloc.stack([
-                alloc.reflow("Underscore patterns are not allowed in definitions"),
                 alloc.region(lines.convert_region(region)),
             ]);
 
@@ -238,8 +262,10 @@ pub fn can_problem<'b>(
             title = DUPLICATE_NAME.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::CyclicAlias(symbol, region, others) => {
-            let answer = crate::error::r#type::cyclic_alias(alloc, lines, symbol, region, others);
+        Problem::CyclicAlias(symbol, region, others, alias_kind) => {
+            let answer = crate::error::r#type::cyclic_alias(
+                alloc, lines, symbol, region, others, alias_kind,
+            );
 
             doc = answer.0;
             title = answer.1;
@@ -249,6 +275,7 @@ pub fn can_problem<'b>(
             typ: alias,
             variable_region,
             variable_name,
+            alias_kind,
         } => {
             doc = alloc.stack([
                 alloc.concat([
@@ -256,10 +283,12 @@ pub fn can_problem<'b>(
                     alloc.type_variable(variable_name),
                     alloc.reflow(" type parameter is not used in the "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" alias definition:"),
+                    alloc.reflow(" "),
+                    alloc.reflow(alias_kind.as_str()),
+                    alloc.reflow(" definition:"),
                 ]),
                 alloc.region(lines.convert_region(variable_region)),
-                alloc.reflow("Roc does not allow unused type alias parameters!"),
+                alloc.reflow("Roc does not allow unused type parameters!"),
                 // TODO add link to this guide section
                 alloc.tip().append(alloc.reflow(
                     "If you want an unused type parameter (a so-called \"phantom type\"), \
@@ -454,9 +483,9 @@ pub fn can_problem<'b>(
         } => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("This pattern in the definition of "),
+                    alloc.reflow("This definition of "),
                     alloc.symbol_unqualified(type_name),
-                    alloc.reflow(" is not what I expect:"),
+                    alloc.reflow(" has an unexpected pattern:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
@@ -743,7 +772,7 @@ pub fn can_problem<'b>(
             title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
             severity = Severity::Warning;
         }
-        Problem::IllegalClaimedAbility(region) => {
+        Problem::IllegalDerivedAbility(region) => {
             doc = alloc.stack([
                 alloc.reflow("This ability cannot be derived:"),
                 alloc.region(lines.convert_region(region)),
@@ -753,6 +782,15 @@ pub fn can_problem<'b>(
                     .append(list_builtin_abilities(alloc)),
             ]);
             title = ILLEGAL_DERIVE.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::NotAnAbility(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This identifier is not an ability in scope:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Only abilities can be implemented."),
+            ]);
+            title = NOT_AN_ABILITY.to_string();
             severity = Severity::Warning;
         }
         Problem::NotAnAbilityMember {
@@ -824,6 +862,121 @@ pub fn can_problem<'b>(
             title = ABILITY_IMPLEMENTATION_NOT_IDENTIFIER.to_string();
             severity = Severity::RuntimeError;
         }
+        Problem::DuplicateImpl {
+            original,
+            duplicate,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability member implementation is duplicate:"),
+                alloc.region(lines.convert_region(duplicate)),
+                alloc.reflow("The first implementation was defined here:"),
+                alloc.region(lines.convert_region(original)),
+                alloc
+                    .reflow("Only one custom implementation can be defined for an ability member."),
+            ]);
+            title = DUPLICATE_IMPLEMENTATION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::ImplementsNonRequired {
+            region,
+            ability,
+            not_required,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This type implements members that are not part of the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The following implemented members should not be listed:"),
+                alloc.type_block(
+                    alloc.intersperse(
+                        not_required
+                            .into_iter()
+                            .map(|sym| alloc.symbol_unqualified(sym)),
+                        alloc.string(",".to_string()).append(alloc.space()),
+                    ),
+                ),
+            ]);
+            title = UNNECESSARY_IMPLEMENTATIONS.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::DoesNotImplementAbility {
+            region,
+            ability,
+            not_implemented,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This type does not fully implement the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The following necessary members are missing implementations:"),
+                alloc.type_block(
+                    alloc.intersperse(
+                        not_implemented
+                            .into_iter()
+                            .map(|sym| alloc.symbol_unqualified(sym)),
+                        alloc.string(",".to_string()).append(alloc.space()),
+                    ),
+                ),
+            ]);
+            title = INCOMPLETE_ABILITY_IMPLEMENTATION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::NotBoundInAllPatterns {
+            unbound_symbol,
+            region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(unbound_symbol),
+                    alloc.reflow(" is not bound in all patterns of this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Identifiers introduced in a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch must be bound in all patterns of the branch. Otherwise, the program would crash when it tries to use an identifier that wasn't bound!"),
+                ]),
+            ]);
+            title = "NAME NOT BOUND IN ALL PATTERNS".to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::NoIdentifiersIntroduced(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This destructure assignment doesn't introduce any new variables:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
+            ]);
+            title = "UNNECESSARY DEFINITION".to_string();
+            severity = Severity::Warning;
+        }
+        Problem::OverloadedSpecialization {
+            ability_member,
+            overload,
+            original_opaque,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability member specialization is already claimed to specialize another opaque type:"),
+                alloc.region(lines.convert_region(overload)),
+                alloc.concat([
+                    alloc.reflow("Previously, we found it to specialize "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(original_opaque),
+                    alloc.reflow("."),
+                ]),
+                alloc.reflow("Ability specializations can only provide implementations for one opaque type, since all opaque types are different!"),
+            ]);
+            title = "OVERLOADED SPECIALIZATION".to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {
@@ -835,9 +988,10 @@ pub fn can_problem<'b>(
 }
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    let doc = alloc.concat([alloc.symbol_qualified(BUILTIN_ABILITIES[0])]);
-    debug_assert!(BUILTIN_ABILITIES.len() == 1);
-    doc
+    alloc.intersperse(
+        [alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)],
+        alloc.reflow(", "),
+    )
 }
 
 fn to_invalid_optional_value_report<'b>(
@@ -1133,7 +1287,18 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        _ => todo!(),
+        BadOpaqueRef(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("This opaque type reference has an invalid name:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"Opaque type names must begin with a capital letter, "),
+                    alloc.reflow(r"and must contain only letters and numbers."),
+                ]),
+            ])
+        }
     }
 }
 
@@ -1799,6 +1964,14 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = OPAQUE_OVER_APPLIED;
+        }
+        RuntimeError::DegenerateBranch(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This branch pattern does not bind all symbols its body needs:"),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = "DEGENERATE BRANCH";
         }
     }
 

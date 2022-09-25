@@ -2,13 +2,15 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_exhaustive::CtorName;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::ability::{UnderivableReason, Unfulfilled};
-use roc_solve::solve;
+use roc_solve_problem::{
+    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+};
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
@@ -30,9 +32,9 @@ pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
-    problem: solve::TypeError,
+    problem: TypeError,
 ) -> Option<Report<'b>> {
-    use solve::TypeError::*;
+    use TypeError::*;
 
     fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
         Some(Report {
@@ -78,6 +80,7 @@ pub fn type_problem<'b>(
                     region,
                     type_got,
                     alias_needs,
+                    alias_kind,
                 } => {
                     let needed_arguments = if alias_needs == 1 {
                         alloc.reflow("1 type argument")
@@ -93,7 +96,9 @@ pub fn type_problem<'b>(
                         alloc.concat([
                             alloc.reflow("The "),
                             alloc.symbol_unqualified(symbol),
-                            alloc.reflow(" alias expects "),
+                            alloc.reflow(" "),
+                            alloc.reflow(alias_kind.as_str()),
+                            alloc.reflow(" expects "),
                             needed_arguments,
                             alloc.reflow(", but it got "),
                             found_arguments,
@@ -118,7 +123,7 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
-                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
+                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/roc-lang/roc/pull/1711
 
                 // We'll also report these as a canonicalization problem, no need to re-report them.
                 CyclicAlias(..) => None,
@@ -221,37 +226,33 @@ pub fn type_problem<'b>(
                 severity: Severity::RuntimeError,
             })
         }
-        DominatedDerive {
-            opaque,
-            ability,
-            derive_region,
-            impl_region,
+        WrongSpecialization {
+            region,
+            ability_member,
+            expected_opaque,
+            found_opaque,
         } => {
             let stack = [
                 alloc.concat([
-                    alloc.symbol_unqualified(opaque),
-                    alloc.reflow(" both derives and custom-implements "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(". We found the derive here:"),
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" is not for the expected type:"),
                 ]),
-                alloc.region(lines.convert_region(derive_region)),
+                alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("and one custom implementation of "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" here:"),
+                    alloc.reflow("It was previously claimed to be a specialization for "),
+                    alloc.symbol_unqualified(expected_opaque),
+                    alloc.reflow(", but was determined to actually specialize "),
+                    alloc.symbol_unqualified(found_opaque),
+                    alloc.reflow("!"),
                 ]),
-                alloc.region(lines.convert_region(impl_region)),
-                alloc.concat([
-                    alloc.reflow("Derived and custom implementations can conflict, so one of them needs to be removed!"),
-                ]),
-                alloc.note("").append(alloc.reflow("We'll try to compile your program using the custom implementation first, and fall-back on the derived implementation if needed. Make sure to disambiguate which one you want!")),
             ];
 
             Some(Report {
-                title: "CONFLICTING DERIVE AND IMPLEMENTATION".to_string(),
+                title: "WRONG SPECIALIZATION TYPE".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::Warning,
+                severity: Severity::RuntimeError,
             })
         }
     }
@@ -263,29 +264,14 @@ fn report_unfulfilled_ability<'a>(
     unfulfilled: Unfulfilled,
 ) -> RocDocBuilder<'a> {
     match unfulfilled {
-        Unfulfilled::Incomplete {
-            typ,
-            ability,
-            missing_members,
-        } => {
-            debug_assert!(!missing_members.is_empty());
-
-            let mut stack = vec![alloc.concat([
+        Unfulfilled::OpaqueDoesNotImplement { typ, ability } => {
+            let stack = vec![alloc.concat([
                 alloc.reflow("The type "),
                 alloc.symbol_unqualified(typ),
                 alloc.reflow(" does not fully implement the ability "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow(". The following specializations are missing:"),
+                alloc.reflow("."),
             ])];
-
-            for member in missing_members.into_iter() {
-                stack.push(alloc.concat([
-                    alloc.reflow("A specialization for "),
-                    alloc.symbol_unqualified(member.value),
-                    alloc.reflow(", which is defined here:"),
-                ]));
-                stack.push(alloc.region(lines.convert_region(member.region)));
-            }
 
             alloc.stack(stack)
         }
@@ -351,9 +337,11 @@ fn report_underivable_reason<'a>(
         UnderivableReason::NotABuiltin => {
             Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
         }
-        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, typ),
-        UnderivableReason::NestedNotDerivable(nested_typ) => {
-            let hint = underivable_hint(alloc, ability, &nested_typ);
+        UnderivableReason::SurfaceNotDerivable(context) => {
+            underivable_hint(alloc, ability, context, typ)
+        }
+        UnderivableReason::NestedNotDerivable(nested_typ, context) => {
+            let hint = underivable_hint(alloc, ability, context, &nested_typ);
             let reason = alloc.stack(
                 [
                     alloc.reflow("In particular, an implementation for"),
@@ -371,59 +359,80 @@ fn report_underivable_reason<'a>(
 fn underivable_hint<'b>(
     alloc: &'b RocDocAllocator<'b>,
     ability: Symbol,
+    context: NotDerivableContext,
     typ: &ErrorType,
 ) -> Option<RocDocBuilder<'b>> {
-    match typ {
-        ErrorType::Function(..) => Some(alloc.note("").append(alloc.concat([
+    match context {
+        NotDerivableContext::NoContext => None,
+        NotDerivableContext::Function => Some(alloc.note("").append(alloc.concat([
             alloc.symbol_unqualified(ability),
             alloc.reflow(" cannot be generated for functions."),
         ]))),
-        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => Some(alloc.tip().append(alloc.concat([
-            alloc.reflow("This type variable is not bound to "),
+        NotDerivableContext::Opaque(symbol) => Some(alloc.tip().append(alloc.concat([
+            alloc.symbol_unqualified(symbol),
+            alloc.reflow(" does not implement "),
             alloc.symbol_unqualified(ability),
-            alloc.reflow(". Consider adding a "),
-            alloc.keyword("has"),
-            alloc.reflow(" clause to bind the type variable, like "),
-            alloc.inline_type_block(alloc.concat([
-                alloc.string("| ".to_string()),
-                alloc.type_variable(v.clone()),
-                alloc.space(),
-                alloc.keyword("has"),
-                alloc.space(),
-                alloc.symbol_qualified(ability),
-            ])),
+            alloc.reflow("."),
+            if symbol.module_id() == alloc.home {
+                alloc.concat([
+                    alloc.reflow(" Consider adding a custom implementation"),
+                    if ability.is_builtin() {
+                        alloc.concat([
+                            alloc.reflow(" or "),
+                            alloc.inline_type_block(alloc.concat([
+                                alloc.keyword("has"),
+                                alloc.space(),
+                                alloc.symbol_qualified(ability),
+                            ])),
+                            alloc.reflow(" to the definition of "),
+                            alloc.symbol_unqualified(symbol),
+                        ])
+                    } else {
+                        alloc.nil()
+                    },
+                    alloc.reflow("."),
+                ])
+            } else {
+                alloc.nil()
+            },
         ]))),
-        ErrorType::Alias(symbol, _, _, AliasKind::Opaque) => {
+        NotDerivableContext::UnboundVar => {
+            let v = match typ {
+                ErrorType::FlexVar(v) => v,
+                ErrorType::RigidVar(v) => v,
+                _ => internal_error!("unbound variable context only applicable for variables"),
+            };
+
             Some(alloc.tip().append(alloc.concat([
-                alloc.symbol_unqualified(*symbol),
-                alloc.reflow(" does not implement "),
+                alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow("."),
-                if symbol.module_id() == alloc.home {
-                    alloc.concat([
-                        alloc.reflow(" Consider adding a custom implementation"),
-                        if ability.is_builtin() {
-                            alloc.concat([
-                                alloc.reflow(" or "),
-                                alloc.inline_type_block(alloc.concat([
-                                    alloc.keyword("has"),
-                                    alloc.space(),
-                                    alloc.symbol_qualified(ability),
-                                ])),
-                                alloc.reflow(" to the definition of "),
-                                alloc.symbol_unqualified(*symbol),
-                            ])
-                        } else {
-                            alloc.nil()
-                        },
-                        alloc.reflow("."),
-                    ])
-                } else {
-                    alloc.nil()
-                },
+                alloc.reflow(". Consider adding a "),
+                alloc.keyword("has"),
+                alloc.reflow(" clause to bind the type variable, like "),
+                alloc.inline_type_block(alloc.concat([
+                    alloc.string("| ".to_string()),
+                    alloc.type_variable(v.clone()),
+                    alloc.space(),
+                    alloc.keyword("has"),
+                    alloc.space(),
+                    alloc.symbol_qualified(ability),
+                ])),
             ])))
         }
-        _ => None,
+        NotDerivableContext::Decode(reason) => match reason {
+            NotDerivableDecode::OptionalRecordField(field) => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
+                    alloc.record_field(field),
+                    alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
+                    alloc.reflow("but are not a concept that extends to runtime!"),
+                    alloc.hardline(),
+                    alloc.reflow("Maybe you wanted to use a "),
+                    alloc.symbol_unqualified(Symbol::RESULT_RESULT),
+                    alloc.reflow("?"),
+                ])))
+            }
+        },
     }
 }
 
@@ -453,16 +462,21 @@ pub fn cyclic_alias<'b>(
     symbol: Symbol,
     region: roc_region::all::Region,
     others: Vec<Symbol>,
+    alias_kind: AliasKind,
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
-        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+        alloc.reflow("Recursion in ")
+        .append(alloc.reflow(alias_kind.as_str()))
+        .append(alloc.reflow("es is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
 
     let doc = if others.is_empty() {
         alloc.stack([
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(alloc.reflow(" is self-recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
             when_is_recursion_legal,
         ])
@@ -471,14 +485,18 @@ pub fn cyclic_alias<'b>(
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(" alias is recursive in an invalid way:")),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(alloc.reflow(" is recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(
-                    " alias depends on itself through the following chain of definitions:",
-                )),
+                .append(alloc.reflow(" "))
+                .append(alloc.reflow(alias_kind.as_str()))
+                .append(
+                    alloc.reflow(" depends on itself through the following chain of definitions:"),
+                ),
             crate::report::cycle(
                 alloc,
                 4,
@@ -817,9 +835,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -856,9 +874,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -894,9 +912,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" guard condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                 )
@@ -1216,15 +1234,15 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("The {ith} argument to ")),
+                        alloc.string(format!("This {ith} argument to ")),
                         this_function.clone(),
-                        alloc.text(" is not what I expect:"),
+                        alloc.text(" has an unexpected type:"),
                     ]),
-                    alloc.text("This argument is"),
+                    alloc.text("The argument is"),
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs the {ith} argument to be:")),
+                        alloc.string(format!(" needs its {ith} argument to be:")),
                     ]),
                     None,
                 )
@@ -1600,8 +1618,8 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an integer")]),
             alloc.text(" of type:"),
         ),
-        Float => (
-            alloc.concat([this_is, alloc.text(" a frac")]),
+        Frac => (
+            alloc.concat([this_is, alloc.text(" a fraction")]),
             alloc.text(" of type:"),
         ),
         Str => (
@@ -1613,7 +1631,7 @@ fn format_category<'b>(
             alloc.text(" which was of type:"),
         ),
         Character => (
-            alloc.concat([this_is, alloc.text(" a character")]),
+            alloc.concat([this_is, alloc.text(" a Unicode scalar value")]),
             alloc.text(" of type:"),
         ),
         Lambda => (
@@ -1646,11 +1664,7 @@ fn format_category<'b>(
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.tag(name.to_owned()),
-                if name.as_str() == "True" || name.as_str() == "False" {
-                    alloc.text(" boolean")
-                } else {
-                    alloc.text(" tag")
-                },
+                alloc.text(" tag"),
             ]),
             alloc.text(" has the type:"),
         ),
@@ -2280,6 +2294,9 @@ fn to_doc_help<'b>(
                                     Parens::Unnecessary,
                                     v,
                                 )),
+                                RecordField::RigidOptional(v) => RecordField::RigidOptional(
+                                    to_doc_help(ctx, alloc, Parens::Unnecessary, v),
+                                ),
                                 RecordField::Required(v) => RecordField::Required(to_doc_help(
                                     ctx,
                                     alloc,
@@ -2564,7 +2581,9 @@ fn to_diff<'b>(
 
         (Alias(sym, _, _, AliasKind::Opaque), _) | (_, Alias(sym, _, _, AliasKind::Opaque))
             // Skip the hint for numbers; it's not as useful as saying "this type is not a number"
-            if !OPAQUE_NUM_SYMBOLS.contains(&sym) =>
+            if !OPAQUE_NUM_SYMBOLS.contains(&sym)
+                // And same for bools
+                && sym != Symbol::BOOL_BOOL =>
         {
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
@@ -2746,6 +2765,7 @@ fn diff_record<'b>(
                 alloc.string(field.as_str().to_string()),
                 match t1 {
                     RecordField::Optional(_) => RecordField::Optional(diff.left),
+                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.left),
                     RecordField::Required(_) => RecordField::Required(diff.left),
                     RecordField::Demanded(_) => RecordField::Demanded(diff.left),
                 },
@@ -2755,6 +2775,7 @@ fn diff_record<'b>(
                 alloc.string(field.as_str().to_string()),
                 match t2 {
                     RecordField::Optional(_) => RecordField::Optional(diff.right),
+                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.right),
                     RecordField::Required(_) => RecordField::Required(diff.right),
                     RecordField::Demanded(_) => RecordField::Demanded(diff.right),
                 },
@@ -2762,7 +2783,15 @@ fn diff_record<'b>(
             status: {
                 match (&t1, &t2) {
                     (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status {
+                    | (RecordField::Optional(_), RecordField::Demanded(_))
+                    | (
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                        RecordField::RigidOptional(_),
+                    )
+                    | (
+                        RecordField::RigidOptional(_),
+                        RecordField::Demanded(_) | RecordField::Required(_),
+                    ) => match diff.status {
                         Status::Similar => {
                             Status::Different(vec![Problem::OptionalRequiredMismatch(
                                 field.clone(),
@@ -2896,15 +2925,14 @@ fn diff_record<'b>(
     }
 }
 
-fn diff_tag_union<'b>(
+fn same_tag_name_overlap_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    fields1: &SendMap<TagName, Vec<ErrorType>>,
-    ext1: TypeExt,
-    fields2: &SendMap<TagName, Vec<ErrorType>>,
-    ext2: TypeExt,
-) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        let diff = traverse(alloc, Parens::Unnecessary, t1, t2);
+    field: TagName,
+    args1: Vec<ErrorType>,
+    args2: Vec<ErrorType>,
+) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
+    if args1.len() == args2.len() {
+        let diff = traverse(alloc, Parens::InTypeParam, args1, args2);
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
@@ -2913,6 +2941,35 @@ fn diff_tag_union<'b>(
             left_able: diff.left_able,
             right_able: diff.right_able,
         }
+    } else {
+        let (left_doc, left_able): (_, Vec<AbleVariables>) = args1
+            .into_iter()
+            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+            .unzip();
+        let (right_doc, right_able): (_, Vec<AbleVariables>) = args2
+            .into_iter()
+            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+            .unzip();
+
+        Diff {
+            left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
+            right: (field.clone(), alloc.tag_name(field), right_doc),
+            status: Status::Similar,
+            left_able: left_able.into_iter().flatten().collect(),
+            right_able: right_able.into_iter().flatten().collect(),
+        }
+    }
+}
+
+fn diff_tag_union<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    fields1: &SendMap<TagName, Vec<ErrorType>>,
+    ext1: TypeExt,
+    fields2: &SendMap<TagName, Vec<ErrorType>>,
+    ext2: TypeExt,
+) -> Diff<RocDocBuilder<'b>> {
+    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        same_tag_name_overlap_diff(alloc, field, t1, t2)
     };
     let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
         TagName,
@@ -3170,7 +3227,7 @@ mod report_text {
                         RecordField::Required(field) => {
                             field_name.append(alloc.text(" : ")).append(field)
                         }
-                        RecordField::Optional(field) => {
+                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
                             field_name.append(alloc.text(" ? ")).append(field)
                         }
                     }
@@ -3854,6 +3911,34 @@ fn exhaustive_problem<'a>(
                 severity: Severity::Warning,
             }
         }
+        Unmatchable {
+            overall_region,
+            branch_region,
+            index,
+        } => {
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" pattern will never be matched:"),
+                ]),
+                alloc.region_with_subregion(
+                    lines.convert_region(overall_region),
+                    lines.convert_region(branch_region),
+                ),
+                alloc.reflow(
+                    "It's impossible to create a value of this shape, \
+                so this pattern can be safely removed!",
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "UNMATCHABLE PATTERN".to_string(),
+                doc,
+                severity: Severity::Warning,
+            }
+        }
     }
 }
 
@@ -3895,8 +3980,8 @@ fn pattern_to_doc_help<'b>(
         Literal(l) => match l {
             Int(i) => alloc.text(i128::from_ne_bytes(i).to_string()),
             U128(i) => alloc.text(u128::from_ne_bytes(i).to_string()),
-            Bit(true) => alloc.text("True"),
-            Bit(false) => alloc.text("False"),
+            Bit(true) => alloc.text("Bool.true"),
+            Bit(false) => alloc.text("Bool.false"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
             Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),

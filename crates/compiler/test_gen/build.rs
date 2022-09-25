@@ -17,6 +17,14 @@ fn main() {
     }
 }
 
+const fn object_file_extension() -> &'static str {
+    if cfg!(windows) {
+        "obj"
+    } else {
+        "o"
+    }
+}
+
 fn build_wasm_linking_test_host() {
     let host_source_path = PathBuf::from("src")
         .join("helpers")
@@ -53,15 +61,8 @@ fn build_wasm_linking_test_host() {
         &format!("-femit-bin={}", host_wasm),
     ]);
 
-    let host_obj_path = PathBuf::from("build").join("wasm_linking_test_host.o");
-    let host_obj = host_obj_path.to_str().unwrap();
-    run_zig(&[
-        "build-obj",
-        host_source,
-        &format!("-femit-bin={}", &host_obj),
-    ]);
-
-    let import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports.o");
+    let mut import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports");
+    import_obj_path.set_extension(object_file_extension());
     let import_obj = import_obj_path.to_str().unwrap();
     run_zig(&[
         "build-obj",
@@ -71,9 +72,15 @@ fn build_wasm_linking_test_host() {
 
     run_zig(&[
         "build-exe",
-        host_obj,
+        host_source,
         import_obj,
         &format!("-femit-bin={}", host_native),
+        #[cfg(windows)]
+        "--subsystem",
+        #[cfg(windows)]
+        "console",
+        #[cfg(windows)]
+        "-lc",
     ]);
 }
 
@@ -95,7 +102,7 @@ fn build_wasm_test_host() {
 
     run_zig(&[
         "wasm-ld",
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &bitcode::get_builtins_wasm32_obj_path(),
         platform_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH,
         WASI_LIBC_PATH,
@@ -141,5 +148,14 @@ fn feature_is_enabled(feature_name: &str) -> bool {
 fn run_zig(args: &[&str]) {
     let zig = zig_executable();
     println!("{} {}", zig, args.join(" "));
-    Command::new(&zig).args(args).output().unwrap();
+    let output = Command::new(&zig).args(args).output().unwrap();
+
+    if !output.status.success() {
+        eprintln!("stdout:\n{}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+        panic!("zig call failed with status {:?}", output.status);
+    }
+
+    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.stderr.is_empty(), "{:#?}", output);
 }

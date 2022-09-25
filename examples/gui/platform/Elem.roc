@@ -64,7 +64,7 @@ none : Elem *
 none = None # I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
 ## Change an element's state type.
 ##
-## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
+## TODO: indent the following once https://github.com/roc-lang/roc/issues/2585 is fixed.
 ## State : { photo : Photo }
 ##
 ## render : State -> Elem State
@@ -113,7 +113,7 @@ translate = \child, toChild, toParent ->
 ## Convenient when you have a [List] in your state and want to make
 ## a [List] of child elements out of it.
 ##
-## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
+## TODO: indent the following once https://github.com/roc-lang/roc/issues/2585 is fixed.
 ## State : { photos : List Photo }
 ##
 ## render : State -> Elem State
@@ -123,7 +123,7 @@ translate = \child, toChild, toParent ->
 ## Elem.list Photo.render state .photos &photos
 ##
 ## col {} children
-## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
+## TODO: format as multiline type annotation once https://github.com/roc-lang/roc/issues/2586 is fixed
 list : (child -> Elem child), parent, (parent -> List child), (parent, List child -> parent) -> List (Elem parent)
 list = \renderChild, parent, toChildren, toParent ->
     List.mapWithIndex
@@ -147,7 +147,7 @@ list = \renderChild, parent, toChildren, toParent ->
 ## if the child has been removed from the parent,
 ## drops it.
 ##
-## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
+## TODO: format as multiline type annotation once https://github.com/roc-lang/roc/issues/2586 is fixed
 translateOrDrop : Elem child, (parent -> Result child *), (parent, child -> parent) -> Elem parent
 translateOrDrop = \child, toChild, toParent ->
     when child is

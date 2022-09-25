@@ -13,7 +13,7 @@
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::{todo_abilities, todo_opaques};
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, CommentOrNewline, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
@@ -21,6 +21,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasKind;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
@@ -274,10 +275,11 @@ fn to_pending_def<'a>(
             }
         }
 
-        Type(TypeDef::Opaque { .. }) => todo_opaques!(),
+        Type(TypeDef::Opaque { .. }) => internal_error!("opaques not implemented"),
         Type(TypeDef::Ability { .. }) => todo_abilities!(),
 
-        Value(AstValueDef::Expect(_)) => todo!(),
+        Value(AstValueDef::Expect { .. }) => todo!(),
+        Value(AstValueDef::ExpectFx { .. }) => todo!(),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
             to_pending_def(env, sub_def, scope, pattern_type)
@@ -341,6 +343,7 @@ fn from_pending_alias<'a>(
                         typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
+                        alias_kind: AliasKind::Structural,
                     });
                 }
             }
@@ -373,7 +376,12 @@ fn from_pending_alias<'a>(
 
                     scope.add_alias(env.pool, symbol, named, annotation_id);
                 } else {
-                    env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
+                    env.problem(Problem::CyclicAlias(
+                        symbol,
+                        name.region,
+                        vec![],
+                        AliasKind::Structural,
+                    ));
                     return output;
                 }
             } else {
@@ -935,7 +943,7 @@ pub fn canonicalize_defs<'a>(
     )
 }
 
-// See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
+// See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {

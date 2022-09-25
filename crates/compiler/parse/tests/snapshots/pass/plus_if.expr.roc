@@ -1,1 +1,1 @@
-1 * if True then 1 else 1
+1 * if Bool.true then 1 else 1

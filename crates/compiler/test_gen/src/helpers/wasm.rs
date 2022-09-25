@@ -4,11 +4,9 @@ use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::DEBUG_SETTINGS;
-use roc_load::Threading;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use roc_load::{ExecutionMode, LoadConfig, Threading};
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Mutex;
 use wasm3::{Environment, Module, Runtime};
@@ -36,6 +34,16 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
+fn write_final_wasm() -> bool {
+    use roc_debug_flags::dbg_do;
+
+    dbg_do!(roc_debug_flags::ROC_WRITE_FINAL_WASM, {
+        return true;
+    });
+
+    DEBUG_SETTINGS.keep_test_binary
+}
+
 #[allow(dead_code)]
 pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
@@ -48,18 +56,12 @@ pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
 
-    if DEBUG_SETTINGS.keep_test_binary {
-        let build_dir_hash = src_hash(src);
-        save_wasm_file(&compiled_bytes, build_dir_hash)
+    if write_final_wasm() {
+        let build_dir_hash = crate::helpers::src_hash(src);
+        crate::helpers::save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
     compiled_bytes
-}
-
-fn src_hash(src: &str) -> u64 {
-    let mut hash_state = DefaultHasher::new();
-    src.hash(&mut hash_state);
-    hash_state.finish()
 }
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
@@ -82,15 +84,19 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
+    let load_config = LoadConfig {
+        target_info: roc_target::TargetInfo::default_wasm32(),
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
+        threading: Threading::Single,
+        exec_mode: ExecutionMode::Executable,
+    };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         Default::default(),
-        roc_target::TargetInfo::default_wasm32(),
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        Threading::Single,
+        load_config,
     );
 
     let loaded = loaded.expect("failed to load module");
@@ -101,6 +107,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         procedures,
         mut interns,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
@@ -114,8 +121,10 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
 
     let env = roc_gen_wasm::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
+        stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
     };
 
     let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap_or_else(|e| {
@@ -153,20 +162,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     module.serialize(&mut app_module_bytes);
 
     app_module_bytes
-}
-
-fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
-    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
-    let debug_dir_path = Path::new(&debug_dir_str);
-    let final_wasm_file = debug_dir_path.join("final.wasm");
-
-    std::fs::create_dir_all(debug_dir_path).unwrap();
-    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
-
-    println!(
-        "Debug command:\n\twasm-objdump -dx {}",
-        final_wasm_file.to_str().unwrap()
-    );
 }
 
 #[allow(dead_code)]
@@ -319,7 +314,6 @@ fn read_i32(memory: &[u8], ptr: usize) -> i32 {
 }
 
 fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
-    module.link_wasi().unwrap();
     let try_link_panic = module.link_closure(
         "env",
         "send_panic_msg_to_rust",
@@ -329,6 +323,7 @@ fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
             Ok(())
         },
     );
+
     match try_link_panic {
         Ok(()) => {}
         Err(wasm3::error::Error::FunctionNotFound) => {}

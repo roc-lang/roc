@@ -419,7 +419,15 @@ fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, inden
 
     match seg {
         Plaintext(string) => {
-            buf.push_str_allow_spaces(string);
+            // Lines in block strings will end with Plaintext ending in "\n" to indicate
+            // a line break in the input string
+            match string.strip_suffix('\n') {
+                Some(string_without_newline) => {
+                    buf.push_str_allow_spaces(string_without_newline);
+                    buf.newline();
+                }
+                None => buf.push_str_allow_spaces(string),
+            }
         }
         Unicode(loc_str) => {
             buf.push_str("\\u(");
@@ -476,7 +484,20 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
     match literal {
         PlainLine(string) => {
-            buf.push_str_allow_spaces(string);
+            // When a PlainLine contains '\n' or '"', format as a block string
+            if string.contains('"') || string.contains('\n') {
+                buf.push_str("\"\"");
+                buf.newline();
+                for line in string.split('\n') {
+                    buf.indent(indent);
+                    buf.push_str_allow_spaces(line);
+                    buf.newline();
+                }
+                buf.indent(indent);
+                buf.push_str("\"\"");
+            } else {
+                buf.push_str_allow_spaces(string);
+            };
         }
         Line(segments) => {
             for seg in segments.iter() {
@@ -484,36 +505,19 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             }
         }
         Block(lines) => {
+            // Block strings will always be formatted with """ on new lines
             buf.push_str("\"\"");
+            buf.newline();
 
-            if lines.len() > 1 {
-                // Since we have multiple lines, format this with
-                // the `"""` symbols on their own lines, and the
+            for segments in lines.iter() {
+                for seg in segments.iter() {
+                    buf.indent(indent);
+                    format_str_segment(seg, buf, indent);
+                }
+
                 buf.newline();
-
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    buf.newline();
-                }
-            } else {
-                // This is a single-line block string, for example:
-                //
-                //     """Whee, "quotes" inside quotes!"""
-
-                // This loop will run either 0 or 1 times.
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    // Don't print a newline here, because we either
-                    // just printed 1 or 0 lines.
-                }
             }
-
+            buf.indent(indent);
             buf.push_str("\"\"");
         }
     }
@@ -815,16 +819,24 @@ fn fmt_expect<'a, 'buf>(
     is_multiline: bool,
     indent: u16,
 ) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("expect");
+
     let return_indent = if is_multiline {
+        buf.newline();
         indent + INDENT
     } else {
+        buf.spaces(1);
         indent
     };
 
-    buf.push_str("expect");
     condition.format(buf, return_indent);
-    buf.push('\n');
-    continuation.format(buf, return_indent);
+
+    // Always put a blank line after the `expect` line(s)
+    buf.ensure_ends_with_blank_line();
+
+    continuation.format(buf, indent);
 }
 
 fn fmt_if<'a, 'buf>(

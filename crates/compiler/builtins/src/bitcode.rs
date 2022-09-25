@@ -1,16 +1,40 @@
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
+use roc_utils::get_lib_path;
 use std::ops::Index;
 
-pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
-    "BUILTINS_HOST_O",
-    "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
-);
+const LIB_DIR_ERROR: &str = "Failed to find the lib directory. Did you copy the roc binary without also copying the lib directory?\nIf you built roc from source, the lib dir should be in target/release.\nIf not, the lib dir should be included in the release tar.gz file.";
 
-pub const BUILTINS_WASM32_OBJ_PATH: &str = env!(
-    "BUILTINS_WASM32_O",
-    "Env var BUILTINS_WASM32_O not found. Is there a problem with the build script?"
-);
+pub fn get_builtins_host_obj_path() -> String {
+    let builtins_host_path = get_lib_path().expect(LIB_DIR_ERROR).join("builtins-host.o");
+
+    builtins_host_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_host_path to str")
+}
+
+pub fn get_builtins_windows_obj_path() -> String {
+    let builtins_host_path = get_lib_path()
+        .expect(LIB_DIR_ERROR)
+        .join("builtins-windows-x86_64.obj");
+
+    builtins_host_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_host_path to str")
+}
+
+pub fn get_builtins_wasm32_obj_path() -> String {
+    let builtins_wasm32_path = get_lib_path()
+        .expect(LIB_DIR_ERROR)
+        .join("builtins-wasm32.o");
+
+    builtins_wasm32_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_wasm32_path to str")
+}
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IntrinsicName {
@@ -51,7 +75,7 @@ impl FloatWidth {
     }
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
-        use roc_target::Architecture;
+        use roc_target::Architecture::*;
         use FloatWidth::*;
 
         // NOTE: this must never use mem::align_of, because that returns the alignment
@@ -60,8 +84,8 @@ impl FloatWidth {
         match self {
             F32 => 4,
             F64 | F128 => match target_info.architecture {
-                Architecture::X86_64 | Architecture::Aarch64 | Architecture::Wasm32 => 8,
-                Architecture::X86_32 | Architecture::Aarch32 => 4,
+                X86_64 | Aarch64 | Wasm32 => 8,
+                X86_32 | Aarch32 => 4,
             },
         }
     }
@@ -336,6 +360,7 @@ pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
 pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
 pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
+pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";

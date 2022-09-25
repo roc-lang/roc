@@ -3,8 +3,7 @@ interface Http
         Request,
         Method,
         Header,
-        Timeout,
-        ProgressTracking,
+        TimeoutConfig,
         Body,
         Response,
         Metadata,
@@ -23,8 +22,7 @@ interface Http
 Request : InternalHttp.Request
 Method : InternalHttp.Method
 Header : InternalHttp.Header
-Timeout : InternalHttp.Timeout
-ProgressTracking : InternalHttp.ProgressTracking
+TimeoutConfig : InternalHttp.TimeoutConfig
 Body : InternalHttp.Body
 Response : InternalHttp.Response
 Metadata : InternalHttp.Metadata
@@ -37,8 +35,6 @@ defaultRequest = {
     url: "",
     body: Http.emptyBody,
     timeout: NoTimeout,
-    progressTracking: NoProgressTracking,
-    allowCookiesFromOtherDomains: False,
 }
 
 ## An HTTP header for configuring requests. See a bunch of common headers
@@ -86,7 +82,7 @@ stringBody = \mimeType, str ->
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is
-        BadUrl url -> Err (BadUrl url)
+        BadRequest err -> Err (BadRequest err)
         Timeout -> Err Timeout
         NetworkError -> Err NetworkError
         BadStatus metadata _ -> Err (BadStatus metadata.statusCode)
@@ -101,7 +97,7 @@ handleStringResponse = \response ->
 errorToString : Error -> Str
 errorToString = \err ->
     when err is
-        BadUrl url -> "\(url) is not a valid URL"
+        BadRequest e -> "Invalid Request: \(e)"
         Timeout -> "Request timed out"
         NetworkError -> "Network error"
         BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)

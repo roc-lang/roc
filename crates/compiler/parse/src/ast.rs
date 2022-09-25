@@ -331,7 +331,15 @@ pub enum ValueDef<'a> {
         body_expr: &'a Loc<Expr<'a>>,
     },
 
-    Expect(&'a Loc<Expr<'a>>),
+    Expect {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
+    },
+
+    ExpectFx {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1041,6 +1049,10 @@ impl<'a> Expr<'a> {
 
     pub fn is_tag(&self) -> bool {
         matches!(self, Expr::Tag(_))
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        matches!(self, Expr::OpaqueRef(_))
     }
 }
 

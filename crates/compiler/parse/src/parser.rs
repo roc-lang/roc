@@ -384,6 +384,7 @@ pub enum EString<'a> {
     UnknownEscape(Position),
     Format(&'a EExpr<'a>, Position),
     FormatEnd(Position),
+    MultilineInsufficientIndent(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -865,7 +866,7 @@ where
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
+            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
@@ -1440,7 +1441,7 @@ where
 {
     debug_assert_ne!(word, b'\n');
 
-    move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
+    move |_arena: &'a Bump, state: State<'a>| match state.bytes().first() {
         Some(x) if *x == word => {
             let state = state.advance(1);
             Ok((MadeProgress, (), state))

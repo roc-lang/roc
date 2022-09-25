@@ -62,7 +62,7 @@ fn roc_function<'a, 'b>(
 
     assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
 
-    run_roc_dylib!(arena.alloc(lib), main_fn_name, &Input, Output, errors)
+    run_roc_dylib!(arena.alloc(lib), main_fn_name, &Input, Output)
 }
 
 fn create_input_list() -> RocList<i64> {

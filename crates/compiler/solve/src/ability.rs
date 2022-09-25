@@ -1,58 +1,31 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
-use roc_collections::VecMap;
-use roc_error_macros::internal_error;
+use roc_collections::{VecMap, VecSet};
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
-use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
-use roc_unify::unify::MustImplementConstraints;
+use roc_solve_problem::{
+    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+};
+use roc_types::num::NumericRange;
+use roc_types::subs::{
+    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
+};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
+use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
 use crate::solve::type_to_var;
-use crate::solve::{Aliases, Pools, TypeError};
+use crate::solve::{Aliases, Pools};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
-    /// Promote this to an error that the type does not fully implement an ability
-    IncompleteAbility,
+    /// Promote this to a generic error that a type doesn't implement an ability
+    DoesNotImplement,
     /// Promote this error to a `TypeError::BadExpr` from elsewhere
     BadExpr(Region, Category, Variable),
     /// Promote this error to a `TypeError::BadPattern` from elsewhere
     BadPattern(Region, PatternCategory, Variable),
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum UnderivableReason {
-    NotABuiltin,
-    /// The surface type is not derivable
-    SurfaceNotDerivable,
-    /// A nested type is not derivable
-    NestedNotDerivable(ErrorType),
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum Unfulfilled {
-    /// Incomplete custom implementation for an ability by an opaque type.
-    Incomplete {
-        typ: Symbol,
-        ability: Symbol,
-        missing_members: Vec<Loc<Symbol>>,
-    },
-    /// Cannot derive implementation of an ability for a structural type.
-    AdhocUnderivable {
-        typ: ErrorType,
-        ability: Symbol,
-        reason: UnderivableReason,
-    },
-    /// Cannot derive implementation of an ability for an opaque type.
-    OpaqueUnderivable {
-        typ: ErrorType,
-        ability: Symbol,
-        opaque: Symbol,
-        derive_region: Region,
-        reason: UnderivableReason,
-    },
 }
 
 /// Indexes a requested deriving of an ability for an opaque type.
@@ -86,7 +59,7 @@ impl PendingDerivesTable {
             } in derives
             {
                 debug_assert!(
-                    ability.is_builtin_ability(),
+                    ability.is_derivable_ability(),
                     "Not a builtin - should have been caught during can"
                 );
                 let derive_key = RequestedDeriveKey { opaque, ability };
@@ -108,158 +81,124 @@ impl PendingDerivesTable {
     }
 }
 
-#[derive(Debug)]
-pub struct DeferredObligations {
-    /// Obligations, to be filled in during solving of a module.
-    obligations: Vec<(MustImplementConstraints, AbilityImplError)>,
-    /// Derives that module-defined opaques claim to have.
-    pending_derives: PendingDerivesTable,
-    /// Derives that are claimed, but have also been determined to have
-    /// specializations. Maps to the first member specialization of the same
-    /// ability.
-    dominated_derives: VecMap<RequestedDeriveKey, Region>,
+type ObligationResult = Result<(), Unfulfilled>;
+
+#[derive(Default)]
+pub struct ObligationCache {
+    impl_cache: VecMap<ImplKey, ObligationResult>,
+    derive_cache: VecMap<RequestedDeriveKey, ObligationResult>,
 }
 
-impl DeferredObligations {
-    pub fn new(pending_derives: PendingDerivesTable) -> Self {
-        Self {
-            obligations: Default::default(),
-            pending_derives,
-            dominated_derives: Default::default(),
-        }
-    }
+enum ReadCache {
+    Impl,
+}
 
-    pub fn add(&mut self, must_implement: MustImplementConstraints, on_error: AbilityImplError) {
-        self.obligations.push((must_implement, on_error));
-    }
+pub struct CheckedDerives {
+    pub legal_derives: Vec<RequestedDeriveKey>,
+    pub problems: Vec<TypeError>,
+}
 
-    pub fn dominate(&mut self, key: RequestedDeriveKey, impl_region: Region) {
-        // Only builtin abilities can be derived, and hence dominated.
-        if self.pending_derives.0.contains_key(&key) && !self.dominated_derives.contains_key(&key) {
-            self.dominated_derives.insert(key, impl_region);
-        }
-    }
-
-    // Rules for checking ability implementations:
-    //  - Ad-hoc derives for structural types are checked on-the-fly
-    //  - Opaque derives are registered as "pending" when we check a module
-    //  - Opaque derives are always checked and registered at the end to make sure opaque
-    //    specializations are found first
-    //  - If an opaque O both derives and specializes an ability A
-    //    - The specialization is recorded in the abilities store (this is done in solve/solve)
-    //    - The derive is checked, but will not be recorded in the abilities store (this is done here)
-    //    - Obligations for O to implement A will defer to whether the specialization is complete
-    pub fn check_all(
-        self,
+impl ObligationCache {
+    #[must_use]
+    pub fn check_derives(
+        &mut self,
         subs: &mut Subs,
         abilities_store: &AbilitiesStore,
-    ) -> (Vec<TypeError>, Vec<RequestedDeriveKey>) {
-        let mut problems = vec![];
-
-        let Self {
-            obligations,
-            pending_derives,
-            dominated_derives,
-        } = self;
-
-        let mut obligation_cache = ObligationCache {
-            abilities_store,
-            pending_derives: &pending_derives,
-            dominated_derives: &dominated_derives,
-
-            impl_cache: VecMap::with_capacity(obligations.len()),
-            derive_cache: VecMap::with_capacity(pending_derives.0.len()),
-        };
-
+        pending_derives: PendingDerivesTable,
+    ) -> CheckedDerives {
         let mut legal_derives = Vec::with_capacity(pending_derives.0.len());
+        let mut problems = vec![];
 
         // First, check all derives.
         for (&derive_key, &(opaque_real_var, derive_region)) in pending_derives.0.iter() {
-            obligation_cache.check_derive(subs, derive_key, opaque_real_var, derive_region);
-            let result = obligation_cache.derive_cache.get(&derive_key).unwrap();
+            self.check_derive(
+                subs,
+                abilities_store,
+                derive_key,
+                opaque_real_var,
+                derive_region,
+            );
+            let result = self.derive_cache.get(&derive_key).unwrap();
             match result {
                 Ok(()) => legal_derives.push(derive_key),
                 Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
             }
         }
 
-        for (derive_key, impl_region) in dominated_derives.iter() {
-            let derive_region = pending_derives.0.get(derive_key).unwrap().1;
-
-            problems.push(TypeError::DominatedDerive {
-                opaque: derive_key.opaque,
-                ability: derive_key.ability,
-                derive_region,
-                impl_region: *impl_region,
-            });
+        CheckedDerives {
+            legal_derives,
+            problems,
         }
+    }
 
-        // Keep track of which types that have an incomplete ability were reported as part of
-        // another type error (from an expression or pattern). If we reported an error for a type
-        // that doesn't implement an ability in that context, we don't want to repeat the error
-        // message.
-        let mut reported_in_context = vec![];
-        let mut incomplete_not_in_context = vec![];
+    #[must_use]
+    pub fn check_obligations(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        must_implement: MustImplementConstraints,
+        on_error: AbilityImplError,
+    ) -> Vec<TypeError> {
+        let must_implement = must_implement.get_unique();
 
-        for (constraints, on_error) in obligations.into_iter() {
-            let must_implement = constraints.get_unique();
+        let mut get_unfulfilled = |must_implement: &[MustImplementAbility]| {
+            must_implement
+                .iter()
+                .filter_map(|mia| {
+                    self.check_one(subs, abilities_store, *mia)
+                        .as_ref()
+                        .err()
+                        .cloned()
+                })
+                .collect::<Vec<_>>()
+        };
 
-            let mut get_unfulfilled = |must_implement: &[MustImplementAbility]| {
-                must_implement
-                    .iter()
-                    .filter_map(|mia| {
-                        obligation_cache
-                            .check_one(subs, *mia)
-                            .as_ref()
-                            .err()
-                            .cloned()
-                    })
-                    .collect::<Vec<_>>()
-            };
+        let mut reported_in_context = VecSet::default();
+        let mut incomplete_not_in_context = VecSet::default();
+        let mut problems = vec![];
 
-            use AbilityImplError::*;
-            match on_error {
-                IncompleteAbility => {
-                    // These aren't attached to another type error, so if these must_implement
-                    // constraints aren't met, we'll emit a generic "this type doesn't implement an
-                    // ability" error message at the end. We only want to do this if it turns out
-                    // the "must implement" constraint indeed wasn't part of a more specific type
-                    // error.
-                    incomplete_not_in_context.extend(must_implement);
+        use AbilityImplError::*;
+        match on_error {
+            DoesNotImplement => {
+                // These aren't attached to another type error, so if these must_implement
+                // constraints aren't met, we'll emit a generic "this type doesn't implement an
+                // ability" error message at the end. We only want to do this if it turns out
+                // the "must implement" constraint indeed wasn't part of a more specific type
+                // error.
+                incomplete_not_in_context.extend(must_implement);
+            }
+            BadExpr(region, category, var) => {
+                let unfulfilled = get_unfulfilled(&must_implement);
+
+                if !unfulfilled.is_empty() {
+                    // Demote the bad variable that exposed this problem to an error, both so
+                    // that we have an ErrorType to report and so that codegen knows to deal
+                    // with the error later.
+                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    problems.push(TypeError::BadExprMissingAbility(
+                        region,
+                        category,
+                        error_type,
+                        unfulfilled,
+                    ));
+                    reported_in_context.extend(must_implement);
                 }
-                BadExpr(region, category, var) => {
-                    let unfulfilled = get_unfulfilled(&must_implement);
+            }
+            BadPattern(region, category, var) => {
+                let unfulfilled = get_unfulfilled(&must_implement);
 
-                    if !unfulfilled.is_empty() {
-                        // Demote the bad variable that exposed this problem to an error, both so
-                        // that we have an ErrorType to report and so that codegen knows to deal
-                        // with the error later.
-                        let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
-                        problems.push(TypeError::BadExprMissingAbility(
-                            region,
-                            category,
-                            error_type,
-                            unfulfilled,
-                        ));
-                        reported_in_context.extend(must_implement);
-                    }
-                }
-                BadPattern(region, category, var) => {
-                    let unfulfilled = get_unfulfilled(&must_implement);
-
-                    if !unfulfilled.is_empty() {
-                        // Demote the bad variable that exposed this problem to an error, both so
-                        // that we have an ErrorType to report and so that codegen knows to deal
-                        // with the error later.
-                        let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
-                        problems.push(TypeError::BadPatternMissingAbility(
-                            region,
-                            category,
-                            error_type,
-                            unfulfilled,
-                        ));
-                        reported_in_context.extend(must_implement);
-                    }
+                if !unfulfilled.is_empty() {
+                    // Demote the bad variable that exposed this problem to an error, both so
+                    // that we have an ErrorType to report and so that codegen knows to deal
+                    // with the error later.
+                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    problems.push(TypeError::BadPatternMissingAbility(
+                        region,
+                        category,
+                        error_type,
+                        unfulfilled,
+                    ));
+                    reported_in_context.extend(must_implement);
                 }
             }
         }
@@ -267,49 +206,72 @@ impl DeferredObligations {
         // Go through and attach generic "type does not implement ability" errors, if they were not
         // part of a larger context.
         for mia in incomplete_not_in_context.into_iter() {
-            if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
-                if !reported_in_context.contains(&mia) {
+            // If the obligation is already cached, we must have already reported it in another
+            // context.
+            if !self.has_cached(mia) && !reported_in_context.contains(&mia) {
+                if let Err(unfulfilled) = self.check_one(subs, abilities_store, mia) {
                     problems.push(TypeError::UnfulfilledAbility(unfulfilled.clone()));
                 }
             }
         }
 
-        (problems, legal_derives)
+        problems
     }
-}
 
-type ObligationResult = Result<(), Unfulfilled>;
-
-struct ObligationCache<'a> {
-    abilities_store: &'a AbilitiesStore,
-    dominated_derives: &'a VecMap<RequestedDeriveKey, Region>,
-    pending_derives: &'a PendingDerivesTable,
-
-    impl_cache: VecMap<ImplKey, ObligationResult>,
-    derive_cache: VecMap<RequestedDeriveKey, ObligationResult>,
-}
-
-enum ReadCache {
-    Impl,
-    Derive,
-}
-
-impl ObligationCache<'_> {
-    fn check_one(&mut self, subs: &mut Subs, mia: MustImplementAbility) -> ObligationResult {
+    fn check_one(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        mia: MustImplementAbility,
+    ) -> ObligationResult {
         let MustImplementAbility { typ, ability } = mia;
 
         match typ {
-            Obligated::Adhoc(var) => self.check_adhoc(subs, var, ability),
-            Obligated::Opaque(opaque) => self.check_opaque_and_read(subs, opaque, ability).clone(),
+            Obligated::Adhoc(var) => self.check_adhoc(subs, abilities_store, var, ability),
+            Obligated::Opaque(opaque) => self
+                .check_opaque_and_read(abilities_store, opaque, ability)
+                .clone(),
         }
     }
 
-    fn check_adhoc(&mut self, subs: &mut Subs, var: Variable, ability: Symbol) -> ObligationResult {
+    fn has_cached(&self, mia: MustImplementAbility) -> bool {
+        match mia.typ {
+            Obligated::Opaque(opaque) => self.impl_cache.contains_key(&ImplKey {
+                opaque,
+                ability: mia.ability,
+            }),
+            Obligated::Adhoc(_) => {
+                // ad-hoc obligations are never cached
+                false
+            }
+        }
+    }
+
+    fn check_adhoc(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        var: Variable,
+        ability: Symbol,
+    ) -> ObligationResult {
         // Not worth caching ad-hoc checks because variables are unlikely to be the same between
         // independent queries.
 
         let opt_can_derive_builtin = match ability {
-            Symbol::ENCODE_ENCODING => Some(self.can_derive_encoding(subs, var)),
+            Symbol::ENCODE_ENCODING => Some(DeriveEncoding::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
+            Symbol::DECODE_DECODING => Some(DeriveDecoding::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             _ => None,
         };
 
@@ -318,11 +280,14 @@ impl ObligationCache<'_> {
                 // can derive!
                 None
             }
-            Some(Err(failure_var)) => Some(if failure_var == var {
-                UnderivableReason::SurfaceNotDerivable
+            Some(Err(NotDerivable {
+                var: failure_var,
+                context,
+            })) => Some(if failure_var == var {
+                UnderivableReason::SurfaceNotDerivable(context)
             } else {
                 let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
-                UnderivableReason::NestedNotDerivable(error_type)
+                UnderivableReason::NestedNotDerivable(error_type, context)
             }),
             None => Some(UnderivableReason::NotABuiltin),
         };
@@ -340,73 +305,41 @@ impl ObligationCache<'_> {
         }
     }
 
-    fn check_opaque(&mut self, subs: &mut Subs, opaque: Symbol, ability: Symbol) -> ReadCache {
+    fn check_opaque(
+        &mut self,
+        abilities_store: &AbilitiesStore,
+        opaque: Symbol,
+        ability: Symbol,
+    ) -> ReadCache {
         let impl_key = ImplKey { opaque, ability };
-        let derive_key = RequestedDeriveKey { opaque, ability };
 
-        match self.pending_derives.0.get(&derive_key) {
-            Some(&(opaque_real_var, derive_region)) => {
-                if self.dominated_derives.contains_key(&derive_key) {
-                    // We have a derive, but also a custom implementation. The custom
-                    // implementation takes priority because we'll use that for codegen.
-                    // We'll report an error for the conflict, and whether the derive is
-                    // legal will be checked out-of-band.
-                    self.check_impl(impl_key);
-                    ReadCache::Impl
-                } else {
-                    // Only a derive
-                    self.check_derive(subs, derive_key, opaque_real_var, derive_region);
-                    ReadCache::Derive
-                }
-            }
-            // Only an impl
-            None => {
-                self.check_impl(impl_key);
-                ReadCache::Impl
-            }
-        }
+        self.check_impl(abilities_store, impl_key);
+        ReadCache::Impl
     }
 
     fn check_opaque_and_read(
         &mut self,
-        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
         opaque: Symbol,
         ability: Symbol,
     ) -> &ObligationResult {
-        match self.check_opaque(subs, opaque, ability) {
+        match self.check_opaque(abilities_store, opaque, ability) {
             ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
-            ReadCache::Derive => self
-                .derive_cache
-                .get(&RequestedDeriveKey { opaque, ability })
-                .unwrap(),
         }
     }
 
-    fn check_impl(&mut self, impl_key: ImplKey) {
+    fn check_impl(&mut self, abilities_store: &AbilitiesStore, impl_key: ImplKey) {
         if self.impl_cache.get(&impl_key).is_some() {
             return;
         }
 
         let ImplKey { opaque, ability } = impl_key;
+        let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
 
-        let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
-        let mut missing_members = Vec::new();
-        for &member in members_of_ability {
-            if self
-                .abilities_store
-                .get_specialization(member, opaque)
-                .is_none()
-            {
-                let root_data = self.abilities_store.member_def(member).unwrap();
-                missing_members.push(Loc::at(root_data.region, member));
-            }
-        }
-
-        let obligation_result = if !missing_members.is_empty() {
-            Err(Unfulfilled::Incomplete {
+        let obligation_result = if !has_declared_impl {
+            Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
-                missing_members,
             })
         } else {
             Ok(())
@@ -418,6 +351,7 @@ impl ObligationCache<'_> {
     fn check_derive(
         &mut self,
         subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
         derive_key: RequestedDeriveKey,
         opaque_real_var: Variable,
         derive_region: Region,
@@ -437,11 +371,6 @@ impl ObligationCache<'_> {
             ability: derive_key.ability,
         };
         let opt_specialization_result = self.impl_cache.insert(impl_key, fake_fulfilled.clone());
-        let is_dominated = self.dominated_derives.contains_key(&derive_key);
-        debug_assert!(
-            opt_specialization_result.is_none() || is_dominated,
-            "This derive also has a specialization but it's not marked as dominated!"
-        );
 
         let old_deriving = self.derive_cache.insert(derive_key, fake_fulfilled.clone());
         debug_assert!(
@@ -451,7 +380,8 @@ impl ObligationCache<'_> {
 
         // Now we check whether the structural type behind the opaque is derivable, since that's
         // what we'll need to generate an implementation for during codegen.
-        let real_var_result = self.check_adhoc(subs, opaque_real_var, derive_key.ability);
+        let real_var_result =
+            self.check_adhoc(subs, abilities_store, opaque_real_var, derive_key.ability);
 
         let root_result = real_var_result.map_err(|err| match err {
             // Promote the failure, which should be related to a structural type not being
@@ -482,11 +412,167 @@ impl ObligationCache<'_> {
         let check_has_fake = self.derive_cache.insert(derive_key, root_result);
         debug_assert_eq!(check_has_fake, Some(fake_fulfilled));
     }
+}
 
-    // If we have a lot of these, consider using a visitor.
-    // It will be very similar for most types (can't derive functions, can't derive unbound type
-    // variables, can only derive opaques if they have an impl, etc).
-    fn can_derive_encoding(&mut self, subs: &mut Subs, var: Variable) -> Result<(), Variable> {
+#[inline(always)]
+#[rustfmt::skip]
+fn is_builtin_number_alias(symbol: Symbol) -> bool {
+    matches!(symbol,
+          Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
+        | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
+        | Symbol::NUM_U32  | Symbol::NUM_UNSIGNED32
+        | Symbol::NUM_U64  | Symbol::NUM_UNSIGNED64
+        | Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128
+        | Symbol::NUM_I8   | Symbol::NUM_SIGNED8
+        | Symbol::NUM_I16  | Symbol::NUM_SIGNED16
+        | Symbol::NUM_I32  | Symbol::NUM_SIGNED32
+        | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
+        | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
+        | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
+        | Symbol::NUM_F32  | Symbol::NUM_BINARY32
+        | Symbol::NUM_F64  | Symbol::NUM_BINARY64
+        | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
+    )
+}
+
+struct NotDerivable {
+    var: Variable,
+    context: NotDerivableContext,
+}
+
+struct Descend(bool);
+
+trait DerivableVisitor {
+    const ABILITY: Symbol;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
+        false
+    }
+
+    #[inline(always)]
+    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
+        if ability != Self::ABILITY {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline(always)]
+    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
+        if ability != Self::ABILITY {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline(always)]
+    fn visit_recursion(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_func(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::Function,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        _subs: &Subs,
+        var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_alias(var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn is_derivable(
+        obligation_cache: &mut ObligationCache,
+        abilities_store: &AbilitiesStore,
+        subs: &mut Subs,
+        var: Variable,
+    ) -> Result<(), NotDerivable> {
         let mut stack = vec![var];
         let mut seen_recursion_vars = vec![];
 
@@ -505,105 +591,304 @@ impl ObligationCache<'_> {
 
             use Content::*;
             use FlatType::*;
-            match content {
-                FlexVar(_) | RigidVar(_) => return Err(var),
-                FlexAbleVar(_, ability) | RigidAbleVar(_, ability) => {
-                    if *ability != Symbol::ENCODE_ENCODING {
-                        return Err(var);
-                    }
-                    // Any concrete type this variables is instantiated with will also gain a "does
-                    // implement" check so this is okay.
+            match *content {
+                FlexVar(opt_name) => {
+                    // Promote the flex var to be bound to the ability.
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
                 }
+                RigidVar(_) => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
+                FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
+                RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
                 RecursionVar {
                     structure,
                     opt_name: _,
                 } => {
-                    seen_recursion_vars.push(var);
-                    stack.push(*structure);
+                    let descend = Self::visit_recursion(var)?;
+                    if descend.0 {
+                        seen_recursion_vars.push(var);
+                        stack.push(structure);
+                    }
                 }
                 Structure(flat_type) => match flat_type {
-                    Apply(
-                        Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
-                        vars,
-                    ) => push_var_slice!(*vars),
-                    Apply(..) => return Err(var),
-                    Func(..) => {
-                        return Err(var);
-                    }
-                    Record(fields, var) => {
-                        push_var_slice!(fields.variables());
-                        stack.push(*var);
-                    }
-                    TagUnion(tags, ext_var) => {
-                        for i in tags.variables() {
-                            push_var_slice!(subs[i]);
+                    Apply(symbol, vars) => {
+                        let descend = Self::visit_apply(var, symbol)?;
+                        if descend.0 {
+                            push_var_slice!(vars)
                         }
-                        stack.push(*ext_var);
                     }
-                    FunctionOrTagUnion(_, _, var) => stack.push(*var),
-                    RecursiveTagUnion(rec_var, tags, ext_var) => {
-                        seen_recursion_vars.push(*rec_var);
-                        for i in tags.variables() {
-                            push_var_slice!(subs[i]);
+                    Func(args, _clos, ret) => {
+                        let descend = Self::visit_func(var)?;
+                        if descend.0 {
+                            push_var_slice!(args);
+                            stack.push(ret);
                         }
-                        stack.push(*ext_var);
                     }
-                    EmptyRecord | EmptyTagUnion => {
-                        // yes
+                    Record(fields, ext) => {
+                        let descend = Self::visit_record(subs, var, fields)?;
+                        if descend.0 {
+                            push_var_slice!(fields.variables());
+                            if !matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::FlexVar(_) | Content::RigidVar(_)
+                            ) {
+                                // TODO: currently, just we suppose the presence of a flex var may
+                                // include more or less things which we can derive. But, we should
+                                // instead recurse here, and add a `t ~ u | u has Decode` constraint as needed.
+                                stack.push(ext);
+                            }
+                        }
                     }
-                    Erroneous(_) => return Err(var),
+                    TagUnion(tags, ext) => {
+                        let descend = Self::visit_tag_union(var)?;
+                        if descend.0 {
+                            for i in tags.variables() {
+                                push_var_slice!(subs[i]);
+                            }
+                            stack.push(ext);
+                        }
+                    }
+                    FunctionOrTagUnion(_tag_name, _fn_name, ext) => {
+                        let descend = Self::visit_function_or_tag_union(var)?;
+                        if descend.0 {
+                            stack.push(ext);
+                        }
+                    }
+                    RecursiveTagUnion(rec, tags, ext) => {
+                        let descend = Self::visit_recursive_tag_union(var)?;
+                        if descend.0 {
+                            seen_recursion_vars.push(rec);
+                            for i in tags.variables() {
+                                push_var_slice!(subs[i]);
+                            }
+                            stack.push(ext);
+                        }
+                    }
+                    EmptyRecord => Self::visit_empty_record(var)?,
+                    EmptyTagUnion => Self::visit_empty_tag_union(var)?,
+
+                    Erroneous(_) => {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        })
+                    }
                 },
-                #[rustfmt::skip]
-                Alias(
-                      Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
-                    | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
-                    | Symbol::NUM_U32  | Symbol::NUM_UNSIGNED32
-                    | Symbol::NUM_U64  | Symbol::NUM_UNSIGNED64
-                    | Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128
-                    | Symbol::NUM_I8   | Symbol::NUM_SIGNED8
-                    | Symbol::NUM_I16  | Symbol::NUM_SIGNED16
-                    | Symbol::NUM_I32  | Symbol::NUM_SIGNED32
-                    | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
-                    | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
-                    | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
-                    | Symbol::NUM_F32  | Symbol::NUM_BINARY32
-                    | Symbol::NUM_F64  | Symbol::NUM_BINARY64
-                    | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
-                    _,
-                    _,
-                    _,
-                ) => {
-                    // yes
-                }
                 Alias(
                     Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
-                    _,
+                    _alias_variables,
                     real_var,
-                    _,
-                ) => stack.push(*real_var),
-                Alias(name, _, _, AliasKind::Opaque) => {
-                    let opaque = *name;
-                    if self
-                        .check_opaque_and_read(subs, opaque, Symbol::ENCODE_ENCODING)
+                    AliasKind::Opaque,
+                ) => {
+                    // Numbers: always decay until a ground is hit.
+                    stack.push(real_var);
+                }
+                Alias(opaque, _alias_variables, _real_var, AliasKind::Opaque) => {
+                    if obligation_cache
+                        .check_opaque_and_read(abilities_store, opaque, Self::ABILITY)
                         .is_err()
+                        && !Self::is_derivable_builtin_opaque(opaque)
                     {
-                        return Err(var);
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::Opaque(opaque),
+                        });
                     }
                 }
-                Alias(_, arguments, real_type_var, _) => {
-                    push_var_slice!(arguments.all_variables());
-                    stack.push(*real_type_var);
+                Alias(symbol, _alias_variables, real_var, AliasKind::Structural) => {
+                    let descend = Self::visit_alias(var, symbol)?;
+                    if descend.0 {
+                        stack.push(real_var);
+                    }
                 }
-                RangedNumber(..) => {
-                    // yes, all numbers can
+                RangedNumber(range) => Self::visit_ranged_number(var, range)?,
+
+                LambdaSet(..) => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
                 }
-                LambdaSet(..) => return Err(var),
                 Error => {
-                    return Err(var);
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    });
                 }
             }
         }
 
+        Ok(())
+    }
+}
+
+struct DeriveEncoding;
+impl DerivableVisitor for DeriveEncoding {
+    const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        _subs: &Subs,
+        _var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+}
+
+struct DeriveDecoding;
+impl DerivableVisitor for DeriveDecoding {
+    const ABILITY: Symbol = Symbol::DECODE_DECODING;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        for (field_name, _, field) in fields.iter_all() {
+            if subs[field].is_optional() {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                        subs[field_name].clone(),
+                    )),
+                });
+            }
+        }
+
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
 }
@@ -633,51 +918,106 @@ pub fn type_implementing_specialization(
 }
 
 /// Result of trying to resolve an ability specialization.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
-    /// A specialization must be generated.
-    NeedsGenerated,
+    /// A specialization must be generated for the given type variable.
+    NeedsGenerated(Variable),
 }
 
-pub fn resolve_ability_specialization(
+/// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
+/// [resolving ability specializations][`resolve_ability_specialization`].
+///
+/// The trait is provided so you can implement your own resolver at other points in the compilation
+/// process, for example during monomorphization we have module-re-entrant ability stores that are
+/// not available during solving.
+pub trait AbilityResolver {
+    /// Gets the parent ability and type of an ability member.
+    ///
+    /// If needed, the type of the ability member will be imported into a local `subs` buffer; as
+    /// such, subs must be provided.
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: Symbol,
+        home_subs: &mut Subs,
+    ) -> Option<(Symbol, Variable)>;
+
+    /// Finds the declared implementation of an [`ImplKey`][roc_can::abilities::ImplKey].
+    fn get_implementation(&self, impl_key: roc_can::abilities::ImplKey) -> Option<MemberImpl>;
+}
+
+/// Trivial implementation of a resolver for a module-local abilities store, that defers all
+/// queries to the module store.
+impl AbilityResolver for AbilitiesStore {
+    #[inline(always)]
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: Symbol,
+        _home_subs: &mut Subs, // only have access to one abilities store, do nothing with subs
+    ) -> Option<(Symbol, Variable)> {
+        self.member_def(ability_member)
+            .map(|def| (def.parent_ability, def.signature_var()))
+    }
+
+    #[inline(always)]
+    fn get_implementation(&self, impl_key: roc_can::abilities::ImplKey) -> Option<MemberImpl> {
+        self.get_implementation(impl_key).copied()
+    }
+}
+
+pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
-    abilities_store: &AbilitiesStore,
+    resolver: &R,
     ability_member: Symbol,
     specialization_var: Variable,
 ) -> Option<Resolved> {
     use roc_unify::unify::{unify, Mode};
 
-    let member_def = abilities_store
-        .member_def(ability_member)
+    let (parent_ability, signature_var) = resolver
+        .member_parent_and_signature_var(ability_member, subs)
         .expect("Not an ability member symbol");
 
     // Figure out the ability we're resolving in a temporary subs snapshot.
     let snapshot = subs.snapshot();
 
-    let signature_var = member_def.signature_var();
-
     instantiate_rigids(subs, signature_var);
-    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) =
-        unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
-            "If resolving a specialization, the specialization must be known to typecheck.",
-        );
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
+        &mut Env::new(subs),
+        specialization_var,
+        signature_var,
+        Mode::EQ,
+    )
+    .expect_success(
+        "If resolving a specialization, the specialization must be known to typecheck.",
+    );
 
     subs.rollback_to(snapshot);
 
-    let obligated =
-        type_implementing_specialization(&must_implement_ability, member_def.parent_ability)?;
+    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            let specialization = abilities_store.get_specialization(ability_member, symbol)?;
+            let impl_key = roc_can::abilities::ImplKey {
+                opaque: symbol,
+                ability_member,
+            };
 
-            Resolved::Specialization(specialization.symbol)
+            match resolver.get_implementation(impl_key)? {
+                roc_types::types::MemberImpl::Impl(spec_symbol) => {
+                    Resolved::Specialization(spec_symbol)
+                }
+                roc_types::types::MemberImpl::Derived => {
+                    todo_abilities!("get type from obligated opaque")
+                }
+                // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
+                // which will make this simpler.
+                roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
+            }
         }
-        Obligated::Adhoc(_) => {
+        Obligated::Adhoc(variable) => {
             // TODO: more rules need to be validated here, like is this a builtin ability?
-            Resolved::NeedsGenerated
+            Resolved::NeedsGenerated(variable)
         }
     };
 

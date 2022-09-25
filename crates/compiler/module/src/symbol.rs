@@ -47,7 +47,10 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
-pub const BUILTIN_ABILITIES: &[Symbol] = &[Symbol::ENCODE_ENCODING];
+pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
+    (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
+    (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
+];
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
@@ -86,8 +89,12 @@ impl Symbol {
         self.module_id().is_builtin()
     }
 
-    pub fn is_builtin_ability(self) -> bool {
-        BUILTIN_ABILITIES.contains(&self)
+    pub fn is_derivable_ability(self) -> bool {
+        self.derivable_ability().is_some()
+    }
+
+    pub fn derivable_ability(self) -> Option<&'static (Symbol, &'static [Symbol])> {
+        DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -145,6 +152,7 @@ impl Symbol {
     }
 
     pub const fn to_ne_bytes(self) -> [u8; 8] {
+        // repr(packed(4)) is repr(c), and with the fields as defined will not having padding.
         unsafe { std::mem::transmute(self) }
     }
 
@@ -504,6 +512,20 @@ impl<'a> PackageModuleIds<'a> {
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
         self.by_id.iter()
     }
+
+    /// Returns true iff two modules belong to the same package.
+    /// Returns [None] if one module is unknown.
+    pub fn package_eq(&self, left: ModuleId, right: ModuleId) -> Option<bool> {
+        if left.is_builtin() ^ right.is_builtin() {
+            return Some(false);
+        }
+        let result = match (self.get_name(left)?, self.get_name(right)?) {
+            (PQModuleName::Unqualified(_), PQModuleName::Unqualified(_)) => true,
+            (PQModuleName::Qualified(pkg1, _), PQModuleName::Qualified(pkg2, _)) => pkg1 == pkg2,
+            _ => false,
+        };
+        Some(result)
+    }
 }
 
 /// Stores a mapping between ModuleId and InlinableString.
@@ -774,6 +796,12 @@ macro_rules! define_builtins {
         )+
         num_modules: $total:literal
     } => {
+        impl<'a> super::ident::QualifiedModuleName<'a> {
+            pub fn is_builtin(&self) -> bool {
+                self.opt_package.is_none() && ($($module_name == self.module.as_str() ||)+ false)
+            }
+        }
+
         impl IdentIds {
             pub fn exposed_builtins(extra_capacity: usize) -> IdentIdsByModule {
                 let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
@@ -1000,6 +1028,8 @@ define_builtins! {
         30 DEV_TMP5: "#dev_tmp5"
 
         31 ATTR_INVALID: "#attr_invalid"
+
+        32 CLONE: "#clone" // internal function that clones a value into a buffer
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {
@@ -1157,10 +1187,8 @@ define_builtins! {
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
-        1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
-                                       // NB: not strictly needed; used for finding tag names in error suggestions
-        2 BOOL_TRUE: "True" imported // Bool.Bool = [False, True]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        1 BOOL_FALSE: "false"
+        2 BOOL_TRUE: "true"
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
@@ -1219,6 +1247,9 @@ define_builtins! {
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
+        50 STR_REPLACE_EACH: "replaceEach"
+        51 STR_REPLACE_FIRST: "replaceFirst"
+        52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1265,32 +1296,37 @@ define_builtins! {
         41 LIST_ANY: "any"
         42 LIST_TAKE_FIRST: "takeFirst"
         43 LIST_TAKE_LAST: "takeLast"
-        44 LIST_FIND: "find"
-        45 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
-        46 LIST_SUBLIST: "sublist"
-        47 LIST_INTERSPERSE: "intersperse"
-        48 LIST_INTERSPERSE_CLOS: "#intersperseClos"
-        49 LIST_SPLIT: "split"
-        50 LIST_SPLIT_CLOS: "#splitClos"
-        51 LIST_ALL: "all"
-        52 LIST_DROP_IF: "dropIf"
-        53 LIST_DROP_IF_PREDICATE: "#dropIfPred"
-        54 LIST_SORT_ASC: "sortAsc"
-        55 LIST_SORT_DESC: "sortDesc"
-        56 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
-        57 LIST_REPLACE: "replace"
-        58 LIST_IS_UNIQUE: "#isUnique"
-        59 LIST_FIND_INDEX: "findIndex"
-        60 LIST_GET_UNSAFE: "getUnsafe"
-        61 LIST_REPLACE_UNSAFE: "replaceUnsafe"
-        62 LIST_WITH_CAPACITY: "withCapacity"
-        63 LIST_ITERATE: "iterate"
-        64 LIST_UNREACHABLE: "unreachable"
-        65 LIST_RESERVE: "reserve"
-        66 LIST_APPEND_UNSAFE: "appendUnsafe"
-        67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
-        68 LIST_CAPACITY: "capacity"
-        69 LIST_MAP_TRY: "mapTry"
+        44 LIST_FIND_FIRST: "findFirst"
+        45 LIST_FIND_LAST: "findLast"
+        46 LIST_FIND_FIRST_INDEX: "findFirstIndex"
+        47 LIST_FIND_LAST_INDEX: "findLastIndex"
+        48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.findFirst
+        49 LIST_SUBLIST: "sublist"
+        50 LIST_INTERSPERSE: "intersperse"
+        51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        52 LIST_SPLIT: "split"
+        53 LIST_SPLIT_FIRST: "splitFirst"
+        54 LIST_SPLIT_LAST: "splitLast"
+        55 LIST_SPLIT_CLOS: "#splitClos"
+        56 LIST_ALL: "all"
+        57 LIST_DROP_IF: "dropIf"
+        58 LIST_DROP_IF_PREDICATE: "#dropIfPred"
+        59 LIST_SORT_ASC: "sortAsc"
+        60 LIST_SORT_DESC: "sortDesc"
+        61 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        62 LIST_STARTS_WITH: "startsWith"
+        63 LIST_ENDS_WITH: "endsWith"
+        64 LIST_REPLACE: "replace"
+        65 LIST_IS_UNIQUE: "#isUnique"
+        66 LIST_GET_UNSAFE: "getUnsafe"
+        67 LIST_REPLACE_UNSAFE: "replaceUnsafe"
+        68 LIST_WITH_CAPACITY: "withCapacity"
+        69 LIST_UNREACHABLE: "unreachable"
+        70 LIST_RESERVE: "reserve"
+        71 LIST_APPEND_UNSAFE: "appendUnsafe"
+        72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
+        73 LIST_CAPACITY: "capacity"
+        74 LIST_MAP_TRY: "mapTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
@@ -1379,9 +1415,38 @@ define_builtins! {
         24 ENCODE_APPEND: "append"
         25 ENCODE_TO_BYTES: "toBytes"
     }
-    12 JSON: "Json" => {
+    12 DECODE: "Decode" => {
+        0 DECODE_DECODE_ERROR: "DecodeError"
+        1 DECODE_DECODE_RESULT: "DecodeResult"
+        2 DECODE_DECODER_OPAQUE: "Decoder"
+        3 DECODE_DECODING: "Decoding"
+        4 DECODE_DECODER: "decoder"
+        5 DECODE_DECODERFORMATTING: "DecoderFormatting"
+        6 DECODE_U8: "u8"
+        7 DECODE_U16: "u16"
+        8 DECODE_U32: "u32"
+        9 DECODE_U64: "u64"
+        10 DECODE_U128: "u128"
+        11 DECODE_I8: "i8"
+        12 DECODE_I16: "i16"
+        13 DECODE_I32: "i32"
+        14 DECODE_I64: "i64"
+        15 DECODE_I128: "i128"
+        16 DECODE_F32: "f32"
+        17 DECODE_F64: "f64"
+        18 DECODE_DEC: "dec"
+        19 DECODE_BOOL: "bool"
+        20 DECODE_STRING: "string"
+        21 DECODE_LIST: "list"
+        22 DECODE_RECORD: "record"
+        23 DECODE_CUSTOM: "custom"
+        24 DECODE_DECODE_WITH: "decodeWith"
+        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        26 DECODE_FROM_BYTES: "fromBytes"
+    }
+    13 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 13 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

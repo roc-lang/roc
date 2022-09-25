@@ -18,14 +18,14 @@ extern "C" {
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_caller"]
+    #[link_name = "roc__mainForHost_1__Fx_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1_Fx_size"]
+    #[link_name = "roc__mainForHost_1__Fx_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_result_size"]
+    #[link_name = "roc__mainForHost_1__Fx_result_size"]
     fn size_Fx_result() -> i64;
 }
 
