@@ -161,7 +161,7 @@ apply = \funParser, valParser ->
 ## `andThen` is usually more flexible than necessary, and less efficient
 ## than using `const` with `map` and/or `apply`.
 ## Consider using those functions first.
-# TODO I am considering leaving this function out alltogether
+# TODO I am considering leaving this function out altogether
 # As using it is an anti-pattern.
 andThen : Parser input a, (a -> Parser input b) -> Parser input b
 andThen = \firstParser, buildNextParser ->
