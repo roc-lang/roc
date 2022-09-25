@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::metadata::{self, Metadata, VirtualOffset};
 
 use crate::{
-    align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
+    align_by_constraint, align_to_offset_by_constraint, dbg_hex, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace_mut, open_mmap, open_mmap_mut,
 };
 
@@ -1232,6 +1232,10 @@ fn surgery_elf_help(
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
                             }
+                            RelocationKind::Absolute => {
+                                // NOTE: this relies on our app using position-independent code (PIC)
+                                target_offset + rel.1.addend()
+                            }
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
                             }
@@ -1315,7 +1319,7 @@ fn surgery_elf_help(
     section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
         sh_name: endian::U32::new(LE, 0),
         sh_type: endian::U32::new(LE, elf::SHT_PROGBITS),
-        sh_flags: endian::U64::new(LE, (elf::SHF_ALLOC) as u64),
+        sh_flags: endian::U64::new(LE, elf::SHF_ALLOC as u64),
         sh_addr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
         sh_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
         sh_size: endian::U64::new(LE, new_rodata_section_size),
@@ -1529,24 +1533,27 @@ mod tests {
         )
     }
 
-    fn link_zig_host_and_app_help(dir: &Path) {
+    /// This zig code sample containts a static relocation
+    fn static_relocation_help(dir: &Path) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
 
-            extern fn roc_magic1() callconv(.C) u64;
+            extern fn roc_magic1(usize) callconv(.C) [*]const u8;
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello {}\n", .{roc_magic1()});
+                try stdout.print("Hello {s}\n", .{roc_magic1(0)[0..3]});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            export fn roc_magic1() u64 {
-                return 42;
+            const X = [_][]const u8 { "foo" };
+
+            export fn roc_magic1(index: usize) [*]const u8 {
+                return X[index].ptr;
             }
             "#
         );
@@ -1562,6 +1569,7 @@ mod tests {
             .args(&[
                 "build-obj",
                 "app.zig",
+                "-fPIC",
                 "-target",
                 "x86_64-linux-gnu",
                 "-OReleaseFast",
@@ -1643,12 +1651,11 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn link_zig_host_and_app_windows() {
+    fn static_relocation() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        let dir = Path::new("/tmp/roc/");
 
-        link_zig_host_and_app_help(dir);
+        static_relocation_help(dir);
 
         let output = std::process::Command::new(&dir.join("final"))
             .current_dir(dir)
@@ -1666,6 +1673,6 @@ mod tests {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello 42\n", output);
+        assert_eq!("Hello foo\n", output);
     }
 }
