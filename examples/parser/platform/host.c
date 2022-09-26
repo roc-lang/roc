@@ -120,7 +120,6 @@ size_t roc_str_len(struct RocStr str) {
 extern void roc__mainForHost_1_exposed_generic(struct RocStr *string);
 
 int main() {
-
   struct RocStr str;
   roc__mainForHost_1_exposed_generic(&str);
 
@@ -136,12 +135,13 @@ int main() {
   }
 
   // Write to stdout
-  if (write(STDOUT_FILENO, str_bytes, str_len) >= 0) {
+  size_t written = fwrite(str_bytes, sizeof(char), str_len, stdout);
+  fflush(stdout);
+  if (written == str_len) {
     // Writing succeeded!
     return 0;
   } else {
     printf("Error writing to stdout: %s\n", strerror(errno));
-
     return 1;
   }
 }
