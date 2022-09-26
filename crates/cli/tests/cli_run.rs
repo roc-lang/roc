@@ -233,7 +233,13 @@ mod cli_run {
                 );
             }
 
-            assert!(out.status.success());
+            if !out.status.success() {
+                // We don't need stdout, Cargo prints it for us.
+                panic!(
+                    "Example program exited with status {:?}\nstderr was:\n{:#?}",
+                    out.status, out.stderr
+                );
+            }
         }
     }
 

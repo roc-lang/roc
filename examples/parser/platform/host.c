@@ -136,7 +136,7 @@ int main() {
   }
 
   // Write to stdout
-  if (write(1, str_bytes, str_len) >= 0) {
+  if (write(STDOUT_FILENO, str_bytes, str_len) >= 0) {
     // Writing succeeded!
     return 0;
   } else {
