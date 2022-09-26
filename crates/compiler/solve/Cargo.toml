@@ -37,4 +37,4 @@ tempfile = "3.2.0"
 bumpalo = { version = "3.11.0", features = ["collections"] }
 regex = "1.5.5"
 lazy_static = "1.4.0"
-insta = "1.19.0"
+insta = "1.20.0"

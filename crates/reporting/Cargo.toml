@@ -34,4 +34,4 @@ roc_test_utils = { path = "../test_utils" }
 roc_solve = { path = "../compiler/solve" }
 pretty_assertions = "1.3.0"
 indoc = "1.0.7"
-insta = "1.19.0"
+insta = "1.20.0"
