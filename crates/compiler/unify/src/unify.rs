@@ -347,6 +347,22 @@ impl<'a> Env<'a> {
         debug_assert!(!already_seen);
     }
 
+    fn remove_recursion_pair(&mut self, var1: Variable, var2: Variable) {
+        #[cfg(debug_assertions)]
+        let size_before = self.seen_recursion.len();
+
+        self.seen_recursion.retain(|(v1, v2)| {
+            let is_recursion_pair = self.subs.equivalent_without_compacting(*v1, var1)
+                && self.subs.equivalent_without_compacting(*v2, var2);
+            !is_recursion_pair
+        });
+
+        #[cfg(debug_assertions)]
+        let size_after = self.seen_recursion.len();
+
+        debug_assert!(size_after < size_before, "nothing was removed");
+    }
+
     fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
         let (var1, var2) = (
             self.subs.get_root_key_without_compacting(var1),
@@ -869,7 +885,9 @@ fn unify_alias<M: MetaCollector>(
                 return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
-            unify_pool(env, pool, real_var, *structure, ctx.mode)
+            let outcome = unify_pool(env, pool, real_var, *structure, ctx.mode);
+            env.remove_recursion_pair(ctx.first, ctx.second);
+            outcome
         }
         RigidVar(_) | RigidAbleVar(..) | FlexAbleVar(..) => {
             unify_pool(env, pool, real_var, ctx.second, ctx.mode)
@@ -947,7 +965,9 @@ fn unify_opaque<M: MetaCollector>(
                 return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
-            unify_pool(env, pool, ctx.first, *structure, ctx.mode)
+            let outcome = unify_pool(env, pool, ctx.first, *structure, ctx.mode);
+            env.remove_recursion_pair(ctx.first, ctx.second);
+            outcome
         }
         Alias(other_symbol, other_args, other_real_var, AliasKind::Opaque) => {
             // Opaques types are only equal if the opaque symbols are equal!
@@ -1027,7 +1047,7 @@ fn unify_structure<M: MetaCollector>(
             }
             env.add_recursion_pair(ctx.first, ctx.second);
 
-            match flat_type {
+            let outcome = match flat_type {
                 FlatType::TagUnion(_, _) => {
                     // unify the structure with this unrecursive tag union
                     unify_pool(env, pool, ctx.first, *structure, ctx.mode)
@@ -1047,7 +1067,10 @@ fn unify_structure<M: MetaCollector>(
                     &flat_type,
                     structure
                 ),
-            }
+            };
+
+            env.remove_recursion_pair(ctx.first, ctx.second);
+            outcome
         }
 
         Structure(ref other_flat_type) => {
@@ -1124,7 +1147,10 @@ fn unify_lambda_set<M: MetaCollector>(
             env.add_recursion_pair(ctx.first, ctx.second);
 
             // suppose that the recursion var is a lambda set
-            unify_pool(env, pool, ctx.first, *structure, ctx.mode)
+            let outcome = unify_pool(env, pool, ctx.first, *structure, ctx.mode);
+
+            env.remove_recursion_pair(ctx.first, ctx.second);
+            outcome
         }
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
@@ -3073,13 +3099,15 @@ fn unify_recursion<M: MetaCollector>(
     structure: Variable,
     other: &Content,
 ) -> Outcome<M> {
-    if env.seen_recursion_pair(ctx.first, ctx.second) {
-        return Default::default();
+    if !matches!(other, RecursionVar { .. }) {
+        if env.seen_recursion_pair(ctx.first, ctx.second) {
+            return Default::default();
+        }
+
+        env.add_recursion_pair(ctx.first, ctx.second);
     }
 
-    env.add_recursion_pair(ctx.first, ctx.second);
-
-    match other {
+    let outcome = match other {
         RecursionVar {
             opt_name: other_opt_name,
             structure: _other_structure,
@@ -3142,7 +3170,13 @@ fn unify_recursion<M: MetaCollector>(
         }
 
         Error => merge(env, ctx, Error),
+    };
+
+    if !matches!(other, RecursionVar { .. }) {
+        env.remove_recursion_pair(ctx.first, ctx.second);
     }
+
+    outcome
 }
 
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
