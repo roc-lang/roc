@@ -1,6 +1,5 @@
 interface Env
-    exposes [cwd, dict, var, decode]
-    imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask,
+    exposes [cwd, dict, var, decode] imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask,
         Decode.{ Decoder, DecodeError, Decoding, DecoderFormatting }
     ]
 
@@ -121,9 +120,33 @@ envString = Decode.custom \bytes, @EnvFormatting {} ->
         Ok s -> {result: Ok s, rest: []}
         Err _ -> {result: Err TooShort, rest: bytes}
 
-envList : Decoder _ _ -> _
-envList = \_decodeElem -> Decode.custom \bytes, @EnvFormatting {} ->
-        {result: Err TooShort, rest: bytes}
+envList = \decodeElem -> Decode.custom \bytes, @EnvFormatting {} ->
+    # Per our supported methods of decoding, this is either a list of strings or
+    # a list of numbers; in either case, the list of bytes must be Utf-8
+    # decodable. So just parse it as a list of strings and pass each chunk to
+    # the element decoder. By construction, our element decoders expect to parse
+    # a whole list of bytes anyway.
+    decodeElems = \allBytes, accum ->
+        {toParse, remainder} =
+            when List.splitFirst allBytes (Num.toU8 ',') is
+                Ok { before, after } ->
+                    { toParse: before, remainder: Some after }
+                Err NotFound ->
+                    { toParse: allBytes, remainder: None }
+        
+        when Decode.decodeWith toParse decodeElem (@EnvFormatting {}) is
+            {result, rest} ->
+                when result is
+                    Ok val ->
+                        when remainder is
+                            Some restBytes -> decodeElems restBytes (List.append accum val)
+                            None -> Done (List.append accum val)
+                    Err e -> Errored e rest
+
+    when decodeElems bytes [] is
+        Errored e rest -> { result: Err e, rest }
+        Done vals ->
+            { result: Ok vals, rest: [] }
 
 # TODO: we must currently annotate the arrows here so that the lambda sets are
 # exercised, and the solver can find an ambient lambda set for the

@@ -14,4 +14,8 @@ main =
             n ->
                 lvlStr = Num.toStr n
                 Stdout.line "Your current shell level is \(lvlStr)!")
+    |> Task.await (\{} -> Env.decode "LETTERS")
+    |> Task.await (\letters ->
+        joinedLetters = Str.joinWith letters " "
+        Stdout.line "Your favorite letters are: \(joinedLetters)")
     |> Program.quick
