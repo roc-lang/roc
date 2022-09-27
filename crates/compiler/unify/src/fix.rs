@@ -81,7 +81,7 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
             return Ok(vec![needle]);
         }
 
-        dbg!((left, right));
+        // dbg!((left, right));
 
         use Content::*;
         use FlatType::*;
@@ -106,7 +106,7 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                 Ok(chain)
             }
             (_, RecursionVar { structure, .. }) => {
-                dbg!("HERE");
+                // dbg!("HERE");
                 let mut chain = help(subs, needle, left, *structure)?;
                 //chain.push((left, right));
                 Ok(chain)
@@ -259,16 +259,16 @@ pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Var
         update_var,
     } in updates
     {
-        let before_uset = (
-            subs.get_root_key_without_compacting(source_of_truth),
-            roc_types::subs::SubsFmtContent(
-                subs.get_content_without_compacting(source_of_truth),
-                subs,
-            ),
-            subs.get_root_key_without_compacting(update_var),
-            roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
-        );
-        dbg!(before_uset);
+        // let before_uset = (
+        //     subs.get_root_key_without_compacting(source_of_truth),
+        //     roc_types::subs::SubsFmtContent(
+        //         subs.get_content_without_compacting(source_of_truth),
+        //         subs,
+        //     ),
+        //     subs.get_root_key_without_compacting(update_var),
+        //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
+        // );
+        // dbg!(before_uset);
         //let source_of_truth_desc = subs.get_without_compacting(source_of_truth);
         // subs.union(source_of_truth, update_var, source_of_truth_desc);
         new.push((source_of_truth, update_var));
@@ -277,37 +277,37 @@ pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Var
     for &(source_of_truth, update_var) in new.iter() {
         let source_of_truth_desc = subs.get_without_compacting(source_of_truth);
         subs.union(source_of_truth, update_var, source_of_truth_desc);
-        let after_uset = (
-            subs.get_root_key_without_compacting(source_of_truth),
-            roc_types::subs::SubsFmtContent(
-                subs.get_content_without_compacting(source_of_truth),
-                subs,
-            ),
-            subs.get_root_key_without_compacting(update_var),
-            roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
-        );
-        dbg!(after_uset);
+        // let after_uset = (
+        //     subs.get_root_key_without_compacting(source_of_truth),
+        //     roc_types::subs::SubsFmtContent(
+        //         subs.get_content_without_compacting(source_of_truth),
+        //         subs,
+        //     ),
+        //     subs.get_root_key_without_compacting(update_var),
+        //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
+        // );
+        // dbg!(after_uset);
     }
 
-    dbg!(
-        "UPDATED",
-        subs.get_root_key_without_compacting(left),
-        roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(left), subs,),
-        subs.get_root_key_without_compacting(right),
-        roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(right), subs,),
-    );
+    // dbg!(
+    //     "UPDATED",
+    //     subs.get_root_key_without_compacting(left),
+    //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(left), subs,),
+    //     subs.get_root_key_without_compacting(right),
+    //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(right), subs,),
+    // );
 
     for &(source_of_truth, update_var) in new.iter() {
-        let uset = (
-            subs.get_root_key_without_compacting(source_of_truth),
-            roc_types::subs::SubsFmtContent(
-                subs.get_content_without_compacting(source_of_truth),
-                subs,
-            ),
-            subs.get_root_key_without_compacting(update_var),
-            roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
-        );
-        dbg!(uset);
+        // let uset = (
+        //     subs.get_root_key_without_compacting(source_of_truth),
+        //     roc_types::subs::SubsFmtContent(
+        //         subs.get_content_without_compacting(source_of_truth),
+        //         subs,
+        //     ),
+        //     subs.get_root_key_without_compacting(update_var),
+        //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
+        // );
+        // dbg!(uset);
     }
 
     new.into_iter()
