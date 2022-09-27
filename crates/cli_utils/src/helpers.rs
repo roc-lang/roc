@@ -373,19 +373,17 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
-pub fn examples_dir(dir_name: &str) -> PathBuf {
+pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    // Descend into examples/{dir_name}
-    path.push("examples");
     path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }
 
 #[allow(dead_code)]
-pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = examples_dir(dir_name);
+pub fn file_path_from_root(dir_name: &str, file_name: &str) -> PathBuf {
+    let mut path = dir_path_from_root(dir_name);
 
     path.push(file_name);
 
