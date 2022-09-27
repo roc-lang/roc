@@ -2493,7 +2493,8 @@ fn constrain_typed_function_arguments_simple(
                     index: HumanIndex::zero_based(index),
                     opt_name: Some(symbol),
                 },
-                ann.clone(),
+                Type::Variable(*pattern_var),
+                // ann.clone(),
                 loc_pattern.region,
             );
 
@@ -2518,7 +2519,7 @@ fn constrain_typed_function_arguments_simple(
                     loc_pattern.region,
                 );
 
-                def_pattern_state.constraints.push(pattern_con);
+                argument_pattern_state.constraints.push(pattern_con);
             }
         } else {
             // We need to check the types, and run exhaustiveness checking.
