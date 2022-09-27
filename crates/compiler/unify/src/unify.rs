@@ -1054,7 +1054,14 @@ fn unify_structure<M: MetaCollector>(
                     unify_pool(env, pool, ctx.first, *structure, ctx.mode)
                 }
                 FlatType::RecursiveTagUnion(rec, _, _) => {
-                    debug_assert!(is_recursion_var(env.subs, *rec));
+                    debug_assert!(
+                        is_recursion_var(env.subs, *rec),
+                        "{:?}",
+                        roc_types::subs::SubsFmtContent(
+                            env.subs.get_content_without_compacting(*rec),
+                            env.subs
+                        )
+                    );
                     // unify the structure with this recursive tag union
                     unify_pool(env, pool, ctx.first, *structure, ctx.mode)
                 }
@@ -2705,8 +2712,22 @@ fn unify_flat_type<M: MetaCollector>(
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
-            debug_assert!(is_recursion_var(env.subs, *rec1));
-            debug_assert!(is_recursion_var(env.subs, *rec2));
+            debug_assert!(
+                is_recursion_var(env.subs, *rec1),
+                "{:?}",
+                roc_types::subs::SubsFmtContent(
+                    env.subs.get_content_without_compacting(*rec1),
+                    env.subs
+                )
+            );
+            debug_assert!(
+                is_recursion_var(env.subs, *rec2),
+                "{:?}",
+                roc_types::subs::SubsFmtContent(
+                    env.subs.get_content_without_compacting(*rec2),
+                    env.subs
+                )
+            );
 
             let rec = Rec::Both(*rec1, *rec2);
             let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
