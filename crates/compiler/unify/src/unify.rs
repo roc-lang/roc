@@ -360,6 +360,7 @@ impl<'a> Env<'a> {
         #[cfg(debug_assertions)]
         let size_after = self.seen_recursion.len();
 
+        #[cfg(debug_assertions)]
         debug_assert!(size_after < size_before, "nothing was removed");
     }
 
