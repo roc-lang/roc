@@ -15,7 +15,7 @@ name = "host"
 path = "src/main.rs"
 
 [dependencies]
-roc_std = { path = "../../../crates/roc_std" }
+roc_std = { path = "../../../../crates/roc_std" }
 libc = "0.2"
 arrayvec = "0.7.2"
 page_size = "0.4.2"
