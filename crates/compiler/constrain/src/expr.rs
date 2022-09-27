@@ -1596,10 +1596,10 @@ fn constrain_function_def(
 
             let expr_con = constraints.exists_many(vars, cons);
 
-            constrain_function_def_make_constraint(
+            constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
