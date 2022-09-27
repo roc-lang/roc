@@ -7826,20 +7826,26 @@ mod solve_expr {
 
     #[test]
     fn issue_4077() {
-        infer_eq_without_problem(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [job] to "./platform"
 
-                Input : [FromProjectSource, FromJob Job]
+                F : [Bar, FromG G]
+                G : [G {lst : List F}]
 
-                Job : [Job { inputs : List Input }]
-
-                job : { inputs : List Input } -> Job
-                job = \config -> Job config
+                job : { lst : List F } -> G
+                job = \config -> G config
+                #^^^{-1}
+                #      ^^^^^^    ^^^^^^^^
                 "#
             ),
-            "{ inputs : List Input } -> Job",
+        @r###"
+        job : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] } -[[job(0)]]-> [G { lst : List [Bar, FromG b] }] as b
+        config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
+        G config : [G { lst : List [Bar, FromG a] }] as a
+        "###
+        print_only_under_alias: true
         );
     }
 }
