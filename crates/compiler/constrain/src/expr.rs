@@ -1509,6 +1509,7 @@ fn constrain_function_def(
 
             // TODO see if we can get away with not adding this constraint at all
             def_pattern_state.vars.push(expr_var);
+            let signature_index = constraints.push_type(signature.clone());
             let annotation_expected = FromAnnotation(
                 loc_pattern.clone(),
                 arity,
@@ -1567,7 +1568,6 @@ fn constrain_function_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let signature_closure_type = *signature_closure_type.clone();
-            let signature_index = constraints.push_type(signature.clone());
             let cons = [
                 constraints.let_constraint(
                     [],
