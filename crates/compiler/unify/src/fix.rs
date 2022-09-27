@@ -1,7 +1,6 @@
 //! Fix fixpoints of recursive types.
 
 use roc_error_macros::internal_error;
-use roc_module::symbol::ModuleId;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 struct Update {
@@ -101,13 +100,13 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                 // the transformation, so we can immediately look at the inner variable. We only
                 // need to adjust head constructors.
                 // help(subs, needle, *structure, right)
-                let mut chain = help(subs, needle, *structure, right)?;
+                let chain = help(subs, needle, *structure, right)?;
                 //chain.push((left, right));
                 Ok(chain)
             }
             (_, RecursionVar { structure, .. }) => {
                 // dbg!("HERE");
-                let mut chain = help(subs, needle, left, *structure)?;
+                let chain = help(subs, needle, left, *structure)?;
                 //chain.push((left, right));
                 Ok(chain)
             }
@@ -296,19 +295,6 @@ pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Var
     //     subs.get_root_key_without_compacting(right),
     //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(right), subs,),
     // );
-
-    for &(source_of_truth, update_var) in new.iter() {
-        // let uset = (
-        //     subs.get_root_key_without_compacting(source_of_truth),
-        //     roc_types::subs::SubsFmtContent(
-        //         subs.get_content_without_compacting(source_of_truth),
-        //         subs,
-        //     ),
-        //     subs.get_root_key_without_compacting(update_var),
-        //     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(update_var), subs),
-        // );
-        // dbg!(uset);
-    }
 
     new.into_iter()
         .flat_map(|(_, update_var)| [update_var])
