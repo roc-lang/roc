@@ -221,13 +221,27 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, app_args),
-                CliMode::RocRun => run_roc_on(
-                    file,
-                    iter::once(CMD_RUN).chain(flags.clone()),
-                    stdin,
-                    app_args,
-                ),
+                CliMode::Roc => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(file, flags.clone(), stdin, app_args)
+                }
+                CliMode::RocRun => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_RUN).chain(flags.clone()),
+                        stdin,
+                        app_args,
+                    )
+                }
             };
 
             if !&out.stdout.ends_with(expected_ending) {
