@@ -141,8 +141,7 @@ int main() {
 
   // Write to stdout
   size_t written = fwrite(str_bytes, sizeof(char), str_len, stdout);
-  fflush(stdout);
-  if (written == str_len) {
+  if (fflush(stdout) == 0 && written == str_len) {
     // Writing succeeded!
     return 0;
   } else {
