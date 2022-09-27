@@ -338,7 +338,13 @@ mod cli_run {
                             return;
                         }
                         "args" => {
-                            custom_flags = vec![LINKER_FLAG, "legacy"];
+                            #[allow(unused_assignments)]
+                            {
+                                custom_flags = vec![LINKER_FLAG, "legacy"];
+                            }
+
+                            // Presently broken
+                            return;
                         }
                         _ => {}
                     }
