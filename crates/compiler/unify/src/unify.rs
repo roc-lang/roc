@@ -315,6 +315,7 @@ pub struct Env<'a> {
     pub subs: &'a mut Subs,
     compute_outcome_only: bool,
     seen_recursion: VecSet<(Variable, Variable)>,
+    fixed_variables: VecSet<Variable>,
 }
 
 impl<'a> Env<'a> {
@@ -323,6 +324,7 @@ impl<'a> Env<'a> {
             subs,
             compute_outcome_only: false,
             seen_recursion: Default::default(),
+            fixed_variables: Default::default(),
         }
     }
 
@@ -345,13 +347,19 @@ impl<'a> Env<'a> {
         debug_assert!(!already_seen);
     }
 
-    fn seen_recursion_pair(&self, var1: Variable, var2: Variable) -> bool {
+    fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
         let (var1, var2) = (
             self.subs.get_root_key_without_compacting(var1),
             self.subs.get_root_key_without_compacting(var2),
         );
 
-        self.seen_recursion.contains(&(var1, var2)) || self.seen_recursion.contains(&(var2, var1))
+        self.seen_recursion.contains(&(var1, var2))
+    }
+
+    fn was_fixed(&self, var: Variable) -> bool {
+        self.fixed_variables
+            .iter()
+            .any(|fixed_var| self.subs.equivalent_without_compacting(*fixed_var, var))
     }
 }
 
@@ -831,6 +839,12 @@ fn unify_two_aliases<M: MetaCollector>(
     }
 }
 
+fn fix_fixpoint<M: MetaCollector>(env: &mut Env, ctx: &Context) -> Outcome<M> {
+    let fixed_variables = crate::fix::fix_fixpoint(env.subs, ctx.first, ctx.second);
+    env.fixed_variables.extend(fixed_variables);
+    Default::default()
+}
+
 // Unifies a structural alias
 #[inline(always)]
 fn unify_alias<M: MetaCollector>(
@@ -852,7 +866,7 @@ fn unify_alias<M: MetaCollector>(
         }
         RecursionVar { structure, .. } => {
             if env.seen_recursion_pair(ctx.first, ctx.second) {
-                return Default::default()
+                return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
             unify_pool(env, pool, real_var, *structure, ctx.mode)
@@ -930,7 +944,7 @@ fn unify_opaque<M: MetaCollector>(
         }
         RecursionVar { structure, .. } => {
             if env.seen_recursion_pair(ctx.first, ctx.second) {
-                return Default::default();
+                return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
             unify_pool(env, pool, ctx.first, *structure, ctx.mode)
@@ -1009,7 +1023,7 @@ fn unify_structure<M: MetaCollector>(
         }
         RecursionVar { structure, .. } => {
             if env.seen_recursion_pair(ctx.first, ctx.second) {
-                return Default::default();
+                return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
 
@@ -1105,7 +1119,7 @@ fn unify_lambda_set<M: MetaCollector>(
         }
         RecursionVar { structure, .. } => {
             if env.seen_recursion_pair(ctx.first, ctx.second) {
-                return Default::default();
+                return fix_fixpoint(env, ctx);
             }
             env.add_recursion_pair(ctx.first, ctx.second);
 
@@ -2591,6 +2605,11 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
     new_ext_var: Variable,
     recursion_var: Rec,
 ) -> Outcome<M> {
+    let was_fixed = env.was_fixed(ctx.first) || env.was_fixed(ctx.second);
+    if was_fixed {
+        return Default::default();
+    }
+
     let flat_type = match recursion_var {
         Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
         Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {

@@ -2,4 +2,5 @@
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
+mod fix;
 pub mod unify;
