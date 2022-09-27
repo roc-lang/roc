@@ -2,10 +2,7 @@
 
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_types::{
-    pretty_print::{name_and_print_var, DebugPrint},
-    subs::{Content, FlatType, GetSubsSlice, Subs, Variable},
-};
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 struct Update {
     source_of_truth: Variable,
@@ -255,34 +252,6 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
 
 #[must_use]
 pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Variable> {
-    let snapshot = subs.snapshot();
-    let actual_str = name_and_print_var(
-        left,
-        subs,
-        ModuleId::ATTR,
-        &Default::default(),
-        DebugPrint {
-            print_lambda_sets: true,
-            print_only_under_alias: true,
-        },
-    );
-    dbg!(("BEFORE", left, actual_str));
-    subs.rollback_to(snapshot);
-
-    let snapshot = subs.snapshot();
-    let actual_str = name_and_print_var(
-        right,
-        subs,
-        ModuleId::ATTR,
-        &Default::default(),
-        DebugPrint {
-            print_lambda_sets: true,
-            print_only_under_alias: true,
-        },
-    );
-    dbg!(("BEFORE", right, actual_str));
-    subs.rollback_to(snapshot);
-
     let updates = find_chain(subs, left, right);
     let mut new = vec![];
     for Update {
@@ -341,49 +310,7 @@ pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Var
         dbg!(uset);
     }
 
-    let snapshot = subs.snapshot();
-    let actual_str = name_and_print_var(
-        left,
-        subs,
-        ModuleId::ATTR,
-        &Default::default(),
-        DebugPrint {
-            print_lambda_sets: true,
-            print_only_under_alias: true,
-        },
-    );
-    dbg!(("AFTER", left, actual_str));
-    subs.rollback_to(snapshot);
-
-    let snapshot = subs.snapshot();
-    let actual_str = name_and_print_var(
-        right,
-        subs,
-        ModuleId::ATTR,
-        &Default::default(),
-        DebugPrint {
-            print_lambda_sets: true,
-            print_only_under_alias: true,
-        },
-    );
-    dbg!(("AFTER", right, actual_str));
-    subs.rollback_to(snapshot);
-
     new.into_iter()
         .flat_map(|(_, update_var)| [update_var])
         .collect()
-
-    //let snapshot = subs.snapshot();
-    //let actual_str = name_and_print_var(
-    //    right,
-    //    subs,
-    //    ModuleId::ATTR,
-    //    &Default::default(),
-    //    DebugPrint {
-    //        print_lambda_sets: true,
-    //        print_only_under_alias: true,
-    //    },
-    //);
-    //dbg!((right, actual_str));
-    //subs.rollback_to(snapshot);
 }
