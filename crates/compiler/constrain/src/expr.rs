@@ -1502,14 +1502,28 @@ fn constrain_function_def(
                 loc_symbol.value,
                 Loc {
                     region: loc_function_def.region,
-                    // todo can we use Type::Variable(expr_var) here?
-                    value: signature.clone(),
+                    // NOTE: we MUST use `expr_var` here so that the correct type variable is
+                    // associated with the function. We prefer this to the annotation type, because the
+                    // annotation type may be instantiated into a fresh type variable that is
+                    // disassociated fromt the rest of the program.
+                    // Below, we'll check that the function actually matches the annotation.
+                    value: Type::Variable(expr_var),
                 },
             );
 
             // TODO see if we can get away with not adding this constraint at all
             def_pattern_state.vars.push(expr_var);
-            let signature_index = constraints.push_type(signature.clone());
+
+            let function_shape_expected = constraints.push_type(Type::Function(
+                function_def
+                    .arguments
+                    .iter()
+                    .map(|(v, _, _)| Type::Variable(*v))
+                    .collect(),
+                Box::new(Variable(closure_var)),
+                Box::new(Variable(ret_var)),
+            ));
+
             let annotation_expected = FromAnnotation(
                 loc_pattern.clone(),
                 arity,
@@ -1518,13 +1532,6 @@ fn constrain_function_def(
                 },
                 signature.clone(),
             );
-
-            def_pattern_state.constraints.push(constraints.equal_types(
-                Type::Variable(expr_var),
-                annotation_expected,
-                Category::Storage(std::file!(), std::line!()),
-                Region::span_across(&annotation.region, &loc_body_expr.region),
-            ));
 
             constrain_typed_function_arguments_simple(
                 constraints,
@@ -1546,7 +1553,7 @@ fn constrain_function_def(
                 &mut vars,
             );
 
-            let annotation_expected = FromAnnotation(
+            let body_expected = FromAnnotation(
                 loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
@@ -1560,7 +1567,7 @@ fn constrain_function_def(
                 env,
                 loc_body_expr.region,
                 &loc_body_expr.value,
-                annotation_expected,
+                body_expected,
             );
             let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
 
@@ -1589,8 +1596,18 @@ fn constrain_function_def(
                     Category::ClosureSize,
                     region,
                 ),
-                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                // Now, ensure that the expected function type actually lines up with the annotation.
+                constraints.equal_types(
+                    Type::Variable(expr_var),
+                    annotation_expected,
+                    Category::Storage(std::file!(), std::line!()),
+                    Region::span_across(&annotation.region, &loc_body_expr.region),
+                ),
+                // This is the expected function type, with the appropriate type variables linked to
+                // the arguments and return type - we need this so that type variables are propogated
+                // correctly.
+                constraints.store_index(function_shape_expected, expr_var, file!(), line!()),
                 closure_constraint,
             ];
 
