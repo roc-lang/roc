@@ -50,7 +50,7 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
     let updates_iter = chain
         .into_iter()
         // Skip the first element to avoid rewritting <rec> => type1 explicitly!
-        .skip(0)
+        .skip(1)
         // Set up the iterator so the right-hand side contains the variable we want to clobber with
         // the content of the left-hand side; that is, the left-hand side becomes the
         // source-of-truth.
