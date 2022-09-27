@@ -1631,8 +1631,6 @@ fn layout_spec_help<'a>(
                     let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
-                    dbg!((type_name, layout));
-
                     env.type_names.insert(*union_layout);
 
                     Ok(builder.add_named_type(MOD_APP, type_name))
