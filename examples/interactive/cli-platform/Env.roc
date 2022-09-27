@@ -52,19 +52,18 @@ var = \name ->
 ## - comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas
 ##
 ## Trying to decode into any other types will always fail with a `DecodeErr`.
-decode : Str -> Task val [VarNotFound, DecodeErr DecodeError]* [Env]*
-         | val has Decoding
+decode : Str -> Task val [VarNotFound, DecodeErr DecodeError]* [Env]* | val has Decoding
 decode = \name ->
     Effect.envVar name
-    |> Effect.map (
-        \result ->
-            result
-            |> Result.mapErr (\{} -> VarNotFound)
-            |> Result.try (\varStr ->
-                Decode.fromBytes (Str.toUtf8 varStr) (EnvDecoding.format {})
-                |> Result.mapErr (\_ -> DecodeErr TooShort)
-            )
-    )
+    |> Effect.map
+        (
+            \result ->
+                result
+                |> Result.mapErr (\{} -> VarNotFound)
+                |> Result.try
+                    (\varStr ->
+                        Decode.fromBytes (Str.toUtf8 varStr) (EnvDecoding.format {})
+                        |> Result.mapErr (\_ -> DecodeErr TooShort)))
     |> InternalTask.fromEffect
 
 ## Reads all the process's environment variables into a [Dict].
