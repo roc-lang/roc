@@ -22,8 +22,7 @@ void *roc_alloc(size_t size, unsigned int alignment) {
 #endif
 
   if (result == NULL) {
-    if (size ==
-        0) { // <-  malloc is allowed to 'succeed' with NULL iff size == 0.
+    if (size == 0) { // <-  malloc is allowed to 'succeed' with NULL iff size == 0.
       return NULL;
     }
     // Otherwise, it is an indication of failure.
@@ -88,7 +87,13 @@ void *roc_memcpy(void *dest, const void *src, size_t n) {
   return memcpy(dest, src, n);
 }
 
-void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
+void *roc_memmove(void *dest, const void *src, size_t n) {
+  return memmove(dest, src, n);
+}
+
+void *roc_memset(void *str, int c, size_t n) {
+  return memset(str, c, n);
+}
 
 struct RocStr {
   char *bytes;
