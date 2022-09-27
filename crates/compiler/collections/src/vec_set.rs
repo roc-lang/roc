@@ -88,6 +88,14 @@ impl<T: PartialEq> VecSet<T> {
     pub fn clear(&mut self) {
         self.elements.clear()
     }
+
+    /// Retains only the elements specified by the predicate.
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.elements.retain(f)
+    }
 }
 
 impl<A: Ord> Extend<A> for VecSet<A> {
