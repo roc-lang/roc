@@ -87,6 +87,7 @@ mod cli_run {
         executable_filename: &'a str,
         stdin: &'a [&'a str],
         arguments: &'a [Arg<'a>],
+        env: &'a [(&'a str, &'a str)],
         expected_ending: &'a str,
         use_valgrind: bool,
     }
@@ -136,12 +137,14 @@ mod cli_run {
         compile_out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
         app_args: &[String],
+        extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -214,16 +217,31 @@ mod cli_run {
                             file.with_file_name(executable_filename).to_str().unwrap(),
                             stdin.iter().copied(),
                             app_args,
+                            extra_env.iter().copied(),
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, app_args),
-                CliMode::RocRun => run_roc_on(
-                    file,
-                    iter::once(CMD_RUN).chain(flags.clone()),
-                    stdin,
-                    app_args,
-                ),
+                CliMode::Roc => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(file, flags.clone(), stdin, app_args)
+                }
+                CliMode::RocRun => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_RUN).chain(flags.clone()),
+                        stdin,
+                        app_args,
+                    )
+                }
             };
 
             if !&out.stdout.ends_with(expected_ending) {
@@ -367,6 +385,7 @@ mod cli_run {
                         example.executable_filename,
                         &custom_flags,
                         &app_args,
+                        example.env,
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -381,6 +400,7 @@ mod cli_run {
                         example.executable_filename,
                         &custom_flags,
                         &app_args,
+                        example.env,
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -394,6 +414,7 @@ mod cli_run {
                             example.executable_filename,
                             &[LINKER_FLAG, "legacy"],
                             &app_args,
+                            example.env,
                             example.expected_ending,
                             example.use_valgrind,
                         );
@@ -431,6 +452,7 @@ mod cli_run {
             executable_filename: "helloWorld",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -439,6 +461,7 @@ mod cli_run {
             executable_filename: "rocLovesPlatforms",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
@@ -458,6 +481,7 @@ mod cli_run {
             executable_filename: "rocLovesRust",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
@@ -466,6 +490,7 @@ mod cli_run {
             executable_filename: "rocLovesSwift",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
@@ -474,6 +499,7 @@ mod cli_run {
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
@@ -482,6 +508,7 @@ mod cli_run {
             executable_filename: "rocLovesZig",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"Roc <3 Zig!\n",
             use_valgrind: true,
         },
@@ -490,6 +517,7 @@ mod cli_run {
             executable_filename: "libhello",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"",
             use_valgrind: true,
         },
@@ -498,6 +526,7 @@ mod cli_run {
             executable_filename: "fibonacci",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending:"55\n",
             use_valgrind: true,
         },
@@ -506,6 +535,7 @@ mod cli_run {
             executable_filename: "hello-gui",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -514,6 +544,7 @@ mod cli_run {
             executable_filename: "breakout",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -522,6 +553,7 @@ mod cli_run {
             executable_filename: "quicksort",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             use_valgrind: true,
         },
@@ -538,7 +570,20 @@ mod cli_run {
             executable_filename: "args",
             stdin: &[],
             arguments: &[Arg::PlainText("log"), Arg::PlainText("-b"), Arg::PlainText("3"), Arg::PlainText("--num"), Arg::PlainText("81")],
+            env: &[],
             expected_ending: "4\n",
+            use_valgrind: false,
+        },
+        env:"interactive" => Example {
+            filename: "env.roc",
+            executable_filename: "env",
+            stdin: &[],
+            arguments: &[],
+            env: &[("EDITOR", "roc-editor"), ("SHLVL", "3"), ("LETTERS", "a,c,e,j")],
+            expected_ending: (
+                "Your favorite editor is roc-editor!\n\
+                Your current shell level is 3!\n\
+                Your favorite letters are: a c e j\n"),
             use_valgrind: false,
         },
         effects:"interactive" => Example {
@@ -546,6 +591,7 @@ mod cli_run {
             executable_filename: "effects",
             stdin: &["hi there!"],
             arguments: &[],
+            env: &[],
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
@@ -562,6 +608,7 @@ mod cli_run {
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             arguments: &[],
+            env: &[],
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: false,
         },
@@ -570,6 +617,7 @@ mod cli_run {
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
             arguments: &[],
+            env: &[],
             expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
@@ -595,6 +643,7 @@ mod cli_run {
                 executable_filename: "false",
                 stdin: &[],
                 arguments: &[Arg::ExamplePath("examples/hello.false")],
+                env: &[],
                 expected_ending:"Hello, World!\n",
                 use_valgrind: false,
             }
@@ -604,6 +653,7 @@ mod cli_run {
             executable_filename: "swiftui",
             stdin: &[],
             arguments: &[],
+            env: &[],
             expected_ending: "",
             use_valgrind: false,
         },
@@ -613,6 +663,7 @@ mod cli_run {
                 executable_filename: "static-site",
                 stdin: &[],
                 arguments: &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
+                env: &[],
                 expected_ending: "Processed 3 files with 3 successes and 0 errors\n",
                 use_valgrind: false,
             }
@@ -623,6 +674,7 @@ mod cli_run {
                 executable_filename: "parse-movies-csv",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "Parse success!\n",
                 use_valgrind: false,
             }
@@ -671,6 +723,7 @@ mod cli_run {
                             benchmark.executable_filename,
                             &[],
                             &app_args,
+                            benchmark.env,
                             benchmark.expected_ending,
                             benchmark.use_valgrind,
                         );
@@ -689,6 +742,7 @@ mod cli_run {
                             benchmark.executable_filename,
                             &[PREBUILT_PLATFORM],
                             &app_args,
+                            benchmark.env,
                             benchmark.expected_ending,
                             benchmark.use_valgrind,
                         );
@@ -700,6 +754,7 @@ mod cli_run {
                         benchmark.executable_filename,
                         &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
                         &app_args,
+                        benchmark.env,
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -813,6 +868,7 @@ mod cli_run {
                 executable_filename: "nqueens",
                 stdin: &["6"],
                 arguments: &[],
+                env: &[],
                 expected_ending: "4\n",
                 use_valgrind: true,
             },
@@ -821,6 +877,7 @@ mod cli_run {
                 executable_filename: "cfold",
                 stdin: &["3"],
                 arguments: &[],
+                env: &[],
                 expected_ending: "11 & 11\n",
                 use_valgrind: true,
             },
@@ -829,6 +886,7 @@ mod cli_run {
                 executable_filename: "deriv",
                 stdin: &["2"],
                 arguments: &[],
+                env: &[],
                 expected_ending: "1 count: 6\n2 count: 22\n",
                 use_valgrind: true,
             },
@@ -837,6 +895,7 @@ mod cli_run {
                 executable_filename: "rbtree-ck",
                 stdin: &["100"],
                 arguments: &[],
+                env: &[],
                 expected_ending: "10\n",
                 use_valgrind: true,
             },
@@ -845,6 +904,7 @@ mod cli_run {
                 executable_filename: "rbtree-insert",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "Node Black 0 {} Empty Empty\n",
                 use_valgrind: true,
             },
@@ -853,6 +913,7 @@ mod cli_run {
     //            executable_filename: "rbtree-del",
     //            stdin: &["420"],
     //            arguments: &[],
+    //            env: &[],
     //            expected_ending: "30\n",
     //            use_valgrind: true,
     //        },
@@ -861,6 +922,7 @@ mod cli_run {
                 executable_filename: "test-astar",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "True\n",
                 use_valgrind: false,
             },
@@ -869,6 +931,7 @@ mod cli_run {
                 executable_filename: "test-base64",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 use_valgrind: true,
             },
@@ -877,6 +940,7 @@ mod cli_run {
                 executable_filename: "closure",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "",
                 use_valgrind: false,
             },
@@ -885,6 +949,7 @@ mod cli_run {
                 executable_filename: "issue2279",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "Hello, world!\n",
                 use_valgrind: true,
             },
@@ -893,6 +958,7 @@ mod cli_run {
                 executable_filename: "quicksortapp",
                 stdin: &[],
                 arguments: &[],
+                env: &[],
                 expected_ending: "todo put the correct quicksort answer here",
                 use_valgrind: true,
             },
@@ -973,6 +1039,7 @@ mod cli_run {
             "multi-dep-str",
             &[],
             &[],
+            &[],
             "I am Dep2.str2\n",
             true,
         );
@@ -986,6 +1053,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &[OPTIMIZE_FLAG],
+            &[],
             &[],
             "I am Dep2.str2\n",
             true,
@@ -1001,6 +1069,7 @@ mod cli_run {
             "multi-dep-thunk",
             &[],
             &[],
+            &[],
             "I am Dep2.value2\n",
             true,
         );
@@ -1014,6 +1083,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &[OPTIMIZE_FLAG],
+            &[],
             &[],
             "I am Dep2.value2\n",
             true,
