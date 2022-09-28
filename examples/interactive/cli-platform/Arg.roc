@@ -61,6 +61,8 @@ ParseError a : [
     ProgramNameNotProvided Str,
     ## An argument is required, but it was not found.
     MissingRequiredArg Str,
+    ## A positional argument is required, but it was not found.
+    MissingPositionalArg Str,
     ## An argument was found, but it didn't have the expected [Type].
     WrongType
         {
@@ -406,8 +408,7 @@ parseHelp = \@Parser parser, args ->
         Positional { name } run ->
             when run args is
                 Ok {val, newlyTaken: _} -> Ok val
-                Err NotFound -> Err (MissingRequiredArg name)
-                Err WrongType -> Err (MissingRequiredArg name)
+                Err _ -> Err (MissingPositionalArg name)
 
         SubCommand cmds ->
             when nextUnmarked args is
@@ -665,6 +666,9 @@ formatError = \err ->
 
         MissingRequiredArg arg ->
             "Argument `--\(arg)` is required but was not provided!"
+
+        MissingPositionalArg arg ->
+            "A positional argument for `\(arg)` is required but was not provided!"
 
         WrongType { arg, expected } ->
             formattedType = formatType expected
@@ -1053,3 +1057,9 @@ expect
     ]
 
     parseHelp parser (mark ["hello", "foo"]) == Ok "foo"
+
+# missing positional argument
+expect
+    parser = positional {name: "bar"}
+
+    parseHelp parser (mark []) == Err (MissingPositionalArg "bar")
