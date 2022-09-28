@@ -31,7 +31,7 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg Config (List Str -> Result a [NotFound, WrongType]),
+    Arg Config (List Str -> Result a [NotFound Str, WrongType {arg: Str, expected: Type}]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -281,11 +281,11 @@ parseHelp : Parser a, List Str -> Result a (ParseError *)
 parseHelp = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
-        Arg { long, type } run ->
+        Arg _ run ->
             when run args is
                 Ok val -> Ok val
-                Err NotFound -> Err (MissingRequiredArg long)
-                Err WrongType -> Err (WrongType { arg: long, expected: type })
+                Err (NotFound long) -> Err (MissingRequiredArg long)
+                Err (WrongType {arg, expected}) -> Err (WrongType { arg, expected })
 
         SubCommand cmds ->
             when List.get args 0 is
@@ -320,10 +320,10 @@ bool : _ -> Parser Bool # TODO: panics if parameter annotation given
 bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err NotFound
+            Err NotFound -> Err (NotFound long)
             Ok "true" -> Ok Bool.true
             Ok "false" -> Ok Bool.false
-            Ok _ -> Err WrongType
+            Ok _ -> Err (WrongType { arg: long, expected: Bool })
 
     @Parser (Arg { long, short, help, type: Bool } fn)
 
@@ -332,7 +332,7 @@ str : _ -> Parser Str # TODO: panics if parameter annotation given
 str = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err NotFound
+            Err NotFound -> Err (NotFound long)
             Ok foundArg -> Ok foundArg
 
     @Parser (Arg { long, short, help, type: Str } fn)
@@ -342,10 +342,10 @@ i64 : _ -> Parser I64 # TODO: panics if parameter annotation given
 i64 = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err NotFound
+            Err NotFound -> Err (NotFound long)
             Ok foundArg ->
                 Str.toI64 foundArg
-                |> Result.mapErr \_ -> WrongType
+                |> Result.mapErr \_ -> WrongType {arg: long, expected: I64}
 
     @Parser (Arg { long, short, help, type: I64 } fn)
 
@@ -623,6 +623,18 @@ expect
     ]
 
     List.all cases \args -> parseHelp parser args == Ok "foo: true bar: baz"
+
+# one argument is missing out of multiple
+expect
+    parser =
+        succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
+        |> withParser (str { long: "foo" })
+        |> withParser (str { long: "bar" })
+
+    List.all [
+        parseHelp parser ["--foo", "zaz"] == Err (MissingRequiredArg "bar"),
+        parseHelp parser ["--bar", "zaz"] == Err (MissingRequiredArg "foo"),
+    ] (\b -> b)
 
 # string and bool parsers build help
 expect
