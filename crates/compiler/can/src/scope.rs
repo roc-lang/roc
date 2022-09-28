@@ -695,9 +695,9 @@ mod test {
             &[
                 Ident::from("Str"),
                 Ident::from("List"),
+                Ident::from("Box"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Box"),
             ]
         );
     }
@@ -718,9 +718,9 @@ mod test {
             &[
                 Ident::from("Str"),
                 Ident::from("List"),
+                Ident::from("Box"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Box"),
             ]
         );
 
