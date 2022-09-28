@@ -140,6 +140,11 @@ impl<'a> Dependencies<'a> {
         let mut output = MutSet::default();
 
         for dep in dependencies.iter() {
+            // Do a BFS to check if we have an import cycle; if we do, calculate the cycle and
+            // report the error. Although the worst case here is that we do a quadratic amount of
+            // work for all modules added in a batch compilation, in practice, most dependencies
+            // inserted here have not been seen by [Dependencies] yet, so their import chain is
+            // size 0.
             if self.has_import_dependency(*dep.as_inner(), module_id) {
                 let mut rev_cycle = self.calculate_reverse_import_path(*dep.as_inner(), module_id);
                 rev_cycle.push(module_id);
@@ -203,8 +208,14 @@ impl<'a> Dependencies<'a> {
     }
 
     fn has_import_dependency(&self, module_id: ModuleId, target: ModuleId) -> bool {
+        if module_id.is_builtin() {
+            return false;
+        }
         let mut stack = vec![module_id];
         while let Some(module) = stack.pop() {
+            if module.is_builtin() {
+                continue;
+            }
             if module == target {
                 return true;
             }
