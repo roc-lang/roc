@@ -48,12 +48,12 @@ fn check_cmd_output(
     let out = if cmd_str.contains("cfold") {
         let child = thread::Builder::new()
             .stack_size(CFOLD_STACK_SIZE)
-            .spawn(move || run_cmd(&cmd_str, [stdin_str], &[]))
+            .spawn(move || run_cmd(&cmd_str, [stdin_str], &[], []))
             .unwrap();
 
         child.join().unwrap()
     } else {
-        run_cmd(&cmd_str, [stdin_str], &[])
+        run_cmd(&cmd_str, [stdin_str], &[], [])
     };
 
     if !&out.stdout.ends_with(expected_ending) {
@@ -96,13 +96,14 @@ fn bench_cmd<T: Measurement>(
 
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {:?}", executable_filename), |b| {
-            b.iter(|| run_cmd(black_box(&cmd_str), black_box([stdin_str]), &[]))
+            b.iter(|| run_cmd(black_box(&cmd_str), black_box([stdin_str]), &[], []))
         });
     } else {
         run_cmd(
             black_box(file.with_file_name(executable_filename).to_str().unwrap()),
             black_box([stdin_str]),
             &[],
+            [],
         );
     }
 }

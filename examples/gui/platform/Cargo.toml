@@ -26,7 +26,6 @@ wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "0545e36" }
 wgpu_glyph = { git = "https://github.com/Anton-4/wgpu_glyph", rev = "257d109" }
 glyph_brush = "0.7.2"
 log = "0.4.14"
-env_logger = "0.9.0"
 futures = "0.3.17"
 cgmath = "0.18.0"
 snafu = { version = "0.6.10", features = ["backtraces"] }

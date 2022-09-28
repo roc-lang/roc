@@ -161,15 +161,20 @@ where
     }
 }
 
-pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
+pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a str, &'a str)>>(
     cmd_name: &str,
     stdin_vals: I,
     args: &[String],
+    env: E,
 ) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
         cmd.arg(arg);
+    }
+
+    for (env, val) in env.into_iter() {
+        cmd.env(env, val);
     }
 
     let mut child = cmd

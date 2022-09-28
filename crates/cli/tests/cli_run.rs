@@ -66,6 +66,7 @@ mod cli_run {
         executable_filename: &'a str,
         stdin: &'a [&'a str],
         arguments: &'a [Arg<'a>],
+        env: &'a [(&'a str, &'a str)],
         expected_ending: &'a str,
         use_valgrind: bool,
     }
@@ -115,12 +116,14 @@ mod cli_run {
         compile_out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
         roc_app_args: &[String],
+        extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -193,16 +196,31 @@ mod cli_run {
                             file.with_file_name(executable_filename).to_str().unwrap(),
                             stdin.iter().copied(),
                             roc_app_args,
+                            extra_env.iter().copied(),
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, roc_app_args),
-                CliMode::RocRun => run_roc_on(
-                    file,
-                    iter::once(CMD_RUN).chain(flags.clone()),
-                    stdin,
-                    roc_app_args,
-                ),
+                CliMode::Roc => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(file, flags.clone(), stdin, roc_app_args)
+                }
+                CliMode::RocRun => {
+                    if !extra_env.is_empty() {
+                        // TODO: environment is not currently forwarded by Roc to the target
+                        // binary, so this would fail!
+                        continue;
+                    }
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_RUN).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                    )
+                }
             };
 
             if !&out.stdout.ends_with(expected_ending) {
@@ -216,12 +234,33 @@ mod cli_run {
         }
     }
 
+    // when you don't need args, stdin or extra_env
+    fn test_roc_app_slim(
+        dir_name: &str,
+        roc_filename: &str,
+        executable_filename: &str,
+        expected_ending: &str,
+        use_valgrind: bool,
+    ) {
+        test_roc_app(
+          dir_name,
+          roc_filename,
+          executable_filename,
+          &[],
+          &[],
+          &[],
+          expected_ending,
+          use_valgrind  
+        )
+    }
+
     fn test_roc_app(
         dir_name: &str,
         roc_filename: &str,
         executable_filename: &str,
         stdin: &[&str],
         args: &[Arg],
+        extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -288,6 +327,7 @@ mod cli_run {
             executable_filename,
             &custom_flags,
             &roc_app_args,
+            extra_env,
             expected_ending,
             use_valgrind,
         );
@@ -302,6 +342,7 @@ mod cli_run {
             executable_filename,
             &custom_flags,
             &roc_app_args,
+            extra_env,
             expected_ending,
             use_valgrind,
         );
@@ -315,6 +356,7 @@ mod cli_run {
                 executable_filename,
                 &[LINKER_FLAG, "legacy"],
                 &roc_app_args,
+                extra_env,
                 expected_ending,
                 use_valgrind,
             );
@@ -323,12 +365,10 @@ mod cli_run {
 
     #[test]
     fn hello_world() {
-        test_roc_app(
+        test_roc_app_slim(
             "examples",
             "helloWorld.roc",
             "helloWorld",
-            &[],
-            &[],
             "Hello, World!\n",
             true,
         )
@@ -337,12 +377,10 @@ mod cli_run {
     #[test]
     // uses C platform
     fn platform_switching_main() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/platform-switching",
             "main.roc",
             "rocLovesPlatforms",
-            &[],
-            &[],
             "Which platform am I running on now?\n",
             true,
         )
@@ -354,12 +392,10 @@ mod cli_run {
 
     #[test]
     fn platform_switching_rust() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/platform-switching",
             "rocLovesRust.roc",
             "rocLovesRust",
-            &[],
-            &[],
             "Roc <3 Rust!\n",
             true,
         )
@@ -367,12 +403,10 @@ mod cli_run {
 
     #[test]
     fn platform_switching_zig() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/platform-switching",
             "rocLovesZig.roc",
             "rocLovesZig",
-            &[],
-            &[],
             "Roc <3 Zig!\n",
             true,
         )
@@ -380,12 +414,10 @@ mod cli_run {
 
     #[test]
     fn platform_switching_wasm() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/platform-switching",
             "rocLovesWebAssembly.roc",
             "rocLovesWebAssembly",
-            &[],
-            &[],
             "Roc <3 Web Assembly!\n",
             true,
         )
@@ -393,12 +425,10 @@ mod cli_run {
 
     #[test]
     fn platform_switching_swift() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/platform-switching",
             "rocLovesSwift.roc",
             "rocLovesSwift",
-            &[],
-            &[],
             "Roc <3 Swift!\n",
             true,
         )
@@ -406,12 +436,10 @@ mod cli_run {
 
     #[test]
     fn ruby_interop() {
-        test_roc_app(
+        test_roc_app_slim(
             "examples/ruby-interop",
             "main.roc",
             "libhello",
-            &[],
-            &[],
             "",
             true,
         )
@@ -419,12 +447,10 @@ mod cli_run {
 
     #[test]
     fn fibonacci() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
             "fibonacci.roc",
             "fibonacci",
-            &[],
-            &[],
             "",
             true,
         )
@@ -432,12 +458,10 @@ mod cli_run {
 
     #[test]
     fn hello_gui() {
-        test_roc_app(
+        test_roc_app_slim(
             "examples/gui",
             "hello.roc",
             "hello-gui",
-            &[],
-            &[],
             "",
             false,
         )
@@ -445,12 +469,10 @@ mod cli_run {
 
     #[test]
     fn breakout() {
-        test_roc_app(
+        test_roc_app_slim(
             "examples/gui/breakout",
             "breakout.roc",
             "breakout",
-            &[],
-            &[],
             "",
             false,
         )
@@ -458,12 +480,10 @@ mod cli_run {
 
     #[test]
     fn quicksort() {
-        test_roc_app(
+        test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
             "quicksort.roc",
             "quicksort",
-            &[],
-            &[],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             true,
         )
@@ -483,6 +503,7 @@ mod cli_run {
                 Arg::PlainText("--num"),
                 Arg::PlainText("81"),
             ],
+            &[],
             "4\n",
             false,
         )
@@ -495,6 +516,7 @@ mod cli_run {
             "effects.roc",
             "effects",
             &["hi there!"],
+            &[],
             &[],
             "hi there!\nIt is known\n",
             true,
@@ -510,6 +532,7 @@ mod cli_run {
             "tui",
             &["foo\n"], // NOTE: adding more lines leads to memory leaks
             &[],
+            &[],
             "Hello Worldfoo!\n",
             true,
         )
@@ -523,6 +546,7 @@ mod cli_run {
             "false",
             &[],
             &[Arg::ExamplePath("examples/hello.false")],
+            &[],
             "Hello, World!\n",
             false,
         )
@@ -530,12 +554,10 @@ mod cli_run {
 
     #[test]
     fn swift_ui() {
-        test_roc_app(
+        test_roc_app_slim(
             "examples/swiftui",
             "main.roc",
             "swiftui",
-            &[],
-            &[],
             "",
             false,
         )
@@ -549,7 +571,24 @@ mod cli_run {
             "static-site",
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
+            &[],
             "Processed 3 files with 3 successes and 0 errors\n",
+            false,
+        )
+    }
+
+    #[test]
+    fn with_env_vars() {
+        test_roc_app(
+            "examples/cli",
+            "env.roc",
+            "env",
+            &[],
+            &[],
+            &[("EDITOR", "roc-editor"), ("SHLVL", "3"), ("LETTERS", "a,c,e,j")],
+            "Your favorite editor is roc-editor!\n\
+            Your current shell level is 3!\n\
+            Your favorite letters are: a c e j\n",
             false,
         )
     }
@@ -623,6 +662,7 @@ mod cli_run {
                     executable_filename,
                     &[],
                     &[],
+                    &[],
                     expected_ending,
                     use_valgrind,
                 );
@@ -641,6 +681,7 @@ mod cli_run {
                     executable_filename,
                     &[PREBUILT_PLATFORM],
                     &[],
+                    &[],
                     expected_ending,
                     use_valgrind,
                 );
@@ -651,6 +692,7 @@ mod cli_run {
                 stdin,
                 executable_filename,
                 &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
+                &[],
                 &[],
                 expected_ending,
                 use_valgrind,
@@ -843,6 +885,7 @@ mod cli_run {
             "multi-dep-str",
             &[],
             &[],
+            &[],
             "I am Dep2.str2\n",
             true,
         );
@@ -856,6 +899,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &[OPTIMIZE_FLAG],
+            &[],
             &[],
             "I am Dep2.str2\n",
             true,
@@ -871,6 +915,7 @@ mod cli_run {
             "multi-dep-thunk",
             &[],
             &[],
+            &[],
             "I am Dep2.value2\n",
             true,
         );
@@ -884,6 +929,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &[OPTIMIZE_FLAG],
+            &[],
             &[],
             "I am Dep2.value2\n",
             true,
