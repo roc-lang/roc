@@ -719,8 +719,7 @@ fn parse_defs_end<'a>(
                     };
 
                 if let Some((name, name_region, args)) = opt_tag_and_args {
-                    if let Ok((_, loc_has, state)) =
-                        loc_has_parser(min_indent).parse(arena, state)
+                    if let Ok((_, loc_has, state)) = loc_has_parser(min_indent).parse(arena, state)
                     {
                         let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                             start_column,

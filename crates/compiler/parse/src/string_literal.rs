@@ -321,11 +321,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
                         if state.bytes().starts_with(b"\"\"\"") {
                             // ending the string; don't use the last newline
-                            segments
-                                .push(StrSegment::Plaintext(utf8(state, without_newline)?));
+                            segments.push(StrSegment::Plaintext(utf8(state, without_newline)?));
                         } else {
-                            segments
-                                .push(StrSegment::Plaintext(utf8(state, with_newline)?));
+                            segments.push(StrSegment::Plaintext(utf8(state, with_newline)?));
                         }
 
                         segment_parsed_bytes = 0;
