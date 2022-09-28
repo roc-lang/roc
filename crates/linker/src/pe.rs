@@ -20,8 +20,7 @@ use roc_collections::{MutMap, VecMap};
 use roc_error_macros::internal_error;
 
 use crate::{
-    dbg_hex, generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap,
-    open_mmap_mut,
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap, open_mmap_mut,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -934,8 +933,6 @@ impl AppSections {
 
         for symbol in file.symbols() {
             use object::ObjectSymbol;
-
-            let name = String::from_utf8_lossy(symbol.name_bytes().unwrap_or_default());
 
             if symbol.name_bytes().unwrap_or_default().starts_with(b"roc") {
                 if let object::SymbolSection::Section(index) = symbol.section() {

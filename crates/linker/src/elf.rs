@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::metadata::{self, Metadata, VirtualOffset};
 
 use crate::{
-    align_by_constraint, align_to_offset_by_constraint, dbg_hex, load_struct_inplace,
+    align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace_mut, open_mmap, open_mmap_mut,
 };
 
