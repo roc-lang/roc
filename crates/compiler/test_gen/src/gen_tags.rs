@@ -115,8 +115,8 @@ fn true_is_true() {
     assert_evals_to!(
         indoc!(
             r#"
-                   bool : [True, False]
-                   bool = True
+                   bool : Bool
+                   bool = Bool.true
 
                    bool
                 "#
@@ -132,8 +132,8 @@ fn false_is_false() {
     assert_evals_to!(
         indoc!(
             r#"
-                   bool : [True, False]
-                   bool = False
+                   bool : Bool
+                   bool = Bool.false
 
                    bool
                 "#
@@ -214,8 +214,8 @@ fn basic_enum() {
 //                isEmpty : LinkedList a -> Bool
 //                isEmpty = \list ->
 //                    when list is
-//                        Nil -> True
-//                        Cons _ _ -> False
+//                        Nil -> Bool.true
+//                        Cons _ _ -> Bool.false
 //
 //                isEmpty (Cons 4 Nil)
 //                "#
@@ -232,14 +232,14 @@ fn even_odd() {
             r#"
                 even = \n ->
                     when n is
-                        0 -> True
-                        1 -> False
+                        0 -> Bool.true
+                        1 -> Bool.false
                         _ -> odd (n - 1)
 
                 odd = \n ->
                     when n is
-                        0 -> False
-                        1 -> True
+                        0 -> Bool.false
+                        1 -> Bool.true
                         _ -> even (n - 1)
 
                 odd 5 && even 42
@@ -256,7 +256,7 @@ fn gen_literal_true() {
     assert_evals_to!(
         indoc!(
             r#"
-                if True then -1 else 1
+                if Bool.true then -1 else 1
                 "#
         ),
         -1,
@@ -270,7 +270,7 @@ fn gen_if_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                if True then -1.0 else 1.0
+                if Bool.true then -1.0 else 1.0
                 "#
         ),
         -1.0,
@@ -424,8 +424,8 @@ fn maybe_is_just_not_nested() {
                 isJust : Maybe a -> Bool
                 isJust = \list ->
                     when list is
-                        Nothing -> False
-                        Just _ -> True
+                        Nothing -> Bool.false
+                        Just _ -> Bool.true
 
                 main =
                     isJust (Just 42)
@@ -447,8 +447,8 @@ fn maybe_is_just_nested() {
                 isJust : Maybe a -> Bool
                 isJust = \list ->
                     when list is
-                        Nothing -> False
-                        Just _ -> True
+                        Nothing -> Bool.false
+                        Just _ -> Bool.true
 
                 isJust (Just 42)
                 "#
@@ -601,7 +601,7 @@ fn if_guard_pattern_false() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 if False -> 0
+                        2 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -620,7 +620,7 @@ fn if_guard_switch() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 | 3 if False -> 0
+                        2 | 3 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -639,7 +639,7 @@ fn if_guard_pattern_true() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 if True -> 42
+                        2 if Bool.true -> 42
                         _ -> 0
 
                 wrapper {}
@@ -658,7 +658,7 @@ fn if_guard_exhaustiveness() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        _ if False -> 0
+                        _ if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -814,7 +814,7 @@ fn join_point_if() {
         indoc!(
             r#"
                 x =
-                    if True then 1 else 2
+                    if Bool.true then 1 else 2
 
                 x
                 "#
@@ -895,7 +895,7 @@ fn alignment_in_single_tag_construction() {
     assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
 
     assert_evals_to!(
-        indoc!("Three (1 == 1) (if True then Red else if True then Green else Blue) 32"),
+        indoc!("Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32"),
         (32i64, true, 2u8),
         (i64, bool, u8)
     );
@@ -921,7 +921,7 @@ fn alignment_in_single_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
             r"#
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 when x is
                     Three bool color int ->
@@ -958,7 +958,7 @@ fn alignment_in_multi_tag_construction_three() {
         indoc!(
             r"#
                 x : [Three Bool [Red, Green, Blue] I64, Empty]
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 x
                 #"
@@ -982,7 +982,7 @@ fn alignment_in_multi_tag_pattern_match() {
                         { bool, int }
 
                     Empty ->
-                        { bool: False, int: 0 }
+                        { bool: Bool.false, int: 0 }
                 #"
         ),
         (32i64, true),
@@ -993,13 +993,13 @@ fn alignment_in_multi_tag_pattern_match() {
         indoc!(
             r"#
                 x : [Three Bool [Red, Green, Blue] I64, Empty]
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 when x is
                     Three bool color int ->
                         { bool, color, int }
                     Empty ->
-                        { bool: False, color: Red, int: 0 }
+                        { bool: Bool.false, color: Red, int: 0 }
                 #"
         ),
         (32i64, true, 2u8),
@@ -1237,8 +1237,8 @@ fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            b = False
-            f : Bool, [True, False, Idk] -> U8
+            b = Bar
+            f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
             f b b
             "#
@@ -1853,10 +1853,10 @@ fn error_type_in_tag_union_payload() {
             r#"
             f : ([] -> Bool) -> Bool
             f = \fun ->
-              if True then
+              if Bool.true then
                 fun 42
               else
-                False
+                Bool.false
 
             f (\x -> x)
             "#

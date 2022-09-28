@@ -118,9 +118,9 @@ fn eq_bool_tag() {
         indoc!(
             r#"
                 true : Bool
-                true = True
+                true = Bool.true
 
-                true == True
+                true == Bool.true
                 "#
         ),
         true,
@@ -135,9 +135,9 @@ fn neq_bool_tag() {
         indoc!(
             r#"
                 true : Bool
-                true = True
+                true = Bool.true
 
-                true == False
+                true == Bool.false
                 "#
         ),
         false,

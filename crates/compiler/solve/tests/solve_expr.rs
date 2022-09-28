@@ -1385,7 +1385,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    if True then
+                    if Bool.true then
                         42
                     else
                         24
@@ -3812,7 +3812,7 @@ mod solve_expr {
                     when x is
                         2 | 3 -> 0
                         a if a < 20 ->  1
-                        3 | 4 if False -> 2
+                        3 | 4 if Bool.false -> 2
                         _ -> 3
                 "#
             ),
@@ -4054,7 +4054,7 @@ mod solve_expr {
                 r#"
                 \rec ->
                     { x, y } : { x : I64, y ? Bool }*
-                    { x, y ? False } = rec
+                    { x, y ? Bool.false } = rec
 
                     { x, y }
                 "#
@@ -5015,7 +5015,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                badComics: Bool -> [CowTools _, Thagomizer _]
+                badComics: [True, False] -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -5023,7 +5023,7 @@ mod solve_expr {
                 badComics
                 "#
             ),
-            "Bool -> [CowTools Str, Thagomizer Str]",
+            "[False, True] -> [CowTools Str, Thagomizer Str]",
         )
     }
 
@@ -5929,7 +5929,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                if True then List.first [] else Str.toI64 ""
+                if Bool.true then List.first [] else Str.toI64 ""
                 "#
             ),
             "Result I64 [InvalidNumStr, ListWasEmpty]*",
@@ -6220,7 +6220,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [foo] to "./platform"
 
-                foo : Bool -> Str
+                foo : [True, False] -> Str
                 foo = \ob ->
                 #      ^^
                     when ob is
@@ -6232,8 +6232,8 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        ob : Bool
-        ob : Bool
+        ob : [False, True]
+        ob : [False, True]
         True : [False, True]
         False : [False, True]
         "###
@@ -6330,14 +6330,14 @@ mod solve_expr {
                 r#"
                 app "test" provides [zeroEncoder] to "./platform"
 
-                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+                MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
                 Format has it : fmt -> {} | fmt has Format
 
-                zeroEncoder = @Encoder \lst, _ -> lst
+                zeroEncoder = @MEncoder \lst, _ -> lst
                 "#
             ),
-            "Encoder a | a has Format",
+            "MEncoder a | a has Format",
         )
     }
 
@@ -6348,27 +6348,27 @@ mod solve_expr {
                 r#"
                 app "test" provides [myU8Bytes] to "./platform"
 
-                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+                MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-                Encoding has
-                  toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+                MEncoding has
+                  toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
 
                 Format has
-                  u8 : U8 -> Encoder fmt | fmt has Format
+                  u8 : U8 -> MEncoder fmt | fmt has Format
 
-                appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
-                appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
+                appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt has Format
+                appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-                toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+                toBytes : val, fmt -> List U8 | val has MEncoding, fmt has Format
                 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
                 Linear := {} has [Format {u8}]
 
-                u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+                u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
                 #^^{-1}
 
-                MyU8 := U8 has [Encoding {toEncoder}]
+                MyU8 := U8 has [MEncoding {toEncoder}]
 
                 toEncoder = \@MyU8 n -> u8 n
                 #^^^^^^^^^{-1}
@@ -6378,8 +6378,8 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        Linear#u8(10) : U8 -[[u8(10)]]-> Encoder Linear
-        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> Encoder fmt | fmt has Format
+        Linear#u8(10) : U8 -[[u8(10)]]-> MEncoder Linear
+        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> MEncoder fmt | fmt has Format
         myU8Bytes : List U8
         "###
         )
@@ -6392,21 +6392,21 @@ mod solve_expr {
                 r#"
                 app "test" provides [myU8] to "./platform"
 
-                DecodeError : [TooShort, Leftover (List U8)]
+                MDecodeError : [TooShort, Leftover (List U8)]
 
-                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
 
-                Decoding has
-                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+                MDecoding has
+                    decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
 
-                DecoderFormatting has
-                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+                MDecoderFormatting has
+                    u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
 
-                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
-                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+                decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+                decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
-                fromBytes : List U8, fmt -> Result val DecodeError
-                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes : List U8, fmt -> Result val MDecodeError
+                            | fmt has MDecoderFormatting, val has MDecoding
                 fromBytes = \lst, fmt ->
                     when decodeWith lst decoder fmt is
                         { result, rest } ->
@@ -6415,17 +6415,17 @@ mod solve_expr {
                                 Err e -> Err e
 
 
-                Linear := {} has [DecoderFormatting {u8}]
+                Linear := {} has [MDecoderFormatting {u8}]
 
-                u8 = @Decoder \lst, @Linear {} ->
+                u8 = @MDecoder \lst, @Linear {} ->
                 #^^{-1}
                         when List.first lst is
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8 has [Decoding {decoder}]
+                MyU8 := U8 has [MDecoding {decoder}]
 
-                decoder = @Decoder \lst, fmt ->
+                decoder = @MDecoder \lst, fmt ->
                 #^^^^^^^{-1}
                     when decodeWith lst u8 fmt is
                         { result, rest } ->
@@ -6436,11 +6436,11 @@ mod solve_expr {
                 #^^^^{-1}
                 "#
             ),
-            @r#"
-            Linear#u8(11) : Decoder U8 Linear
-            MyU8#decoder(12) : Decoder MyU8 fmt | fmt has DecoderFormatting
-            myU8 : Result MyU8 DecodeError
-            "#
+            @r###"
+        Linear#u8(11) : MDecoder U8 Linear
+        MyU8#decoder(12) : MDecoder MyU8 fmt | fmt has MDecoderFormatting
+        myU8 : Result MyU8 MDecodeError
+        "###
         )
     }
 
@@ -6494,7 +6494,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ Encoding, toEncoder }, Json]
+                    imports [Json]
                     provides [main] to "./platform"
 
                 HelloWorld := {} has [Encoding {toEncoder}]
@@ -6537,7 +6537,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ toEncoder, Encoding, custom }]
+                    imports [Encode.{ toEncoder, custom }]
                     provides [main] to "./platform"
 
                 A := {} has [Encoding {toEncoder}]
@@ -6912,7 +6912,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 f : _ -> _
-                f = \_ -> if False then "" else f ""
+                f = \_ -> if Bool.false then "" else f ""
 
                 f
                 "#
@@ -6928,7 +6928,7 @@ mod solve_expr {
                 r#"
                 f : _ -> Str
                 f = \s -> g s
-                g = \s -> if True then s else f s
+                g = \s -> if Bool.true then s else f s
 
                 g
                 "#
@@ -7430,7 +7430,7 @@ mod solve_expr {
                 #   ^^
                         (f A (@C {}) (@D {}))
                 #        ^
-                    if True
+                    if Bool.true
                         then it (@E {})
                         #    ^^
                         else it (@F {})
@@ -7741,8 +7741,8 @@ mod solve_expr {
         infer_queries!(
             indoc!(
                 r#"
-                x = True
-                y = False
+                x = Bool.true
+                y = Bool.false
 
                 a = "foo"
                 b = "bar"
@@ -7756,8 +7756,8 @@ mod solve_expr {
                 "#
             ),
         @r###"
-        foo : {} -[[foo(5) [True]* [False]* Str Str]]-> Str
-        bar : {} -[[bar(6) [True]* [False]* Str Str]]-> Str
+        foo : {} -[[foo(5) Bool Bool Str Str]]-> Str
+        bar : {} -[[bar(6) Bool Bool Str Str]]-> Str
         "###
         );
     }

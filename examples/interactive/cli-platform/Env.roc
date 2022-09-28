@@ -1,6 +1,6 @@
 interface Env
-    exposes [cwd, dict, var, exePath, setCwd]
-    imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask]
+    exposes [cwd, dict, var, decode, exePath, setCwd]
+    imports [Task.{ Task }, Path.{ Path }, InternalPath, Effect, InternalTask, EnvDecoding]
 
 ## Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## from the environment. File operations on relative [Path]s are relative to this directory.
@@ -45,31 +45,40 @@ var = \name ->
     |> Effect.map (\result -> Result.mapErr result \{} -> VarNotFound)
     |> InternalTask.fromEffect
 
-# ## Reads the given environment variable and attempts to decode it.
-# ##
-# ## The type being decoded into will be determined by type inference. For example,
-# ## if this ends up being used like a `Task U16 …` then the environment variable
-# ## will be decoded as a string representation of a `U16`.
-# ##
-# ##     getU16Var : Str -> Task U16 [VarNotFound, DecodeErr DecodeError]* [Read [Env]*]*
-# ##     getU16Var = \var -> Env.decode var
-# ##     # If the environment contains a variable NUM_THINGS=123, then calling
-# ##     # (getU16Var "NUM_THINGS") would return a task which succeeds with the U16 number 123.
-# ##     #
-# ##     # However, if the NUM_THINGS environment variable was set to 1234567, then
-# ##     # (getU16Var "NUM_THINGS") would fail because that number is too big to fit in a U16.
-# ##
-# ## Supported types:
-# ## - strings
-# ## - numbers, as long as they contain only numeric digits, up to one `.`, and an optional `-` at the front for negative numbers
-# ## - comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas
-# ##
-# ## Trying to decode into any other types will always fail with a `DecodeErr`.
-# decode : Str -> Task val [VarNotFound, DecodeErr DecodeError]* [Env]*
-#     | val has Decode
-# decode = \var ->
-#     Effect.envVar var
-#     |> InternalTask.fromEffect
+## Reads the given environment variable and attempts to decode it.
+##
+## The type being decoded into will be determined by type inference. For example,
+## if this ends up being used like a `Task U16 …` then the environment variable
+## will be decoded as a string representation of a `U16`.
+##
+##     getU16Var : Str -> Task U16 [VarNotFound, DecodeErr DecodeError]* [Read [Env]*]*
+##     getU16Var = \var -> Env.decode var
+##     # If the environment contains a variable NUM_THINGS=123, then calling
+##     # (getU16Var "NUM_THINGS") would return a task which succeeds with the U16 number 123.
+##     #
+##     # However, if the NUM_THINGS environment variable was set to 1234567, then
+##     # (getU16Var "NUM_THINGS") would fail because that number is too big to fit in a U16.
+##
+## Supported types:
+## - strings
+## - numbers, as long as they contain only numeric digits, up to one `.`, and an optional `-` at the front for negative numbers
+## - comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas
+##
+## Trying to decode into any other types will always fail with a `DecodeErr`.
+decode : Str -> Task val [VarNotFound, DecodeErr DecodeError]* [Read [Env]*]* | val has Decoding
+decode = \name ->
+    Effect.envVar name
+    |> Effect.map
+        (
+            \result ->
+                result
+                |> Result.mapErr (\{} -> VarNotFound)
+                |> Result.try
+                    (\varStr ->
+                        Decode.fromBytes (Str.toUtf8 varStr) (EnvDecoding.format {})
+                        |> Result.mapErr (\_ -> DecodeErr TooShort)))
+    |> InternalTask.fromEffect
+
 ## Reads all the process's environment variables into a [Dict].
 ##
 ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)

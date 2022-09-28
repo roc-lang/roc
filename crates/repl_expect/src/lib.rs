@@ -868,7 +868,7 @@ mod test {
                         @NonEmpty c
                 
                     when nonEmpty is
-                        _ -> False
+                        _ -> Bool.false
                 "#
             ),
             indoc!(
@@ -883,7 +883,7 @@ mod test {
                 13│>          @NonEmpty c
                 14│>
                 15│>      when nonEmpty is
-                16│>          _ -> False
+                16│>          _ -> Bool.false
                 
                 When it failed, these variables had these values:
                 

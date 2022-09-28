@@ -1,10 +1,14 @@
-procedure Test.4 (Test.8):
-    let Test.10 : U64 = 1i64;
-    ret Test.10;
+procedure Bool.1 ():
+    let Bool.12 : Int1 = false;
+    ret Bool.12;
+
+procedure Test.4 (Test.6):
+    let Test.8 : U64 = 1i64;
+    ret Test.8;
 
 procedure Test.0 ():
-    let Test.1 : Int1 = false;
-    let Test.2 : Int1 = false;
+    let Test.1 : Int1 = CallByName Bool.1;
+    let Test.2 : Int1 = CallByName Bool.1;
     let Test.3 : {Int1, Int1} = Struct {Test.1, Test.2};
-    let Test.9 : U64 = CallByName Test.4 Test.3;
-    ret Test.9;
+    let Test.7 : U64 = CallByName Test.4 Test.3;
+    ret Test.7;

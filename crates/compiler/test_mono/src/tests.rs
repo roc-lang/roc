@@ -325,7 +325,7 @@ fn guard_pattern_true() {
     r#"
     wrapper = \{} ->
         when 2 is
-            2 if False -> 42
+            2 if Bool.false -> 42
             _ -> 0
 
     wrapper {}
@@ -420,7 +420,7 @@ fn when_joinpoint() {
 #[mono_test]
 fn simple_if() {
     r#"
-    if True then
+    if Bool.true then
         1
     else
         2
@@ -430,9 +430,9 @@ fn simple_if() {
 #[mono_test]
 fn if_multi_branch() {
     r#"
-    if True then
+    if Bool.true then
         1
-    else if False then
+    else if Bool.false then
         2
     else
         3
@@ -730,8 +730,8 @@ fn is_nil() {
     isNil : ConsList a -> Bool
     isNil = \list ->
         when list is
-            Nil -> True
-            Cons _ _ -> False
+            Nil -> Bool.true
+            Cons _ _ -> Bool.false
 
     isNil (Cons 0x2 Nil)
     "#
@@ -747,8 +747,8 @@ fn has_none() {
     hasNone : ConsList (Maybe a) -> Bool
     hasNone = \list ->
         when list is
-            Nil -> False
-            Cons Nothing _ -> True
+            Nil -> Bool.false
+            Cons Nothing _ -> Bool.true
             Cons (Just _) xs -> hasNone xs
 
     hasNone (Cons (Just 3) Nil)
@@ -1024,7 +1024,7 @@ fn somehow_drops_definitions() {
         apply = \f, x -> f x
 
         main =
-            apply (if True then increment else double) 42
+            apply (if Bool.true then increment else double) 42
         "#
     )
 }
@@ -1047,7 +1047,7 @@ fn specialize_closures() {
             two = 2
 
             b : Bool
-            b = True
+            b = Bool.true
 
             increment : I64 -> I64
             increment = \x -> x + one
@@ -1055,7 +1055,7 @@ fn specialize_closures() {
             double : I64 -> I64
             double = \x -> if b then x * two else x
 
-            apply (if True then increment else double) 42
+            apply (if Bool.true then increment else double) 42
         "#
     )
 }
@@ -1082,7 +1082,7 @@ fn specialize_lowlevel() {
              double : I64 -> I64
              double = \x -> x * two
 
-             (if True then increment else double) 42
+             (if Bool.true then increment else double) 42
          "#
     )
 }
@@ -1102,7 +1102,7 @@ fn empty_list_of_function_type() {
             myClosure = \_ -> "bar"
 
             choose =
-                if False then
+                if Bool.false then
                     myList
                 else
                     [myClosure]
@@ -1180,8 +1180,8 @@ fn monomorphized_tag() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = False
-            f : Bool, [True, False, Idk] -> U8
+            b = Bar
+            f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
             f b b
         "#
@@ -1195,8 +1195,8 @@ fn monomorphized_tag_with_aliased_args() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = False
-            c = False
+            b = Bool.false
+            c = Bool.false
             a = A b c
             f : [A Bool Bool] -> Nat
             f = \_ -> 1
@@ -1286,7 +1286,7 @@ fn issue_2725_alias_polymorphic_lambda() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     indoc!(
         r#"
-        if True then List.first [] else Str.toI64 ""
+        if Bool.true then List.first [] else Str.toI64 ""
         "#
     )
 }
@@ -1361,26 +1361,26 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-        Encoding has
-          toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+        MEncoding has
+          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
 
         Format has
-          u8 : U8 -> Encoder fmt | fmt has Format
+          u8 : U8 -> MEncoder fmt | fmt has Format
 
 
         Linear := {} has [Format {u8}]
 
-        u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+        u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [Encoding {toEncoder}]
+        MyU8 := U8 has [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
         myU8Bytes =
             when toEncoder (@MyU8 15) is
-                @Encoder doEncode -> doEncode [] (@Linear {})
+                @MEncoder doEncode -> doEncode [] (@Linear {})
         "#
     )
 }
@@ -1716,7 +1716,7 @@ fn recursive_call_capturing_function() {
         a = \b ->
             c : U32 -> U32
             c = \d ->
-                if True then d else c (d+b)
+                if Bool.true then d else c (d+b)
             c 0
 
         a 6
@@ -1958,7 +1958,7 @@ fn unreachable_void_constructor() {
 
         x : []
 
-        main = if True then Ok x else Err "abc" 
+        main = if Bool.true then Ok x else Err "abc" 
         "#
     )
 }

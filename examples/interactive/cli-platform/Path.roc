@@ -16,7 +16,7 @@ interface Path
 ## You can canonicalize a [Path] using [Path.canonicalize].
 ##
 ## Comparing canonical paths is often more reliable than comparing raw ones.
-## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `False`,
+## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `Bool.false`,
 ## because those are different paths even though their canonical equivalents would be equal.
 ##
 ## Also note that canonicalization reads from the file system (in order to resolve symbolic
@@ -233,7 +233,7 @@ WindowsRoot : []
 #                 Str.concat prefixStr suffixStr
 #                 |> FromStr
 #     InternalPath.wrap content
-## Returns `True` if the first path begins with the second.
+## Returns `Bool.true` if the first path begins with the second.
 # startsWith : Path, Path -> Bool
 # startsWith = \path, prefix ->
 #     when InternalPath.unwrap path is
@@ -249,14 +249,14 @@ WindowsRoot : []
 #                         # Compare the two for equality.
 #                         Str.isEqUtf8 prefixStr bytesPrefix
 #                     else
-#                         False
+#                         Bool.false
 #         FromStr pathStr ->
 #             when InternalPath.unwrap prefix is
 #                 FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
 #                     Str.startsWithUtf8 pathStr prefixBytes
 #                 FromStr prefixStr ->
 #                     Str.startsWith pathStr prefixStr
-## Returns `True` if the first path ends with the second.
+## Returns `Bool.true` if the first path ends with the second.
 # endsWith : Path, Path -> Bool
 # endsWith = \path, prefix ->
 #     when InternalPath.unwrap path is
@@ -272,7 +272,7 @@ WindowsRoot : []
 #                         # Compare the two for equality.
 #                         Str.startsWithUtf8 suffixStr bytesSuffix
 #                     else
-#                         False
+#                         Bool.false
 #         FromStr pathStr ->
 #             when InternalPath.unwrap suffix is
 #                 FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->

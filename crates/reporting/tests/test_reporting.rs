@@ -603,10 +603,10 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        True
         Str
         Frac
         Num
+        Err
     "###
     );
 
@@ -758,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     List
-                    True
+                    Err
                     Box
-                    Str
                 "#
             ),
         );
@@ -786,8 +786,8 @@ mod test_reporting {
 
         Str
 
-    But I need every `if` condition to evaluate to a Bool—either `True` or
-    `False`.
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
     "###
     );
 
@@ -814,7 +814,7 @@ mod test_reporting {
         Num a
 
     But I need every `if` guard condition to evaluate to a Bool—either
-    `True` or `False`.
+    `Bool.true` or `Bool.false`.
     "###
     );
 
@@ -822,7 +822,7 @@ mod test_reporting {
         if_2_branch_mismatch,
         indoc!(
             r#"
-            if True then 2 else "foo"
+            if Bool.true then 2 else "foo"
             "#
         ),
         @r###"
@@ -830,8 +830,8 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    4│      if True then 2 else "foo"
-                                ^^^^^
+    4│      if Bool.true then 2 else "foo"
+                                     ^^^^^
 
     The `else` branch is a string of type:
 
@@ -849,7 +849,7 @@ mod test_reporting {
         if_3_branch_mismatch,
         indoc!(
             r#"
-             if True then 2 else if False then 2 else "foo"
+             if Bool.true then 2 else if Bool.false then 2 else "foo"
              "#
         ),
         @r###"
@@ -857,8 +857,8 @@ mod test_reporting {
 
     The 3rd branch of this `if` does not match all the previous branches:
 
-    4│      if True then 2 else if False then 2 else "foo"
-                                                     ^^^^^
+    4│      if Bool.true then 2 else if Bool.false then 2 else "foo"
+                                                               ^^^^^
 
     The 3rd branch is a string of type:
 
@@ -1404,7 +1404,7 @@ mod test_reporting {
         indoc!(
             r#"
             x : Num.Int *
-            x = if True then 3.14 else 4
+            x = if Bool.true then 3.14 else 4
 
             x
             "#
@@ -1415,8 +1415,8 @@ mod test_reporting {
     Something is off with the `then` branch of this `if` expression:
 
     4│      x : Num.Int *
-    5│      x = if True then 3.14 else 4
-                             ^^^^
+    5│      x = if Bool.true then 3.14 else 4
+                                  ^^^^
 
     The 1st branch is a fraction of type:
 
@@ -1960,7 +1960,7 @@ mod test_reporting {
     //                Something is off with the body of the `f` definition:
     //
     //                1│ f : a, b -> a
-    //                2│ f = \x, y -> if True then x else y
+    //                2│ f = \x, y -> if Bool.true then x else y
     //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                The body is an anonymous function of type:
@@ -1975,7 +1975,7 @@ mod test_reporting {
         indoc!(
             r#"
             f : a, b -> a
-            f = \x, y -> if True then x else y
+            f = \x, y -> if Bool.true then x else y
 
             f
             "#
@@ -1986,8 +1986,8 @@ mod test_reporting {
     Something is off with the `else` branch of this `if` expression:
 
     4│      f : a, b -> a
-    5│      f = \x, y -> if True then x else y
-                                             ^
+    5│      f = \x, y -> if Bool.true then x else y
+                                                  ^
 
     This `y` value is a:
 
@@ -2380,7 +2380,7 @@ mod test_reporting {
     4│      42 + True
                  ^^^^
 
-    This `True` boolean has the type:
+    This `True` tag has the type:
 
         [True]a
 
@@ -5252,7 +5252,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if True then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "\(greeting), World!"
             "#,
             ),
             @r###"
@@ -5260,8 +5260,8 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if True then 1 else "\(greeting), World!"
-                                ^^^^^^^^^^^^^^^^^^^^^
+    6│      if Bool.true then 1 else "\(greeting), World!"
+                                     ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
 
@@ -5280,14 +5280,14 @@ mod test_reporting {
             $(
             test_report!(
                 $name,
-                &format!(r#"if True then "abc" else 1 {} 2"#, $op),
+                &format!(r#"if Bool.true then "abc" else 1 {} 2"#, $op),
                 |golden| assert_eq!(golden, format!(
 r#"── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
 This `if` has an `else` branch with a different type from its `then` branch:
 
-4│      if True then "abc" else 1 {} 2
-                                ^^{}^^
+4│      if Bool.true then "abc" else 1 {} 2
+                                     ^^{}^^
 
 This comparison produces:
 
@@ -5829,7 +5829,7 @@ All branches in an `if` must have the same type!
         apply_unary_not,
         indoc!(
             r#"
-            foo = True
+            foo = Bool.true
 
             !foo 1 2
             "#
@@ -6063,8 +6063,8 @@ All branches in an `if` must have the same type!
 
         Str
 
-    But I need every `expect` condition to evaluate to a Bool—either `True`
-    or `False`.
+    But I need every `expect` condition to evaluate to a Bool—either
+    `Bool.true` or `Bool.false`.
     "###
     );
 
@@ -7616,7 +7616,7 @@ All branches in an `if` must have the same type!
             r#"
             F n := n
 
-            if True
+            if Bool.true
             then @F ""
             else @F {}
             "#
@@ -7856,7 +7856,7 @@ All branches in an `if` must have the same type!
             r#"
             x : [A]
             when x is
-                A if True -> ""
+                A if Bool.true -> ""
             "#
         ),
         @r###"
@@ -7865,7 +7865,7 @@ All branches in an `if` must have the same type!
     This `when` does not cover all the possibilities:
 
     5│>      when x is
-    6│>          A if True -> ""
+    6│>          A if Bool.true -> ""
 
     Other possibilities include:
 
@@ -8563,27 +8563,27 @@ All branches in an `if` must have the same type!
             eq = \@You {}, @AndI {} -> False
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with this specialization of `eq`:
+    Something is off with this specialization of `eq`:
 
-        9│  eq = \@You {}, @AndI {} -> False
-            ^^
+    9│  eq = \@You {}, @AndI {} -> False
+        ^^
 
-        This value is a declared specialization of type:
+    This value is a declared specialization of type:
 
-            You, AndI -> [False, True]
+        You, AndI -> [False]a
 
-        But the type annotation on `eq` says it must match:
+    But the type annotation on `eq` says it must match:
 
-            You, You -> Bool
+        You, You -> Bool
 
-        Tip: Type comparisons between an opaque type are only ever equal if
-        both types are the same opaque type. Did you mean to create an opaque
-        type by wrapping it? If I have an opaque type Age := U32 I can create
-        an instance of this opaque type by doing @Age 23.
-        "#
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
     );
 
     test_report!(
@@ -9082,7 +9082,7 @@ All branches in an `if` must have the same type!
         function_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             main = Encode.toEncoder \x -> x
             "#
@@ -9108,7 +9108,7 @@ All branches in an `if` must have the same type!
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             A := {}
             main = Encode.toEncoder { x: @A {} }
@@ -9293,7 +9293,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ Encoding }]
+                imports []
                 provides [A, myEncoder] to "./platform"
 
             A := U8 has [ Encoding {toEncoder ? myEncoder} ]
@@ -9482,7 +9482,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_function,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A a := a -> a has [Encode.Encoding]
             "#
@@ -9505,7 +9505,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_non_encoding_alias,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Encode.Encoding]
 
@@ -9531,7 +9531,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_other_has_encoding,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Encode.Encoding]
 
@@ -9545,7 +9545,7 @@ All branches in an `if` must have the same type!
         has_encoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [Encode] provides [MyNat] to "./platform"
+            app "test" imports [] provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] has [Encode.Encoding]
             "#
@@ -9643,27 +9643,27 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             f : _ -> (_ -> Str)
-            f = \_ -> if True then {} else f {}
+            f = \_ -> if Bool.true then {} else f {}
 
             f
             "#
         ),
         @r###"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression is used in an unexpected way:
+    This expression is used in an unexpected way:
 
-        5│      f = \_ -> if True then {} else f {}
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    5│      f = \_ -> if Bool.true then {} else f {}
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        It is a value of type:
+    It is a value of type:
 
-            {}
+        {}
 
-        But you are trying to use it as:
+    But you are trying to use it as:
 
-            a -> Str
-        "###
+        a -> Str
+    "###
     );
 
     test_report!(
@@ -10186,7 +10186,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_function,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A a := a -> a has [Decode.Decoding]
             "#
@@ -10209,7 +10209,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_non_decoding_opaque,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Decode.Decoding]
 
@@ -10235,7 +10235,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_other_has_decoding,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [A] to "./platform"
+            app "test" imports [] provides [A] to "./platform"
 
             A := B has [Decode.Decoding]
 
@@ -10249,7 +10249,7 @@ All branches in an `if` must have the same type!
         derive_decoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [Decode] provides [MyNat] to "./platform"
+            app "test" imports [] provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] has [Decode.Decoding]
             "#
@@ -10261,7 +10261,7 @@ All branches in an `if` must have the same type!
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
                 myDecoder : Decoder (a -> a) fmt | fmt has DecoderFormatting
@@ -10291,7 +10291,7 @@ All branches in an `if` must have the same type!
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             A := {}
 
@@ -10425,7 +10425,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             f : {a: Str, b ? Str}
-            f = if True then {a: ""} else {a: "b", b: ""}
+            f = if Bool.true then {a: ""} else {a: "b", b: ""}
             f
             "#
         ),
@@ -10435,8 +10435,8 @@ All branches in an `if` must have the same type!
     Something is off with the `then` branch of this `if` expression:
 
     4│      f : {a: Str, b ? Str}
-    5│      f = if True then {a: ""} else {a: "b", b: ""}
-                             ^^^^^^^
+    5│      f = if Bool.true then {a: ""} else {a: "b", b: ""}
+                                  ^^^^^^^
 
     The 1st branch is a record of type:
 
@@ -10475,7 +10475,7 @@ All branches in an `if` must have the same type!
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [Decode, Json] provides [main] to "./platform"
+            app "test" imports [Json] provides [main] to "./platform"
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
@@ -10505,7 +10505,7 @@ All branches in an `if` must have the same type!
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
              main =
                  myDecoder : Decoder {x : Str, y ? Str} fmt | fmt has DecoderFormatting

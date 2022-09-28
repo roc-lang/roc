@@ -1,18 +1,26 @@
+procedure Bool.1 ():
+    let Bool.12 : Int1 = false;
+    ret Bool.12;
+
+procedure Bool.2 ():
+    let Bool.11 : Int1 = true;
+    ret Bool.11;
+
 procedure Test.2 (Test.4):
-    let Test.13 : U8 = 1i64;
-    let Test.14 : U8 = GetTagId Test.4;
-    let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
-    if Test.15 then
-        let Test.11 : Int1 = true;
-        ret Test.11;
+    let Test.11 : U8 = 1i64;
+    let Test.12 : U8 = GetTagId Test.4;
+    let Test.13 : Int1 = lowlevel Eq Test.11 Test.12;
+    if Test.13 then
+        let Test.9 : Int1 = CallByName Bool.2;
+        ret Test.9;
     else
-        let Test.12 : Int1 = false;
-        ret Test.12;
+        let Test.10 : Int1 = CallByName Bool.1;
+        ret Test.10;
 
 procedure Test.0 ():
-    let Test.16 : I64 = 2i64;
-    let Test.17 : [<rnu><null>, C I64 *self] = TagId(1) ;
-    let Test.10 : [<rnu><null>, C I64 *self] = TagId(0) Test.16 Test.17;
-    let Test.9 : Int1 = CallByName Test.2 Test.10;
-    dec Test.10;
-    ret Test.9;
+    let Test.14 : I64 = 2i64;
+    let Test.15 : [<rnu><null>, C I64 *self] = TagId(1) ;
+    let Test.8 : [<rnu><null>, C I64 *self] = TagId(0) Test.14 Test.15;
+    let Test.7 : Int1 = CallByName Test.2 Test.8;
+    dec Test.8;
+    ret Test.7;

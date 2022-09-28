@@ -861,14 +861,51 @@ fn issue_2863_module_type_does_not_exist() {
 
                         Did you mean one of these?
 
+                            Decoding
                             Result
                             Dict
-                            List
-                            Box
+                            DecodeError
                         "
                       )
                 )
         }
         Ok(_) => unreachable!("we expect failure here"),
     }
+}
+
+#[test]
+fn import_builtin_in_platform_and_check_app() {
+    let modules = vec![
+        (
+            "platform/main.roc",
+            indoc!(
+                r#"
+                    platform "testplatform"
+                        requires {} { main : Str }
+                        exposes []
+                        packages {}
+                        imports [Str]
+                        provides [mainForHost]
+
+                    mainForHost : Str
+                    mainForHost = main
+                    "#
+            ),
+        ),
+        (
+            "Main",
+            indoc!(
+                r#"
+                    app "test"
+                        packages { pf: "platform/main.roc" }
+                        provides [main] to pf
+
+                    main = ""
+                    "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("import_builtin_in_platform_and_check_app", modules);
+    assert!(result.is_ok(), "should check");
 }

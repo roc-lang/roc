@@ -1,6 +1,8 @@
 use object::pe;
 use object::LittleEndian as LE;
 
+pub(crate) const APP_DLL: &str = "roc-cheaty-lib.dll";
+
 fn synthetic_image_export_directory(
     name: &str,
     virtual_address: u32,
@@ -41,7 +43,7 @@ fn synthetic_export_dir(virtual_address: u32, custom_names: &[String]) -> Vec<u8
 
     let ptr = vec.as_mut_ptr();
 
-    let name = "roc-cheaty-lib.dll";
+    let name = APP_DLL;
     let directory = synthetic_image_export_directory(name, virtual_address, custom_names);
 
     unsafe {
@@ -147,8 +149,7 @@ pub fn synthetic_dll(custom_names: &[String]) -> Vec<u8> {
 
     // we store the export directory in a .rdata section
     let rdata_section: (_, Vec<u8>) = {
-        // not sure if that 0x40 is important, I took it from a .dll that zig produced
-        let characteristics = object::pe::IMAGE_SCN_MEM_READ | 0x40;
+        let characteristics = object::pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA;
         let range = writer.reserve_section(
             *b".rdata\0\0",
             characteristics,

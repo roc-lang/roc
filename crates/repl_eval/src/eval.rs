@@ -125,6 +125,9 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(name, _, real_var, kind) => {
+                if *name == Symbol::BOOL_BOOL {
+                    return (newtype_containers, alias_content, content);
+                }
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. For example,
                 //   T : { a : Str }
@@ -377,8 +380,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(tags.len(), 1);
-
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     Ok(single_tag_union_to_ast(

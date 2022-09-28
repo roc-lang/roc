@@ -1,10 +1,10 @@
 procedure List.6 (#Attr.2):
-    let List.385 : U64 = lowlevel ListLen #Attr.2;
-    ret List.385;
+    let List.380 : U64 = lowlevel ListLen #Attr.2;
+    ret List.380;
 
 procedure List.6 (#Attr.2):
-    let List.386 : U64 = lowlevel ListLen #Attr.2;
-    ret List.386;
+    let List.381 : U64 = lowlevel ListLen #Attr.2;
+    ret List.381;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.257 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;

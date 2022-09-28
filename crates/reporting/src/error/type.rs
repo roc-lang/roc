@@ -835,9 +835,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -874,9 +874,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -912,9 +912,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" guard condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.tag("True".into()),
+                        alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
-                        alloc.tag("False".into()),
+                        alloc.tag("Bool.false".into()),
                         alloc.reflow("."),
                     ]),
                 )
@@ -1664,11 +1664,7 @@ fn format_category<'b>(
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.tag(name.to_owned()),
-                if name.as_str() == "True" || name.as_str() == "False" {
-                    alloc.text(" boolean")
-                } else {
-                    alloc.text(" tag")
-                },
+                alloc.text(" tag"),
             ]),
             alloc.text(" has the type:"),
         ),
@@ -2585,7 +2581,9 @@ fn to_diff<'b>(
 
         (Alias(sym, _, _, AliasKind::Opaque), _) | (_, Alias(sym, _, _, AliasKind::Opaque))
             // Skip the hint for numbers; it's not as useful as saying "this type is not a number"
-            if !OPAQUE_NUM_SYMBOLS.contains(&sym) =>
+            if !OPAQUE_NUM_SYMBOLS.contains(&sym)
+                // And same for bools
+                && sym != Symbol::BOOL_BOOL =>
         {
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
@@ -3982,8 +3980,8 @@ fn pattern_to_doc_help<'b>(
         Literal(l) => match l {
             Int(i) => alloc.text(i128::from_ne_bytes(i).to_string()),
             U128(i) => alloc.text(u128::from_ne_bytes(i).to_string()),
-            Bit(true) => alloc.text("True"),
-            Bit(false) => alloc.text("False"),
+            Bit(true) => alloc.text("Bool.true"),
+            Bit(false) => alloc.text("Bool.false"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
             Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
