@@ -143,9 +143,22 @@ int main() {
   size_t written = fwrite(str_bytes, sizeof(char), str_len, stdout);
   if (fflush(stdout) == 0 && written == str_len) {
     // Writing succeeded!
+
+    // dealllocate the roc string
+    if (!(is_small_str(str))) {
+        roc_dealloc(str_bytes - 8, 1);
+    }
+
     return 0;
   } else {
     printf("Error writing to stdout: %s\n", strerror(errno));
+
+    // dealllocate the roc string
+    if (!(is_small_str(str))) {
+        roc_dealloc(str_bytes - 8, 1);
+    }
+
     return 1;
   }
+
 }
