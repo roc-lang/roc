@@ -86,7 +86,7 @@ fn loc_tag_pattern_arg<'a>(
     // If we encounter one, we're done parsing function args!
     move |arena, original_state: State<'a>| {
         let (_, spaces, state) = backtrackable(space0_e(min_indent, EPattern::IndentStart))
-            .parse(arena, original_state.clone())?;
+            .parse(arena, original_state)?;
 
         let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
 
@@ -207,7 +207,7 @@ fn loc_ident_pattern_help<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let original_state = state.clone();
+        let original_state = state;
 
         let (_, loc_ident, state) =
             specialize(|_, pos| EPattern::Start(pos), loc!(parse_ident)).parse(arena, state)?;

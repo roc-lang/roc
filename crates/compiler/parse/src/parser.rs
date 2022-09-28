@@ -1152,7 +1152,7 @@ where
     move |arena: &'a Bump, state: State<'a>| {
         // We have to clone this because if the optional parser fails,
         // we need to revert back to the original state.
-        let original_state = state.clone();
+        let original_state = state;
 
         match parser.parse(arena, state) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
@@ -1196,7 +1196,7 @@ macro_rules! loc {
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
         move |arena, state: $crate::state::State<'a>| {
-            let original_state = state.clone();
+            let original_state = state;
 
             match $p1.parse(arena, state) {
                 Ok((p1, _, state)) => match $p2.parse(arena, state) {
@@ -1215,7 +1215,7 @@ macro_rules! skip_first {
 macro_rules! skip_second {
     ($p1:expr, $p2:expr) => {
         move |arena, state: $crate::state::State<'a>| {
-            let original_state = state.clone();
+            let original_state = state;
 
             match $p1.parse(arena, state) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state) {
@@ -1330,7 +1330,7 @@ macro_rules! and {
         move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| {
             // We have to clone this because if the first parser passes and then
             // the second one fails, we need to revert back to the original state.
-            let original_state = state.clone();
+            let original_state = state;
 
             match $p1.parse(arena, state) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state) {
@@ -1709,7 +1709,7 @@ where
     Error: 'a,
 {
     move |arena: &'a Bump, state: State<'a>| {
-        let old_state = state.clone();
+        let old_state = state;
 
         match parser.parse(arena, state) {
             Ok((_, a, s1)) => Ok((NoProgress, a, s1)),

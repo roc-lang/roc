@@ -152,7 +152,7 @@ macro_rules! advance_state {
 }
 
 pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    let initial = state.clone();
+    let initial = state;
 
     match parse_ident_help(arena, state) {
         Ok((progress, ident, state)) => {

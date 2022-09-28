@@ -25,7 +25,7 @@ pub fn parse_loc_with<'a>(
 ) -> Result<Loc<ast::Expr<'a>>, SourceError<'a, SyntaxError<'a>>> {
     let state = State::new(input.trim().as_bytes());
 
-    match crate::expr::test_parse_expr(0, arena, state.clone()) {
+    match crate::expr::test_parse_expr(0, arena, state) {
         Ok(loc_expr) => Ok(loc_expr),
         Err(fail) => Err(SyntaxError::Expr(fail, Position::default()).into_source_error(&state)),
     }

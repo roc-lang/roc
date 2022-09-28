@@ -576,7 +576,7 @@ fn expression<'a>(
             )
             .trace("type_annotation:expression:arrow")
         ]
-        .parse(arena, state.clone());
+        .parse(arena, state);
 
         let (progress, annot, state) = match result {
             Ok((p2, (rest, _dropped_spaces), state)) => {
@@ -609,7 +609,7 @@ fn expression<'a>(
                         word1(b',', EType::TStart)
                     ))
                     .trace("check trailing comma")
-                    .parse(arena, state.clone())?;
+                    .parse(arena, state)?;
 
                     if comma.is_some() {
                         // If the surrounding scope has declared that a trailing comma is not a valid state
@@ -628,7 +628,7 @@ fn expression<'a>(
         // Finally, try to parse a where clause if there is one.
         // The where clause must be at least as deep as where the type annotation started.
         let min_where_clause_indent = min_indent;
-        match has_clause_chain(min_where_clause_indent).parse(arena, state.clone()) {
+        match has_clause_chain(min_where_clause_indent).parse(arena, state) {
             Ok((where_progress, (spaces_before, has_chain), state)) => {
                 use crate::ast::Spaceable;
 
