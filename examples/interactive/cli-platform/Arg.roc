@@ -202,7 +202,7 @@ andMap = \@Parser parser, @Parser mapper ->
                     Positional config run ->
                         Positional config \args ->
                             run args
-                            |> Result.map (\{val, newlyTaken} -> {val: fn val, newlyTaken})
+                            |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
@@ -344,7 +344,7 @@ andMap = \@Parser parser, @Parser mapper ->
                     Positional config run ->
                         Positional config \args ->
                             run args
-                            |> Result.map (\{val, newlyTaken} -> {val: fn val, newlyTaken})
+                            |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
@@ -407,7 +407,7 @@ parseHelp = \@Parser parser, args ->
 
         Positional { name } run ->
             when run args is
-                Ok {val, newlyTaken: _} -> Ok val
+                Ok { val, newlyTaken: _ } -> Ok val
                 Err _ -> Err (MissingPositionalArg name)
 
         SubCommand cmds ->
@@ -490,9 +490,9 @@ i64 = \{ long, short ? "", help ? "" } ->
 positional : _ -> Parser Str
 positional = \{ name, help ? "" } ->
     fn = \args ->
-        nextUnmarked args 
+        nextUnmarked args
         |> Result.mapErr (\OutOfBounds -> NotFound)
-        |> Result.map (\{val, index} -> {val, newlyTaken: Set.insert args.taken index})
+        |> Result.map (\{ val, index } -> { val, newlyTaken: Set.insert args.taken index })
 
     @Parser (Positional { name, help } fn)
 
@@ -561,44 +561,48 @@ formatHelp = \@NamedParser { name, help, parser } ->
 # formatHelpHelp : Nat, Help -> Str
 formatHelpHelp = \n, cmdHelp ->
     indented = indent n
+
     when cmdHelp is
         SubCommands cmds ->
-            fmtCmdHelp = 
+            fmtCmdHelp =
                 Str.joinWith
                     (List.map cmds \subCmd -> formatSubCommand (n + indentLevel) subCmd)
                     "\n\n"
 
-
             """
-
+            
             \(indented)COMMANDS:
             \(fmtCmdHelp)
             """
 
         Config configs ->
             argConfigs =
-                filterMap configs (\config ->
-                    when config is
-                        Arg c -> Some c
-                        _ -> None)
+                filterMap
+                    configs
+                    (\config ->
+                        when config is
+                            Arg c -> Some c
+                            _ -> None)
 
             positionaConfigs =
-                filterMap configs (\config ->
-                    when config is
-                        Positional c -> Some c
-                        _ -> None)
+                filterMap
+                    configs
+                    (\config ->
+                        when config is
+                            Positional c -> Some c
+                            _ -> None)
 
             fmtArgsHelp =
                 if List.isEmpty argConfigs then
                     ""
                 else
-                    helpStr = 
+                    helpStr =
                         argConfigs
                         |> List.map (\c -> formatArgConfig (n + indentLevel) c)
                         |> Str.joinWith "\n"
 
                     """
-
+                    
                     \(indented)OPTIONS:
                     \(helpStr)
                     """
@@ -613,7 +617,7 @@ formatHelpHelp = \n, cmdHelp ->
                         |> Str.joinWith "\n"
 
                     """
-
+                    
                     \(indented)POSITIONAL ARGUMENTS:
                     \(helpStr)
                     """
@@ -860,9 +864,9 @@ expect
 
     toHelp parser
     == Config [
-        (Arg { long: "foo", short: "", help: "the foo flag", type: Str }),
-        (Arg { long: "bar", short: "B", help: "", type: Str }),
-        (Arg { long: "bool", short: "", help: "", type: Bool }),
+        Arg { long: "foo", short: "", help: "the foo flag", type: Str },
+        Arg { long: "bar", short: "B", help: "", type: Str },
+        Arg { long: "bool", short: "", help: "", type: Bool },
     ]
 
 # format argument is missing
@@ -1032,7 +1036,7 @@ expect
 
 # parse positional argument
 expect
-    parser = positional {name: "foo"}
+    parser = positional { name: "foo" }
 
     parseHelp parser (mark ["myArg"]) == Ok "myArg"
 
@@ -1041,7 +1045,7 @@ expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo), bar: \(bar)")
         |> withParser (str { long: "foo" })
-        |> withParser (positional {name: "bar"})
+        |> withParser (positional { name: "bar" })
 
     cases = [
         ["--foo", "true", "baz"],
@@ -1053,14 +1057,14 @@ expect
 # parse positional argument with subcommand
 expect
     parser = choice [
-        positional {name: "bar"}
-        |> subCommand "hello"
+        positional { name: "bar" }
+        |> subCommand "hello",
     ]
 
     parseHelp parser (mark ["hello", "foo"]) == Ok "foo"
 
 # missing positional argument
 expect
-    parser = positional {name: "bar"}
+    parser = positional { name: "bar" }
 
     parseHelp parser (mark []) == Err (MissingPositionalArg "bar")
