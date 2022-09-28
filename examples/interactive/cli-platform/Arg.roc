@@ -487,6 +487,7 @@ i64 = \{ long, short ? "", help ? "" } ->
     @Parser (Arg { long, short, help, type: I64 } fn)
 
 ## Parses a single positional argument as a string.
+positional : _ -> Parser Str
 positional = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args 
