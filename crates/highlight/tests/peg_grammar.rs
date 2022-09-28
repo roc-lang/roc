@@ -730,16 +730,24 @@ test1 =
         file_to_string(&file_path)
     }
 
+    fn cli_testing_path(sub_path: &str) -> String {
+        let examples_dir = "../cli_testing_examples/".to_string();
+
+        let file_path = examples_dir + sub_path;
+
+        file_to_string(&file_path)
+    }
+
     #[test]
     fn test_hello() {
-        let tokens = tokenize(&example_path("hello-world/main.roc"));
+        let tokens = tokenize(&example_path("helloWorld.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
     #[test]
     fn test_fibo() {
-        let tokens = tokenize(&example_path("algorithms/fibonacci.roc"));
+        let tokens = tokenize(&cli_testing_path("algorithms/fibonacci.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -831,14 +839,14 @@ test1 =
 
     #[test]
     fn test_base64() {
-        let tokens = tokenize(&example_path("benchmarks/Base64.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/Base64.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
     #[test]
     fn test_base64_test() {
-        let tokens = tokenize(&example_path("benchmarks/TestBase64.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/TestBase64.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -874,7 +882,7 @@ test1 =
 
     #[test]
     fn test_astar_test() {
-        let tokens = tokenize(&example_path("benchmarks/TestAStar.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/TestAStar.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1106,7 +1114,7 @@ test1 =
 
     #[test]
     fn test_closure_file() {
-        let tokens = tokenize(&example_path("benchmarks/Closure.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/Closure.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1126,7 +1134,7 @@ test1 =
 
     #[test]
     fn test_nqueens() {
-        let tokens = tokenize(&example_path("benchmarks/NQueens.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/NQueens.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1149,7 +1157,7 @@ test1 =
 
     #[test]
     fn test_quicksort() {
-        let tokens = tokenize(&example_path("benchmarks/Quicksort.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/Quicksort.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1176,7 +1184,7 @@ test1 =
 
     #[test]
     fn test_task() {
-        let tokens = tokenize(&example_path("benchmarks/platform/Task.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/platform/Task.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1221,7 +1229,7 @@ test1 =
 
     #[test]
     fn test_cfold() {
-        let tokens = tokenize(&example_path("benchmarks/CFold.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/CFold.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1291,7 +1299,7 @@ balance = \color ->
 
     #[test]
     fn test_rbtree_insert() {
-        let tokens = tokenize(&example_path("benchmarks/RBTreeInsert.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/RBTreeInsert.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1357,7 +1365,7 @@ balance = \color ->
 
     #[test]
     fn test_rbtree_ck() {
-        let tokens = tokenize(&example_path("benchmarks/RBTreeCk.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/RBTreeCk.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1390,7 +1398,7 @@ balance = \color ->
 
     #[test]
     fn test_astar() {
-        let tokens = tokenize(&example_path("benchmarks/AStar.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/AStar.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1409,7 +1417,7 @@ balance = \color ->
 
     #[test]
     fn test_false_interpreter_context() {
-        let tokens = tokenize(&example_path("false-interpreter/Context.roc"));
+        let tokens = tokenize(&example_path("cli/false-interpreter/Context.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -1437,7 +1445,7 @@ balance = \color ->
 
     #[test]
     fn test_deriv() {
-        let tokens = tokenize(&example_path("benchmarks/Deriv.roc"));
+        let tokens = tokenize(&cli_testing_path("benchmarks/Deriv.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
