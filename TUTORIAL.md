@@ -964,7 +964,7 @@ instead of to a value. Just like how you can read `name : Str` as "`name` has th
 you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type
 `{ firstName : Str, lastName : Str }`."
 
-We can also give type annotations to tag unions:
+We can also annotate types that include tags:
 
 ```coffee
 colorFromStr : Str -> [Red, Green, Yellow]
@@ -975,7 +975,7 @@ colorFromStr = \string ->
         _ -> Yellow
 ```
 
-You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
+You can read the type `[Red, Green, Yellow]` as "a *tag union* of the tags `Red`, `Green`, and `Yellow`."
 
 When we annotate a list type, we have to specify the type of its elements:
 
