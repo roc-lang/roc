@@ -31,7 +31,7 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg Config (MarkedArgs -> Result a [NotFound Str, WrongType { arg : Str, expected : Type }]),
+    Arg Config (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -44,11 +44,14 @@ Parser a := [
     Lazy ({} -> a),
 ]
 
+## Indices in an arguments list that have already been parsed.
+Taken : Set Nat
+
 ## A representation of parsed and unparsed arguments in a constant list of
 ## command-line arguments.
 ## Used only internally, for efficient representation of parsed and unparsed
 ## arguments.
-MarkedArgs : { args : List Str, taken : Set Nat }
+MarkedArgs : { args : List Str, taken : Taken }
 
 ## Enumerates errors that can occur during parsing a list of command line arguments.
 ParseError a : [
@@ -129,7 +132,7 @@ toHelpHelper = \@Parser parser, configs ->
                 (\{ name, parser: innerParser } -> { name, help: toHelpHelper innerParser [] })
             |> SubCommands
 
-findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newTaken : Set Nat } [NotFound]*
+findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newlyTaken : Taken } [NotFound]*
 findOneArg = \long, short, { args, taken } ->
     argMatches = \{ index, found: _ }, arg ->
         if Set.contains taken index || Set.contains taken (index + 1) then
@@ -154,7 +157,10 @@ findOneArg = \long, short, { args, taken } ->
             (\val ->
                 newUsed = Set.fromList [argIndex, argIndex + 1]
 
-                { val, newTaken: Set.union taken newUsed })
+                { val, newlyTaken: newUsed })
+
+updateTaken : MarkedArgs, Taken -> MarkedArgs
+updateTaken = \{ args, taken }, taken2 -> { args, taken: Set.union taken taken2 }
 
 # andMap : Parser a, Parser (a -> b) -> Parser b
 andMap = \@Parser parser, @Parser mapper ->
@@ -176,7 +182,7 @@ andMap = \@Parser parser, @Parser mapper ->
                     Arg config run ->
                         Arg config \args ->
                             run args
-                            |> Result.map fn
+                            |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
@@ -190,13 +196,13 @@ andMap = \@Parser parser, @Parser mapper ->
                     Succeed a ->
                         Arg config \args ->
                             when run args is
-                                Ok fn -> Ok (fn a)
+                                Ok { val: fn, newlyTaken } -> Ok { val: fn a, newlyTaken }
                                 Err err -> Err err
 
                     Lazy thunk ->
                         Arg config \args ->
                             when run args is
-                                Ok fn -> Ok (fn (thunk {}))
+                                Ok { val: fn, newlyTaken } -> Ok { val: fn (thunk {}), newlyTaken }
                                 Err err -> Err err
 
                     WithConfig parser2 config2 ->
@@ -208,7 +214,10 @@ andMap = \@Parser parser, @Parser mapper ->
                         # Parse first the one and then the other.
                         combinedParser = Arg config2 \args ->
                             when run args is
-                                Ok fn -> run2 args |> Result.map fn
+                                Ok { val: fn, newlyTaken } ->
+                                    run2 (updateTaken args newlyTaken)
+                                    |> Result.map (\{ val, newlyTaken: newlyTaken2 } -> { val: fn val, newlyTaken: Set.union newlyTaken newlyTaken2 })
+
                                 Err err -> Err err
 
                         # Store the extra config.
@@ -242,7 +251,7 @@ andMap = \@Parser parser, @Parser mapper ->
                     Arg config run ->
                         Arg config \args ->
                             run args
-                            |> Result.map fn
+                            |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
@@ -299,9 +308,9 @@ parseHelp = \@Parser parser, args ->
         Succeed val -> Ok val
         Arg _ run ->
             when run args is
-                Ok val -> Ok val
+                Ok { val, newlyTaken: _ } -> Ok val
                 Err (NotFound long) -> Err (MissingRequiredArg long)
-                Err (WrongType { arg, expected }) -> Err (WrongType { arg, expected })
+                Err (WrongType {arg, expected}) -> Err (WrongType { arg: long, expected: type })
 
         SubCommand cmds ->
             when nextUnmarked args is
@@ -348,10 +357,10 @@ bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok { val, newTaken: _ } ->
+            Ok { val, newlyTaken } ->
                 when val is
-                    "true" -> Ok Bool.true
-                    "false" -> Ok Bool.false
+                    "true" -> Ok { val: Bool.true, newlyTaken }
+                    "false" -> Ok { val: Bool.false, newlyTaken }
                     _ -> Err (WrongType { arg: long, expected: Bool })
 
     @Parser (Arg { long, short, help, type: Bool } fn)
@@ -362,7 +371,7 @@ str = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok { val, newTaken: _ } -> Ok val
+            Ok { val, newlyTaken } -> Ok { val, newlyTaken }
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
@@ -372,9 +381,10 @@ i64 = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok { val, newTaken: _ } ->
+            Ok { val, newlyTaken } ->
                 Str.toI64 val
-                |> Result.mapErr \_ -> WrongType { arg: long, expected: I64 }
+                |> Result.mapErr (\_ -> WrongType { arg: long, expected: I64 })
+                |> Result.map (\v -> { val: v, newlyTaken })
 
     @Parser (Arg { long, short, help, type: I64 } fn)
 
