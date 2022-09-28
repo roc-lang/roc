@@ -375,20 +375,6 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
 
 /// # dbg_hex
 /// display dbg result in hexadecimal `{:#x?}` format.
-///
-/// # usage
-/// Replace `dbg!()` with `dbg_hex!()`
-///
-/// # example
-/// ```rust, no_run
-/// use dbg_hex::dbg_hex;
-/// dbg_hex!(0x16 + 0x16);
-/// ```
-///
-/// output
-/// ```text
-/// [src/lib.rs:38] 0x16 + 0x16 = 0x2c
-/// ```
 #[macro_export]
 macro_rules! dbg_hex {
     // NOTE: We cannot use `concat!` to make a static string as a format argument

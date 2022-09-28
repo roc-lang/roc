@@ -1057,9 +1057,6 @@ fn write_section_header(
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
-    use std::ops::Deref;
-
-    use object::pe::ImageFileHeader;
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
 

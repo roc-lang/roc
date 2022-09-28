@@ -1534,6 +1534,7 @@ mod tests {
     }
 
     /// This zig code sample containts a static relocation
+    #[allow(dead_code)]
     fn static_relocation_help(dir: &Path) {
         let host_zig = indoc!(
             r#"
