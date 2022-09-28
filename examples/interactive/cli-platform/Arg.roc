@@ -44,6 +44,10 @@ Parser a := [
     Lazy ({} -> a),
 ]
 
+## A representation of parsed and unparsed arguments in a constant list of
+## command-line arguments.
+## Used only internally, for efficient representation of parsed and unparsed
+## arguments.
 MarkedArgs : { args : List Str, taken : Set Nat }
 
 ## Enumerates errors that can occur during parsing a list of command line arguments.
