@@ -9,6 +9,7 @@ interface Arg
         bool,
         str,
         i64,
+        positional,
         subCommand,
         choice,
         withParser,
@@ -31,7 +32,8 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg Config (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
+    Arg ArgConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
+    Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound, WrongType]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -92,12 +94,19 @@ Help : [
     Config (List Config),
 ]
 
-Config : {
+ArgConfig : {
     long : Str,
     short : Str,
     help : Str,
     type : Type,
 }
+
+PositionalConfig : {
+    name : Str,
+    help : Str,
+}
+
+Config : [Arg ArgConfig, Positional PositionalConfig]
 
 ## Generates help metadata from a [Parser].
 ##
@@ -123,7 +132,7 @@ toHelpHelper = \@Parser parser, configs ->
             toHelpHelper innerParser (List.append configs config)
 
         Arg config _ ->
-            List.append configs config
+            List.append configs (Arg config)
             |> Config
 
         SubCommand commands ->
@@ -131,6 +140,10 @@ toHelpHelper = \@Parser parser, configs ->
                 commands
                 (\{ name, parser: innerParser } -> { name, help: toHelpHelper innerParser [] })
             |> SubCommands
+
+        Positional config _ ->
+            List.append configs (Positional config)
+            |> Config
 
 findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newlyTaken : Taken } [NotFound]*
 findOneArg = \long, short, { args, taken } ->
@@ -184,6 +197,11 @@ andMap = \@Parser parser, @Parser mapper ->
                             run args
                             |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
+                    Positional config run ->
+                        Positional config \args ->
+                            run args
+                            |> Result.map (\{val, newlyTaken} -> {val: fn val, newlyTaken})
+
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
                             { name, parser: andMap parser2 (@Parser mapper) }
@@ -222,7 +240,75 @@ andMap = \@Parser parser, @Parser mapper ->
 
                         # Store the extra config.
                         @Parser combinedParser
-                        |> WithConfig config
+                        |> WithConfig (Arg config)
+
+                    Positional config2 run2 ->
+                        combinedParser = Positional config2 \args ->
+                            when run args is
+                                Ok { val: fn, newlyTaken } ->
+                                    run2 (updateTaken args newlyTaken)
+                                    |> Result.map (\{ val, newlyTaken: newlyTaken2 } -> { val: fn val, newlyTaken: Set.union newlyTaken newlyTaken2 })
+
+                                Err err -> Err err
+
+                        # Store the extra config.
+                        @Parser combinedParser
+                        |> WithConfig (Arg config)
+
+                    SubCommand cmds ->
+                        # For each subcommand, first run the subcommand, then
+                        # push the result through the arg parser.
+                        mapSubParser = \{ name, parser: parser2 } ->
+                            { name, parser: andMap parser2 (@Parser mapper) }
+
+                        List.map cmds mapSubParser
+                        |> SubCommand
+
+            Positional config run ->
+                when parser is
+                    Succeed a ->
+                        Positional config \args ->
+                            when run args is
+                                Ok { val: fn, newlyTaken } -> Ok { val: fn a, newlyTaken }
+                                Err err -> Err err
+
+                    Lazy thunk ->
+                        Positional config \args ->
+                            when run args is
+                                Ok { val: fn, newlyTaken } -> Ok { val: fn (thunk {}), newlyTaken }
+                                Err err -> Err err
+
+                    WithConfig parser2 config2 ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> WithConfig config2
+
+                    Arg config2 run2 ->
+                        # Parse first the one and then the other.
+                        combinedParser = Arg config2 \args ->
+                            when run args is
+                                Ok { val: fn, newlyTaken } ->
+                                    run2 (updateTaken args newlyTaken)
+                                    |> Result.map (\{ val, newlyTaken: newlyTaken2 } -> { val: fn val, newlyTaken: Set.union newlyTaken newlyTaken2 })
+
+                                Err err -> Err err
+
+                        # Store the extra config.
+                        @Parser combinedParser
+                        |> WithConfig (Positional config)
+
+                    Positional config2 run2 ->
+                        combinedParser = Positional config2 \args ->
+                            when run args is
+                                Ok { val: fn, newlyTaken } ->
+                                    run2 (updateTaken args newlyTaken)
+                                    |> Result.map (\{ val, newlyTaken: newlyTaken2 } -> { val: fn val, newlyTaken: Set.union newlyTaken newlyTaken2 })
+
+                                Err err -> Err err
+
+                        # Store the extra config.
+                        @Parser combinedParser
+                        |> WithConfig (Positional config)
 
                     SubCommand cmds ->
                         # For each subcommand, first run the subcommand, then
@@ -252,6 +338,11 @@ andMap = \@Parser parser, @Parser mapper ->
                         Arg config \args ->
                             run args
                             |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
+
+                    Positional config run ->
+                        Positional config \args ->
+                            run args
+                            |> Result.map (\{val, newlyTaken} -> {val: fn val, newlyTaken})
 
                     SubCommand cmds ->
                         mapSubParser = \{ name, parser: parser2 } ->
@@ -311,6 +402,12 @@ parseHelp = \@Parser parser, args ->
                 Ok { val, newlyTaken: _ } -> Ok val
                 Err (NotFound long) -> Err (MissingRequiredArg long)
                 Err (WrongType {arg, expected}) -> Err (WrongType { arg: long, expected: type })
+
+        Positional { name } run ->
+            when run args is
+                Ok {val, newlyTaken: _} -> Ok val
+                Err NotFound -> Err (MissingRequiredArg name)
+                Err WrongType -> Err (MissingRequiredArg name)
 
         SubCommand cmds ->
             when nextUnmarked args is
@@ -388,6 +485,15 @@ i64 = \{ long, short ? "", help ? "" } ->
 
     @Parser (Arg { long, short, help, type: I64 } fn)
 
+## Parses a single positional argument as a string.
+positional = \{ name, help ? "" } ->
+    fn = \args ->
+        nextUnmarked args 
+        |> Result.mapErr (\OutOfBounds -> NotFound)
+        |> Result.map (\{val, index} -> {val, newlyTaken: Set.insert args.taken index})
+
+    @Parser (Positional { name, help } fn)
+
 ## Wraps a given parser as a subcommand parser.
 ##
 ## When parsing arguments, the subcommand name will be expected to be parsed
@@ -429,6 +535,13 @@ indentLevel = 4
 
 mapNonEmptyStr = \s, f -> if Str.isEmpty s then s else f s
 
+filterMap : List a, (a -> [Some b, None]) -> List b
+filterMap = \lst, transform ->
+    List.walk lst [] \all, elem ->
+        when transform elem is
+            Some v -> List.append all v
+            None -> all
+
 # formatHelp : NamedParser a -> Str
 formatHelp = \@NamedParser { name, help, parser } ->
     fmtHelp =
@@ -436,40 +549,84 @@ formatHelp = \@NamedParser { name, help, parser } ->
 
     cmdHelp = toHelp parser
 
-    fmtCmdHeading =
-        when cmdHelp is
-            SubCommands _ -> "COMMANDS:"
-            Config _ -> "OPTIONS:"
-
-    fmtCmdHelp = formatCmdHelp indentLevel cmdHelp
+    fmtCmdHelp = formatHelpHelp 0 cmdHelp
 
     """
     \(name)\(fmtHelp)
-    
-    \(fmtCmdHeading)
     \(fmtCmdHelp)
     """
 
-# formatCmdHelp : Nat, Help -> Str <- TODO: layout-gen panics when the following annotation is applied!
-formatCmdHelp = \n, help ->
-    when help is
+# formatHelpHelp : Nat, Help -> Str
+formatHelpHelp = \n, cmdHelp ->
+    indented = indent n
+    when cmdHelp is
         SubCommands cmds ->
-            Str.joinWith
-                (List.map cmds \subCmd -> formatSubCommand n subCmd)
-                "\n\n"
+            fmtCmdHelp = 
+                Str.joinWith
+                    (List.map cmds \subCmd -> formatSubCommand (n + indentLevel) subCmd)
+                    "\n\n"
+
+
+            """
+
+            \(indented)COMMANDS:
+            \(fmtCmdHelp)
+            """
 
         Config configs ->
-            Str.joinWith (List.map configs \c -> formatConfig n c) "\n"
+            argConfigs =
+                filterMap configs (\config ->
+                    when config is
+                        Arg c -> Some c
+                        _ -> None)
+
+            positionaConfigs =
+                filterMap configs (\config ->
+                    when config is
+                        Positional c -> Some c
+                        _ -> None)
+
+            fmtArgsHelp =
+                if List.isEmpty argConfigs then
+                    ""
+                else
+                    helpStr = 
+                        argConfigs
+                        |> List.map (\c -> formatArgConfig (n + indentLevel) c)
+                        |> Str.joinWith "\n"
+
+                    """
+
+                    \(indented)OPTIONS:
+                    \(helpStr)
+                    """
+
+            fmtPositionalsHelp =
+                if List.isEmpty positionaConfigs then
+                    ""
+                else
+                    helpStr =
+                        positionaConfigs
+                        |> List.map (\c -> formatPositionalConfig (n + indentLevel) c)
+                        |> Str.joinWith "\n"
+
+                    """
+
+                    \(indented)POSITIONAL ARGUMENTS:
+                    \(helpStr)
+                    """
+
+            Str.concat fmtArgsHelp fmtPositionalsHelp
 
 formatSubCommand = \n, { name, help } ->
     indented = indent n
 
-    fmtHelp = formatCmdHelp (n + indentLevel) help
+    fmtHelp = formatHelpHelp (n + indentLevel) help
 
-    "\(indented)\(name)\n\(fmtHelp)"
+    "\(indented)\(name)\(fmtHelp)"
 
-formatConfig : Nat, Config -> Str
-formatConfig = \n, { long, short, help, type } ->
+formatArgConfig : Nat, ArgConfig -> Str
+formatArgConfig = \n, { long, short, help, type } ->
     indented = indent n
 
     formattedShort =
@@ -481,6 +638,15 @@ formatConfig = \n, { long, short, help, type } ->
         mapNonEmptyStr help \h -> "    \(h)"
 
     "\(indented)--\(long)\(formattedShort)\(formattedHelp)  (\(formattedType))"
+
+formatPositionalConfig : Nat, PositionalConfig -> Str
+formatPositionalConfig = \n, { name, help } ->
+    indented = indent n
+
+    formattedHelp =
+        mapNonEmptyStr help \h -> "    \(h)"
+
+    "\(indented)\(name)\(formattedHelp)"
 
 formatType : Type -> Str
 formatType = \type ->
@@ -689,9 +855,9 @@ expect
 
     toHelp parser
     == Config [
-        { long: "foo", short: "", help: "the foo flag", type: Str },
-        { long: "bar", short: "B", help: "", type: Str },
-        { long: "bool", short: "", help: "", type: Bool },
+        (Arg { long: "foo", short: "", help: "the foo flag", type: Str }),
+        (Arg { long: "bar", short: "B", help: "", type: Str }),
+        (Arg { long: "bool", short: "", help: "", type: Bool }),
     ]
 
 # format argument is missing
@@ -760,12 +926,14 @@ expect
     
     COMMANDS:
         login
-            --user  (string)
-            --pw  (string)
+            OPTIONS:
+                --user  (string)
+                --pw  (string)
     
         publish
-            --file  (string)
-            --url  (string)
+            OPTIONS:
+                --file  (string)
+                --url  (string)
     """
 
 # format help menu with program help message
@@ -782,7 +950,6 @@ expect
     
     COMMANDS:
         login
-    
     """
 
 # subcommand parser
@@ -857,3 +1024,32 @@ expect
             The available subcommands are:
             \t"auth", "publish"
             """
+
+# parse positional argument
+expect
+    parser = positional {name: "foo"}
+
+    parseHelp parser (mark ["myArg"]) == Ok "myArg"
+
+# parse positional argument with argument flag
+expect
+    parser =
+        succeed (\foo -> \bar -> "foo: \(foo), bar: \(bar)")
+        |> withParser (str { long: "foo" })
+        |> withParser (positional {name: "bar"})
+
+    cases = [
+        ["--foo", "true", "baz"],
+        ["baz", "--foo", "true"],
+    ]
+
+    List.all cases \args -> parseHelp parser (mark args) == Ok "foo: true, bar: baz"
+
+# parse positional argument with subcommand
+expect
+    parser = choice [
+        positional {name: "bar"}
+        |> subCommand "hello"
+    ]
+
+    parseHelp parser (mark ["hello", "foo"]) == Ok "foo"
