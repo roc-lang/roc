@@ -39,6 +39,9 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          
+      # for debugging    
+      - run: sudo apt install -y tree
 
       - name: build benchmark runner
         run: cd ci/bench-runner && cargo build --release && cd ../..
