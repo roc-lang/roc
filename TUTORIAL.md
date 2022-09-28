@@ -977,6 +977,13 @@ colorFromStr = \string ->
 
 You can read the type `[Red, Green, Yellow]` as "a *tag union* of the tags `Red`, `Green`, and `Yellow`."
 
+Tags are always annotated as being part of a tag union, even if that union only has one tag in it. For example:
+
+```coffee
+redTag : [Red]
+redTag = Red
+```
+
 When we annotate a list type, we have to specify the type of its elements:
 
 ```coffee
