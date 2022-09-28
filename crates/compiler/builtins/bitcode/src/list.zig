@@ -595,9 +595,10 @@ pub fn listDropAt(
 
         if (list.isUnique()) {
             var i = drop_index;
-            while (i < size) : (i += 1) {
+            while (i < size - 1) : (i += 1) {
                 const copy_target = source_ptr + i * element_width;
                 const copy_source = copy_target + element_width;
+
                 @memcpy(copy_target, copy_source, element_width);
             }
 

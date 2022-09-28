@@ -251,7 +251,13 @@ mod cli_run {
                 );
             }
 
-            assert!(out.status.success());
+            if !out.status.success() {
+                // We don't need stdout, Cargo prints it for us.
+                panic!(
+                    "Example program exited with status {:?}\nstderr was:\n{:#?}",
+                    out.status, out.stderr
+                );
+            }
         }
     }
 
@@ -659,6 +665,17 @@ mod cli_run {
                 arguments: &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
                 env: &[],
                 expected_ending: "Processed 3 files with 3 successes and 0 errors\n",
+                use_valgrind: false,
+            }
+        },
+        parse_movies_csv: "parser" => {
+            Example {
+                filename: "parse-movies-csv.roc",
+                executable_filename: "parse-movies-csv",
+                stdin: &[],
+                arguments: &[],
+                env: &[],
+                expected_ending: "Parse success!\n",
                 use_valgrind: false,
             }
         },
