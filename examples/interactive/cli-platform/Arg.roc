@@ -31,7 +31,7 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg Config (List Str -> Result a [NotFound Str, WrongType { arg : Str, expected : Type }]),
+    Arg Config (MarkedArgs -> Result a [NotFound Str, WrongType { arg : Str, expected : Type }]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -43,6 +43,8 @@ Parser a := [
     WithConfig (Parser a) Config,
     Lazy ({} -> a),
 ]
+
+MarkedArgs : { args : List Str, taken : Set Nat }
 
 ## Enumerates errors that can occur during parsing a list of command line arguments.
 ParseError a : [
@@ -123,24 +125,32 @@ toHelpHelper = \@Parser parser, configs ->
                 (\{ name, parser: innerParser } -> { name, help: toHelpHelper innerParser [] })
             |> SubCommands
 
-findOneArg : Str, Str, List Str -> Result Str [NotFound]*
-findOneArg = \long, short, args ->
-    argMatches = \arg ->
-        if arg == "--\(long)" then
-            Bool.true
+findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newTaken : Set Nat } [NotFound]*
+findOneArg = \long, short, { args, taken } ->
+    argMatches = \{ index, found: _ }, arg ->
+        if Set.contains taken index || Set.contains taken (index + 1) then
+            Continue { index: index + 1, found: Bool.false }
+        else if arg == "--\(long)" then
+            Break { index, found: Bool.true }
+        else if Bool.not (Str.isEmpty short) && arg == "-\(short)" then
+            Break { index, found: Bool.true }
         else
-            Bool.not (Str.isEmpty short) && arg == "-\(short)"
+            Continue { index: index + 1, found: Bool.false }
 
     # TODO allow = as well, etc.
-    result = List.findFirstIndex args argMatches
+    { index: argIndex, found } = List.walkUntil args { index: 0, found: Bool.false } argMatches
 
-    when result is
-        Ok index ->
-            # Return the next arg after the given one
-            List.get args (index + 1)
-            |> Result.mapErr \_ -> NotFound
+    if !found then
+        Err NotFound
+    else
+        # Return the next arg after the given one
+        List.get args (argIndex + 1)
+        |> Result.mapErr (\_ -> NotFound)
+        |> Result.map
+            (\val ->
+                newUsed = Set.fromList [argIndex, argIndex + 1]
 
-        Err NotFound -> Err NotFound
+                { val, newTaken: Set.union taken newUsed })
 
 # andMap : Parser a, Parser (a -> b) -> Parser b
 andMap = \@Parser parser, @Parser mapper ->
@@ -275,9 +285,11 @@ parse = \@NamedParser parser, args ->
     then
         Err (ProgramNameNotProvided parser.name)
     else
-        parseHelp parser.parser (List.split args 1).others
+        markedArgs = { args, taken: Set.single 0 }
 
-parseHelp : Parser a, List Str -> Result a (ParseError *)
+        parseHelp parser.parser markedArgs
+
+parseHelp : Parser a, MarkedArgs -> Result a (ParseError *)
 parseHelp = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
@@ -288,9 +300,9 @@ parseHelp = \@Parser parser, args ->
                 Err (WrongType { arg, expected }) -> Err (WrongType { arg, expected })
 
         SubCommand cmds ->
-            when List.get args 0 is
-                Ok cmd ->
-                    argsRest = (List.split args 1).others
+            when nextUnmarked args is
+                Ok { index, val: cmd } ->
+                    argsRest = { args & taken: Set.insert args.taken index }
                     state =
                         List.walkUntil
                             cmds
@@ -313,6 +325,17 @@ parseHelp = \@Parser parser, args ->
         WithConfig parser2 _config ->
             parseHelp parser2 args
 
+nextUnmarked : MarkedArgs -> Result { index : Nat, val : Str } [OutOfBounds]
+nextUnmarked = \marked ->
+    help = \index ->
+        if Set.contains marked.taken index then
+            help (index + 1)
+        else
+            List.get marked.args index
+            |> Result.map \val -> { index, val }
+
+    help 0
+
 ## Creates a parser for a boolean flag argument.
 ## Flags of value "true" and "false" will be parsed as [Bool.true] and [Bool.false], respectively.
 ## All other values will result in a `WrongType` error.
@@ -321,9 +344,11 @@ bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok "true" -> Ok Bool.true
-            Ok "false" -> Ok Bool.false
-            Ok _ -> Err (WrongType { arg: long, expected: Bool })
+            Ok { val, newTaken: _ } ->
+                when val is
+                    "true" -> Ok Bool.true
+                    "false" -> Ok Bool.false
+                    _ -> Err (WrongType { arg: long, expected: Bool })
 
     @Parser (Arg { long, short, help, type: Bool } fn)
 
@@ -333,7 +358,7 @@ str = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok foundArg -> Ok foundArg
+            Ok { val, newTaken: _ } -> Ok val
 
     @Parser (Arg { long, short, help, type: Str } fn)
 
@@ -343,8 +368,8 @@ i64 = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
             Err NotFound -> Err (NotFound long)
-            Ok foundArg ->
-                Str.toI64 foundArg
+            Ok { val, newTaken: _ } ->
+                Str.toI64 val
                 |> Result.mapErr \_ -> WrongType { arg: long, expected: I64 }
 
     @Parser (Arg { long, short, help, type: I64 } fn)
@@ -507,107 +532,109 @@ formatError = \err ->
 ## ```
 withParser = \arg1, arg2 -> andMap arg2 arg1
 
+mark = \args -> { args, taken: Set.empty }
+
 # bool undashed long argument is missing
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["foo"]) == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument without value is missing
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
 
 # bool dashed long argument with value is determined true
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo", "true"] == Ok Bool.true
+    parseHelp parser (mark ["--foo", "true"]) == Ok Bool.true
 
 # bool dashed long argument with value is determined false
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo", "false"] == Ok Bool.false
+    parseHelp parser (mark ["--foo", "false"]) == Ok Bool.false
 
 # bool dashed long argument with value is determined wrong type
 expect
     parser = bool { long: "foo" }
 
-    parseHelp parser ["--foo", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["--foo", "not-a-bool"]) == Err (WrongType { arg: "foo", expected: Bool })
 
 # bool dashed short argument with value is determined true
 expect
     parser = bool { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "true"] == Ok Bool.true
+    parseHelp parser (mark ["-F", "true"]) == Ok Bool.true
 
 # bool dashed short argument with value is determined false
 expect
     parser = bool { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "false"] == Ok Bool.false
+    parseHelp parser (mark ["-F", "false"]) == Ok Bool.false
 
 # bool dashed short argument with value is determined wrong type
 expect
     parser = bool { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "not-a-bool"] == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["-F", "not-a-bool"]) == Err (WrongType { arg: "foo", expected: Bool })
 
 # string dashed long argument without value is missing
 expect
     parser = str { long: "foo" }
 
-    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
 
 # string dashed long argument with value is determined
 expect
     parser = str { long: "foo" }
 
-    parseHelp parser ["--foo", "itsme"] == Ok "itsme"
+    parseHelp parser (mark ["--foo", "itsme"]) == Ok "itsme"
 
 # string dashed short argument without value is missing
 expect
     parser = str { long: "foo", short: "F" }
 
-    parseHelp parser ["-F"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["-F"]) == Err (MissingRequiredArg "foo")
 
 # string dashed short argument with value is determined
 expect
     parser = str { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "itsme"] == Ok "itsme"
+    parseHelp parser (mark ["-F", "itsme"]) == Ok "itsme"
 
 # i64 dashed long argument without value is missing
 expect
     parser = i64 { long: "foo" }
 
-    parseHelp parser ["--foo"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
 
 # i64 dashed long argument with value is determined positive
 expect
     parser = i64 { long: "foo" }
 
-    parseHelp parser ["--foo", "1234"] == Ok 1234
+    parseHelp parser (mark ["--foo", "1234"]) == Ok 1234
 
 # i64 dashed long argument with value is determined negative
 expect
     parser = i64 { long: "foo" }
 
-    parseHelp parser ["--foo", "-1234"] == Ok -1234
+    parseHelp parser (mark ["--foo", "-1234"]) == Ok -1234
 
 # i64 dashed short argument without value is missing
 expect
     parser = i64 { long: "foo", short: "F" }
 
-    parseHelp parser ["-F"] == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["-F"]) == Err (MissingRequiredArg "foo")
 
 # i64 dashed short argument with value is determined
 expect
     parser = i64 { long: "foo", short: "F" }
 
-    parseHelp parser ["-F", "1234"] == Ok 1234
+    parseHelp parser (mark ["-F", "1234"]) == Ok 1234
 
 # two string parsers complete cases
 expect
@@ -622,7 +649,7 @@ expect
         ["--foo", "true", "--bar", "baz", "--other", "something"],
     ]
 
-    List.all cases \args -> parseHelp parser args == Ok "foo: true bar: baz"
+    List.all cases \args -> parseHelp parser (mark args) == Ok "foo: true bar: baz"
 
 # one argument is missing out of multiple
 expect
@@ -657,7 +684,7 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    when parseHelp parser ["foo"] is
+    when parseHelp parser (mark ["foo"]) is
         Ok _ -> Bool.false
         Err e ->
             err = formatError e
@@ -668,7 +695,7 @@ expect
 expect
     parser = bool { long: "foo" }
 
-    when parseHelp parser ["--foo", "12"] is
+    when parseHelp parser (mark ["--foo", "12"]) is
         Ok _ -> Bool.false
         Err e ->
             err = formatError e
@@ -786,7 +813,7 @@ expect
     parser =
         choice [subCommand (succeed "") "auth", subCommand (succeed "") "publish"]
 
-    when parseHelp parser [] is
+    when parseHelp parser (mark []) is
         Ok _ -> Bool.true
         Err e ->
             err = formatError e
@@ -804,7 +831,7 @@ expect
     parser =
         choice [subCommand (succeed "") "auth", subCommand (succeed "") "publish"]
 
-    when parseHelp parser ["logs"] is
+    when parseHelp parser (mark ["logs"]) is
         Ok _ -> Bool.true
         Err e ->
             err = formatError e
