@@ -35,7 +35,7 @@ jobs:
           7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
       - name: build tests without running
-        run: cargo build --locked --release --no-run
+        run: cargo test --locked --release --no-run
 
       - run: cargo test-gen-llvm
       
