@@ -42,7 +42,7 @@ use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader,
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
-use roc_parse::parser::{FileError, Parser, SyntaxError};
+use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::{Annotation, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
@@ -3255,6 +3255,45 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
+fn verify_interface_matches_file_path<'a>(
+    interface_name: Loc<roc_parse::header::ModuleName<'a>>,
+    path: &Path,
+    state: &roc_parse::state::State<'a>,
+) -> Result<(), LoadingProblem<'a>> {
+    let module_parts = interface_name.value.as_str().split(MODULE_SEPARATOR).rev();
+
+    let mut is_mismatched = false;
+    let mut opt_path = Some(path);
+    for part in module_parts {
+        match opt_path.and_then(|path| path.file_stem().map(|fi| (path, fi))) {
+            None => {
+                is_mismatched = true;
+                break;
+            }
+            Some((path, fi)) => {
+                if fi != part {
+                    is_mismatched = true;
+                    break;
+                }
+                opt_path = path.parent();
+            }
+        }
+    }
+
+    if !is_mismatched {
+        return Ok(());
+    }
+
+    use roc_parse::parser::EHeader;
+    let syntax_problem =
+        SyntaxError::Header(EHeader::InconsistentModuleName(interface_name.region));
+    let problem = LoadingProblem::ParsingFailed(FileError {
+        problem: SourceError::new(syntax_problem, state),
+        filename: path.to_path_buf(),
+    });
+    Err(problem)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
@@ -3280,6 +3319,8 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => {
+            verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
+
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,

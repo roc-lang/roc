@@ -318,7 +318,7 @@ fn import_transitive_alias() {
             ),
         ),
         (
-            "Main",
+            "Other",
             indoc!(
                 r#"
                         interface Other exposes [empty] imports [RBTree]
@@ -908,4 +908,39 @@ fn import_builtin_in_platform_and_check_app() {
 
     let result = multiple_modules("import_builtin_in_platform_and_check_app", modules);
     assert!(result.is_ok(), "should check");
+}
+
+#[test]
+fn module_doesnt_match_file_path() {
+    let modules = vec![(
+        "Age",
+        indoc!(
+            r#"
+                interface NotAge exposes [Age] imports []
+
+                Age := U32
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("module_doesnt_match_file_path", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
+
+            This module name does not correspond with the file path it is defined
+            in:
+
+            1│  interface NotAge exposes [Age] imports []
+                          ^^^^^^
+
+            Module names must correspond with the file paths they are defined in.
+            For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
+            defined in Math/Sin.roc."#
+        ),
+        "\n{}",
+        err
+    );
 }

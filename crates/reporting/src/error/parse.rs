@@ -3100,6 +3100,33 @@ fn to_header_report<'a>(
             }
         }
 
+        EHeader::InconsistentModuleName(region) => {
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"This module name does not correspond with the file path it is defined in:",
+                ),
+                alloc.region(lines.convert_region(*region)),
+                alloc.concat([
+                    alloc.reflow("Module names must correspond with the file paths they are defined in. For example, I expect to see "),
+                    alloc.parser_suggestion("BigNum"),
+                    alloc.reflow(" defined in "),
+                    alloc.parser_suggestion("BigNum.roc"),
+                    alloc.reflow(", or "),
+                    alloc.parser_suggestion("Math.Sin"),
+                    alloc.reflow(" defined in "),
+                    alloc.parser_suggestion("Math/Sin.roc"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD MODULE NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EHeader::AppName(_, pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
