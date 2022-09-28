@@ -1028,3 +1028,45 @@ fn module_cyclic_import_transitive() {
         err
     );
 }
+
+#[test]
+fn nested_module_has_incorrect_name() {
+    let modules = vec![
+        (
+            "Dep/Foo.roc",
+            indoc!(
+                r#"
+                interface Foo exposes [] imports []
+                "#
+            ),
+        ),
+        (
+            "I.roc",
+            indoc!(
+                r#"
+                interface I exposes [] imports [Dep.Foo]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("nested_module_has_incorrect_name", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
+
+            This module has a different name than I expected:
+
+            1│  interface Foo exposes [] imports []
+                          ^^^
+
+            Based on the nesting and use of this module, I expect it to have name
+
+                Dep.Foo"#
+        ),
+        "\n{}",
+        err
+    );
+}

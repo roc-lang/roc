@@ -431,6 +431,8 @@ pub enum PackageQualified<'a, T> {
     Qualified(&'a str, T),
 }
 
+impl<'a, T: Copy> Copy for PackageQualified<'a, T> {}
+
 /// Package-qualified module name
 pub type PQModuleName<'a> = PackageQualified<'a, ModuleName>;
 

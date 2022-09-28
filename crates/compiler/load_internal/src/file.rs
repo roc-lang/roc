@@ -827,6 +827,8 @@ enum Msg<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
+
+    IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
 #[derive(Debug)]
@@ -1125,6 +1127,13 @@ enum WorkerMsg {
 }
 
 #[derive(Debug)]
+pub struct IncorrectModuleName<'a> {
+    pub module_id: ModuleId,
+    pub found: Loc<PQModuleName<'a>>,
+    pub expected: PQModuleName<'a>,
+}
+
+#[derive(Debug)]
 pub enum LoadingProblem<'a> {
     FileProblem {
         filename: PathBuf,
@@ -1141,6 +1150,7 @@ pub enum LoadingProblem<'a> {
     FormattedReport(String),
 
     ImportCycle(PathBuf, Vec<ModuleId>),
+    IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
 pub enum Phases {
@@ -1235,6 +1245,7 @@ impl<'a> LoadStart<'a> {
                 filename,
                 true,
                 None,
+                None,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
@@ -1304,6 +1315,28 @@ impl<'a> LoadStart<'a> {
                         root_exposed_ident_ids,
                         cycle,
                         filename,
+                        render,
+                    );
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(LoadingProblem::IncorrectModuleName(FileError {
+                    problem: SourceError { problem, bytes },
+                    filename,
+                })) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_incorrect_module_name_report(
+                        module_ids,
+                        root_exposed_ident_ids,
+                        problem,
+                        filename,
+                        bytes,
                         render,
                     );
                     return Err(LoadingProblem::FormattedReport(buf));
@@ -1625,6 +1658,21 @@ fn state_thread_step<'a>(
                     );
                     Err(LoadingProblem::FormattedReport(buf))
                 }
+                Msg::IncorrectModuleName(FileError {
+                    problem: SourceError { problem, bytes },
+                    filename,
+                }) => {
+                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+                    let buf = to_incorrect_module_name_report(
+                        module_ids,
+                        state.constrained_ident_ids,
+                        problem,
+                        filename,
+                        bytes,
+                        state.render,
+                    );
+                    Err(LoadingProblem::FormattedReport(buf))
+                }
                 msg => {
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
@@ -1673,6 +1721,23 @@ fn state_thread_step<'a>(
                                 root_exposed_ident_ids,
                                 cycle,
                                 filename,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
+                        Err(LoadingProblem::IncorrectModuleName(FileError {
+                            problem: SourceError { problem, bytes },
+                            filename,
+                        })) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_incorrect_module_name_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                problem,
+                                filename,
+                                bytes,
                                 render,
                             );
                             return Err(LoadingProblem::FormattedReport(buf));
@@ -1902,6 +1967,9 @@ fn worker_task_step<'a>(
                                     .send(Msg::FailedToReadFile { filename, error })
                                     .unwrap();
                             }
+                            Err(LoadingProblem::IncorrectModuleName(err)) => {
+                                msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
+                            }
                             Err(other) => {
                                 return Err(other);
                             }
@@ -1965,6 +2033,9 @@ fn worker_task<'a>(
                             msg_tx
                                 .send(Msg::FailedToReadFile { filename, error })
                                 .unwrap();
+                        }
+                        Err(LoadingProblem::IncorrectModuleName(err)) => {
+                            msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
                         }
                         Err(other) => {
                             return Err(other);
@@ -2794,6 +2865,9 @@ fn update<'a>(
         Msg::FailedToReadFile { .. } => {
             unreachable!();
         }
+        Msg::IncorrectModuleName(..) => {
+            internal_error!();
+        }
     }
 }
 
@@ -3150,13 +3224,14 @@ fn load_builtin_module<'a>(
 
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
-    send_header(
+    let (module_id, _, header) = build_header(
         info,
         parse_state,
         module_ids,
         ident_ids_by_module,
         module_timing,
-    )
+    );
+    (module_id, Msg::Header(header))
 }
 
 /// Load a module by its module name, rather than by its filename
@@ -3212,13 +3287,14 @@ fn load_module<'a>(
         "Json", ModuleId::JSON
     }
 
-    let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
+    let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
 
     load_filename(
         arena,
         filename,
         false,
         opt_shorthand,
+        Some(module_name),
         module_ids,
         ident_ids_by_module,
         module_start_time,
@@ -3227,7 +3303,7 @@ fn load_module<'a>(
 
 fn module_name_to_path<'a>(
     src_dir: &Path,
-    module_name: PQModuleName<'a>,
+    module_name: &PQModuleName<'a>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 ) -> (PathBuf, Option<&'a str>) {
     let mut filename;
@@ -3244,7 +3320,7 @@ fn module_name_to_path<'a>(
             }
         }
         PQModuleName::Qualified(shorthand, name) => {
-            opt_shorthand = Some(shorthand);
+            opt_shorthand = Some(*shorthand);
             let shorthands = arc_shorthands.lock();
 
             match shorthands.get(shorthand) {
@@ -3346,6 +3422,7 @@ fn parse_header<'a>(
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    opt_expected_module_name: Option<PackageQualified<'a, ModuleName>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
@@ -3366,9 +3443,11 @@ fn parse_header<'a>(
         Ok((ast::Module::Interface { header }, parse_state)) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
 
+            let header_name_region = header.name.region;
+
             let info = HeaderInfo {
                 loc_name: Loc {
-                    region: header.name.region,
+                    region: header_name_region,
                     value: ModuleNameEnum::Interface(header.name.value),
                 },
                 filename,
@@ -3380,13 +3459,33 @@ fn parse_header<'a>(
                 extra: HeaderFor::Interface,
             };
 
-            Ok(send_header(
+            let (module_id, module_name, header) = build_header(
                 info,
                 parse_state,
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            ))
+            );
+
+            if let Some(expected_module_name) = opt_expected_module_name {
+                if expected_module_name != module_name {
+                    let problem = SourceError::new(
+                        IncorrectModuleName {
+                            module_id,
+                            found: Loc::at(header_name_region, module_name),
+                            expected: expected_module_name,
+                        },
+                        &parse_state,
+                    );
+                    let problem = LoadingProblem::IncorrectModuleName(FileError {
+                        problem,
+                        filename: header.module_path,
+                    });
+                    return Err(problem);
+                }
+            }
+
+            Ok((module_id, Msg::Header(header)))
         }
         Ok((ast::Module::Hosted { header }, parse_state)) => {
             let info = HeaderInfo {
@@ -3406,13 +3505,15 @@ fn parse_header<'a>(
                 },
             };
 
-            Ok(send_header(
+            let (module_id, _, header) = build_header(
                 info,
                 parse_state,
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            ))
+            );
+
+            Ok((module_id, Msg::Header(header)))
         }
         Ok((ast::Module::App { header }, parse_state)) => {
             let mut app_file_dir = filename.clone();
@@ -3450,13 +3551,14 @@ fn parse_header<'a>(
                 },
             };
 
-            let (module_id, app_module_header_msg) = send_header(
+            let (module_id, _, resolved_header) = build_header(
                 info,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
                 module_timing,
             );
+            let app_module_header_msg = Msg::Header(resolved_header);
 
             match header.to.value {
                 To::ExistingPackage(existing_package) => {
@@ -3536,6 +3638,7 @@ fn load_filename<'a>(
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    opt_expected_module_name: Option<PackageQualified<'a, ModuleName>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: Instant,
@@ -3551,6 +3654,7 @@ fn load_filename<'a>(
             filename,
             is_root_module,
             opt_shorthand,
+            opt_expected_module_name,
             module_ids,
             ident_ids_by_module,
             arena.alloc(bytes),
@@ -3583,6 +3687,7 @@ fn load_from_str<'a>(
         filename,
         false,
         None,
+        None,
         module_ids,
         ident_ids_by_module,
         src.as_bytes(),
@@ -3603,13 +3708,13 @@ struct HeaderInfo<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_header<'a>(
+fn build_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     use ModuleNameEnum::*;
 
     let HeaderInfo {
@@ -3657,13 +3762,14 @@ fn send_header<'a>(
     let mut scope: MutMap<Ident, (Symbol, Region)> =
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
+    let name: PQModuleName;
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = match opt_shorthand {
+        name = match opt_shorthand {
             Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
             None => PQModuleName::Unqualified(declared_name),
         };
@@ -3792,7 +3898,8 @@ fn send_header<'a>(
 
     (
         home,
-        Msg::Header(ModuleHeader {
+        name,
+        ModuleHeader {
             module_id: home,
             module_path: filename,
             is_root_module,
@@ -3808,7 +3915,7 @@ fn send_header<'a>(
             symbols_from_requires: Vec::new(),
             header_for: extra,
             module_timing,
-        }),
+        },
     )
 }
 
@@ -5680,6 +5787,55 @@ fn to_import_cycle_report<'a>(
         filename,
         doc,
         title: "IMPORT CYCLE".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_incorrect_module_name_report<'a>(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    problem: IncorrectModuleName<'a>,
+    filename: PathBuf,
+    src: &'a [u8],
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    let IncorrectModuleName {
+        module_id,
+        found,
+        expected,
+    } = problem;
+
+    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
+    // than an incorrect module name problem (the latter can happen only after parsing).
+    let src = unsafe { from_utf8_unchecked(src) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let doc = alloc.stack([
+        alloc.reflow("This module has a different name than I expected:"),
+        alloc.region(lines.convert_region(found.region)),
+        alloc.reflow("Based on the nesting and use of this module, I expect it to have name"),
+        alloc.pq_module_name(expected).indent(4),
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "INCORRECT MODULE NAME".to_string(),
         severity: Severity::RuntimeError,
     };
 
