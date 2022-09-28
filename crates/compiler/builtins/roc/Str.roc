@@ -359,6 +359,9 @@ splitFirst = \haystack, needle ->
 # splitFirst when needle isn't in haystack
 expect splitFirst "foo" "z" == Err NotFound
 
+# splitFirst when needle isn't in haystack, and haystack is empty
+expect splitFirst "" "z" == Err NotFound
+
 # splitFirst when haystack ends with needle repeated
 expect splitFirst "foo" "o" == Ok { before: "f", after: "o" }
 
@@ -444,17 +447,17 @@ matchesAt = \haystack, haystackIndex, needle ->
     needleLength = Str.countUtf8Bytes needle
     endIndex = min (haystackIndex + needleLength) haystackLength
 
-    matchesAtHelp haystack haystackIndex needle 0 endIndex
+    matchesAtHelp haystack haystackIndex needle 0 needleLength endIndex
 
-matchesAtHelp : Str, Nat, Str, Nat, Nat -> Bool
-matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
+matchesAtHelp : Str, Nat, Str, Nat, Nat, Nat -> Bool
+matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, needleLength, endIndex ->
     if haystackIndex < endIndex then
         if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
-            matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) endIndex
+            matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) needleLength endIndex
         else
             Bool.false
     else
-        Bool.true
+        needleIndex == needleLength
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
 ## UTF-8 `U8` byte as well as the index of that byte within the string.
