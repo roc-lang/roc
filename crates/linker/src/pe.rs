@@ -2,7 +2,6 @@ use std::{
     io::{BufReader, BufWriter},
     ops::Range,
     path::Path,
-    time::Instant,
 };
 
 use bincode::{deserialize_from, serialize_into};
@@ -20,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use roc_collections::MutMap;
 use roc_error_macros::internal_error;
 
-use crate::{generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut};
+use crate::{
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap, open_mmap_mut,
+};
 
 /// The metadata stores information about/from the host .exe because
 ///
@@ -38,6 +39,9 @@ struct PeMetadata {
 
     last_host_section_size: u64,
     last_host_section_address: u64,
+
+    /// Number of sections in the unmodified host .exe
+    host_section_count: usize,
 
     optional_header_offset: usize,
 
@@ -58,128 +62,16 @@ struct PeMetadata {
     exports: MutMap<String, i64>,
 }
 
-pub(crate) fn preprocess_windows(
-    host_exe_filename: &str,
-    metadata_filename: &Path,
-    out_filename: &Path,
-    _shared_lib: &Path,
-    _verbose: bool,
-    _time: bool,
-) -> object::read::Result<()> {
-    use object::ObjectSection;
+impl PeMetadata {
+    fn write_to_file(&self, metadata_filename: &Path) {
+        let metadata_file =
+            std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
 
-    let total_start = Instant::now();
-    let exec_parsing_start = total_start;
-
-    let _exec_parsing_duration = exec_parsing_start.elapsed();
-
-    let data = std::fs::read(host_exe_filename).unwrap();
-    let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut dynhost = Preprocessor::preprocess(out_filename, &data, &new_sections);
-
-    let dynhost_data: &[u8] = &*dynhost;
-    let dynhost_obj = match object::read::pe::PeFile64::parse(dynhost_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            internal_error!("Failed to parse executable file: {}", err);
-        }
-    };
-
-    // -2 because we added 2 sections, -1 because we have a count and want an index
-    let last_host_section = dynhost_obj
-        .sections()
-        .nth(dynhost_obj.sections().count() - 2 - 1)
-        .unwrap();
-
-    let dynamic_relocations = DynamicRelocationsPe::new(dynhost_data);
-    let thunks_start_offset = find_thunks_start_offset(dynhost_data, &dynamic_relocations);
-
-    let optional_header = dynhost_obj.nt_headers().optional_header;
-    let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
-        + std::mem::size_of::<u32>()
-        + std::mem::size_of::<ImageFileHeader>();
-
-    let exports: MutMap<String, i64> = dynhost_obj
-        .exports()
-        .unwrap()
-        .into_iter()
-        .map(|e| {
-            (
-                String::from_utf8(e.name().to_vec()).unwrap(),
-                (e.address() - optional_header.image_base.get(LE)) as i64,
-            )
-        })
-        .collect();
-
-    let imports: Vec<_> = dynhost_obj
-        .imports()
-        .unwrap()
-        .iter()
-        .filter(|import| import.library() == APP_DLL.as_bytes())
-        .map(|import| {
-            std::str::from_utf8(import.name())
-                .unwrap_or_default()
-                .to_owned()
-        })
-        .collect();
-
-    let last_host_section_size = last_host_section.size();
-    let last_host_section_address = last_host_section.address();
-
-    // in the data directories, update the length of the imports (there is one fewer now)
-    {
-        let start = dynamic_relocations.data_directories_offset_in_file as usize
-            + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
-                * std::mem::size_of::<pe::ImageDataDirectory>();
-
-        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut dynhost, start);
-
-        let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
-        dir.size.set(LE, new);
+        serialize_into(BufWriter::new(metadata_file), self)
+            .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
     }
 
-    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let start = dynamic_relocations.imports_offset_in_file as usize
-            + W * dynamic_relocations.dummy_import_index as usize;
-
-        for b in dynhost[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
-
-    let metadata = PeMetadata {
-        dynhost_file_size: std::fs::metadata(out_filename).unwrap().len() as usize,
-        image_base: optional_header.image_base.get(LE),
-        file_alignment: optional_header.file_alignment.get(LE),
-        section_alignment: optional_header.section_alignment.get(LE),
-        last_host_section_size,
-        last_host_section_address,
-        optional_header_offset,
-        imports,
-        exports,
-        dynamic_relocations,
-        thunks_start_offset,
-    };
-
-    let metadata_file =
-        std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-
-    serialize_into(BufWriter::new(metadata_file), &metadata)
-        .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
-
-    Ok(())
-}
-
-pub(crate) fn surgery_pe(
-    out_filename: &str,
-    metadata_filename: &str,
-    app_bytes: &[u8],
-    _verbose: bool,
-) {
-    let md: PeMetadata = {
+    fn read_from_file(metadata_filename: &Path) -> Self {
         let input =
             std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
 
@@ -189,9 +81,119 @@ pub(crate) fn surgery_pe(
                 internal_error!("Failed to deserialize metadata: {}", err);
             }
         }
-    };
+    }
 
-    let app_obj_sections = AppSections::from_data(app_bytes);
+    fn from_preprocessed_host(preprocessed_data: &[u8], new_sections: &[[u8; 8]]) -> Self {
+        use object::ObjectSection;
+
+        let dynhost_obj = object::read::pe::PeFile64::parse(preprocessed_data)
+            .unwrap_or_else(|err| internal_error!("Failed to parse executable file: {}", err));
+
+        let host_section_count = dynhost_obj.sections().count() - new_sections.len();
+        let last_host_section = dynhost_obj
+            .sections()
+            .nth(host_section_count - 1) // -1 because we have a count and want an index
+            .unwrap();
+
+        let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
+        let thunks_start_offset = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+
+        let optional_header = dynhost_obj.nt_headers().optional_header;
+        let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
+            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<ImageFileHeader>();
+
+        let exports: MutMap<String, i64> = dynhost_obj
+            .exports()
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                (
+                    String::from_utf8(e.name().to_vec()).unwrap(),
+                    (e.address() - optional_header.image_base.get(LE)) as i64,
+                )
+            })
+            .collect();
+
+        let imports: Vec<_> = dynhost_obj
+            .imports()
+            .unwrap()
+            .iter()
+            .filter(|import| import.library() == APP_DLL.as_bytes())
+            .map(|import| {
+                std::str::from_utf8(import.name())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+
+        let last_host_section_size = last_host_section.size();
+        let last_host_section_address = last_host_section.address();
+
+        PeMetadata {
+            dynhost_file_size: preprocessed_data.len(),
+            image_base: optional_header.image_base.get(LE),
+            file_alignment: optional_header.file_alignment.get(LE),
+            section_alignment: optional_header.section_alignment.get(LE),
+            last_host_section_size,
+            last_host_section_address,
+            host_section_count,
+            optional_header_offset,
+            imports,
+            exports,
+            dynamic_relocations,
+            thunks_start_offset,
+        }
+    }
+}
+
+pub(crate) fn preprocess_windows(
+    host_exe_filename: &Path,
+    metadata_filename: &Path,
+    preprocessed_filename: &Path,
+    _verbose: bool,
+    _time: bool,
+) -> object::read::Result<()> {
+    let data = open_mmap(host_exe_filename);
+    let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
+    let mut preprocessed = Preprocessor::preprocess(preprocessed_filename, &data, &new_sections);
+
+    // get the metadata from the preprocessed executable before the destructive operations below
+    let md = PeMetadata::from_preprocessed_host(&preprocessed, &new_sections);
+
+    // in the data directories, update the length of the imports (there is one fewer now)
+    {
+        let start = md.dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_IMPORT
+                * std::mem::size_of::<pe::ImageDataDirectory>();
+
+        let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(&mut preprocessed, start);
+
+        let new = dir.size.get(LE) - std::mem::size_of::<pe::ImageImportDescriptor>() as u32;
+        dir.size.set(LE, new);
+    }
+
+    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
+    {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        let start = md.dynamic_relocations.imports_offset_in_file as usize
+            + W * md.dynamic_relocations.dummy_import_index as usize;
+
+        for b in preprocessed[start..][..W].iter_mut() {
+            *b = 0;
+        }
+    }
+
+    md.write_to_file(metadata_filename);
+
+    Ok(())
+}
+
+pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
+    let md = PeMetadata::read_from_file(metadata_path);
+
+    let app_obj_sections = AppSections::from_data(roc_app_bytes);
     let mut symbols = app_obj_sections.symbols;
 
     let image_base: u64 = md.image_base;
@@ -204,10 +206,7 @@ pub(crate) fn surgery_pe(
         .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
         .sum();
 
-    let executable = &mut mmap_mut(
-        Path::new(out_filename),
-        md.dynhost_file_size + app_sections_size,
-    );
+    let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
 
     let app_code_section_va = md.last_host_section_address
         + next_multiple_of(
@@ -215,9 +214,12 @@ pub(crate) fn surgery_pe(
             section_alignment as usize,
         ) as u64;
 
-    let mut section_header_start = 624;
     let mut section_file_offset = md.dynhost_file_size;
     let mut virtual_address = (app_code_section_va - image_base) as u32;
+
+    // find the location to write the section headers for our new sections
+    let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
+        + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
 
     let mut code_bytes_added = 0;
     let mut data_bytes_added = 0;
@@ -275,7 +277,7 @@ pub(crate) fn surgery_pe(
         let mut offset = section_file_offset;
         let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
         for section in it {
-            let slice = &app_bytes[section.file_range.start..section.file_range.end];
+            let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
             for (name, app_relocation) in section.relocations.iter() {
@@ -368,6 +370,9 @@ struct DynamicRelocationsPe {
 
     /// The dummy .dll is the `dummy_import_index`th import of the host .exe
     dummy_import_index: u32,
+
+    /// Start of the first ImageSectionHeader of the file
+    section_headers_offset_in_file: u64,
 }
 
 impl DynamicRelocationsPe {
@@ -437,6 +442,7 @@ impl DynamicRelocationsPe {
 
         let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
         let sections = nt_headers.sections(data, offset)?;
+        let section_headers_offset_in_file = offset;
 
         let data_dir = match data_directories.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
             Some(data_dir) => data_dir,
@@ -475,6 +481,7 @@ impl DynamicRelocationsPe {
             imports_offset_in_file,
             data_directories_offset_in_file,
             dummy_import_index,
+            section_headers_offset_in_file,
         };
 
         this.append_roc_imports(&import_table, &descriptor)?;
@@ -506,7 +513,7 @@ impl Preprocessor {
 
     fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
         let this = Self::new(data, extra_sections);
-        let mut result = mmap_mut(output_path, data.len() + this.additional_length);
+        let mut result = open_mmap_mut(output_path, data.len() + this.additional_length);
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
@@ -579,8 +586,6 @@ impl Preprocessor {
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
-        // start of the first new section
-
         for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
@@ -655,20 +660,6 @@ impl Preprocessor {
             offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
         }
     }
-}
-
-fn mmap_mut(path: &Path, length: usize) -> MmapMut {
-    let out_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
-    out_file
-        .set_len(length as u64)
-        .unwrap_or_else(|e| internal_error!("{e}"));
-
-    unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
@@ -1446,7 +1437,7 @@ mod test {
 
         let dynhost_bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
 
-        let mut executable = mmap_mut(
+        let mut executable = open_mmap_mut(
             &dir.join("app.exe"),
             dynhost_bytes.len() + roc_app_sections_size,
         );

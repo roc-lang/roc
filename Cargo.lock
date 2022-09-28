@@ -1871,9 +1871,9 @@ checksum = "90953f308a79fe6d62a4643e51f848fbfddcd05975a38e69fdf4ab86a7baf7ca"
 
 [[package]]
 name = "insta"
-version = "1.19.0"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f37dc501f12ec0c339b385787fa89ffda3d5d2caa62e558da731134c24d6e0c4"
+checksum = "58a931b01c76064c5be919faa2ef0dc570e9a889dcd1e5fef08a8ca6eb4d6c0b"
 dependencies = [
  "console",
  "linked-hash-map",
@@ -2776,9 +2776,9 @@ checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
 name = "peg"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af728fe826811af3b38c37e93de6d104485953ea373d656eebae53d6987fcd2c"
+checksum = "a07f2cafdc3babeebc087e499118343442b742cc7c31b4d054682cc598508554"
 dependencies = [
  "peg-macros",
  "peg-runtime",
@@ -2786,9 +2786,9 @@ dependencies = [
 
 [[package]]
 name = "peg-macros"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4536be147b770b824895cbad934fccce8e49f14b4c4946eaa46a6e4a12fcdc16"
+checksum = "4a90084dc05cf0428428e3d12399f39faad19b0909f64fb9170c9fdd6d9cd49b"
 dependencies = [
  "peg-runtime",
  "proc-macro2",
@@ -2797,9 +2797,9 @@ dependencies = [
 
 [[package]]
 name = "peg-runtime"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9b0efd3ba03c3a409d44d60425f279ec442bcf0b9e63ff4e410da31c8b0f69f"
+checksum = "9fa00462b37ead6d11a82c9d568b26682d78e0477dc02d1966c013af80969739"
 
 [[package]]
 name = "percent-encoding"
@@ -5341,9 +5341,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa76fb221a1f8acddf5b54ace85912606980ad661ac7a503b4570ffd3a624dad"
+checksum = "23639446165ca5a5de86ae1d8896b737ae80319560fbaa4c2887b7da6e7ebd7d"
 dependencies = [
  "cfg-if 1.0.0",
  "js-sys",
