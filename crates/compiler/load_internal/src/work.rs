@@ -1,4 +1,7 @@
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::{
+    all::{MutMap, MutSet},
+    VecMap,
+};
 use roc_module::symbol::{ModuleId, PackageQualified};
 
 use std::collections::hash_map::Entry;
@@ -103,6 +106,10 @@ pub struct Dependencies<'a> {
     make_specializations_dependents: MakeSpecializationsDependents,
 }
 
+pub struct DepCycle {
+    pub cycle: Vec<ModuleId>,
+}
+
 impl<'a> Dependencies<'a> {
     pub fn new(goal_phase: Phase) -> Self {
         let mut deps = Self {
@@ -127,12 +134,21 @@ impl<'a> Dependencies<'a> {
         module_id: ModuleId,
         dependencies: &MutSet<PackageQualified<'a, ModuleId>>,
         goal_phase: Phase,
-    ) -> MutSet<(ModuleId, Phase)> {
+    ) -> Result<MutSet<(ModuleId, Phase)>, DepCycle> {
         use Phase::*;
 
         let mut output = MutSet::default();
 
         for dep in dependencies.iter() {
+            if self.has_import_dependency(*dep.as_inner(), module_id) {
+                let mut rev_cycle = self.calculate_reverse_import_path(*dep.as_inner(), module_id);
+                rev_cycle.push(module_id);
+                rev_cycle.reverse();
+                let cycle = rev_cycle;
+
+                return Err(DepCycle { cycle });
+            }
+
             let has_package_dependency = self.add_package_dependency(dep, Phase::LoadHeader);
 
             let dep = *dep.as_inner();
@@ -183,7 +199,53 @@ impl<'a> Dependencies<'a> {
 
         self.add_to_status_for_all_phases(module_id, goal_phase);
 
-        output
+        Ok(output)
+    }
+
+    fn has_import_dependency(&self, module_id: ModuleId, target: ModuleId) -> bool {
+        let mut stack = vec![module_id];
+        while let Some(module) = stack.pop() {
+            if module == target {
+                return true;
+            }
+            if let Some(dependencies) = self.make_specializations_dependents.0.get(&module) {
+                stack.extend(dependencies.succ.iter());
+            }
+        }
+        false
+    }
+
+    fn calculate_reverse_import_path(
+        &self,
+        module_id: ModuleId,
+        target: ModuleId,
+    ) -> Vec<ModuleId> {
+        let mut stack = vec![module_id];
+        let mut backlinks = VecMap::with_capacity(16);
+        let mut found_import = false;
+        while let Some(module) = stack.pop() {
+            if module == target {
+                found_import = true;
+                break;
+            }
+            if let Some(dependencies) = self.make_specializations_dependents.0.get(&module) {
+                for import in dependencies.succ.iter() {
+                    backlinks.insert(*import, module);
+                    stack.push(*import);
+                }
+            }
+        }
+        if !found_import {
+            roc_error_macros::internal_error!("calculate_import_path should only be called when an import path is known to exist!");
+        }
+
+        let mut source = target;
+        let mut rev_path = vec![source];
+        while let Some(&parent) = backlinks.get(&source) {
+            rev_path.push(parent);
+            source = parent;
+        }
+        rev_path
     }
 
     /// Adds a status for the given module for exactly one phase.

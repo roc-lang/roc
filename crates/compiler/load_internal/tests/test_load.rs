@@ -944,3 +944,87 @@ fn module_doesnt_match_file_path() {
         err
     );
 }
+
+#[test]
+fn module_cyclic_import_itself() {
+    let modules = vec![(
+        "Age",
+        indoc!(
+            r#"
+            interface Age exposes [] imports [Age]
+            "#
+        ),
+    )];
+
+    let err = multiple_modules("module_cyclic_import_itself", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
+
+            I can't compile Age because it depends on itself through the following
+            chain of module imports:
+
+                ┌─────┐
+                │     Age
+                │     ↓
+                │     Age
+                └─────┘
+
+            Cyclic dependencies are not allowed in Roc! Can you restructure a
+            module in this import chain so that it doesn't have to depend on
+            itself?"#
+        ),
+        "\n{}",
+        err
+    );
+}
+
+#[test]
+fn module_cyclic_import_transitive() {
+    let modules = vec![
+        (
+            "Age",
+            indoc!(
+                r#"
+                interface Age exposes [] imports [Person]
+                "#
+            ),
+        ),
+        (
+            "Person",
+            indoc!(
+                r#"
+                interface Person exposes [] imports [Age]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_cyclic_import_transitive", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
+
+            I can't compile Age because it depends on itself through the following
+            chain of module imports:
+
+                ┌─────┐
+                │     Age
+                │     ↓
+                │     Person
+                │     ↓
+                │     Age
+                └─────┘
+
+            Cyclic dependencies are not allowed in Roc! Can you restructure a
+            module in this import chain so that it doesn't have to depend on
+            itself?"#
+        ),
+        "\n{}",
+        err
+    );
+}

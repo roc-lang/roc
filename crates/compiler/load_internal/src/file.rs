@@ -61,8 +61,8 @@ use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
 
-use crate::work::Dependencies;
 pub use crate::work::Phase;
+use crate::work::{DepCycle, Dependencies};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_instant::{Duration, Instant};
@@ -1139,6 +1139,8 @@ pub enum LoadingProblem<'a> {
 
     /// a formatted report
     FormattedReport(String),
+
+    ImportCycle(PathBuf, Vec<ModuleId>),
 }
 
 pub enum Phases {
@@ -1286,6 +1288,24 @@ impl<'a> LoadStart<'a> {
                 }
                 Err(LoadingProblem::FileProblem { filename, error }) => {
                     let buf = to_file_problem_report(&filename, error);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(LoadingProblem::ImportCycle(filename, cycle)) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_import_cycle_report(
+                        module_ids,
+                        root_exposed_ident_ids,
+                        cycle,
+                        filename,
+                        render,
+                    );
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
                 Err(e) => return Err(e),
@@ -1643,6 +1663,19 @@ fn state_thread_step<'a>(
                                 render,
                             );
                             Err(LoadingProblem::FormattedReport(buf))
+                        }
+                        Err(LoadingProblem::ImportCycle(filename, cycle)) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_import_cycle_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                cycle,
+                                filename,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
                         }
                         Err(e) => Err(e),
                     }
@@ -2161,11 +2194,23 @@ fn update<'a>(
                         .map(|x| *x.as_inner()),
                 );
 
-            work.extend(state.dependencies.add_module(
+            let added_deps_result = state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
                 state.exec_mode.goal_phase(),
-            ));
+            );
+
+            let new_work = match added_deps_result {
+                Ok(work) => work,
+                Err(DepCycle { cycle }) => {
+                    return Err(LoadingProblem::ImportCycle(
+                        header.module_path.clone(),
+                        cycle,
+                    ));
+                }
+            };
+
+            work.extend(new_work);
 
             state.module_cache.headers.insert(header.module_id, header);
 
@@ -5582,6 +5627,65 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
     let palette = DEFAULT_PALETTE;
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
+    buf
+}
+
+fn to_import_cycle_report<'a>(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    import_cycle: Vec<ModuleId>,
+    filename: PathBuf,
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // import_cycle looks like CycleModule, Import1, ..., ImportN, CycleModule
+    // In a self-referential case, it just looks like CycleModule, CycleModule.
+    debug_assert!(import_cycle.len() >= 2);
+    let source_of_cycle = import_cycle.first().unwrap();
+
+    // We won't be printing any lines for this report, so this is okay.
+    // TODO: it would be nice to show how each module imports another in the cycle.
+    let src_lines = &[];
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(src_lines, *source_of_cycle, &interns);
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow("I can't compile "),
+            alloc.module(*source_of_cycle),
+            alloc.reflow(
+                " because it depends on itself through the following chain of module imports:",
+            ),
+        ]),
+        roc_reporting::report::cycle(
+            &alloc,
+            4,
+            alloc.module(*source_of_cycle),
+            import_cycle
+                .into_iter()
+                .skip(1)
+                .map(|module| alloc.module(module))
+                .collect(),
+        ),
+        alloc.reflow("Cyclic dependencies are not allowed in Roc! Can you restructure a module in this import chain so that it doesn't have to depend on itself?")
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "IMPORT CYCLE".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
     buf
 }
 
