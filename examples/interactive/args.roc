@@ -1,6 +1,6 @@
 app "args"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Arg, pf.Program.{ Program, exitCode }]
+    imports [pf.Stdout, pf.Arg, pf.Program.{ Program }]
     provides [main] to pf
 
 main : Program
