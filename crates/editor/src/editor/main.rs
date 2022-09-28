@@ -59,8 +59,6 @@ pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
 }
 
 fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
-    env_logger::init();
-
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
