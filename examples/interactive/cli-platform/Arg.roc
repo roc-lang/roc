@@ -31,7 +31,7 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg Config (List Str -> Result a [NotFound Str, WrongType {arg: Str, expected: Type}]),
+    Arg Config (List Str -> Result a [NotFound Str, WrongType { arg : Str, expected : Type }]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -285,7 +285,7 @@ parseHelp = \@Parser parser, args ->
             when run args is
                 Ok val -> Ok val
                 Err (NotFound long) -> Err (MissingRequiredArg long)
-                Err (WrongType {arg, expected}) -> Err (WrongType { arg, expected })
+                Err (WrongType { arg, expected }) -> Err (WrongType { arg, expected })
 
         SubCommand cmds ->
             when List.get args 0 is
@@ -345,7 +345,7 @@ i64 = \{ long, short ? "", help ? "" } ->
             Err NotFound -> Err (NotFound long)
             Ok foundArg ->
                 Str.toI64 foundArg
-                |> Result.mapErr \_ -> WrongType {arg: long, expected: I64}
+                |> Result.mapErr \_ -> WrongType { arg: long, expected: I64 }
 
     @Parser (Arg { long, short, help, type: I64 } fn)
 
@@ -631,10 +631,12 @@ expect
         |> withParser (str { long: "foo" })
         |> withParser (str { long: "bar" })
 
-    List.all [
-        parseHelp parser ["--foo", "zaz"] == Err (MissingRequiredArg "bar"),
-        parseHelp parser ["--bar", "zaz"] == Err (MissingRequiredArg "foo"),
-    ] (\b -> b)
+    List.all
+        [
+            parseHelp parser ["--foo", "zaz"] == Err (MissingRequiredArg "bar"),
+            parseHelp parser ["--bar", "zaz"] == Err (MissingRequiredArg "foo"),
+        ]
+        (\b -> b)
 
 # string and bool parsers build help
 expect
