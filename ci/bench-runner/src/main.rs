@@ -230,6 +230,13 @@ fn check_if_bench_executables_changed() -> bool {
     let bench_folder_str = "/crates/cli_testing_examples/benchmarks/";
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
+
+    Command::new("tree")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap_or_else(|_| panic!("tree command failed", file_or_folder));
+
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");

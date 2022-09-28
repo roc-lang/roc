@@ -37,9 +37,6 @@ mod cli_run {
         Roc,
     }
 
-    #[cfg(not(debug_assertions))]
-    use roc_collections::all::MutMap;
-
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const TEST_LEGACY_LINKER: bool = true;
 
