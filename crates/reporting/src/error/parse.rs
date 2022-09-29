@@ -529,6 +529,24 @@ fn to_expr_report<'a>(
 
         EExpr::Ability(err, pos) => to_ability_def_report(alloc, lines, filename, err, *pos),
 
+        EExpr::IndentEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![alloc.reflow(
+                    "Looks like the indentation ends prematurely after an expression",
+                )]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INDENT ENDS AFTER EXPRESSION".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
