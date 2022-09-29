@@ -1232,10 +1232,6 @@ fn surgery_elf_help(
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
                             }
-                            RelocationKind::Absolute => {
-                                // NOTE: this relies on our app using position-independent code (PIC)
-                                target_offset + rel.1.addend()
-                            }
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
                             }
@@ -1533,9 +1529,8 @@ mod tests {
         )
     }
 
-    /// This zig code sample containts a static relocation
     #[allow(dead_code)]
-    fn static_relocation_help(dir: &Path) {
+    fn zig_host_app_help(dir: &Path) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
@@ -1652,11 +1647,11 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn static_relocation() {
+    fn zig_host_app() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        static_relocation_help(dir);
+        zig_host_app_help(dir);
 
         let output = std::process::Command::new(&dir.join("final"))
             .current_dir(dir)
