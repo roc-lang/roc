@@ -3466,8 +3466,6 @@ dependencies = [
  "roc_tracing",
  "serial_test",
  "signal-hook",
- "strum",
- "strum_macros",
  "target-lexicon",
  "tempfile",
  "ven_pretty",
