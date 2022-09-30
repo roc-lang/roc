@@ -32,8 +32,8 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg ArgConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
-    Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
+    Arg ArgConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } (ParseError [])),
+    Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } (ParseError [])),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -395,20 +395,17 @@ parse = \@NamedParser parser, args ->
 
         parseHelp parser.parser markedArgs
 
-parseHelp : Parser a, MarkedArgs -> Result a (ParseError *)
+parseHelp : Parser a, MarkedArgs -> Result a (ParseError [])
 parseHelp = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
         Arg _ run ->
-            when run args is
-                Ok { val, newlyTaken: _ } -> Ok val
-                Err (NotFound long) -> Err (MissingRequiredArg long)
-                Err (WrongType {arg, expected}) -> Err (WrongType { arg, expected })
+            run args
+            |> Result.map .val
 
-        Positional { name } run ->
-            when run args is
-                Ok { val, newlyTaken: _ } -> Ok val
-                Err _ -> Err (MissingPositionalArg name)
+        Positional _ run ->
+            run args
+            |> Result.map .val
 
         SubCommand cmds ->
             when nextUnmarked args is
@@ -454,7 +451,7 @@ bool : _ -> Parser Bool # TODO: panics if parameter annotation given
 bool = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (NotFound long)
+            Err NotFound -> Err (MissingRequiredArg long)
             Ok { val, newlyTaken } ->
                 when val is
                     "true" -> Ok { val: Bool.true, newlyTaken }
@@ -468,7 +465,7 @@ str : _ -> Parser Str # TODO: panics if parameter annotation given
 str = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (NotFound long)
+            Err NotFound -> Err (MissingRequiredArg long)
             Ok { val, newlyTaken } -> Ok { val, newlyTaken }
 
     @Parser (Arg { long, short, help, type: Str } fn)
@@ -478,7 +475,7 @@ i64 : _ -> Parser I64 # TODO: panics if parameter annotation given
 i64 = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (NotFound long)
+            Err NotFound -> Err (MissingRequiredArg long)
             Ok { val, newlyTaken } ->
                 Str.toI64 val
                 |> Result.mapErr (\_ -> WrongType { arg: long, expected: I64 })
@@ -491,7 +488,7 @@ positional : _ -> Parser Str
 positional = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args
-        |> Result.mapErr (\OutOfBounds -> (NotFound name))
+        |> Result.mapErr (\OutOfBounds -> (MissingPositionalArg name))
         |> Result.map (\{ val, index } -> { val, newlyTaken: Set.insert args.taken index })
 
     @Parser (Positional { name, help } fn)
