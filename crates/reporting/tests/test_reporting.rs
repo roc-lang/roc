@@ -4604,7 +4604,8 @@ mod test_reporting {
     4│      f <- Foo.foo
                         ^
 
-    Looks like the indentation ends prematurely after an expression
+    Looks like the indentation ends prematurely here. Did you mean to have
+    another expression after this line?
     "###
     );
 

@@ -535,9 +535,10 @@ fn to_expr_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat(vec![alloc.reflow(
-                    "Looks like the indentation ends prematurely after an expression",
-                )]),
+                alloc.concat(vec![
+                    alloc.reflow("Looks like the indentation ends prematurely here. "),
+                    alloc.reflow("Did you mean to have another expression after this line?"),
+                ]),
             ]);
 
             Report {
