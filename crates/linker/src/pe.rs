@@ -1435,7 +1435,7 @@ mod test {
 
         runner(dir);
 
-        let output = std::process::Command::new("app.exe")
+        let output = std::process::Command::new(&dir.join("app.exe"))
             .current_dir(dir)
             .output()
             .unwrap();
