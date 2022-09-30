@@ -459,8 +459,10 @@ matchesAt = \haystack, haystackIndex, needle ->
 matchesAtHelp = \state ->
     { haystack, haystackIndex, needle, needleIndex, needleLength, endIndex } = state
     isAtEndOfHaystack = haystackIndex >= endIndex
+
     if isAtEndOfHaystack then
         didWalkEntireNeedle = needleIndex == needleLength
+
         didWalkEntireNeedle
     else
         doesThisMatch =
@@ -473,6 +475,7 @@ matchesAtHelp = \state ->
                     haystackIndex: haystackIndex + 1,
                     needleIndex: needleIndex + 1,
                 }
+
         doesThisMatch && doesRestMatch
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
