@@ -298,8 +298,7 @@ mod cli_run {
         }
 
         // workaround for surgical linker issue, see PR #3990
-        // TODO temp for debugging: set back to empty vec
-        let mut custom_flags: Vec<&str> = vec![LINKER_FLAG, "legacy"];
+        let mut custom_flags: Vec<&str> = vec![];
 
         match executable_filename {
             "form" | "hello-gui" | "breakout" | "ruby" => {
