@@ -235,7 +235,13 @@ mod cli_run {
                 );
             }
 
-            assert!(out.status.success());
+            if !out.status.success() {
+                // We don't need stdout, Cargo prints it for us.
+                panic!(
+                    "Example program exited with status {:?}\nstderr was:\n{:#?}",
+                    out.status, out.stderr
+                );
+            }
         }
     }
 
@@ -593,6 +599,17 @@ mod cli_run {
             Your current shell level is 3!\n\
             Your favorite letters are: a c e j\n",
             false,
+            false,
+        )
+    }
+
+    #[test]
+    fn parse_movies_csv() {
+        test_roc_app_slim(
+            "examples/parser",
+            "parse-movies-csv.roc",
+            "parse-movies-csv",
+            "Parse success!\n",
             false,
         )
     }

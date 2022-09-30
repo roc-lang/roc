@@ -4587,6 +4587,29 @@ mod test_reporting {
     );
 
     test_report!(
+        expression_indentation_end,
+        indoc!(
+            r#"
+            f <- Foo.foo
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ────── tmp/expression_indentation_end/Test.roc ─
+
+    I am partway through parsing an expression, but I got stuck here:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      f <- Foo.foo
+                        ^
+
+    Looks like the indentation ends prematurely here. Did you mean to have
+    another expression after this line?
+    "###
+    );
+
+    test_report!(
         type_inline_alias,
         indoc!(
             r#"
