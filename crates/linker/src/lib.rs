@@ -195,10 +195,14 @@ fn preprocess(
         println!("Targeting: {}", target);
     }
 
+    let endianness = target
+        .endianness()
+        .unwrap_or(target_lexicon::Endianness::Little);
+
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             crate::elf::preprocess_elf(
-                target,
+                endianness,
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
@@ -367,4 +371,31 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
         .unwrap_or_else(|e| internal_error!("{e}"));
 
     unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
+}
+
+/// # dbg_hex
+/// display dbg result in hexadecimal `{:#x?}` format.
+#[macro_export]
+macro_rules! dbg_hex {
+    // NOTE: We cannot use `concat!` to make a static string as a format argument
+    // of `eprintln!` because `file!` could contain a `{` or
+    // `$val` expression could be a block (`{ .. }`), in which case the `eprintln!`
+    // will be malformed.
+    () => {
+        eprintln!("[{}:{}]", file!(), line!());
+    };
+    ($val:expr $(,)?) => {
+        // Use of `match` here is intentional because it affects the lifetimes
+        // of temporaries - https://stackoverflow.com/a/48732525/1063961
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}] {} = {:#x?}",
+                    file!(), line!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg_hex!($val)),+,)
+    };
 }
