@@ -452,11 +452,15 @@ matchesAt = \haystack, haystackIndex, needle ->
 matchesAtHelp : Str, Nat, Str, Nat, Nat, Nat -> Bool
 matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, needleLength, endIndex ->
     if haystackIndex < endIndex then
-        if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
+        nextNeedleCharMatches =
+            Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex
+        if nextNeedleCharMatches then
             matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) needleLength endIndex
         else
             Bool.false
     else
+        # If we're at the end of the haystack, the needle was matched only if
+        # we've walked the entire needle as well.
         needleIndex == needleLength
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
