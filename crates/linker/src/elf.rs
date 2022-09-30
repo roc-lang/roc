@@ -83,6 +83,8 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             vaddresses.insert("memcpy".to_string(), address);
         } else if name == "roc_memset" {
             vaddresses.insert("memset".to_string(), address);
+        } else if name == "roc_memmove" {
+            vaddresses.insert("memmove".to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
@@ -289,9 +291,28 @@ pub(crate) fn preprocess_elf(
 
     if verbose {
         println!(
-            "Found roc symbol definitions: {:+x?}",
-            md.roc_symbol_vaddresses
+            "Found {} roc symbol definitions:",
+            md.roc_symbol_vaddresses.len()
         );
+
+        let (mut builtins, mut other): (Vec<_>, Vec<_>) = md
+            .roc_symbol_vaddresses
+            .iter()
+            .partition(|(n, _)| n.starts_with("roc_builtins"));
+
+        // sort by address
+        builtins.sort_by_key(|t| t.1);
+        other.sort_by_key(|t| t.1);
+
+        for (name, vaddr) in other.iter() {
+            println!("\t{:#08x}: {}", vaddr, name);
+        }
+
+        println!("Of which {} are builtins", builtins.len(),);
+
+        for (name, vaddr) in builtins.iter() {
+            println!("\t{:#08x}: {}", vaddr, name);
+        }
     }
 
     let exec_parsing_duration = exec_parsing_start.elapsed();

@@ -800,6 +800,12 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 
             while (delimiter_index < delimiter_len) {
                 var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
+
+                if (str_index + delimiter_index >= str_len) {
+                    matches_delimiter = false;
+                    break;
+                }
+
                 var strChar = str_bytes[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
