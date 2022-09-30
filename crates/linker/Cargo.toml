@@ -30,4 +30,3 @@ tempfile = "3.2.0"
 
 [dev-dependencies]
 indoc = "1.0.7"
-libc = "0.2.133"
