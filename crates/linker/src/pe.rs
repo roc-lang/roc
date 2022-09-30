@@ -1432,6 +1432,7 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
+        let dir = Path::new(r"C:\Users\folkert\Documents\GitHub\roc\linktest");
 
         runner(dir);
 
@@ -1573,6 +1574,7 @@ mod test {
     }
 
     #[cfg(windows)]
+    #[ignore]
     #[test]
     fn app_internal_relocations_windows() {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
