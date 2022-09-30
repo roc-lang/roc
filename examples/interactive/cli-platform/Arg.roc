@@ -488,7 +488,7 @@ positional : _ -> Parser Str
 positional = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args
-        |> Result.mapErr (\OutOfBounds -> (MissingPositionalArg name))
+        |> Result.mapErr (\OutOfBounds -> MissingPositionalArg name)
         |> Result.map (\{ val, index } -> { val, newlyTaken: Set.insert args.taken index })
 
     @Parser (Positional { name, help } fn)
