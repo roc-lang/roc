@@ -33,7 +33,7 @@ NamedParser a := {
 Parser a := [
     Succeed a,
     Arg ArgConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
-    Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound, WrongType]),
+    Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } [NotFound Str, WrongType { arg : Str, expected : Type }]),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
         (List {
@@ -403,7 +403,7 @@ parseHelp = \@Parser parser, args ->
             when run args is
                 Ok { val, newlyTaken: _ } -> Ok val
                 Err (NotFound long) -> Err (MissingRequiredArg long)
-                Err (WrongType {arg, expected}) -> Err (WrongType { arg: long, expected: type })
+                Err (WrongType {arg, expected}) -> Err (WrongType { arg, expected })
 
         Positional { name } run ->
             when run args is
@@ -491,7 +491,7 @@ positional : _ -> Parser Str
 positional = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args
-        |> Result.mapErr (\OutOfBounds -> NotFound)
+        |> Result.mapErr (\OutOfBounds -> (NotFound name))
         |> Result.map (\{ val, index } -> { val, newlyTaken: Set.insert args.taken index })
 
     @Parser (Positional { name, help } fn)
@@ -849,8 +849,8 @@ expect
 
     List.all
         [
-            parseHelp parser ["--foo", "zaz"] == Err (MissingRequiredArg "bar"),
-            parseHelp parser ["--bar", "zaz"] == Err (MissingRequiredArg "foo"),
+            parseHelp parser (mark ["--foo", "zaz"]) == Err (MissingRequiredArg "bar"),
+            parseHelp parser (mark ["--bar", "zaz"]) == Err (MissingRequiredArg "foo"),
         ]
         (\b -> b)
 
