@@ -402,11 +402,11 @@ macro_rules! dbg_hex {
 
 // These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
 // On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
-#[cfg(windows)]
+#[cfg(test, windows)]
 #[allow(unused_imports)]
 use windows_roc_platform_functions::*;
 
-#[cfg(windows)]
+#[cfg(test, windows)]
 mod windows_roc_platform_functions {
     use core::ffi::c_void;
 
