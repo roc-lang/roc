@@ -447,21 +447,33 @@ matchesAt = \haystack, haystackIndex, needle ->
     needleLength = Str.countUtf8Bytes needle
     endIndex = min (haystackIndex + needleLength) haystackLength
 
-    matchesAtHelp haystack haystackIndex needle 0 needleLength endIndex
+    matchesAtHelp {
+        haystack,
+        haystackIndex,
+        needle,
+        needleIndex: 0,
+        needleLength,
+        endIndex,
+    }
 
-matchesAtHelp : Str, Nat, Str, Nat, Nat, Nat -> Bool
-matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, needleLength, endIndex ->
-    if haystackIndex < endIndex then
-        nextNeedleCharMatches =
-            Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex
-        if nextNeedleCharMatches then
-            matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) needleLength endIndex
-        else
-            Bool.false
+matchesAtHelp = \state ->
+    { haystack, haystackIndex, needle, needleIndex, needleLength, endIndex } = state
+    isAtEndOfHaystack = haystackIndex >= endIndex
+    if isAtEndOfHaystack then
+        didWalkEntireNeedle = needleIndex == needleLength
+        didWalkEntireNeedle
     else
-        # If we're at the end of the haystack, the needle was matched only if
-        # we've walked the entire needle as well.
-        needleIndex == needleLength
+        doesThisMatch =
+            Str.getUnsafe haystack haystackIndex
+            ==
+            Str.getUnsafe needle needleIndex
+        doesRestMatch =
+            matchesAtHelp
+                { state &
+                    haystackIndex: haystackIndex + 1,
+                    needleIndex: needleIndex + 1,
+                }
+        doesThisMatch && doesRestMatch
 
 ## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
 ## UTF-8 `U8` byte as well as the index of that byte within the string.
