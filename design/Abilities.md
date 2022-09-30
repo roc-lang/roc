@@ -1,4 +1,7 @@
 # Proposal: Abilities in Roc
+
+Status: we invite you to try out abilities for beta use, and are working on resolving known limitations (see issue [#2463](https://github.com/roc-lang/roc/issues/2463)).
+
 This design idea addresses a variety of problems in Roc at once. It also unlocks some very exciting benefits that I didn't expect at the outset! It's a significant addition to the language, but it also means two other language features can be removed, and numbers can get a lot simpler.
 
 
