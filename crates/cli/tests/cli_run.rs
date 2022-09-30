@@ -20,8 +20,6 @@ mod cli_run {
     use serial_test::serial;
     use std::iter;
     use std::path::Path;
-    use strum::IntoEnumIterator;
-    use strum_macros::EnumIter;
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
@@ -30,11 +28,11 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    #[derive(Debug, EnumIter)]
+    #[derive(Debug)]
     enum CliMode {
-        RocBuild,
-        RocRun,
-        Roc,
+        RocBuild, // buildOnly
+        RocRun,   // buildAndRun
+        Roc,      // buildAndRunIfNoErrors
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -126,6 +124,7 @@ mod cli_run {
         extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
+        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
     ) {
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
@@ -134,7 +133,13 @@ mod cli_run {
             std::env::set_var("NO_AVX512", "1");
         }
 
-        for cli_mode in CliMode::iter() {
+        let cli_commands = if test_many_cli_commands {
+            vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
+        } else {
+            vec![CliMode::Roc]
+        };
+
+        for cli_mode in cli_commands.iter() {
             let flags = {
                 let mut vec = flags.to_vec();
 
@@ -243,17 +248,19 @@ mod cli_run {
         use_valgrind: bool,
     ) {
         test_roc_app(
-          dir_name,
-          roc_filename,
-          executable_filename,
-          &[],
-          &[],
-          &[],
-          expected_ending,
-          use_valgrind  
+            dir_name,
+            roc_filename,
+            executable_filename,
+            &[],
+            &[],
+            &[],
+            expected_ending,
+            use_valgrind,
+            false,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn test_roc_app(
         dir_name: &str,
         roc_filename: &str,
@@ -263,6 +270,7 @@ mod cli_run {
         extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
+        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
 
@@ -284,7 +292,8 @@ mod cli_run {
         }
 
         // workaround for surgical linker issue, see PR #3990
-        let mut custom_flags: Vec<&str> = vec![];
+        // TODO temp for debugging: set back to empty vec
+        let mut custom_flags: Vec<&str> = vec![LINKER_FLAG, "legacy"];
 
         match executable_filename {
             "form" | "hello-gui" | "breakout" | "ruby" => {
@@ -330,6 +339,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
+            test_many_cli_commands,
         );
 
         custom_flags.push(OPTIMIZE_FLAG);
@@ -345,6 +355,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
+            test_many_cli_commands,
         );
 
         // Also check with the legacy linker.
@@ -359,6 +370,7 @@ mod cli_run {
                 extra_env,
                 expected_ending,
                 use_valgrind,
+                test_many_cli_commands,
             );
         }
     }
@@ -436,13 +448,7 @@ mod cli_run {
 
     #[test]
     fn ruby_interop() {
-        test_roc_app_slim(
-            "examples/ruby-interop",
-            "main.roc",
-            "libhello",
-            "",
-            true,
-        )
+        test_roc_app_slim("examples/ruby-interop", "main.roc", "libhello", "", true)
     }
 
     #[test]
@@ -458,13 +464,7 @@ mod cli_run {
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim(
-            "examples/gui",
-            "hello.roc",
-            "hello-gui",
-            "",
-            false,
-        )
+        test_roc_app_slim("examples/gui", "hello.roc", "hello-gui", "", false)
     }
 
     #[test]
@@ -506,6 +506,7 @@ mod cli_run {
             &[],
             "4\n",
             false,
+            false,
         )
     }
 
@@ -520,6 +521,7 @@ mod cli_run {
             &[],
             "hi there!\nIt is known\n",
             true,
+            false,
         )
     }
 
@@ -535,6 +537,7 @@ mod cli_run {
             &[],
             "Hello Worldfoo!\n",
             true,
+            false,
         )
     }
 
@@ -549,18 +552,13 @@ mod cli_run {
             &[],
             "Hello, World!\n",
             false,
+            true,
         )
     }
 
     #[test]
     fn swift_ui() {
-        test_roc_app_slim(
-            "examples/swiftui",
-            "main.roc",
-            "swiftui",
-            "",
-            false,
-        )
+        test_roc_app_slim("examples/swiftui", "main.roc", "swiftui", "", false)
     }
 
     #[test]
@@ -574,6 +572,7 @@ mod cli_run {
             &[],
             "Processed 3 files with 3 successes and 0 errors\n",
             false,
+            false,
         )
     }
 
@@ -585,10 +584,15 @@ mod cli_run {
             "env",
             &[],
             &[],
-            &[("EDITOR", "roc-editor"), ("SHLVL", "3"), ("LETTERS", "a,c,e,j")],
+            &[
+                ("EDITOR", "roc-editor"),
+                ("SHLVL", "3"),
+                ("LETTERS", "a,c,e,j"),
+            ],
             "Your favorite editor is roc-editor!\n\
             Your current shell level is 3!\n\
             Your favorite letters are: a c e j\n",
+            false,
             false,
         )
     }
@@ -665,6 +669,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
+                    false,
                 );
 
                 ran_without_optimizations = true;
@@ -684,6 +689,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
+                    false,
                 );
             }
 
@@ -696,6 +702,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
+                false,
             );
         }
 
@@ -774,6 +781,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
+                false,
             );
 
             check_output_with_stdin(
@@ -784,6 +792,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
+                false,
             );
         }
 
@@ -888,6 +897,7 @@ mod cli_run {
             &[],
             "I am Dep2.str2\n",
             true,
+            false,
         );
     }
 
@@ -903,6 +913,7 @@ mod cli_run {
             &[],
             "I am Dep2.str2\n",
             true,
+            false,
         );
     }
 
@@ -918,6 +929,7 @@ mod cli_run {
             &[],
             "I am Dep2.value2\n",
             true,
+            false,
         );
     }
 
@@ -933,6 +945,7 @@ mod cli_run {
             &[],
             "I am Dep2.value2\n",
             true,
+            false,
         );
     }
 
