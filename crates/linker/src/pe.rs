@@ -20,7 +20,8 @@ use roc_collections::{MutMap, VecMap};
 use roc_error_macros::internal_error;
 
 use crate::{
-    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap, open_mmap_mut,
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut,
+    load_structs_inplace_mut, open_mmap, open_mmap_mut,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -531,6 +532,7 @@ impl Preprocessor {
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
+        this.relocate_base_relocations(&mut result);
 
         result
     }
@@ -541,12 +543,16 @@ impl Preprocessor {
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
         let mut offset = dos_header.nt_headers_offset().into();
         let header_offset = offset;
-        let (nt_headers, _data_directories) =
+        let (nt_headers, data_directories) =
             ImageNtHeaders64::parse(data, &mut offset).unwrap_or_else(|e| internal_error!("{e}"));
         let section_table_offset = offset;
         let sections = nt_headers
             .sections(data, offset)
             .unwrap_or_else(|e| internal_error!("{e}"));
+
+        // in the data directories, update the length of the imports (there is one fewer now)
+        let dir = data_directories.get(object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC);
+        dbg!(dir);
 
         // recalculate the size of the headers. The size of the headers must be rounded up to the
         // next multiple of `file_alignment`.
@@ -619,6 +625,75 @@ impl Preprocessor {
 
             result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
                 .copy_from_slice(&header_array);
+        }
+    }
+
+    /// We shifted bytes around in the file, which means absolute relocations don't work any more
+    /// and need some adjustment
+    fn relocate_base_relocations(&self, result: &mut MmapMut) {
+        let shift = self.new_headers_size - self.old_headers_size;
+        let mut offset = self.section_table_offset as usize;
+        loop {
+            let header = load_struct_inplace_mut::<object::pe::ImageSectionHeader>(result, offset);
+
+            match &header.name {
+                b"\0\0\0\0\0\0\0\0" => break,
+                b".reloc\0\0" => {
+                    let mut block_start = header.pointer_to_raw_data.get(LE);
+
+                    loop {
+                        let xs = load_struct_inplace::<object::pe::ImageBaseRelocation>(
+                            result,
+                            block_start as usize,
+                        );
+
+                        dbg!(xs, xs.size_of_block.get(LE));
+
+                        if xs.size_of_block.get(LE) == 0 {
+                            break;
+                        }
+
+                        const W: usize = std::mem::size_of::<object::pe::ImageBaseRelocation>();
+
+                        let count = (xs.size_of_block.get(LE) - W as u32) / 2;
+                        let block_data_start = block_start as usize + W;
+                        dbg!(count);
+                        dbg!(block_start);
+                        block_start += xs.size_of_block.get(LE);
+                        dbg!(block_start);
+                        let ys = load_structs_inplace_mut::<u16>(
+                            result,
+                            block_data_start,
+                            count as usize,
+                        );
+
+                        let type_mask = 0b1111_0000_0000_0000;
+                        for reloc in ys {
+                            let relocation_type = *reloc >> 12;
+                            let relocation_value = *reloc & !type_mask;
+                            match relocation_type {
+                                object::pe::IMAGE_REL_AMD64_SECTION => {
+                                    // ignore; this is an index into a debug table, and that did not change
+                                }
+                                object::pe::IMAGE_REL_AMD64_ABSOLUTE => {
+                                    // let's get to work
+                                    let new_value = (relocation_value + shift as u16) & !type_mask;
+                                    *reloc = (*reloc & type_mask) | new_value;
+                                }
+                                object::pe::IMAGE_REL_AMD64_REL32_2 => {
+                                    // unsure what to do with this one
+                                }
+                                _ => {}
+                            }
+                            crate::dbg_hex!(relocation_type, relocation_value);
+                        }
+                    }
+                }
+
+                _ => { /* fall through */ }
+            }
+
+            offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
         }
     }
 
