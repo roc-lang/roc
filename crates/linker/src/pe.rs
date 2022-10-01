@@ -734,7 +734,10 @@ impl Preprocessor {
 
         dbg_hex!(nt_headers.optional_header.size_of_headers.get(LE));
 
-        // nt_headers .optional_header .size_of_headers .set(LE, self.new_headers_size as u32);
+        nt_headers
+            .optional_header
+            .size_of_headers
+            .set(LE, self.new_headers_size as u32);
 
         // update the section file offsets
         //
@@ -1517,6 +1520,10 @@ mod test {
 
             offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
         }
+
+        let nt_headers = load_struct_inplace_mut::<ImageNtHeaders64>(&mut mmap, 0x78);
+
+        nt_headers.optional_header.size_of_headers.set(LE, 0x600);
 
         if true {
             let mut block_start = 0x00003600 + shift as u32;
