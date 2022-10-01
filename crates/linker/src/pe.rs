@@ -1567,12 +1567,22 @@ mod test {
                 r#"
                 const std = @import("std");
 
+                const std = @import("std");
+                const RndGen = std.rand.DefaultPrng;
+
                 extern fn roc_magic1() callconv(.C) u64;
                 // extern fn roc_magic2() callconv(.C) u8;
 
                 pub fn main() !void {
+                    var rnd = RndGen.init(0);
+                    var some_random_num = rnd.random().int(i32);
+
                     const stdout = std.io.getStdOut().writer();
-                    try stdout.print("Hello world", .{});
+                    if (some_random_num == 0) {
+                        try stdout.print("Hello roc {}", .{ roc_magic1()});
+                    } else {
+                        try stdout.print("Hello world", .{});
+                    }
                 }
                 "#
             ),
