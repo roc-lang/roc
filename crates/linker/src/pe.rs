@@ -486,7 +486,8 @@ impl DynamicRelocationsPe {
         let imports_offset_in_section = import_va.wrapping_sub(section_va);
         let imports_offset_in_file = offset_in_file + imports_offset_in_section;
 
-        let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?.unwrap();
+        let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?
+            .expect("the host to use functions from the app");
 
         let mut this = Self {
             name_by_virtual_address: Default::default(),
@@ -1566,7 +1567,7 @@ mod test {
                 r#"
                 const std = @import("std");
 
-                // extern fn roc_magic1() callconv(.C) u64;
+                extern fn roc_magic1() callconv(.C) u64;
                 // extern fn roc_magic2() callconv(.C) u8;
 
                 pub fn main() !void {
