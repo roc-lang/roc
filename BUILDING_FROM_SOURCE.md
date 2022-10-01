@@ -210,9 +210,20 @@ The official LLVM pre-built binaries for Windows lack features that roc needs. I
 ```text
 <# ! Replace YOUR_USERNAME ! #>
 $env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.1-win64'
+
+# make it permanent
+[System.Environment]::SetEnvironmentVariable('LLVM_SYS_130_PREFIX','C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.1-win64')
 ```
 
 Once all that was done, `cargo build` ran successfully for Roc!
+
+#### WSL 
+
+configure the correct (unix) line endings
+
+```
+git config --global core.autocrlf input
+```
 
 #### Build issues on Windows
 
