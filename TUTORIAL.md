@@ -280,6 +280,14 @@ addAndStringify = \num1, num2 ->
 This code is equivalent to writing `else if sum < 0 then` on one line, although the stylistic
 convention is to write `else if` on the same line.
 
+## Booleans
+
+In Roc, `if` conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
+so the compiler will report an error for conditionals like `if 1 then` or `if "true" then`.)
+
+The two boolean values in Roc are `Bool.true` and `Bool.false`, which you can see by putting
+something like `1 == 1` into the REPL.
+
 ## Records
 
 Currently our `addAndStringify` function takes two arguments. We can instead make
@@ -430,12 +438,6 @@ A tag is a literal value just like a number or a string. Similarly to how I can 
 the number `42` or the string `"forty-two"` without defining them first, I can also write
 the tag `FortyTwo` without defining it first. Also, similarly to how `42 == 42` and
 `"forty-two" == "forty-two"`, it's also the case that `FortyTwo == FortyTwo`.
-
-Speaking of equals, if we put `42 == 42` into `roc repl`, the output we'll see is `True`.
-This is because booleans in Roc are tags; a boolean is either the tag `True` or the tag
-`False`. So I can write `if True then` or `if False then` and it will work as expected,
-even though I'd get an error if I wrote `if "true" then` or `if 1 then`. (Roc doesn't
-have a concept of "truthiness" - you always have to use booleans for conditionals!)
 
 Let's say we wanted to turn `stoplightColor` from a `Red`, `Green`, or `Yellow` into
 a string. Here's one way we could do that:
@@ -606,10 +608,10 @@ In this example, `List.map` calls the function `\num -> num * 2` on each element
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
-For example, the `Num.isOdd` function returns `True` if it's given an odd number, and `False` otherwise.
-So `Num.isOdd 5` returns `True` and `Num.isOdd 2` returns `False`.
+For example, the `Num.isOdd` function returns `true` if it's given an odd number, and `false` otherwise.
+So `Num.isOdd 5` returns `true` and `Num.isOdd 2` returns `false`.
 
-So calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[True, False, True]`.
+As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
 ### List element type compatibility
 
@@ -619,7 +621,7 @@ an error at compile time. Here's a valid, and then an invalid example:
 ```coffee
 # working example
 List.map [-1, 2, 3, -4] Num.isNegative
-# returns [True, False, False, True]
+# returns [Bool.true, Bool.false, Bool.false, Bool.true]
 ```
 
 ```coffee
@@ -659,7 +661,7 @@ List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
         NumElem num -> Num.isNegative num
         StrElem str -> Str.isCapitalized str
 
-# returns [True, False, False, False, True]
+# returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
 
 Compare this with the example from earlier, which caused a compile-time error:
@@ -672,7 +674,7 @@ The version that uses tags works because we aren't trying to call `Num.isNegativ
 Instead, we're using a `when` to tell when we've got a string or a number, and then calling either
 `Num.isNegative` or `Str.isCapitalized` depending on which type we have.
 
-We could take this as far as we like, adding more different tags (e.g. `BoolElem True`) and then adding
+We could take this as far as we like, adding more different tags (e.g. `BoolElem Bool.true`) and then adding
 more branches to the `when` to handle them appropriately.
 
 ### Using tags as functions
@@ -696,29 +698,29 @@ want a function which uses all of its arguments as the payload to the given tag.
 ### `List.any` and `List.all`
 
 There are several functions that work like `List.map` - they walk through each element of a list and do
-something with it. Another is `List.any`, which returns `True` if calling the given function on any element
-in the list returns `True`:
+something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element
+in the list returns `true`:
 
 ```coffee
 List.any [1, 2, 3] Num.isOdd
-# returns True because 1 and 3 are odd
+# returns `Bool.true` because 1 and 3 are odd
 ```
 
 ```coffee
 List.any [1, 2, 3] Num.isNegative
-# returns False because none of these is negative
+# returns `Bool.false` because none of these is negative
 ```
 
-There's also `List.all` which only returns `True` if all the elements in the list pass the test:
+There's also `List.all` which only returns `true` if all the elements in the list pass the test:
 
 ```coffee
 List.all [1, 2, 3] Num.isOdd
-# returns False because 2 is not odd
+# returns `Bool.false` because 2 is not odd
 ```
 
 ```coffee
 List.all [1, 2, 3] Num.isPositive
-# returns True because all of these are positive
+# returns `Bool.true` because all of these are positive
 ```
 
 ### Removing elements from a list
@@ -731,7 +733,7 @@ List.dropAt ["Sam", "Lee", "Ari"] 1
 ```
 
 Another way is to use `List.keepIf`, which passes each of the list's elements to the given
-function, and then keeps them only if that function returns `True`.
+function, and then keeps them only if that function returns `true`.
 
 ```coffee
 List.keepIf [1, 2, 3, 4, 5] Num.isEven
@@ -828,7 +830,7 @@ Result.withDefault (List.get ["a", "b", "c"] 100) ""
 
 ```coffee
 Result.isOk (List.get ["a", "b", "c"] 1)
-# returns True because `List.get` returned an `Ok` tag. (The payload gets ignored.)
+# returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
 
 # Note: There's a Result.isErr function that works similarly.
 ```
@@ -998,7 +1000,7 @@ isEmpty : List * -> Bool
 
 The `*` is a *wildcard type* - that is, a type that's compatible with any other type. `List *` is compatible
 with any type of `List` - so, `List Str`, `List Bool`, and so on. So you can call
-`List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [True]`, and they will both work fine.
+`List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [Bool.true]`, and they will both work fine.
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another
 function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to
@@ -1013,7 +1015,7 @@ strings : List Str
 strings = List.reverse ["a", "b"]
 
 bools : List Bool
-bools = List.reverse [True, False]
+bools = List.reverse [Bool.true, Bool.false]
 ```
 
 In the `strings` example, we have `List.reverse` returning a `List Str`. In the `bools` example, it's returning a
@@ -1777,7 +1779,7 @@ example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
         Bar bool -> bool
-        _ -> False
+        _ -> Bool.false
 ```
 
 In contrast, a *closed tag union* (or *closed union*) like `[Foo Str, Bar Bool]` (without the `*`)
@@ -1903,7 +1905,7 @@ example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
         Bar bool -> bool
-        _ -> False
+        _ -> Bool.false
 ```
 
 ```coffee
@@ -1923,7 +1925,7 @@ example : [Foo Str, Bar Bool]a -> [Foo Str, Bar Bool]a
 example = \tag ->
     when tag is
         Foo str -> Bar (Str.isEmpty str)
-        Bar _ -> Bar False
+        Bar _ -> Bar Bool.false
         other -> other
 ```
 
