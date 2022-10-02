@@ -603,11 +603,26 @@ impl Preprocessor {
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
+        const W: usize = std::mem::size_of::<ImageSectionHeader>();
+
+        let previous_section_header =
+            load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
+
+        let previous_section_header_end = previous_section_header.virtual_address.get(LE)
+            + previous_section_header.virtual_size.get(LE);
+
+        let mut next_virtual_address =
+            next_multiple_of(previous_section_header_end as usize, self.section_alignment);
+
         for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
-                virtual_size: Default::default(),
-                virtual_address: Default::default(),
+                // NOTE: the virtual_size CANNOT BE ZERO! the binary is invalid if a section has
+                // zero virtual size. Setting it to 1 works, (because this one byte is not backed
+                // up by space on disk, the loader will zero the memory if you run the executable)
+                virtual_size: object::U32::new(LE, 1),
+                // NOTE: this must be a valid virtual address, using 0 is invalid!
+                virtual_address: object::U32::new(LE, next_virtual_address as u32),
                 size_of_raw_data: Default::default(),
                 pointer_to_raw_data: Default::default(),
                 pointer_to_relocations: Default::default(),
@@ -617,11 +632,11 @@ impl Preprocessor {
                 characteristics: Default::default(),
             };
 
-            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-                unsafe { std::mem::transmute(header) };
+            let header_array: [u8; W] = unsafe { std::mem::transmute(header) };
 
-            result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
-                .copy_from_slice(&header_array);
+            result[self.extra_sections_start + i * W..][..W].copy_from_slice(&header_array);
+
+            next_virtual_address += self.section_alignment;
         }
     }
 
