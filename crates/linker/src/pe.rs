@@ -520,6 +520,7 @@ struct Preprocessor {
     new_section_count: usize,
     old_headers_size: usize,
     new_headers_size: usize,
+    section_alignment: usize,
 }
 
 impl Preprocessor {
@@ -552,6 +553,7 @@ impl Preprocessor {
         // next multiple of `file_alignment`.
         let old_headers_size = nt_headers.optional_header.size_of_headers.get(LE) as usize;
         let file_alignment = nt_headers.optional_header.file_alignment.get(LE) as usize;
+        let section_alignment = nt_headers.optional_header.section_alignment.get(LE) as usize;
         let extra_sections_width = extra_sections.len() * Self::SECTION_HEADER_WIDTH;
 
         // in a better world `extra_sections_width.div_ceil(file_alignment)` would be stable
@@ -573,6 +575,7 @@ impl Preprocessor {
             new_section_count: sections.len() + extra_sections.len(),
             old_headers_size,
             new_headers_size,
+            section_alignment,
         }
     }
 
