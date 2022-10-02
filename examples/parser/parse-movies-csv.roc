@@ -56,4 +56,3 @@ enumerate = \elements ->
     last
     |> List.prepend (inits |> Str.joinWith ", ")
     |> Str.joinWith " and "
-

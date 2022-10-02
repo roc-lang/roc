@@ -129,7 +129,7 @@ fn create_llvm_module<'a>(
                 // Ignore "unused" problems
                 UnusedDef(_, _)
                 | UnusedArgument(_, _, _, _)
-                | UnusedImport(_, _)
+                | UnusedModuleImport(_, _)
                 | RuntimeError(_)
                 | UnsupportedPattern(_, _)
                 | ExposedButNotDefined(_) => {

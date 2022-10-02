@@ -2302,11 +2302,6 @@ fn to_pending_alias_or_opaque<'a>(
     opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
-    let shadow_kind = match kind {
-        AliasKind::Structural => ShadowKind::Alias,
-        AliasKind::Opaque => ShadowKind::Opaque,
-    };
-
     let region = Region::span_across(&name.region, &ann.region);
 
     match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
@@ -2361,7 +2356,12 @@ fn to_pending_alias_or_opaque<'a>(
             }
         }
 
-        Err((original_region, loc_shadowed_symbol)) => {
+        Err((original_sym, original_region, loc_shadowed_symbol)) => {
+            let shadow_kind = match kind {
+                AliasKind::Structural => ShadowKind::Alias(original_sym),
+                AliasKind::Opaque => ShadowKind::Opaque(original_sym),
+            };
+
             env.problem(Problem::Shadowing {
                 original_region,
                 shadow: loc_shadowed_symbol,
@@ -2422,11 +2422,11 @@ fn to_pending_type_def<'a>(
                 .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
             {
                 Ok(symbol) => Loc::at(name.region, symbol),
-                Err((original_region, shadowed_symbol)) => {
+                Err((original_symbol, original_region, shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: shadowed_symbol,
-                        kind: ShadowKind::Ability,
+                        kind: ShadowKind::Ability(original_symbol),
                     });
                     return PendingTypeDef::AbilityShadows;
                 }

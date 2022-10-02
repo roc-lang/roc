@@ -328,7 +328,7 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             HelloWorld := {} has [Encoding {toEncoder}]
@@ -356,7 +356,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             HelloWorld := {} has [Encoding {toEncoder}]
@@ -381,7 +381,7 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             HelloWorld := Str has [Encoding {toEncoder}]
@@ -421,7 +421,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode.{ toEncoder }, Json] provides [main] to "./platform"
+                app "test" imports [Encode, Json] provides [main] to "./platform"
 
                 main =
                     when Str.fromUtf8 (Encode.toBytes "foo" Json.toUtf8) is
@@ -442,7 +442,7 @@ mod encode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Encode.{{ toEncoder }}, Json] provides [main] to "./platform"
+                        app "test" imports [Encode, Json] provides [main] to "./platform"
 
                         main =
                             when Str.fromUtf8 (Encode.toBytes {}{} Json.toUtf8) is
@@ -481,7 +481,7 @@ fn encode_derived_record_one_field_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -503,7 +503,7 @@ fn encode_derived_record_two_fields_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -526,7 +526,7 @@ fn encode_derived_nested_record_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -550,7 +550,7 @@ fn encode_derived_tag_one_payload_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -573,7 +573,7 @@ fn encode_derived_tag_two_payloads_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -596,7 +596,7 @@ fn encode_derived_nested_tag_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -620,7 +620,7 @@ fn encode_derived_nested_record_tag_record() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -644,7 +644,7 @@ fn encode_derived_list_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -668,7 +668,7 @@ fn encode_derived_list_of_records() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -692,7 +692,7 @@ fn encode_derived_list_of_lists_of_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =
@@ -716,7 +716,7 @@ fn encode_derived_record_with_many_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode, Json]
                 provides [main] to "./platform"
 
             main =

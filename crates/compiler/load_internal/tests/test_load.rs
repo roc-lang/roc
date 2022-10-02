@@ -779,7 +779,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                 is imported from another module:
 
                 1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                      ^^^^^^^^^^^
+                                                                            ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
@@ -793,7 +793,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                 is imported from another module:
 
                 1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                      ^^^^^^^^^^^
+                                                                            ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
