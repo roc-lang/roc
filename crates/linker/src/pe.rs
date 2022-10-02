@@ -520,6 +520,7 @@ struct Preprocessor {
     new_section_count: usize,
     old_headers_size: usize,
     new_headers_size: usize,
+    section_alignment: usize,
 }
 
 impl Preprocessor {
@@ -552,6 +553,7 @@ impl Preprocessor {
         // next multiple of `file_alignment`.
         let old_headers_size = nt_headers.optional_header.size_of_headers.get(LE) as usize;
         let file_alignment = nt_headers.optional_header.file_alignment.get(LE) as usize;
+        let section_alignment = nt_headers.optional_header.section_alignment.get(LE) as usize;
         let extra_sections_width = extra_sections.len() * Self::SECTION_HEADER_WIDTH;
 
         // in a better world `extra_sections_width.div_ceil(file_alignment)` would be stable
@@ -573,6 +575,7 @@ impl Preprocessor {
             new_section_count: sections.len() + extra_sections.len(),
             old_headers_size,
             new_headers_size,
+            section_alignment,
         }
     }
 
@@ -600,11 +603,26 @@ impl Preprocessor {
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
+        const W: usize = std::mem::size_of::<ImageSectionHeader>();
+
+        let previous_section_header =
+            load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
+
+        let previous_section_header_end = previous_section_header.virtual_address.get(LE)
+            + previous_section_header.virtual_size.get(LE);
+
+        let mut next_virtual_address =
+            next_multiple_of(previous_section_header_end as usize, self.section_alignment);
+
         for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
-                virtual_size: Default::default(),
-                virtual_address: Default::default(),
+                // NOTE: the virtual_size CANNOT BE ZERO! the binary is invalid if a section has
+                // zero virtual size. Setting it to 1 works, (because this one byte is not backed
+                // up by space on disk, the loader will zero the memory if you run the executable)
+                virtual_size: object::U32::new(LE, 1),
+                // NOTE: this must be a valid virtual address, using 0 is invalid!
+                virtual_address: object::U32::new(LE, next_virtual_address as u32),
                 size_of_raw_data: Default::default(),
                 pointer_to_raw_data: Default::default(),
                 pointer_to_relocations: Default::default(),
@@ -614,11 +632,11 @@ impl Preprocessor {
                 characteristics: Default::default(),
             };
 
-            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-                unsafe { std::mem::transmute(header) };
+            let header_array: [u8; W] = unsafe { std::mem::transmute(header) };
 
-            result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
-                .copy_from_slice(&header_array);
+            result[self.extra_sections_start + i * W..][..W].copy_from_slice(&header_array);
+
+            next_virtual_address += self.section_alignment;
         }
     }
 
@@ -643,6 +661,16 @@ impl Preprocessor {
             .optional_header
             .size_of_headers
             .set(LE, self.new_headers_size as u32);
+
+        // adding new sections increased the size of the image. We update this value so the
+        // preprocessedhost is, in theory, runnable. In practice for roc programs it will crash
+        // because there are missing symbols (those that the app should provide), but for testing
+        // being able to run the preprocessedhost is nice.
+        nt_headers.optional_header.size_of_image.set(
+            LE,
+            nt_headers.optional_header.size_of_image.get(LE)
+                + (self.section_alignment * extra_sections.len()) as u32,
+        );
 
         // update the section file offsets
         //
@@ -1435,7 +1463,7 @@ mod test {
 
         runner(dir);
 
-        let output = std::process::Command::new("app.exe")
+        let output = std::process::Command::new(&dir.join("app.exe"))
             .current_dir(dir)
             .output()
             .unwrap();
@@ -1532,12 +1560,13 @@ mod test {
 
     #[cfg(windows)]
     #[test]
+    #[ignore = "does not work yet"]
     fn basics_windows() {
         assert_eq!("Hello, 234567 32 1 3!\n", windows_test(test_basics))
     }
 
-    #[ignore]
     #[test]
+    #[ignore]
     fn basics_wine() {
         assert_eq!("Hello, 234567 32 1 3!\n", wine_test(test_basics))
     }
@@ -1582,5 +1611,65 @@ mod test {
     #[test]
     fn app_internal_relocations_wine() {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
+    }
+
+    /// Run our preprocessing on an all-zig host. There is no app here to simplify things.
+    fn preprocessing_help(dir: &Path) {
+        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+        let host_zig = indoc!(
+            r#"
+            const std = @import("std");
+            pub fn main() !void {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("Hello there\n", .{});
+            }
+            "#
+        );
+
+        std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
+
+        let output = std::process::Command::new(&zig)
+            .current_dir(dir)
+            .args(&[
+                "build-exe",
+                "host.zig",
+                "-lc",
+                "-target",
+                "x86_64-windows-gnu",
+                "-rdynamic",
+                "--strip",
+                "-OReleaseFast",
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("zig build-exe failed");
+        }
+
+        let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();
+        let host_bytes = host_bytes.as_slice();
+
+        let extra_sections = [*b"\0\0\0\0\0\0\0\0", *b"\0\0\0\0\0\0\0\0"];
+
+        Preprocessor::preprocess(&dir.join("app.exe"), host_bytes, extra_sections.as_slice());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preprocessing_windows() {
+        assert_eq!("Hello there\n", windows_test(preprocessing_help))
+    }
+
+    #[test]
+    #[ignore]
+    fn preprocessing_wine() {
+        assert_eq!("Hello there\n", wine_test(preprocessing_help))
     }
 }
