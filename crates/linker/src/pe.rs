@@ -539,6 +539,8 @@ struct Preprocessor {
     new_section_count: usize,
     old_headers_size: usize,
     new_headers_size: usize,
+    file_alignment: usize,
+    section_alignment: usize,
 }
 
 impl Preprocessor {
@@ -546,7 +548,8 @@ impl Preprocessor {
 
     fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
         let this = Self::new(data, extra_sections);
-        let new_size = next_multiple_of(data.len() + this.additional_length, 0x1000);
+        let new_size =
+            next_multiple_of(data.len() + this.additional_length, this.section_alignment);
         dbg_hex!(&this);
         dbg_hex!(data.len(), this.additional_length);
         dbg_hex!(new_size);
@@ -554,7 +557,7 @@ impl Preprocessor {
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
-        // this.relocate_base_relocations(&mut result);
+        this.relocate_base_relocations(&mut result);
 
         result
     }
@@ -565,21 +568,18 @@ impl Preprocessor {
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
         let mut offset = dos_header.nt_headers_offset().into();
         let header_offset = offset;
-        let (nt_headers, data_directories) =
+        let (nt_headers, _data_directories) =
             ImageNtHeaders64::parse(data, &mut offset).unwrap_or_else(|e| internal_error!("{e}"));
         let section_table_offset = offset;
         let sections = nt_headers
             .sections(data, offset)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        // in the data directories, update the length of the imports (there is one fewer now)
-        let dir = data_directories.get(object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC);
-        dbg!(dir);
-
         // recalculate the size of the headers. The size of the headers must be rounded up to the
         // next multiple of `file_alignment`.
         let old_headers_size = nt_headers.optional_header.size_of_headers.get(LE) as usize;
         let file_alignment = nt_headers.optional_header.file_alignment.get(LE) as usize;
+        let section_alignment = nt_headers.optional_header.section_alignment.get(LE) as usize;
         let extra_sections_width = extra_sections.len() * Self::SECTION_HEADER_WIDTH;
 
         // in a better world `extra_sections_width.div_ceil(file_alignment)` would be stable
@@ -601,6 +601,8 @@ impl Preprocessor {
             new_section_count: sections.len() + extra_sections.len(),
             old_headers_size,
             new_headers_size,
+            file_alignment,
+            section_alignment,
         }
     }
 
@@ -629,11 +631,24 @@ impl Preprocessor {
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
+        const W: usize = std::mem::size_of::<ImageSectionHeader>();
+
+        let previous =
+            load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
+
+        let mut virtual_address = next_multiple_of(
+            (previous.virtual_address.get(LE) + previous.virtual_size.get(LE)) as usize,
+            self.section_alignment,
+        );
+
         for (i, name) in extra_sections.iter().enumerate() {
             let header = ImageSectionHeader {
                 name: *name,
-                virtual_size: Default::default(),
-                virtual_address: Default::default(),
+                // NOTE: the virtual_size CANNOT BE ZERO! the binary is invalid if a section has
+                // zero virtual size. Setting it to 1 works, (because this one byte is not backed
+                // up by space on disk, the loader will zero the memory if you run the executable)
+                virtual_size: object::U32::new(LE, 1),
+                virtual_address: object::U32::new(LE, virtual_address as u32),
                 size_of_raw_data: Default::default(),
                 pointer_to_raw_data: Default::default(),
                 pointer_to_relocations: Default::default(),
@@ -643,11 +658,11 @@ impl Preprocessor {
                 characteristics: Default::default(),
             };
 
-            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-                unsafe { std::mem::transmute(header) };
+            let header_array: [u8; W] = unsafe { std::mem::transmute(header) };
 
-            result[self.extra_sections_start + i * header_array.len()..][..header_array.len()]
-                .copy_from_slice(&header_array);
+            result[self.extra_sections_start + i * W..][..W].copy_from_slice(&header_array);
+
+            virtual_address += self.section_alignment;
         }
     }
 
@@ -715,7 +730,7 @@ impl Preprocessor {
     }
 
     fn fix(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
-        // self.write_dummy_sections(result, extra_sections);
+        self.write_dummy_sections(result, extra_sections);
 
         // update the size of the headers
         //
@@ -738,6 +753,12 @@ impl Preprocessor {
             .optional_header
             .size_of_headers
             .set(LE, self.new_headers_size as u32);
+
+        nt_headers.optional_header.size_of_image.set(
+            LE,
+            nt_headers.optional_header.size_of_image.get(LE)
+                + (self.section_alignment * extra_sections.len()) as u32,
+        );
 
         // update the section file offsets
         //
@@ -1102,8 +1123,6 @@ fn update_optional_header(
     let optional_header =
         load_struct_inplace_mut::<ImageOptionalHeader64>(data, optional_header_offset);
 
-    panic!();
-
     optional_header
         .size_of_code
         .set(LE, optional_header.size_of_code.get(LE) + code_bytes_added);
@@ -1439,143 +1458,6 @@ mod test {
         increase_number_of_sections_help(PE_DYNHOST, &new_sections, &path);
     }
 
-    fn shifting_works_help(dir: &Path) {
-        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
-
-        let host_zig = indoc!(
-            r#"
-            const std = @import("std");
-
-            pub fn main() !void {
-                const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello there\n", .{});
-            }
-            "#
-        );
-
-        std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
-
-        // now we can compile the host (it uses libapp.obj, hence the order here)
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-exe",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "-rdynamic",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
-
-        if !output.status.success() {
-            use std::io::Write;
-
-            std::io::stdout().write_all(&output.stdout).unwrap();
-            std::io::stderr().write_all(&output.stderr).unwrap();
-
-            panic!("zig build-exe failed");
-        }
-
-        let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();
-        let host_bytes = host_bytes.as_slice();
-
-        let shift = 0x200;
-        let mut mmap = open_mmap_mut(&dir.join("app.exe"), host_bytes.len() + shift);
-
-        let cutoff = 0x400;
-
-        mmap[..cutoff].copy_from_slice(&host_bytes[..cutoff]);
-        mmap[cutoff + shift..].copy_from_slice(&host_bytes[cutoff..]);
-
-        let section_table_offset = 0x180;
-        let mut offset = section_table_offset as usize;
-        loop {
-            let header =
-                load_struct_inplace_mut::<object::pe::ImageSectionHeader>(&mut mmap, offset);
-
-            dbg!(String::from_utf8_lossy(&header.name));
-            dbg!(&header);
-
-            // stop when we hit the NULL section
-            if header.name == [0; 8] {
-                break;
-            }
-
-            if header.name.starts_with(b".reloc")
-                || header.name.starts_with(b".tls")
-                || header.name.starts_with(b".pdata")
-                || header.name.starts_with(b".data")
-                || header.name.starts_with(b".rdata")
-                || header.name.starts_with(b".text")
-            {
-                let old = header.pointer_to_raw_data.get(LE);
-                dbg_hex!(old);
-                header.pointer_to_raw_data.set(LE, old + shift as u32);
-            }
-
-            offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
-        }
-
-        if true {
-            let mut block_start = 0x00003600 + shift as u32;
-
-            loop {
-                let xs = load_struct_inplace::<object::pe::ImageBaseRelocation>(
-                    &mut mmap,
-                    block_start as usize,
-                );
-
-                if xs.size_of_block.get(LE) == 0 {
-                    break;
-                }
-
-                const W: usize = std::mem::size_of::<object::pe::ImageBaseRelocation>();
-
-                let count = (xs.size_of_block.get(LE) - W as u32) / 2;
-                let block_data_start = block_start as usize + W;
-                block_start += xs.size_of_block.get(LE);
-                let ys =
-                    load_structs_inplace_mut::<u16>(&mut mmap, block_data_start, count as usize);
-
-                let type_mask = 0b1111_0000_0000_0000;
-                for reloc in ys {
-                    let relocation_type = *reloc >> 12;
-                    let relocation_value = *reloc & !type_mask;
-                    match relocation_type {
-                        object::pe::IMAGE_REL_AMD64_SECTION => {
-                            // ignore; this is an index into a debug table, and that did not change
-                        }
-                        object::pe::IMAGE_REL_AMD64_ABSOLUTE => {
-                            // let's get to work
-                            let new_value = (relocation_value + shift as u16) & !type_mask;
-                            *reloc = (*reloc & type_mask) | new_value;
-                        }
-                        object::pe::IMAGE_REL_AMD64_REL32_2 => {
-                            // unsure what to do with this one
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn shifting_works_windows() {
-        assert_eq!("Hello there\n", windows_test(shifting_works_help))
-    }
-
-    #[test]
-    #[ignore]
-    fn shifting_works_wine() {
-        assert_eq!("Hello there\n", wine_test(shifting_works_help))
-    }
-
     fn zig_host_app(dir: &Path, host_zig: &str, app_zig: &str) {
         let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
 
@@ -1693,7 +1575,7 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        let dir = Path::new("/tmp/roc");
+        // let dir = Path::new("/tmp/roc");
 
         runner(dir);
 
@@ -1803,7 +1685,7 @@ mod test {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }
 
-    fn add_section_works_help(dir: &Path) {
+    fn preprocessing_help(dir: &Path) {
         let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
 
         let host_zig = indoc!(
@@ -1847,161 +1729,20 @@ mod test {
         let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();
         let host_bytes = host_bytes.as_slice();
 
-        let shift = 0x200;
-        let mut mmap = open_mmap_mut(&dir.join("app.exe"), host_bytes.len() + shift);
+        let extra_sections = [*b"\0\0\0\0\0\0\0\0", *b"\0\0\0\0\0\0\0\0"];
 
-        let cutoff = 0x400;
-
-        mmap[..cutoff].copy_from_slice(&host_bytes[..cutoff]);
-        mmap[cutoff + shift..].copy_from_slice(&host_bytes[cutoff..]);
-
-        let section_table_offset = 0x180;
-        let mut offset = section_table_offset as usize;
-        loop {
-            let header =
-                load_struct_inplace_mut::<object::pe::ImageSectionHeader>(&mut mmap, offset);
-
-            dbg!(String::from_utf8_lossy(&header.name));
-            dbg!(&header);
-
-            // stop when we hit the NULL section
-            if header.name == [0; 8] {
-                break;
-            }
-
-            if header.name.starts_with(b".reloc")
-                || header.name.starts_with(b".tls")
-                || header.name.starts_with(b".pdata")
-                || header.name.starts_with(b".data")
-                || header.name.starts_with(b".rdata")
-                || header.name.starts_with(b".text")
-            {
-                let old = header.pointer_to_raw_data.get(LE);
-                dbg_hex!(old);
-                header.pointer_to_raw_data.set(LE, old + shift as u32);
-            }
-
-            offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
-        }
-
-        let nt_headers = load_struct_inplace_mut::<ImageNtHeaders64>(&mut mmap, 0x78);
-
-        dbg_hex!(nt_headers.optional_header.size_of_headers.get(LE));
-        nt_headers.optional_header.size_of_headers.set(LE, 0x600);
-
-        let old = dbg_hex!(nt_headers.optional_header.size_of_image.get(LE));
-        nt_headers.optional_header.size_of_image.set(LE, 0xc000);
-
-        let old = nt_headers.file_header.number_of_sections.get(LE);
-        nt_headers.file_header.number_of_sections.set(LE, old + 2);
-
-        let section_header = load_struct_inplace_mut::<ImageSectionHeader>(&mut mmap, 0x270 - 40);
-        dbg!(&section_header);
-
-        // 5 .reloc        000000c0  0000000140009000  0000000140009000  00003800  2**2
-
-        let extra_sections = [b"\0\0\0\0\0\0\0\0", b"\0\0\0\0\0\0\0\0"];
-        for (i, name) in extra_sections.iter().enumerate() {
-            let header = ImageSectionHeader {
-                name: **name,
-                virtual_size: object::U32::new(LE, 1), // sections cannot be empty ...
-                virtual_address: object::U32::new(LE, 0xa000 + i as u32 * 0x1000),
-                size_of_raw_data: Default::default(),
-                pointer_to_raw_data: object::U32::new(LE, 0),
-                pointer_to_relocations: Default::default(),
-                pointer_to_linenumbers: Default::default(),
-                number_of_relocations: Default::default(),
-                number_of_linenumbers: Default::default(),
-                characteristics: object::U32::new(LE, 0xC000_0000),
-            };
-
-            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-                unsafe { std::mem::transmute(header) };
-
-            let extra_sections_start = 0x270;
-            mmap[extra_sections_start + i * header_array.len()..][..header_array.len()]
-                .copy_from_slice(&header_array);
-        }
-
-        //        {
-        //            let header = ImageSectionHeader {
-        //                name: [0; 8],
-        //                virtual_size: Default::default(),
-        //                virtual_address: Default::default(),
-        //                size_of_raw_data: Default::default(),
-        //                pointer_to_raw_data: Default::default(),
-        //                pointer_to_relocations: Default::default(),
-        //                pointer_to_linenumbers: Default::default(),
-        //                number_of_relocations: Default::default(),
-        //                number_of_linenumbers: Default::default(),
-        //                characteristics: Default::default(),
-        //            };
-        //
-        //            let header_array: [u8; std::mem::size_of::<ImageSectionHeader>()] =
-        //                unsafe { std::mem::transmute(header) };
-        //
-        //            let i = extra_sections.len();
-        //            let extra_sections_start = 0x270;
-        //            mmap[extra_sections_start + i * header_array.len()..][..header_array.len()]
-        //                .copy_from_slice(&header_array);
-        //        }
-
-        if true {
-            let mut block_start = 0x00003600 + shift as u32;
-
-            loop {
-                let xs = load_struct_inplace::<object::pe::ImageBaseRelocation>(
-                    &mut mmap,
-                    block_start as usize,
-                );
-
-                if xs.size_of_block.get(LE) == 0 {
-                    break;
-                }
-
-                const W: usize = std::mem::size_of::<object::pe::ImageBaseRelocation>();
-
-                let count = (xs.size_of_block.get(LE) - W as u32) / 2;
-                let block_data_start = block_start as usize + W;
-                block_start += xs.size_of_block.get(LE);
-                let ys =
-                    load_structs_inplace_mut::<u16>(&mut mmap, block_data_start, count as usize);
-
-                let type_mask = 0b1111_0000_0000_0000;
-                for reloc in ys {
-                    let relocation_type = *reloc >> 12;
-                    let relocation_value = *reloc & !type_mask;
-                    match relocation_type {
-                        object::pe::IMAGE_REL_AMD64_SECTION => {
-                            // ignore; this is an index into a debug table, and that did not change
-                        }
-                        object::pe::IMAGE_REL_AMD64_ABSOLUTE => {
-                            // let's get to work
-                            let new_value = (relocation_value + shift as u16) & !type_mask;
-                            *reloc = (*reloc & type_mask) | new_value;
-                        }
-                        object::pe::IMAGE_REL_AMD64_REL32_2 => {
-                            // unsure what to do with this one
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        Preprocessor::preprocess(&dir.join("app.exe"), host_bytes, extra_sections.as_slice());
     }
 
     #[cfg(windows)]
     #[test]
-    fn add_section_works_windows() {
-        assert_eq!("Hello there\n", windows_test(add_section_works_help))
+    fn preprocessing_windows() {
+        assert_eq!("Hello there\n", windows_test(preprocessing_help))
     }
 
     #[test]
     #[ignore]
-    fn add_section_works_wine() {
-        assert_eq!("Hello there\n", wine_test(add_section_works_help))
+    fn preprocessing_wine() {
+        assert_eq!("Hello there\n", wine_test(preprocessing_help))
     }
 }
-
-// rsync -avP --rsync-path='wsl rsync' folkert@192.168.0.115:Documents/GitHub/roc/linktest linktest
-// rsync -avP --rsync-path='wsl rsync' ~/roc/roc/crates/linker/src/pe.rs folkert@192.168.0.115:Documents/GitHub/roc/crates/linker/src/pe.rs
