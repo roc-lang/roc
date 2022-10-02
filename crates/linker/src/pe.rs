@@ -1462,7 +1462,7 @@ mod test {
 
         runner(dir);
 
-        let output = std::process::Command::new("app.exe")
+        let output = std::process::Command::new(&dir.join("app.exe"))
             .current_dir(dir)
             .output()
             .unwrap();
@@ -1563,8 +1563,8 @@ mod test {
         assert_eq!("Hello, 234567 32 1 3!\n", windows_test(test_basics))
     }
 
-    #[ignore]
     #[test]
+    #[ignore]
     fn basics_wine() {
         assert_eq!("Hello, 234567 32 1 3!\n", wine_test(test_basics))
     }
