@@ -288,8 +288,17 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string)
             }
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
-                buf.push_str(string);
+                for c in string.chars() {
+                    if c == '"' {
+                        buf.push_char_literal('"')
+                    } else {
+                        for escaped in c.escape_default() {
+                            buf.push_char_literal(escaped);
+                        }
+                    }
+                }
                 buf.push('\'');
             }
             &NonBase10Int {
