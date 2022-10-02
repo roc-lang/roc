@@ -17,7 +17,7 @@ cwd =
 ## Sets the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## in the environment. After changing it, file operations on relative [Path]s will be relative
 ## to this directory.
-setCwd : Path -> Task {} [InvalidCwd]* [Read [Env]*]*
+setCwd : Path -> Task {} [InvalidCwd]* [Write [Env]*]*
 setCwd = \path ->
     Effect.setCwd (InternalPath.toBytes path)
     |> Effect.map (\result -> Result.mapErr result \{} -> InvalidCwd)
