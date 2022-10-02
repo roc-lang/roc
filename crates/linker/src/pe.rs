@@ -662,6 +662,15 @@ impl Preprocessor {
             .size_of_headers
             .set(LE, self.new_headers_size as u32);
 
+        // this is required to run the intermediate product, the final surgery process will
+        // overwrite this again. But we want to run the intermediate product (the preprocessedhost)
+        // to be runnable for debugging purposes.
+        nt_headers.optional_header.size_of_image.set(
+            LE,
+            nt_headers.optional_header.size_of_image.get(LE)
+                + (self.section_alignment * extra_sections.len()) as u32,
+        );
+
         // update the section file offsets
         //
         // Sections:
