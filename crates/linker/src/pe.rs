@@ -20,7 +20,8 @@ use roc_collections::{MutMap, VecMap};
 use roc_error_macros::internal_error;
 
 use crate::{
-    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut, open_mmap, open_mmap_mut,
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut,
+    load_structs_inplace_mut, open_mmap, open_mmap_mut,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -602,7 +603,7 @@ impl Preprocessor {
         result[self.new_headers_size..].copy_from_slice(&data[self.old_headers_size..]);
     }
 
-    fn write_dummy_sections(&self, result: &mut MmapMut, extra_sections: &[[u8; 8]]) {
+    fn write_dummy_sections(&self, result: &mut MmapMut, extra_section_names: &[[u8; 8]]) {
         const W: usize = std::mem::size_of::<ImageSectionHeader>();
 
         let previous_section_header =
@@ -614,8 +615,14 @@ impl Preprocessor {
         let mut next_virtual_address =
             next_multiple_of(previous_section_header_end as usize, self.section_alignment);
 
-        for (i, name) in extra_sections.iter().enumerate() {
-            let header = ImageSectionHeader {
+        let extra_section_headers = load_structs_inplace_mut::<ImageSectionHeader>(
+            result,
+            self.extra_sections_start,
+            extra_section_names.len(),
+        );
+
+        for (header, name) in extra_section_headers.iter_mut().zip(extra_section_names) {
+            *header = ImageSectionHeader {
                 name: *name,
                 // NOTE: the virtual_size CANNOT BE ZERO! the binary is invalid if a section has
                 // zero virtual size. Setting it to 1 works, (because this one byte is not backed
@@ -631,10 +638,6 @@ impl Preprocessor {
                 number_of_linenumbers: Default::default(),
                 characteristics: Default::default(),
             };
-
-            let header_array: [u8; W] = unsafe { std::mem::transmute(header) };
-
-            result[self.extra_sections_start + i * W..][..W].copy_from_slice(&header_array);
 
             next_virtual_address += self.section_alignment;
         }
