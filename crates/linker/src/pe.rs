@@ -1610,4 +1610,64 @@ mod test {
     fn app_internal_relocations_wine() {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }
+
+    fn preprocessing_help(dir: &Path) {
+        let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+        let host_zig = indoc!(
+            r#"
+            const std = @import("std");
+            pub fn main() !void {
+                const stdout = std.io.getStdOut().writer();
+                try stdout.print("Hello there\n", .{});
+            }
+            "#
+        );
+
+        std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
+
+        // now we can compile the host (it uses libapp.obj, hence the order here)
+        let output = std::process::Command::new(&zig)
+            .current_dir(dir)
+            .args(&[
+                "build-exe",
+                "host.zig",
+                "-lc",
+                "-target",
+                "x86_64-windows-gnu",
+                "-rdynamic",
+                "--strip",
+                "-OReleaseFast",
+            ])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            use std::io::Write;
+
+            std::io::stdout().write_all(&output.stdout).unwrap();
+            std::io::stderr().write_all(&output.stderr).unwrap();
+
+            panic!("zig build-exe failed");
+        }
+
+        let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();
+        let host_bytes = host_bytes.as_slice();
+
+        let extra_sections = [*b"\0\0\0\0\0\0\0\0", *b"\0\0\0\0\0\0\0\0"];
+
+        Preprocessor::preprocess(&dir.join("app.exe"), host_bytes, extra_sections.as_slice());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preprocessing_windows() {
+        assert_eq!("Hello there\n", windows_test(preprocessing_help))
+    }
+
+    #[test]
+    #[ignore]
+    fn preprocessing_wine() {
+        assert_eq!("Hello there\n", wine_test(preprocessing_help))
+    }
 }
