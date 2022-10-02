@@ -662,9 +662,10 @@ impl Preprocessor {
             .size_of_headers
             .set(LE, self.new_headers_size as u32);
 
-        // this is required to run the intermediate product, the final surgery process will
-        // overwrite this again. But we want to run the intermediate product (the preprocessedhost)
-        // to be runnable for debugging purposes.
+        // adding new sections increased the size of the image. We update this value so the
+        // preprocessedhost is, in theory, runnable. In practice for roc programs it will crash
+        // because there are missing symbols (those that the app should provide), but for testing
+        // being able to run the preprocessedhost is nice.
         nt_headers.optional_header.size_of_image.set(
             LE,
             nt_headers.optional_header.size_of_image.get(LE)
@@ -1612,6 +1613,7 @@ mod test {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }
 
+    /// Run our preprocessing on an all-zig host. There is no app here to simplify things.
     fn preprocessing_help(dir: &Path) {
         let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
 
@@ -1627,7 +1629,6 @@ mod test {
 
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
 
-        // now we can compile the host (it uses libapp.obj, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
