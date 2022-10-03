@@ -3218,6 +3218,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     outcome
 }
 
+#[allow(clippy::too_many_arguments)]
 fn unify_two_function_or_tag_unions<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,

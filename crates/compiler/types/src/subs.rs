@@ -963,7 +963,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "]<{:?}>", new_ext)
         }
         FlatType::FunctionOrTagUnion(tagnames, symbol, ext) => {
-            let tagnames: &[TagName] = &subs.get_subs_slice(*tagnames);
+            let tagnames: &[TagName] = subs.get_subs_slice(*tagnames);
 
             write!(
                 f,
@@ -3891,7 +3891,7 @@ fn flat_type_to_err_type(
 
             let mut err_tags: SendMap<TagName, Vec<_>> = SendMap::default();
 
-            err_tags.extend(tag_names.into_iter().map(|t| (t.clone(), vec![])));
+            err_tags.extend(tag_names.iter().map(|t| (t.clone(), vec![])));
 
             match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
