@@ -11100,4 +11100,36 @@ All branches in an `if` must have the same type!
         U8
     "###
     );
+
+    test_report!(
+        big_char_does_not_fit_in_u8_pattern,
+        indoc!(
+            r#"
+            x : U8
+            
+            when x is
+                '☃' -> ""
+                _ -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    6│>      when x is
+    7│           '☃' -> ""
+    8│           _ -> ""
+
+    This `x` value is a:
+
+        U8
+
+    But the branch patterns have type:
+
+        U16, I32, U32, I64, Nat, U64, I128, or U128
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
 }
