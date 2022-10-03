@@ -1200,6 +1200,19 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
 
                     tag_name_to_expr(env, tag_name)
                 }
+                FlatType::FunctionOrTagUnion(tags, _, _) if tags.len() == 2 => {
+                    let tags = env.subs.get_subs_slice(*tags);
+                    let tag_name_1 = &tags[0];
+                    let tag_name_2 = &tags[1];
+
+                    let tag_name = if value {
+                        max_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
+                    } else {
+                        min_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
+                    };
+
+                    tag_name_to_expr(env, tag_name)
+                }
                 other => {
                     unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
                 }
@@ -1271,6 +1284,37 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
                         .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
                         .map(|(a, b)| (a.clone(), b.to_vec()))
+                        .collect();
+
+                    let union_variant = {
+                        let mut layout_env = layout::Env::from_components(
+                            &mut env.layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+                        union_sorted_tags_pub(&mut layout_env, tags_vec, None)
+                    };
+
+                    match union_variant {
+                        UnionVariant::ByteUnion(tagnames) => {
+                            let tag_name = &tagnames[value as usize].expect_tag_ref();
+                            let tag_expr = tag_name_to_expr(env, tag_name);
+                            let loc_tag_expr = Loc::at_zero(tag_expr);
+                            Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)
+                        }
+                        _ => unreachable!("invalid union variant for a Byte!"),
+                    }
+                }
+                FlatType::FunctionOrTagUnion(tags, _, _) => {
+                    // anything with fewer tags is not a byte
+                    debug_assert!(tags.len() > 2);
+
+                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = env
+                        .subs
+                        .get_subs_slice(*tags)
+                        .iter()
+                        .map(|t| (t.clone(), vec![]))
                         .collect();
 
                     let union_variant = {
