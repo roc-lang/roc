@@ -4067,3 +4067,21 @@ fn int_let_generalization() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_match_char() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            c = 'A'
+
+            when c is
+                'A' -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
