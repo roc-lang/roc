@@ -7559,31 +7559,30 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
-            main : Task.Task {} []
-            main = "whatever man you don't even know my type"
-            main
+            alt : Task.Task {} []
+            alt = "whatever man you don't even know my type"
+            alt
             "#
         ),
-        @r#"
-        ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `Task` module is not imported:
+    The `Task` module is not imported:
 
-        1│  main : Task.Task {} []
-                   ^^^^^^^^^^^^^^^
+    4│      alt : Task.Task {} []
+                  ^^^^^^^^^^^^^^^
 
-        Is there an import missing? Perhaps there is a typo. Did you mean one
-        of these?
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
 
-            Test
-            List
-            Num
-            Box
-        "#
+        List
+        Num
+        Box
+        Set
+    "###
     );
 
     test_report!(
