@@ -210,7 +210,7 @@ pub struct ElemId(*const RocElemEntry);
 #[repr(C)]
 pub union RocElemEntry {
     pub rect: ManuallyDrop<RocRect>,
-    pub text: ManuallyDrop<RocStr>,
+    pub text: ManuallyDrop<RocText>,
 }
 
 #[repr(u8)]
@@ -282,6 +282,16 @@ pub struct RocRect {
     pub left: f32,
     pub top: f32,
     pub width: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct RocText {
+    pub text: RocStr,
+    pub color: Rgba,
+    pub left: f32,
+    pub size: f32,
+    pub top: f32,
 }
 
 impl Clone for RocElem {
