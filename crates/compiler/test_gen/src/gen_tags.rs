@@ -2011,14 +2011,14 @@ fn dispatch_tag_union_function_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            g = if Bool.true then H else J
+            g = \b -> if b then H else J
 
-            when g "" is
-                H _ -> "it's H"
-                J _ -> "it's J"
+            when P ((g Bool.true) "") ((g Bool.false) "") is
+                P (H _) (J _) -> "okay"
+                _ -> "FAIL"
             "#
         ),
-        RocStr::from("it's H"),
+        RocStr::from("okay"),
         RocStr
     );
 }
