@@ -8,8 +8,8 @@ use bincode::{deserialize_from, serialize_into};
 use memmap2::MmapMut;
 use object::{
     pe::{
-        self, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64, ImageSectionHeader,
-        ImageThunkData64,
+        self, ImageBaseRelocation, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64,
+        ImageSectionHeader, ImageThunkData64,
     },
     read::pe::ImportTable,
     LittleEndian as LE, Object, RelocationTarget, SectionIndex,
@@ -222,6 +222,9 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
         + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
 
+    let reloc_section_header_start =
+        section_header_start - std::mem::size_of::<ImageSectionHeader>();
+
     let mut code_bytes_added = 0;
     let mut data_bytes_added = 0;
     let mut file_bytes_added = 0;
@@ -234,6 +237,16 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         (app_code_section_va - image_base) as u32,
         section_alignment,
     );
+
+    let reloc_section_start = 0x4600;
+    let new_block_va = 0xb000;
+    let relocations = &[0];
+    let added_reloc_bytes =
+        write_image_base_relocation(executable, reloc_section_start, new_block_va, relocations);
+
+    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
+    ptr.virtual_size
+        .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
 
     for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
         let length: usize = app_obj_sections
@@ -359,6 +372,8 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         .into_iter()
         .map(|s| (s.name, s.offset_in_section as u64))
         .collect();
+
+    dbg!(&symbols);
 
     redirect_dummy_dll_functions(executable, &symbols, &md.imports, md.thunks_start_offset);
 }
@@ -1084,6 +1099,41 @@ fn write_section_header(
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
+fn write_image_base_relocation(
+    mmap: &mut [u8],
+    reloc_section_start: usize,
+    new_block_va: u32,
+    relocations: &[u16],
+) -> usize {
+    let mut next_block_start = reloc_section_start as u32;
+
+    let new_block_start = loop {
+        let header =
+            load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
+
+        if header.virtual_address.get(LE) == 0 {
+            break next_block_start;
+        }
+
+        next_block_start += header.size_of_block.get(LE);
+    };
+
+    let size_of_block = 8 + 2 * relocations.len();
+
+    let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, new_block_start as usize);
+    *header = ImageBaseRelocation {
+        virtual_address: object::U32::new(LE, new_block_va),
+        size_of_block: object::U32::new(LE, size_of_block as u32),
+    };
+
+    let destination =
+        load_structs_inplace_mut::<u16>(mmap, new_block_start as usize + 8, relocations.len());
+
+    destination.copy_from_slice(relocations);
+
+    size_of_block
+}
+
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
@@ -1463,6 +1513,7 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
+        let dir = Path::new(r"C:\Users\folkert\Documents\GitHub\roc\linktest");
 
         runner(dir);
 
@@ -1686,15 +1737,19 @@ mod test {
 
                 extern fn roc_magic() callconv(.C) u64;
 
+                pub export fn roc_alloc() u64 {
+                    return 123456;
+                }
+
                 pub fn main() !void {
                     const stdout = std.io.getStdOut().writer();
 
                     var timer = std.time.Timer.start() catch unreachable;
 
                     if (timer.read() == 1234) { 
-                        try stdout.print("Hello, {}!\n", .{roc_magic()});
-                    } else { 
                         try stdout.print("Hello, {}!\n", .{32});
+                    } else { 
+                        try stdout.print("Hello, {}!\n", .{roc_magic()});
                     }
                 }
                 "#
@@ -1785,13 +1840,226 @@ mod test {
 
             std::fs::copy(&dir.join("preprocessedhost"), &dir.join("app.exe")).unwrap();
 
-            // surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &*roc_app);
+            {
+                let executable_path: &Path = &dir.join("app.exe");
+                let metadata_path: &Path = &dir.join("metadata");
+                let roc_app_bytes = &*roc_app;
+                let md = PeMetadata::read_from_file(metadata_path);
+
+                let app_obj_sections = AppSections::from_data(roc_app_bytes);
+                let mut symbols = app_obj_sections.roc_symbols;
+
+                let image_base: u64 = md.image_base;
+                let file_alignment = md.file_alignment as usize;
+                let section_alignment = md.section_alignment as usize;
+
+                let app_sections_size: usize = app_obj_sections
+                    .sections
+                    .iter()
+                    .map(|s| {
+                        next_multiple_of(s.file_range.end - s.file_range.start, file_alignment)
+                    })
+                    .sum();
+
+                let executable =
+                    &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
+
+                let app_code_section_va = md.last_host_section_address
+                    + next_multiple_of(
+                        md.last_host_section_size as usize,
+                        section_alignment as usize,
+                    ) as u64;
+
+                let mut section_file_offset = md.dynhost_file_size;
+                let mut virtual_address = (app_code_section_va - image_base) as u32;
+
+                // find the location to write the section headers for our new sections
+                let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file
+                    as usize
+                    + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
+
+                let mut code_bytes_added = 0;
+                let mut data_bytes_added = 0;
+                let mut file_bytes_added = 0;
+
+                // relocations between the sections of the roc application
+                // (as opposed to relocations for symbols the app imports from the host)
+                let inter_app_relocations = process_internal_relocations(
+                    &app_obj_sections.sections,
+                    &app_obj_sections.other_symbols,
+                    (app_code_section_va - image_base) as u32,
+                    section_alignment,
+                );
+
+                // 0x3a08
+                let reloc_section_start = 0x4600;
+                let new_block_va = 0x3000;
+                let relocations = &[0xa03];
+                let added_reloc_bytes = write_image_base_relocation(
+                    executable,
+                    reloc_section_start,
+                    new_block_va,
+                    relocations,
+                );
+
+                let reloc_section_header_start =
+                    section_header_start - std::mem::size_of::<ImageSectionHeader>();
+
+                let ptr = load_struct_inplace_mut::<ImageSectionHeader>(
+                    executable,
+                    reloc_section_header_start,
+                );
+                ptr.virtual_size
+                    .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
+
+                for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
+                    let length: usize = app_obj_sections
+                        .sections
+                        .iter()
+                        .filter(|s| s.kind == kind)
+                        .map(|s| s.file_range.end - s.file_range.start)
+                        .sum();
+
+                    // offset_in_section now becomes a proper virtual address
+                    for symbol in symbols.iter_mut() {
+                        if symbol.section_kind == kind {
+                            symbol.offset_in_section +=
+                                image_base as usize + virtual_address as usize;
+                        }
+                    }
+
+                    let virtual_size = u32::max(1, length as u32);
+                    let size_of_raw_data = next_multiple_of(length, file_alignment) as u32;
+
+                    match kind {
+                        SectionKind::Text => {
+                            code_bytes_added += size_of_raw_data;
+
+                            write_section_header(
+                                executable,
+                                *b".text1\0\0",
+                                pe::IMAGE_SCN_MEM_READ
+                                    | pe::IMAGE_SCN_CNT_CODE
+                                    | pe::IMAGE_SCN_MEM_EXECUTE,
+                                section_header_start,
+                                section_file_offset,
+                                virtual_size,
+                                virtual_address,
+                                size_of_raw_data,
+                            );
+                        }
+                        SectionKind::ReadOnlyData => {
+                            data_bytes_added += size_of_raw_data;
+
+                            write_section_header(
+                                executable,
+                                *b".rdata1\0",
+                                pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA,
+                                section_header_start,
+                                section_file_offset,
+                                virtual_size,
+                                virtual_address,
+                                size_of_raw_data,
+                            );
+                        }
+                    }
+
+                    let mut offset = section_file_offset;
+                    let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
+                    for section in it {
+                        let slice =
+                            &roc_app_bytes[section.file_range.start..section.file_range.end];
+                        executable[offset..][..slice.len()].copy_from_slice(slice);
+
+                        for (name, app_relocation) in section.relocations.iter() {
+                            let AppRelocation {
+                                offset_in_section,
+                                relocation,
+                                address,
+                            } = app_relocation;
+
+                            if let Some(destination) = md.exports.get(name) {
+                                match relocation.kind() {
+                                    object::RelocationKind::Relative => {
+                                        // we implicitly only do 32-bit relocations
+                                        debug_assert_eq!(relocation.size(), 32);
+
+                                        let delta = destination
+                                            - virtual_address as i64
+                                            - *offset_in_section as i64
+                                            + relocation.addend();
+
+                                        executable[offset + *offset_in_section as usize..][..4]
+                                            .copy_from_slice(&(delta as i32).to_le_bytes());
+                                    }
+                                    _ => todo!(),
+                                }
+                            } else if let Some(destination) = inter_app_relocations.get(name) {
+                                // we implicitly only do 32-bit relocations
+                                debug_assert_eq!(relocation.size(), 32);
+
+                                let delta = destination
+                                    - virtual_address as i64
+                                    - *offset_in_section as i64
+                                    + relocation.addend();
+
+                                executable[offset + *offset_in_section as usize..][..4]
+                                    .copy_from_slice(&(delta as i32).to_le_bytes());
+                            } else {
+                                match relocation.kind() {
+                                    object::RelocationKind::Relative => {
+                                        // we implicitly only do 32-bit relocations
+                                        debug_assert_eq!(relocation.size(), 32);
+
+                                        let delta = *address as i64 - *offset_in_section as i64
+                                            + relocation.addend();
+
+                                        executable[offset + *offset_in_section as usize..][..4]
+                                            .copy_from_slice(&(delta as i32).to_le_bytes());
+                                    }
+                                    _ => todo!(),
+                                }
+                            }
+                        }
+
+                        offset += slice.len();
+                    }
+
+                    section_header_start += std::mem::size_of::<ImageSectionHeader>();
+                    section_file_offset += size_of_raw_data as usize;
+                    virtual_address += next_multiple_of(length, section_alignment) as u32;
+                    file_bytes_added += next_multiple_of(length, section_alignment) as u32;
+                }
+
+                update_optional_header(
+                    executable,
+                    md.optional_header_offset,
+                    code_bytes_added as u32,
+                    file_bytes_added as u32,
+                    data_bytes_added as u32,
+                );
+
+                let mut symbols: Vec<_> = symbols
+                    .into_iter()
+                    .map(|s| (s.name, s.offset_in_section as u64))
+                    .collect();
+
+                crate::dbg_hex!(&symbols);
+                symbols[0].1 = 0x140001000;
+
+                crate::dbg_hex!(md.thunks_start_offset);
+                redirect_dummy_dll_functions(
+                    executable,
+                    &symbols,
+                    &md.imports,
+                    md.thunks_start_offset,
+                );
+            };
         };
     }
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "does not work yet"]
     fn stripped_basics_windows() {
         assert_eq!("Hello, 32!\n", windows_test(stripped_basics))
     }
