@@ -962,13 +962,13 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "]<{:?}>", new_ext)
         }
-        FlatType::FunctionOrTagUnion(tagname_index, symbol, ext) => {
-            let tagname: &TagName = &subs[*tagname_index];
+        FlatType::FunctionOrTagUnion(tagnames, symbol, ext) => {
+            let tagnames: &[TagName] = &subs.get_subs_slice(*tagnames);
 
             write!(
                 f,
                 "FunctionOrTagUnion({:?}, {:?}, {:?})",
-                tagname, symbol, ext
+                tagnames, symbol, ext
             )
         }
         FlatType::RecursiveTagUnion(rec, tags, ext) => {
@@ -2424,7 +2424,12 @@ pub enum FlatType {
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(UnionTags, Variable),
-    FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
+
+    /// `A` might either be a function
+    ///   x -> A x : a -> [A a, B a, C a]
+    /// or a tag `[A, B, C]`
+    FunctionOrTagUnion(SubsSlice<TagName>, SubsSlice<Symbol>, Variable),
+
     RecursiveTagUnion(Variable, UnionTags, Variable),
     Erroneous(SubsIndex<Problem>),
     EmptyRecord,
@@ -3881,12 +3886,12 @@ fn flat_type_to_err_type(
             }
         }
 
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
-            let tag_name = subs[tag_name].clone();
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
+            let tag_names = subs.get_subs_slice(tag_names);
 
-            let mut err_tags = SendMap::default();
+            let mut err_tags: SendMap<TagName, Vec<_>> = SendMap::default();
 
-            err_tags.insert(tag_name, vec![]);
+            err_tags.extend(tag_names.into_iter().map(|t| (t.clone(), vec![])));
 
             match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
@@ -4202,8 +4207,8 @@ impl StorageSubs {
                 Self::offset_tag_union(offsets, *union_tags),
                 Self::offset_variable(offsets, *ext),
             ),
-            FlatType::FunctionOrTagUnion(tag_name, symbol, ext) => FlatType::FunctionOrTagUnion(
-                Self::offset_tag_name_index(offsets, *tag_name),
+            FlatType::FunctionOrTagUnion(tag_names, symbol, ext) => FlatType::FunctionOrTagUnion(
+                Self::offset_tag_name_slice(offsets, *tag_names),
                 *symbol,
                 Self::offset_variable(offsets, *ext),
             ),
@@ -4295,13 +4300,13 @@ impl StorageSubs {
         record_fields
     }
 
-    fn offset_tag_name_index(
+    fn offset_tag_name_slice(
         offsets: &StorageSubsOffsets,
-        mut tag_name: SubsIndex<TagName>,
-    ) -> SubsIndex<TagName> {
-        tag_name.index += offsets.tag_names;
+        mut tag_names: SubsSlice<TagName>,
+    ) -> SubsSlice<TagName> {
+        tag_names.start += offsets.tag_names;
 
-        tag_name
+        tag_names
     }
 
     fn offset_variable(offsets: &StorageSubsOffsets, variable: Variable) -> Variable {
@@ -4542,12 +4547,22 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     TagUnion(union_tags, new_ext)
                 }
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                    let new_tag_name = SubsIndex::new(env.target.tag_names.len() as u32);
+                FunctionOrTagUnion(tag_names, symbols, ext_var) => {
+                    let new_tag_names = SubsSlice::extend_new(
+                        &mut env.target.tag_names,
+                        env.source.get_subs_slice(tag_names).iter().cloned(),
+                    );
 
-                    env.target.tag_names.push(env.source[tag_name].clone());
+                    let new_symbols = SubsSlice::extend_new(
+                        &mut env.target.closure_names,
+                        env.source.get_subs_slice(symbols).iter().cloned(),
+                    );
 
-                    FunctionOrTagUnion(new_tag_name, symbol, storage_copy_var_to_help(env, ext_var))
+                    FunctionOrTagUnion(
+                        new_tag_names,
+                        new_symbols,
+                        storage_copy_var_to_help(env, ext_var),
+                    )
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -4981,14 +4996,20 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     TagUnion(union_tags, new_ext)
                 }
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                    let new_tag_name = SubsIndex::new(env.target.tag_names.len() as u32);
+                FunctionOrTagUnion(tag_names, symbols, ext_var) => {
+                    let new_tag_names = SubsSlice::extend_new(
+                        &mut env.target.tag_names,
+                        env.source.get_subs_slice(tag_names).iter().cloned(),
+                    );
 
-                    env.target.tag_names.push(env.source[tag_name].clone());
+                    let new_symbols = SubsSlice::extend_new(
+                        &mut env.target.closure_names,
+                        env.source.get_subs_slice(symbols).iter().cloned(),
+                    );
 
                     FunctionOrTagUnion(
-                        new_tag_name,
-                        symbol,
+                        new_tag_names,
+                        new_symbols,
                         copy_import_to_help(env, max_rank, ext_var),
                     )
                 }

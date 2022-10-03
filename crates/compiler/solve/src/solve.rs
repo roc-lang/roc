@@ -2299,10 +2299,11 @@ fn type_to_variable<'a>(
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }
 
-                let slice = SubsIndex::new(subs.tag_names.len() as u32);
-                subs.tag_names.push(tag_name.clone());
+                let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name.clone()]);
+                let symbols = SubsSlice::extend_new(&mut subs.closure_names, [*symbol]);
 
-                let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
+                let content =
+                    Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }

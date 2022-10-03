@@ -60,8 +60,6 @@ trait CopyEnv {
 
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase>;
 
-    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName>;
-
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase>;
 
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
@@ -93,11 +91,6 @@ impl CopyEnv for Subs {
     #[inline(always)]
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
         name
-    }
-
-    #[inline(always)]
-    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
-        tag_name
     }
 
     #[inline(always)]
@@ -148,11 +141,6 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     #[inline(always)]
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
         SubsIndex::push_new(&mut self.target.field_names, self.source[name].clone())
-    }
-
-    #[inline(always)]
-    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
-        SubsIndex::push_new(&mut self.target.tag_names, self.source[tag_name].clone())
     }
 
     #[inline(always)]
@@ -935,12 +923,13 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         Structure(RecursiveTagUnion(new_rec_var, new_union_tags, new_ext_var))
                     })
                 }
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                FunctionOrTagUnion(tag_names, symbols, ext_var) => {
                     let new_ext_var = descend_var!(ext_var);
-                    let new_tag_name = env.clone_tag_name(tag_name);
+                    let new_tag_names = env.clone_tag_names(tag_names);
+                    let new_symbols = env.clone_lambda_names(symbols);
                     perform_clone!(Structure(FunctionOrTagUnion(
-                        new_tag_name,
-                        symbol,
+                        new_tag_names,
+                        new_symbols,
                         new_ext_var
                     )))
                 }
