@@ -3461,7 +3461,7 @@ fn parse_header<'a>(
 
             let (module_id, module_name, header) = build_header(
                 info,
-                parse_state,
+                parse_state.clone(),
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
@@ -5737,7 +5737,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
     buf
 }
 
-fn to_import_cycle_report<'a>(
+fn to_import_cycle_report(
     module_ids: ModuleIds,
     all_ident_ids: IdentIdsByModule,
     import_cycle: Vec<ModuleId>,
