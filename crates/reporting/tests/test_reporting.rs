@@ -2158,12 +2158,19 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `f` value is defined directly in terms of itself, causing an
-        infinite loop.
-        "#
+    `f` is defined directly in terms of itself:
+
+    4│      f = f
+            ^^^^^
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `f` values!
+
+    Hint: Did you mean to define `f` as a function?
+    "###
     );
 
     // invalid mutual recursion
@@ -7559,31 +7566,30 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
-            main : Task.Task {} []
-            main = "whatever man you don't even know my type"
-            main
+            alt : Task.Task {} []
+            alt = "whatever man you don't even know my type"
+            alt
             "#
         ),
-        @r#"
-        ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `Task` module is not imported:
+    The `Task` module is not imported:
 
-        1│  main : Task.Task {} []
-                   ^^^^^^^^^^^^^^^
+    4│      alt : Task.Task {} []
+                  ^^^^^^^^^^^^^^^
 
-        Is there an import missing? Perhaps there is a typo. Did you mean one
-        of these?
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
 
-            Test
-            List
-            Num
-            Box
-        "#
+        List
+        Num
+        Box
+        Set
+    "###
     );
 
     test_report!(
@@ -10766,6 +10772,31 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
+    "###
+    );
+
+    test_report!(
+        invalid_toplevel_cycle,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            main =
+                if Bool.true then \{} -> {} else main
+            "#
+        ),
+    @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+    `main` is defined directly in terms of itself:
+
+    3│>  main =
+    4│>      if Bool.true then \{} -> {} else main
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `main` values!
+
+    Hint: Did you mean to define `main` as a function?
     "###
     );
 }
