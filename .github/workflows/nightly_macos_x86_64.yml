@@ -1,6 +1,6 @@
-on:
-  schedule:
-    - cron:  '0 9 * * *' # 9=9am utc+0
+on: [pull_request]
+  #schedule:
+  #  - cron:  '0 9 * * *' # 9=9am utc+0
 
 name: Nightly Release macOS x86_64
 
@@ -11,7 +11,10 @@ env:
 jobs:
   test-build-upload:
     name: build, test, package and upload nightly release
-    runs-on: [macos-12]
+    strategy:
+      matrix:
+        os: [ macos-11, macos-12 ]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v3
@@ -47,11 +50,19 @@ jobs:
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
         
+      - name: get macos version if 11
+        if: endsWith(matrix.os, '11')
+        run: echo "MACOSVERSION=11" >> $GITHUB_ENV
+        
+      - name: get macos version if 12
+        if: endsWith(matrix.os, '12')
+        run: echo "MACOSVERSION=12" >> $GITHUB_ENV
+        
       - name: build file name
         env:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
-        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_$MACOSVERSION_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
         
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
