@@ -4,16 +4,15 @@ on: [pull_request]
 
 name: Nightly Release macOS x86_64
 
-env:
-  ZIG_VERSION: 0.9.1
-  LLVM_SYS_130_PREFIX: /usr/local/opt/llvm
-
 jobs:
   test-build-upload:
     name: build, test, package and upload nightly release
     strategy:
       matrix:
         os: [ macos-11, macos-12 ]
+    env:
+      ZIG_VERSION: 0.9.1
+      LLVM_SYS_130_PREFIX: /usr/local/opt/llvm
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
