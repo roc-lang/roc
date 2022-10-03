@@ -10767,4 +10767,22 @@ All branches in an `if` must have the same type!
     @r###"
     "###
     );
+
+    test_report!(
+        invalid_toplevel_cycle,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            main =
+                if Bool.true then \{} -> {} else main
+            "#
+        ),
+    @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The `main` value is defined directly in terms of itself, causing an
+    infinite loop.
+    "###
+    );
 }
