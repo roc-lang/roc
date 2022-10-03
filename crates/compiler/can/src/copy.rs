@@ -725,7 +725,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
             FloatLiteral(sub!(*v1), sub!(*v2), s.clone(), *n, *bound)
         }
         StrLiteral(s) => StrLiteral(s.clone()),
-        SingleQuote(c) => SingleQuote(*c),
+        SingleQuote(v1, v2, c, bound) => SingleQuote(sub!(*v1), sub!(*v2), *c, *bound),
         Underscore => Underscore,
         AbilityMemberSpecialization { ident, specializes } => AbilityMemberSpecialization {
             ident: *ident,

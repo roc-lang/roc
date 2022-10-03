@@ -366,7 +366,7 @@ fn pattern<'a>(
             f.text(&**n)
         }
         StrLiteral(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(c) => f.text(format!("'{}'", c)),
+        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
         Underscore => f.text("_"),
 
         Shadowed(_, _, _) => todo!(),
