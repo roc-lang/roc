@@ -7886,4 +7886,58 @@ mod solve_expr {
             "U32",
         );
     }
+
+    #[test]
+    fn check_char_pattern_as_u8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U8 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U8 -> U8",
+        );
+    }
+
+    #[test]
+    fn check_char_pattern_as_u16() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U16 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U16 -> U16",
+        );
+    }
+
+    #[test]
+    fn check_char_pattern_as_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U32 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U32 -> U32",
+        );
+    }
 }
