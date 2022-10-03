@@ -450,8 +450,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         payload_vars,
                     ))
                 }
-                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                    let tag_name = &env.subs[*tag_name];
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
+                    let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
 
                     Ok(single_tag_union_to_ast(
                         env,
@@ -631,8 +631,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
             }
-            Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                let tag_name = &env.subs[*tag_name];
+            Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
+                let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {

@@ -2657,13 +2657,13 @@ fn unify_flat_type<M: MetaCollector>(
 
             outcome
         }
-        (FunctionOrTagUnion(tag_name, tag_symbol, ext), Func(args, closure, ret)) => {
+        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
                 ctx,
-                tag_name,
-                *tag_symbol,
+                *tag_names,
+                *tag_symbols,
                 *ext,
                 *args,
                 *ret,
@@ -2671,13 +2671,13 @@ fn unify_flat_type<M: MetaCollector>(
                 true,
             )
         }
-        (Func(args, closure, ret), FunctionOrTagUnion(tag_name, tag_symbol, ext)) => {
+        (Func(args, closure, ret), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
                 ctx,
-                tag_name,
-                *tag_symbol,
+                *tag_names,
+                *tag_symbols,
                 *ext,
                 *args,
                 *ret,
@@ -2685,9 +2685,9 @@ fn unify_flat_type<M: MetaCollector>(
                 false,
             )
         }
-        (FunctionOrTagUnion(tag_name_1, _, ext1), FunctionOrTagUnion(tag_name_2, _, ext2)) => {
-            let tag_name_1_ref = &env.subs[*tag_name_1];
-            let tag_name_2_ref = &env.subs[*tag_name_2];
+        (FunctionOrTagUnion(tag_names_1, _, ext1), FunctionOrTagUnion(tag_names_2, _, ext2)) => {
+            let tag_name_1_ref = &env.subs.get_subs_slice(*tag_names_1);
+            let tag_name_2_ref = &env.subs.get_subs_slice(*tag_names_2);
 
             if tag_name_1_ref == tag_name_2_ref {
                 let outcome = unify_pool(env, pool, *ext1, *ext2, ctx.mode);
@@ -2698,37 +2698,62 @@ fn unify_flat_type<M: MetaCollector>(
                     outcome
                 }
             } else {
-                let tags1 = UnionTags::from_tag_name_index(*tag_name_1);
-                let tags2 = UnionTags::from_tag_name_index(*tag_name_2);
+                let empty_tag_var_slices_1 = SubsSlice::extend_new(
+                    &mut env.subs.variable_slices,
+                    std::iter::repeat(Default::default()).take(tag_names_1.len()),
+                );
+                let tags1 = UnionTags::from_slices(*tag_names_1, empty_tag_var_slices_1);
+
+                let empty_tag_var_slices_2 = SubsSlice::extend_new(
+                    &mut env.subs.variable_slices,
+                    std::iter::repeat(Default::default()).take(tag_names_2.len()),
+                );
+                let tags2 = UnionTags::from_slices(*tag_names_2, empty_tag_var_slices_2);
 
                 unify_tag_unions(env, pool, ctx, tags1, *ext1, tags2, *ext2, Rec::None)
             }
         }
-        (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
-            let tags2 = UnionTags::from_tag_name_index(*tag_name);
+        (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
         }
-        (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
-            let tags1 = UnionTags::from_tag_name_index(*tag_name);
+        (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
             unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
-        (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+        (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let tags2 = UnionTags::from_tag_name_index(*tag_name);
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
             let rec = Rec::Left(*recursion_var);
 
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
         }
 
-        (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+        (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let tags1 = UnionTags::from_tag_name_index(*tag_name);
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
             let rec = Rec::Right(*recursion_var);
 
             unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
@@ -3133,17 +3158,20 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
-    tag_name_index: &SubsIndex<TagName>,
-    tag_symbol: Symbol,
+    tag_names_slice: SubsSlice<TagName>,
+    tag_fn_lambdas: SubsSlice<Symbol>,
     tag_ext: Variable,
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
 ) -> Outcome<M> {
-    let tag_name = env.subs[*tag_name_index].clone();
+    let tag_names = env.subs.get_subs_slice(tag_names_slice).to_vec();
 
-    let union_tags = UnionTags::insert_slices_into_subs(env.subs, [(tag_name, function_arguments)]);
+    let union_tags = UnionTags::insert_slices_into_subs(
+        env.subs,
+        tag_names.into_iter().map(|tag| (tag, function_arguments)),
+    );
     let content = Content::Structure(FlatType::TagUnion(union_tags, tag_ext));
 
     let new_tag_union_var = fresh(env, pool, ctx, content);
@@ -3155,7 +3183,14 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     };
 
     {
-        let union_tags = UnionLambdas::tag_without_arguments(env.subs, tag_symbol);
+        let lambda_names = env.subs.get_subs_slice(tag_fn_lambdas).to_vec();
+        let new_lambda_names = SubsSlice::extend_new(&mut env.subs.closure_names, lambda_names);
+        let empty_captures_slices = SubsSlice::extend_new(
+            &mut env.subs.variable_slices,
+            std::iter::repeat(Default::default()).take(new_lambda_names.len()),
+        );
+        let union_tags = UnionLambdas::from_slices(new_lambda_names, empty_captures_slices);
+
         let ambient_function_var = if left { ctx.first } else { ctx.second };
         let lambda_set_content = LambdaSet(self::LambdaSet {
             solved: union_tags,
