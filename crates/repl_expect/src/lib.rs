@@ -853,7 +853,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface A exposes [] imports []
+                interface Test exposes [] imports []
 
                 NonEmpty := [
                     First Str U8,
@@ -899,7 +899,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface A exposes [] imports []
+                interface Test exposes [] imports []
 
                 makeForcer : {} -> (Str -> U8)
                 makeForcer = \{} -> \_ -> 2u8
