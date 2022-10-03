@@ -1239,3 +1239,39 @@ fn record_of_poly_function_and_string() {
         r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
     );
 }
+
+#[test]
+fn expr_produces_bool() {
+    expect_success(
+        indoc!(
+            r#"
+            1 == 1
+            "#
+        ),
+        r#"Bool.true : Bool"#,
+    );
+}
+
+#[test]
+fn bool_true() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.true
+            "#
+        ),
+        r#"Bool.true : Bool"#,
+    );
+}
+
+#[test]
+fn bool_false() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.fasle
+            "#
+        ),
+        r#"Bool.false : Bool"#,
+    );
+}

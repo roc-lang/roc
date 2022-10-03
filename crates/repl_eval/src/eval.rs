@@ -1153,6 +1153,10 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                 }
             }
         }
+        Alias(Symbol::BOOL_BOOL, _, _, _) => Expr::Var {
+            module_name: "Bool",
+            ident: if value { "true" } else { "false" },
+        },
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
