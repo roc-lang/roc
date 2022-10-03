@@ -44,7 +44,29 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
     END_COL,
     "\n\n"
 );
-pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
+
+// For when nothing is entered in the repl
+// TODO add link to repl tutorial(does not yet exist).
+pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
+
+// TODO add link to repl tutorial(does not yet exist).
+pub const TIPS: &str = concatcp!(
+    BLUE,
+    "  - ",
+    END_COL,
+    "Entered code needs to return something. For example:\n\n",
+    PINK,
+    "    » foo = 1\n    …    foo\n\n",
+    END_COL,
+    BLUE,
+    "  - ",
+    END_COL,
+    ":q to quit\n\n",
+    BLUE,
+    "  - ",
+    END_COL,
+    ":help\n"
+);
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
@@ -392,7 +414,7 @@ pub fn main() -> io::Result<()> {
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
+    print!("{}{}", WELCOME_MESSAGE, TIPS);
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
@@ -415,7 +437,7 @@ pub fn main() -> io::Result<()> {
                 match trim_line.to_lowercase().as_str() {
                     "" => {
                         if pending_src.is_empty() {
-                            print!("\n{}", INSTRUCTIONS);
+                            print!("\n{}", SHORT_INSTRUCTIONS);
                         } else if prev_line_blank {
                             // After two blank lines in a row, give up and try parsing it
                             // even though it's going to fail. This way you don't get stuck.
@@ -437,7 +459,8 @@ pub fn main() -> io::Result<()> {
                         }
                     }
                     ":help" => {
-                        println!("Use :exit or :quit or :q to exit.");
+                        // TODO add link to repl tutorial(does not yet exist).
+                        println!("Use :q to exit.");
                     }
                     ":exit" | ":quit" | ":q" => {
                         break;
