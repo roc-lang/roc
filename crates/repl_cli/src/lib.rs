@@ -45,6 +45,7 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
     "\n\n"
 );
 pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
+pub const TIPS: &str = "Everything in the repl needs to be an expression, it needs to return something. See example below: \n\n\n foo = 1 \n\n foo";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
@@ -392,7 +393,7 @@ pub fn main() -> io::Result<()> {
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
+    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS, TIPS);
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
