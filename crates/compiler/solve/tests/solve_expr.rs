@@ -7841,4 +7841,18 @@ mod solve_expr {
             "hasher -> hasher | hasher has Hasher",
         );
     }
+
+    #[test]
+    fn dispatch_tag_union_function_inferred() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                g = if Bool.true then A else B
+
+                g ""
+                "#
+            ),
+            "[A Str, B Str]*",
+        );
+    }
 }
