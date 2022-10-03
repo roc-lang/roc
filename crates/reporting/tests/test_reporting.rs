@@ -2158,12 +2158,19 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `f` value is defined directly in terms of itself, causing an
-        infinite loop.
-        "#
+    `f` is defined directly in terms of itself:
+
+    4│      f = f
+            ^^^^^
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `f` values!
+
+    Hint: Did you mean to define `f` as a function?
+    "###
     );
 
     // invalid mutual recursion
@@ -10781,8 +10788,15 @@ All branches in an `if` must have the same type!
     @r###"
     ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
-    The `main` value is defined directly in terms of itself, causing an
-    infinite loop.
+    `main` is defined directly in terms of itself:
+
+    3│>  main =
+    4│>      if Bool.true then \{} -> {} else main
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `main` values!
+
+    Hint: Did you mean to define `main` as a function?
     "###
     );
 }
