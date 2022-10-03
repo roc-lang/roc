@@ -5597,6 +5597,12 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn format_shorthand_record_assignment() {
+        expr_formats_to("{ a: a }", "{ a }");
+        expr_formats_same("{ a }");
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {
@@ -5612,6 +5618,8 @@ mod test_fmt {
     //            f =
     //                \_ -> 4
     //            "#
+    //            k
+    //            k
     //        ));
     //    }
 }

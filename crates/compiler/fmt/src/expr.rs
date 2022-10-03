@@ -1285,14 +1285,12 @@ fn fmt_record<'a, 'buf>(
     }
 }
 
-fn format_field_multiline<'a, 'buf, T>(
+fn format_field_multiline<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    field: &AssignedField<'a, T>,
+    field: &AssignedField<'a, Expr<'a>>,
     indent: u16,
     separator_prefix: &str,
-) where
-    T: Formattable,
-{
+) {
     use self::AssignedField::*;
     match field {
         RequiredValue(name, spaces, ann) => {
@@ -1304,10 +1302,21 @@ fn format_field_multiline<'a, 'buf, T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.push_str(separator_prefix);
-            buf.push_str(":");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
+            match ann.value {
+                Expr::Var {
+                    module_name: "",
+                    ident,
+                } if ident == name.value => {
+                    // pass, collapse the record to a label-only formatting
+                }
+                _ => {
+                    buf.push_str(separator_prefix);
+                    buf.push_str(":");
+                    buf.spaces(1);
+                    ann.value.format(buf, indent);
+                }
+            }
+
             buf.push(',');
         }
         OptionalValue(name, spaces, ann) => {

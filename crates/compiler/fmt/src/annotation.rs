@@ -376,7 +376,15 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, 1, newlines == Newlines::Yes);
+        format_assigned_field_help(
+            self,
+            buf,
+            parens,
+            indent,
+            1,
+            newlines == Newlines::Yes,
+            |_, _| false,
+        );
     }
 }
 
@@ -393,7 +401,15 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, 0, newlines == Newlines::Yes);
+        format_assigned_field_help(
+            self,
+            buf,
+            parens,
+            indent,
+            0,
+            newlines == Newlines::Yes,
+            |name, expr| matches!(expr, Expr::Var{module_name: "", ident} if *ident == name),
+        );
     }
 }
 
@@ -417,6 +433,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
     indent: u16,
     separator_spaces: usize,
     is_multiline: bool,
+    collapse_to_label_only: impl Fn(&str, &T) -> bool,
 ) where
     T: Formattable,
 {
@@ -435,10 +452,12 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
-            buf.push(':');
-            buf.spaces(1);
-            ann.value.format(buf, indent);
+            if !collapse_to_label_only(&name.value, &ann.value) {
+                buf.spaces(separator_spaces);
+                buf.push(':');
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
         }
         OptionalValue(name, spaces, ann) => {
             if is_multiline {
@@ -473,6 +492,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 indent,
                 separator_spaces,
                 is_multiline,
+                collapse_to_label_only,
             );
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
@@ -483,6 +503,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 indent,
                 separator_spaces,
                 is_multiline,
+                collapse_to_label_only,
             );
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
