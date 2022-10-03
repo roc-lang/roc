@@ -3,13 +3,4 @@ app "helloWorld"
     imports []
     provides [main] to pf
 
-crash : Str -> a
-crash = \msg ->
-  expect msg != msg
-
-  diverge : {} -> a
-  diverge = \{} -> diverge {}
-
-  diverge {}
-
-main = crash "Hello, World!\n"
+main = "Hello, World!\n"
