@@ -4027,12 +4027,18 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        SingleQuote(character) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
-            Layout::int_width(IntWidth::I32),
-            hole,
-        ),
+        SingleQuote(_, _, character, _) => {
+            let layout = layout_cache
+                .from_var(env.arena, variable, env.subs)
+                .unwrap();
+
+            Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
+                layout,
+                hole,
+            )
+        }
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,

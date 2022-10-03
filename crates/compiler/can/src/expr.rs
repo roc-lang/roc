@@ -22,6 +22,7 @@ use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
+use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
@@ -91,7 +92,8 @@ pub enum Expr {
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
     Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
-    SingleQuote(char),
+    // Number variable, precision variable, value, bound
+    SingleQuote(Variable, Variable, char, SingleQuoteBound),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
@@ -637,7 +639,15 @@ pub fn canonicalize_expr<'a>(
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
                 if it.peek().is_none() {
-                    (Expr::SingleQuote(char), Output::default())
+                    (
+                        Expr::SingleQuote(
+                            var_store.fresh(),
+                            var_store.fresh(),
+                            char,
+                            SingleQuoteBound::from_char(char),
+                        ),
+                        Output::default(),
+                    )
                 } else {
                     // multiple chars is found
                     let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
@@ -1642,7 +1652,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
-        | other @ SingleQuote(_)
+        | other @ SingleQuote(..)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -2703,7 +2713,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
             | Expr::Str(_)
             | Expr::ZeroArgumentTag { .. }
             | Expr::Accessor(_)
-            | Expr::SingleQuote(_)
+            | Expr::SingleQuote(..)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)

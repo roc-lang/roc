@@ -10799,4 +10799,33 @@ All branches in an `if` must have the same type!
     Hint: Did you mean to define `main` as a function?
     "###
     );
+
+    test_report!(
+        invalid_toplevel_cycle,
+        big_char_does_not_fit_in_u8,
+        indoc!(
+            r#"
+            digits : List U8
+            digits = List.range '0' '9'
+
+            List.contains digits '☃'
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `contains` has an unexpected type:
+
+    7│      List.contains digits '☃'
+                                 ^^^^^
+
+    The argument is a Unicode scalar value of type:
+
+        U16, I32, U32, I64, Nat, U64, I128, or U128
+
+    But `contains` needs its 2nd argument to be:
+
+        U8
+    "###
+    );
 }
