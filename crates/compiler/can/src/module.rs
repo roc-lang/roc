@@ -899,7 +899,7 @@ fn fix_values_captured_in_closure_pattern(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | Underscore
         | Shadowed(..)
         | MalformedPattern(_, _)
