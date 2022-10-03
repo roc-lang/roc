@@ -393,7 +393,7 @@ pub fn main() -> io::Result<()> {
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS, TIPS);
+    print!("{}{}{}", WELCOME_MESSAGE, INSTRUCTIONS, TIPS);
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
