@@ -1038,7 +1038,7 @@ fn fix_values_captured_in_closure_expr(
         | Int(..)
         | Float(..)
         | Str(_)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | Var(_)
         | AbilityMember(..)
         | EmptyRecord

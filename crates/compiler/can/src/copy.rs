@@ -259,7 +259,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Int(v1, v2, str, val, bound) => Int(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Float(v1, v2, str, val, bound) => Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Str(str) => Str(str.clone()),
-        SingleQuote(char) => SingleQuote(*char),
+        SingleQuote(v1, v2, char, bound) => SingleQuote(sub!(*v1), sub!(*v2), *char, *bound),
         List {
             elem_var,
             loc_elems,

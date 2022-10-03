@@ -7841,4 +7841,49 @@ mod solve_expr {
             "hasher -> hasher | hasher has Hasher",
         );
     }
+
+    #[test]
+    fn check_char_as_u8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U8
+                x = '.'
+
+                x
+                "#
+            ),
+            "U8",
+        );
+    }
+
+    #[test]
+    fn check_char_as_u16() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U16
+                x = '.'
+
+                x
+                "#
+            ),
+            "U16",
+        );
+    }
+
+    #[test]
+    fn check_char_as_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U32
+                x = '.'
+
+                x
+                "#
+            ),
+            "U32",
+        );
+    }
 }
