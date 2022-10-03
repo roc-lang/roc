@@ -425,13 +425,11 @@ impl fmt::Debug for ModuleId {
 /// 4. throw away short names. stash the module id in the can env under the resolved module name
 /// 5. test:
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageQualified<'a, T> {
     Unqualified(T),
     Qualified(&'a str, T),
 }
-
-impl<'a, T: Copy> Copy for PackageQualified<'a, T> {}
 
 /// Package-qualified module name
 pub type PQModuleName<'a> = PackageQualified<'a, ModuleName>;
