@@ -280,13 +280,8 @@ addAndStringify = \num1, num2 ->
 This code is equivalent to writing `else if sum < 0 then` on one line, although the stylistic
 convention is to write `else if` on the same line.
 
-## Booleans
-
-In Roc, `if` conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
-so the compiler will report an error for conditionals like `if 1 then` or `if "true" then`.)
-
-The two boolean values in Roc are `Bool.true` and `Bool.false`, which you can see by putting
-something like `1 == 1` into the REPL.
+> *Note*: In Roc, `if` conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
+> so the compiler will report an error for conditionals like `if 1 then` or `if "true" then`.)
 
 ## Records
 
@@ -567,6 +562,25 @@ We refer to whatever comes before a `->` in a `when` expression as a *pattern* -
 `Custom description -> description` branch, `Custom description` would be a pattern. In programming, using
 patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
 suggest making a `when` branch that begins with something like `Custom description ->`.
+
+## Booleans
+
+In many programming languages, `true` and `false` are special language keywords that refer to
+the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed
+as the ordinary values `Bool.true` and `Bool.false`.
+
+This design is partly to keep the number of special keywords in the language smaller, but mainly
+to suggest how booleans are intended be used in Roc: for
+[*boolean logic*](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed
+to for data modeling. Tags are the preferred choice for data modeling, and having tag values be
+more concise than boolean values helps make this preference clear.
+
+As an example of why tags are encouraged for data modeling, in many languages it would be common
+to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable
+to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only
+ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of
+booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` -
+some of which might also want payloads.
 
 ## Lists
 
