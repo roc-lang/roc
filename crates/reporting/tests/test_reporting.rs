@@ -10801,7 +10801,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        invalid_toplevel_cycle,
         big_char_does_not_fit_in_u8,
         indoc!(
             r#"
