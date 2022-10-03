@@ -58,7 +58,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
     match e {
         Num(_, n, _, _) | Int(_, _, n, _, _) | Float(_, _, n, _, _) => f.text(&**n),
         Str(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(c) => f.text(format!("'{}'", c)),
+        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
         List {
             elem_var: _,
             loc_elems,
