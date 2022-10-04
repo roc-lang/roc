@@ -31,6 +31,9 @@ pub enum HeaderFor<'a> {
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
         main_for_host: roc_module::symbol::Symbol,
+
+        /// function used to evaluate expect-fx
+        platform_test_runner: roc_module::symbol::Symbol,
     },
     Interface,
 }
@@ -103,6 +106,25 @@ pub enum ModuleNameEnum<'a> {
     Interface(ModuleName<'a>),
     Hosted(ModuleName<'a>),
     Platform,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+pub struct TargetTriple<'a>(&'a str);
+
+impl<'a> From<TargetTriple<'a>> for &'a str {
+    fn from(name: TargetTriple<'a>) -> Self {
+        name.0
+    }
+}
+
+impl<'a> TargetTriple<'a> {
+    pub const fn new(name: &'a str) -> Self {
+        TargetTriple(name)
+    }
+
+    pub fn as_str(&'a self) -> &'a str {
+        self.0
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -220,6 +242,8 @@ pub struct PlatformHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub targets: Collection<'a, Loc<Spaced<'a, TargetsEntry<'a>>>>,
+    pub tests: Loc<Spaced<'a, ExposedName<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub before_header: &'a [CommentOrNewline<'a>],
@@ -234,6 +258,10 @@ pub struct PlatformHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
     pub before_provides: &'a [CommentOrNewline<'a>],
     pub after_provides: &'a [CommentOrNewline<'a>],
+    pub before_targets: &'a [CommentOrNewline<'a>],
+    pub after_targets: &'a [CommentOrNewline<'a>],
+    pub before_tests: &'a [CommentOrNewline<'a>],
+    pub after_tests: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -260,6 +288,12 @@ pub struct TypedIdent<'a> {
     pub ident: Loc<&'a str>,
     pub spaces_before_colon: &'a [CommentOrNewline<'a>],
     pub ann: Loc<TypeAnnotation<'a>>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct TargetsEntry<'a> {
+    pub target: Loc<Spaced<'a, TargetTriple<'a>>>,
+    pub cmd_to_run: Loc<Spaced<'a, StrLiteral<'a>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

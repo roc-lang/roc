@@ -145,6 +145,34 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
+pub fn target_triple_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, state: State<'a>| {
+        use encode_unicode::CharExt;
+
+        let buffer = state.bytes();
+        let mut chomped = 0;
+
+        while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+            // ASCII alphabetic, or ASCII digit, or `_`, or `-`
+            if ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '-' {
+                chomped += width;
+            } else {
+                // we're done
+                break;
+            }
+        }
+
+        if chomped == 0 {
+            Err((NoProgress, (), state))
+        } else {
+            let ident = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            let width = ident.len();
+
+            Ok((MadeProgress, ident, state.advance(width)))
+        }
+    }
+}
+
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
         Ok($state.advance($n))

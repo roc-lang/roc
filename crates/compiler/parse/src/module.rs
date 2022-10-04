@@ -2,14 +2,17 @@ use crate::ast::{Collection, CommentOrNewline, Defs, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, HostedHeader, ImportsEntry,
-    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, To, TypedIdent,
+    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, TargetTriple,
+    TargetsEntry, To, TypedIdent,
 };
-use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
+use crate::ident::{
+    self, lowercase_ident, target_triple_ident, unqualified_ident, uppercase, UppercaseIdent,
+};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_region, word1, EExposes, EGenerates,
-    EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser,
-    SourceError, SpaceProblem, SyntaxError,
+    EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETargets, ETests,
+    ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
@@ -316,6 +319,12 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
+        let (_, ((before_tests, after_tests), tests), state) =
+            specialize(EHeader::Tests, tests()).parse(arena, state)?;
+
+        let (_, ((before_targets, after_targets), targets), state) =
+            specialize(EHeader::Targets, targets()).parse(arena, state)?;
+
         let (_, ((before_provides, after_provides), (provides, _provides_type)), state) =
             specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
@@ -326,6 +335,8 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
             packages: packages.entries,
             imports,
             provides,
+            targets,
+            tests,
             before_header: &[] as &[_],
             after_platform_keyword,
             before_requires,
@@ -338,10 +349,89 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
             after_imports,
             before_provides,
             after_provides,
+            before_targets,
+            after_targets,
+            before_tests,
+            after_tests,
         };
 
         Ok((MadeProgress, header, state))
     }
+}
+
+#[inline(always)]
+fn tests<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Loc<Spaced<'a, ExposedName<'a>>>,
+    ),
+    ETests,
+> {
+    let min_indent = 1;
+
+    and!(
+        spaces_around_keyword(
+            min_indent,
+            "tests",
+            ETests::Tests,
+            ETests::IndentTests,
+            ETests::IndentTestFnNameStart
+        ),
+        exposes_entry(ETests::TestFnName)
+    )
+}
+
+#[inline(always)]
+fn targets<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Collection<'a, Loc<Spaced<'a, TargetsEntry<'a>>>>,
+    ),
+    ETargets,
+> {
+    let min_indent = 1;
+    and!(
+        spaces_around_keyword(
+            min_indent,
+            "targets",
+            ETargets::Targets,
+            ETargets::IndentTargets,
+            ETargets::IndentRecordStart
+        ),
+        collection_trailing_sep_e!(
+            word1(b'{', ETargets::RecordStart),
+            loc!(map!(
+                and!(
+                    skip_second!(
+                        loc!(map!(
+                            specialize(|_, pos| ETargets::TargetTriple(pos), target_triple_ident()),
+                            |n| Spaced::Item(TargetTriple::new(n))
+                        )),
+                        // The target triple must be followed by a colon.
+                        word1(b':', ETargets::ColonAfterTargetTriple)
+                    ),
+                    space0_around_ee(
+                        loc!(map!(
+                            specialize(|_, pos| ETargets::BuildCmd(pos), string_literal::parse()),
+                            Spaced::Item
+                        )),
+                        min_indent,
+                        ETargets::IndentBuildCmdOpen,
+                        ETargets::IndentBuildCmdEnd,
+                    )
+                ),
+                |(target, cmd_to_run)| Spaced::Item(TargetsEntry { target, cmd_to_run })
+            )),
+            word1(b',', ETargets::RecordEnd),
+            word1(b'}', ETargets::RecordEnd),
+            min_indent,
+            ETargets::Open,
+            ETargets::IndentRecordEnd,
+            Spaced::SpaceBefore
+        )
+    )
 }
 
 #[derive(Debug)]

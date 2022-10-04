@@ -3171,6 +3171,159 @@ fn to_header_report<'a>(
         EHeader::GeneratesWith(generates_with, pos) => {
             to_generates_with_report(alloc, lines, filename, generates_with, *pos)
         }
+        EHeader::Targets(targets, pos) => to_targets_report(alloc, lines, filename, targets, *pos),
+        EHeader::Tests(tests, pos) => to_tests_report(alloc, lines, filename, tests, *pos),
+    }
+}
+
+fn to_tests_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::ETests,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::ETests;
+
+    match *parse_problem {
+        ETests::TestFnName(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I am partway through parsing a `tests` entry, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("I was expecting a function name next, like")]),
+                alloc
+                    .parser_suggestion("tests myExpectFxFunctionName")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID TESTS ENTRY".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ETests::IndentTests(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("platform"),
+                    alloc.reflow(" module should have a "),
+                    alloc.keyword("tests"),
+                    alloc.reflow(" entry here:"),
+                ]),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I need a "),
+                    alloc.keyword("tests"),
+                    alloc.reflow(" entry that looks something like this:"),
+                ]),
+                alloc
+                    .parser_suggestion("tests myExpectFxFunctionName")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCOMPLETE PLATFORM HEADER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        ETests::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+
+        _ => todo!("unhandled `tests` parsing error {:?}", parse_problem),
+    }
+}
+
+fn to_targets_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::ETargets,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::ETargets;
+
+    match *parse_problem {
+        ETargets::RecordEnd(pos) | // TODO: give this its own error message
+        ETargets::BuildCmd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a `targets` list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow(
+                    "I was expecting a build command string next, like",
+                )]),
+                alloc
+                    .parser_suggestion("targets { wasm32_unknown_unknown: \"my_wasm_build_cmd\" }")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD TARGETS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        ETargets::Targets(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("platform"),
+                    alloc.reflow(" module should have a "),
+                    alloc.keyword("targets"),
+                    alloc.reflow(" entry here:"),
+                ]),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I need a "),
+                    alloc.keyword("targets"),
+                    alloc.reflow(" entry that looks something like this:"),
+                ]),
+                alloc.concat([
+                    alloc
+                        .parser_suggestion("targets {\n")
+                        .indent(4),
+                    alloc
+                        .parser_suggestion("x86_64-unknown-freebsd: \"my_x64_freebsd_build_cmd\",\n")
+                        .indent(8),
+                    alloc
+                        .parser_suggestion("wasm32-unknown-unknown: \"my_wasm_build_cmd\",\n")
+                        .indent(8),
+                    alloc
+                        .parser_suggestion("}")
+                        .indent(4),
+                ])
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCOMPLETE PLATFORM HEADER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+
+        ETargets::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+
+        _ => todo!("unhandled `targets` parsing error {:?}", parse_problem),
     }
 }
 
