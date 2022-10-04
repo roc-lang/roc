@@ -6448,8 +6448,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            debug_assert_eq!(lhs_layout, rhs_layout);
             let int_width = intwidth_from_layout(*lhs_layout);
+
+            debug_assert_eq!(rhs_layout, &Layout::Builtin(Builtin::Int(IntWidth::U8)));
+            let rhs_arg = if rhs_layout != lhs_layout {
+                // LLVM shift intrinsics expect the left and right sides to have the same type, so
+                // here we cast up `rhs` to the lhs type. Since the rhs was checked to be a U8,
+                // this cast isn't lossy.
+                let rhs_arg = env.builder.build_int_cast(
+                    rhs_arg.into_int_value(),
+                    lhs_arg.get_type().into_int_type(),
+                    "cast_for_shift",
+                );
+                rhs_arg.into()
+            } else {
+                rhs_arg
+            };
 
             build_int_binop(
                 env,
