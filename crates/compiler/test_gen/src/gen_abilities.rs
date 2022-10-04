@@ -1268,6 +1268,7 @@ mod hash_immediate {
     }
 
     #[test]
+    #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
     fn i128() {
         assert_evals_to!(
             &build_test("-2i128"),
@@ -1279,6 +1280,7 @@ mod hash_immediate {
     }
 
     #[test]
+    #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
     fn u128() {
         assert_evals_to!(
             &build_test("Num.maxU128 - 1"),
