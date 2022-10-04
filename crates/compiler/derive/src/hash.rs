@@ -22,6 +22,7 @@ use crate::{synth_var, util::Env, DerivedBody};
 pub(crate) fn derive_hash(env: &mut Env<'_>, key: FlatHashKey, def_symbol: Symbol) -> DerivedBody {
     let (body, body_type) = match key {
         FlatHashKey::Record(fields) => hash_record(env, def_symbol, fields),
+        FlatHashKey::TagUnion(_) => todo!(),
     };
 
     let specialization_lambda_sets =

@@ -27,6 +27,20 @@ test_key_eq! {
         v!({ c: v!(U8), a: v!(U8), b: v!(U8), })
     explicit_empty_record_and_implicit_empty_record:
         v!(EMPTY_RECORD), v!({})
+
+    same_tag_union:
+        v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
+    same_tag_union_tags_diff_types:
+        v!([ A v!(U8) v!(U8), B v!(U8) ]), v!([ A v!(STR) v!(STR), B v!(STR) ])
+    same_tag_union_tags_any_order:
+        v!([ A v!(U8) v!(U8), B v!(U8), C ]), v!([ C, B v!(STR), A v!(STR) v!(STR) ])
+    explicit_empty_tag_union_and_implicit_empty_tag_union:
+        v!(EMPTY_TAG_UNION), v!([])
+
+    same_recursive_tag_union:
+        v!([ Nil, Cons v!(^lst)] as lst), v!([ Nil, Cons v!(^lst)] as lst)
+    same_tag_union_and_recursive_tag_union_fields:
+        v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(^lst)] as lst)
 }
 
 test_key_neq! {
@@ -36,6 +50,13 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+
+    different_tag_union_tags:
+        v!([ A v!(U8) ]), v!([ B v!(U8) ])
+    tag_union_empty_vs_nonempty:
+        v!(EMPTY_TAG_UNION), v!([ B v!(U8) ])
+    different_recursive_tag_union_tags:
+        v!([ Nil, Cons v!(^lst) ] as lst), v!([ Nil, Next v!(^lst) ] as lst)
 }
 
 #[test]
@@ -84,6 +105,36 @@ fn derivable_record_with_record_ext() {
         Hash,
         v!({ b: v!(STR), }{ a: v!(STR), } ),
         DeriveKey::Hash(FlatHashKey::Record(vec!["a".into(), "b".into()])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_var() {
+    check_derivable(
+        Hash,
+        v!([ A v!(STR) ]* ),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_able_var() {
+    check_derivable(
+        Hash,
+        v!([ A v!(STR) ]a has Symbol::ENCODE_TO_ENCODER),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_with_tag_ext() {
+    check_derivable(
+        Hash,
+        v!([ B v!(STR) v!(U8) ][ A v!(STR) ]),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![
+            ("A".into(), 1),
+            ("B".into(), 2),
+        ])),
     );
 }
 
