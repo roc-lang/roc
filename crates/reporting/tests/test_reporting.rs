@@ -8593,10 +8593,7 @@ All branches in an `if` must have the same type!
 
         You, You -> Bool
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: Did you mean to use `Bool.false` rather than `False`?
     "###
     );
 
@@ -10797,6 +10794,58 @@ All branches in an `if` must have the same type!
     an infinite number of `main` values!
 
     Hint: Did you mean to define `main` as a function?
+    "###
+    );
+
+    test_report!(
+        bool_vs_true_tag,
+        indoc!(
+            r#"
+            if True then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if True then "" else ""
+               ^^^^
+
+    This `True` tag has the type:
+
+        [True]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.true` rather than `True`?
+    "###
+    );
+
+    test_report!(
+        bool_vs_false_tag,
+        indoc!(
+            r#"
+            if False then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if False then "" else ""
+               ^^^^^
+
+    This `False` tag has the type:
+
+        [False]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.false` rather than `False`?
     "###
     );
 }
