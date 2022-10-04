@@ -1104,7 +1104,7 @@ fn decode_record_of_record() {
 }
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-mod hash_immediate {
+mod hash {
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
@@ -1112,7 +1112,6 @@ mod hash_immediate {
     use crate::helpers::wasm::assert_evals_to;
 
     use indoc::indoc;
-    use roc_std::RocList;
 
     const TEST_HASHER: &str = indoc!(
         r#"
@@ -1195,135 +1194,140 @@ mod hash_immediate {
         )
     }
 
-    #[test]
-    fn i8() {
-        assert_evals_to!(
-            &build_test("-2i8"),
-            RocList::from_slice(&[254]),
-            RocList<u8>
-        )
-    }
+    mod immediate {
+        use super::{assert_evals_to, build_test};
+        use roc_std::RocList;
 
-    #[test]
-    fn u8() {
-        assert_evals_to!(
-            &build_test("254u8"),
-            RocList::from_slice(&[254]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn i8() {
+            assert_evals_to!(
+                &build_test("-2i8"),
+                RocList::from_slice(&[254]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn i16() {
-        assert_evals_to!(
-            &build_test("-2i16"),
-            RocList::from_slice(&[254, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn u8() {
+            assert_evals_to!(
+                &build_test("254u8"),
+                RocList::from_slice(&[254]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn u16() {
-        assert_evals_to!(
-            &build_test("Num.maxU16 - 1"),
-            RocList::from_slice(&[254, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn i16() {
+            assert_evals_to!(
+                &build_test("-2i16"),
+                RocList::from_slice(&[254, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn i32() {
-        assert_evals_to!(
-            &build_test("-2i32"),
-            RocList::from_slice(&[254, 255, 255, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn u16() {
+            assert_evals_to!(
+                &build_test("Num.maxU16 - 1"),
+                RocList::from_slice(&[254, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn u32() {
-        assert_evals_to!(
-            &build_test("Num.maxU32 - 1"),
-            RocList::from_slice(&[254, 255, 255, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn i32() {
+            assert_evals_to!(
+                &build_test("-2i32"),
+                RocList::from_slice(&[254, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn i64() {
-        assert_evals_to!(
-            &build_test("-2i64"),
-            RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn u32() {
+            assert_evals_to!(
+                &build_test("Num.maxU32 - 1"),
+                RocList::from_slice(&[254, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn u64() {
-        assert_evals_to!(
-            &build_test("Num.maxU64 - 1"),
-            RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn i64() {
+            assert_evals_to!(
+                &build_test("-2i64"),
+                RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
-    fn i128() {
-        assert_evals_to!(
-            &build_test("-2i128"),
-            RocList::from_slice(&[
-                254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-            ]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn u64() {
+            assert_evals_to!(
+                &build_test("Num.maxU64 - 1"),
+                RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
-    fn u128() {
-        assert_evals_to!(
-            &build_test("Num.maxU128 - 1"),
-            RocList::from_slice(&[
-                254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
-            ]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn i128() {
+            assert_evals_to!(
+                &build_test("-2i128"),
+                RocList::from_slice(&[
+                    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+                ]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn string() {
-        assert_evals_to!(
-            &build_test(r#""ab☃AB""#),
-            RocList::from_slice(&[97, 98, 226, 152, 131, 65, 66]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn u128() {
+            assert_evals_to!(
+                &build_test("Num.maxU128 - 1"),
+                RocList::from_slice(&[
+                    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+                ]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn list_u8() {
-        assert_evals_to!(
-            &build_test(r#"[15u8, 23u8, 37u8]"#),
-            RocList::from_slice(&[15, 23, 37]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn string() {
+            assert_evals_to!(
+                &build_test(r#""ab☃AB""#),
+                RocList::from_slice(&[97, 98, 226, 152, 131, 65, 66]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn list_string() {
-        assert_evals_to!(
-            &build_test(r#"["ab", "cd", "ef"]"#),
-            RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
-            RocList<u8>
-        )
-    }
+        #[test]
+        fn list_u8() {
+            assert_evals_to!(
+                &build_test(r#"[15u8, 23u8, 37u8]"#),
+                RocList::from_slice(&[15, 23, 37]),
+                RocList<u8>
+            )
+        }
 
-    #[test]
-    fn list_list_string() {
-        assert_evals_to!(
-            &build_test(r#"[[ "ab", "cd" ], [ "ef" ]]"#),
-            RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
-            RocList<u8>
-        )
+        #[test]
+        fn list_string() {
+            assert_evals_to!(
+                &build_test(r#"["ab", "cd", "ef"]"#),
+                RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn list_list_string() {
+            assert_evals_to!(
+                &build_test(r#"[[ "ab", "cd" ], [ "ef" ]]"#),
+                RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
+                RocList<u8>
+            )
+        }
     }
 }
