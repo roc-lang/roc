@@ -272,6 +272,10 @@ impl ObligationCache {
                 var,
             )),
 
+            Symbol::HASH_HASH_ABILITY => {
+                Some(DeriveHash::is_derivable(self, abilities_store, subs, var))
+            }
+
             _ => None,
         };
 
@@ -807,6 +811,95 @@ impl DerivableVisitor for DeriveEncoding {
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        for (field_name, _, field) in fields.iter_all() {
+            if subs[field].is_optional() {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                        subs[field_name].clone(),
+                    )),
+                });
+            }
+        }
+
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+}
+
+struct DeriveHash;
+impl DerivableVisitor for DeriveHash {
+    const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {

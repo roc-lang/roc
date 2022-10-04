@@ -22,7 +22,7 @@ Hash has
     ## Hashes a value into a [Hasher].
     ## Note that [hash] does not produce a hash value itself; the hasher must be
     ## [complete]d in order to extract the hash value.
-    hash : a, hasher -> hasher | a has Hash, hasher has Hasher
+    hash : hasher, a -> hasher | a has Hash, hasher has Hasher
 
 ## Describes a hashing algorithm that is fed bytes and produces an integer hash.
 ##
