@@ -13,8 +13,8 @@ interface Parser.CSV
         f64,
     ]
     imports [
-        Parser.Core.{ Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, maybe, oneorMore, sepBy1, between, ignore, flatten, sepBy },
-        Parser.Str.{ RawStr, parseStrPartial, oneOf, codeunit, codeunitSatisfies, scalar, digits, strFromRaw },
+        Parser.Core.{ Parser, parse, buildPrimitiveParser, alt, map, many, sepBy1, between, ignore, flatten, sepBy },
+        Parser.Str.{ RawStr, oneOf, codeunit, codeunitSatisfies, strFromRaw },
     ]
 
 ## This is a CSV parser which follows RFC4180

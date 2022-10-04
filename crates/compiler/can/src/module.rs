@@ -122,7 +122,7 @@ pub struct ExposedModuleTypes {
 #[derive(Debug)]
 pub struct Module {
     pub module_id: ModuleId,
-    pub exposed_imports: MutMap<Symbol, Variable>,
+    pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -145,8 +145,7 @@ pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
     pub declarations: Declarations,
-    pub exposed_imports: MutMap<Symbol, Variable>,
-    pub lookups: Vec<(Symbol, Variable, Region)>,
+    pub exposed_imports: MutMap<Symbol, Region>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -277,7 +276,6 @@ pub fn canonicalize_module_defs<'a>(
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
     let mut env = Env::new(arena, home, dep_idents, module_ids);
-    let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(
@@ -301,7 +299,6 @@ pub fn canonicalize_module_defs<'a>(
     // rules multiple times unnecessarily.
     crate::operator::desugar_defs(arena, loc_defs);
 
-    let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
@@ -319,20 +316,13 @@ pub fn canonicalize_module_defs<'a>(
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
-            // this is a value definition
-            let expr_var = var_store.fresh();
-
             match scope.import(ident, symbol, region) {
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
                     // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
-                    can_exposed_imports.insert(symbol, expr_var);
-
-                    // This will be used during constraint generation,
-                    // to add the usual Lookup constraint as if this were a normal def.
-                    lookups.push((symbol, expr_var, region));
+                    can_exposed_imports.insert(symbol, region);
                 }
                 Err((_shadowed_symbol, _region)) => {
                     panic!("TODO gracefully handle shadowing in imports.")
@@ -795,7 +785,6 @@ pub fn canonicalize_module_defs<'a>(
         problems: env.problems,
         symbols_from_requires,
         pending_derives,
-        lookups,
         loc_expects,
     }
 }

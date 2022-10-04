@@ -3793,6 +3793,7 @@ dependencies = [
  "clap 3.2.20",
  "iced-x86",
  "indoc",
+ "libc",
  "mach_object",
  "memmap2 0.5.7",
  "object 0.29.0",

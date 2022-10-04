@@ -393,6 +393,12 @@ when number is
     _ -> ""
 ```
 
+## Booleans
+
+Roc has a `Bool` module (with operations like `Bool.and` and `Bool.or`; Roc does not have
+a `Basics` module), and `Bool` is an opaque type. The values `Bool.true` and `Bool.false` work
+like `True` and `False` do in Elm.
+
 ## Custom Types
 
 This is the biggest semantic difference between Roc and Elm.
@@ -527,11 +533,11 @@ the type of the union it goes in.
 Here are some examples of using tags in a REPL:
 
 ```coffee
-> True
-True : [True]*
+> Red
+Red : [Red]*
 
-> False
-False : [False]*
+> Blue
+Blue : [Blue]*
 
 > Ok "hi"
 Ok "hi" : [Ok Str]*
@@ -643,7 +649,7 @@ by removing the `*`. For example, if you changed the annotation to this...
 alwaysFoo : [Foo Str, Bar Bool] -> [Foo Str]*
 ```
 
-...then the function would only accept tags like `Foo "hi"` and `Bar False`. By writing
+...then the function would only accept tags like `Foo "hi"` and `Bar (x == y)`. By writing
 out your own annotations, you can get the same level of restriction you get with
 traditional algebraic data types (which, after all, come with the requirement that
 you write out their annotations). Using annotations, you can restrict even
@@ -1285,7 +1291,7 @@ Roc's standard library has these modules:
 
 Some differences to note:
 
-- All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all tags, so they do not need to be exposed; they are globally available regardless!)
+- All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`Ok` and `Err` are ordinary tags, so they do not need to be exposed; they are globally available regardless!)
 - In Roc it's called `Str` instead of `String`.
 - `List` refers to something more like Elm's `Array`, as noted earlier.
 - No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).

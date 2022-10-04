@@ -2158,12 +2158,19 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `f` value is defined directly in terms of itself, causing an
-        infinite loop.
-        "#
+    `f` is defined directly in terms of itself:
+
+    4│      f = f
+            ^^^^^
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `f` values!
+
+    Hint: Did you mean to define `f` as a function?
+    "###
     );
 
     // invalid mutual recursion
@@ -4587,6 +4594,29 @@ mod test_reporting {
     );
 
     test_report!(
+        expression_indentation_end,
+        indoc!(
+            r#"
+            f <- Foo.foo
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ────── tmp/expression_indentation_end/Test.roc ─
+
+    I am partway through parsing an expression, but I got stuck here:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      f <- Foo.foo
+                        ^
+
+    Looks like the indentation ends prematurely here. Did you mean to have
+    another expression after this line?
+    "###
+    );
+
+    test_report!(
         type_inline_alias,
         indoc!(
             r#"
@@ -6175,18 +6205,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
 
     ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
 
@@ -6218,18 +6243,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
 
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
@@ -7412,18 +7432,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    The `Result` name is first defined here:
-
-    1│  app "test" provides [main] to "./platform"
-      
-
-    But then it's defined a second time here:
+    This alias has the same name as a builtin:
 
     4│      Result a b : [Ok a, Err b]
             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    All builtin aliases are in scope by default, so I need this alias to
+    have a different name!
     "###
     );
 
@@ -7551,31 +7566,30 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
-            main : Task.Task {} []
-            main = "whatever man you don't even know my type"
-            main
+            alt : Task.Task {} []
+            alt = "whatever man you don't even know my type"
+            alt
             "#
         ),
-        @r#"
-        ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `Task` module is not imported:
+    The `Task` module is not imported:
 
-        1│  main : Task.Task {} []
-                   ^^^^^^^^^^^^^^^
+    4│      alt : Task.Task {} []
+                  ^^^^^^^^^^^^^^^
 
-        Is there an import missing? Perhaps there is a typo. Did you mean one
-        of these?
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
 
-            Test
-            List
-            Num
-            Box
-        "#
+        List
+        Num
+        Box
+        Set
+    "###
     );
 
     test_report!(
@@ -8579,10 +8593,7 @@ All branches in an `if` must have the same type!
 
         You, You -> Bool
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: Did you mean to use `Bool.false` rather than `False`?
     "###
     );
 
@@ -10685,6 +10696,156 @@ All branches in an `if` must have the same type!
 
     It's impossible to create a value of this shape, so this pattern can
     be safely removed!
+    "###
+    );
+
+    test_report!(
+        custom_type_conflicts_with_builtin,
+        indoc!(
+            r#"
+            Nat := [ S Nat, Z ]
+
+            ""
+            "#
+        ),
+    @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This opaque type has the same name as a builtin:
+
+    4│      Nat := [ S Nat, Z ]
+            ^^^^^^^^^^^^^^^^^^^
+
+    All builtin opaque types are in scope by default, so I need this
+    opaque type to have a different name!
+    "###
+    );
+
+    test_report!(
+        unused_value_import,
+        indoc!(
+            r#"
+            app "test" imports [List.{ concat }] provides [main] to "./platform"
+
+            main = ""
+            "#
+        ),
+    @r###"
+    ── UNUSED IMPORT ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    `List.concat` is not used in this module.
+
+    1│  app "test" imports [List.{ concat }] provides [main] to "./platform"
+                                   ^^^^^^
+
+    Since `List.concat` isn't used, you don't need to import it.
+    "###
+    );
+
+    test_report!(
+        #[ignore = "https://github.com/roc-lang/roc/issues/4096"]
+        unnecessary_builtin_module_import,
+        indoc!(
+            r#"
+            app "test" imports [Str] provides [main] to "./platform"
+
+            main = Str.concat "" ""
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        #[ignore = "https://github.com/roc-lang/roc/issues/4096"]
+        unnecessary_builtin_type_import,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{ DecodeError }] provides [main, E] to "./platform"
+
+            E : DecodeError
+
+            main = ""
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        invalid_toplevel_cycle,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            main =
+                if Bool.true then \{} -> {} else main
+            "#
+        ),
+    @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+    `main` is defined directly in terms of itself:
+
+    3│>  main =
+    4│>      if Bool.true then \{} -> {} else main
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `main` values!
+
+    Hint: Did you mean to define `main` as a function?
+    "###
+    );
+
+    test_report!(
+        bool_vs_true_tag,
+        indoc!(
+            r#"
+            if True then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if True then "" else ""
+               ^^^^
+
+    This `True` tag has the type:
+
+        [True]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.true` rather than `True`?
+    "###
+    );
+
+    test_report!(
+        bool_vs_false_tag,
+        indoc!(
+            r#"
+            if False then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if False then "" else ""
+               ^^^^^
+
+    This `False` tag has the type:
+
+        [False]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.false` rather than `False`?
     "###
     );
 }

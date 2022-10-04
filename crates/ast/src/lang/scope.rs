@@ -169,7 +169,7 @@ impl Scope {
             aliases.insert(symbol, alias);
         }
 
-        let idents = Symbol::default_in_scope();
+        let idents = Symbol::apply_types_in_scope();
         let idents: MutMap<_, _> = idents.into_iter().collect();
 
         Scope {
