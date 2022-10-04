@@ -10992,6 +10992,25 @@ All branches in an `if` must have the same type!
              main = foo (A (\x -> x) B)
              "#
         ),
-        @""
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (A (\x -> x) B)
+                    ^^^^^^^^^^^^^
+
+    Roc can't generate an implementation of the `Hash.Hash` ability for
+
+        [A (a -> a) [B]a]b
+
+    In particular, an implementation for
+
+        a -> a
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
     );
 }
