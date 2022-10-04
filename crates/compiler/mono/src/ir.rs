@@ -5446,38 +5446,10 @@ pub fn with_hole<'a>(
                 }
                 TagDiscriminant => {
                     debug_assert_eq!(arg_symbols.len(), 1);
-                    let x = arg_symbols[0];
-                    let x_layout = layout_cache.from_var(arena, args[0].0, env.subs).expect(
-                        "TagDiscriminant only built in derived impls, which must type-check",
-                    );
+                    let tag = arg_symbols[0];
+                    let tag_var = args[0].0;
 
-                    let x_union_layout = match x_layout {
-                        Layout::Union(un) => un,
-                        _ => internal_error!("TagDiscriminant can only apply to tags"),
-                    };
-                    let tag_id_layout = x_union_layout.tag_id_layout();
-                    debug_assert!(tag_id_layout == Layout::u8() || tag_id_layout == Layout::u16());
-
-                    let tag_id_sym = env.unique_symbol();
-
-                    let cast_to_u16 = self::Call {
-                        call_type: CallType::LowLevel {
-                            op: LowLevel::NumIntCast,
-                            update_mode: env.next_update_mode_id(),
-                        },
-                        arguments: env.arena.alloc([tag_id_sym]),
-                    };
-
-                    let hole = Stmt::Let(assigned, Expr::Call(cast_to_u16), Layout::u16(), hole);
-                    Stmt::Let(
-                        tag_id_sym,
-                        Expr::GetTagId {
-                            structure: x,
-                            union_layout: x_union_layout,
-                        },
-                        tag_id_layout,
-                        env.arena.alloc(hole),
-                    )
+                    build_tag_discriminant_expr(env, layout_cache, assigned, tag, tag_var, hole)
                 }
                 _ => {
                     let call = self::Call {
@@ -5501,6 +5473,76 @@ pub fn with_hole<'a>(
         }
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
+    }
+}
+
+fn build_tag_discriminant_expr<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    tag_sym: Symbol,
+    tag_var: Variable,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    use crate::layout::UnionVariant::*;
+
+    let union_variant = {
+        let mut layout_env =
+            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        crate::layout::union_sorted_tags(&mut layout_env, tag_var)
+            .expect("TagDiscriminant only built in derived impls, which must type-check")
+    };
+
+    let build_cast_to_u16 = |env: &mut Env<'a, '_>, tag_id_sym| self::Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::NumIntCast,
+            update_mode: env.next_update_mode_id(),
+        },
+        arguments: env.arena.alloc([tag_id_sym]),
+    };
+
+    match union_variant {
+        Never | Unit | Newtype { .. } | NewtypeByVoid { .. } => {
+            // All trivial unions decay into `0` for their discriminant.
+            Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int(0u128.to_ne_bytes())),
+                Layout::u16(),
+                hole,
+            )
+        }
+        BoolUnion { .. } | ByteUnion(..) => {
+            // These are represented as integers at runtime, so we just need to cast them.
+            let cast_to_u16 = build_cast_to_u16(env, tag_sym);
+
+            Stmt::Let(assigned, Expr::Call(cast_to_u16), Layout::u16(), hole)
+        }
+        Wrapped(..) => {
+            let tag_layout = layout_cache.from_var(env.arena, tag_var, env.subs).unwrap();
+            let tag_union_layout = match tag_layout {
+                Layout::Union(un) => un,
+                _ => internal_error!(
+                    "Somehow this is a `Wrapped` variant, but its layout is not a union"
+                ),
+            };
+
+            let tag_id_layout = tag_union_layout.tag_id_layout();
+            debug_assert!(tag_id_layout == Layout::u8() || tag_id_layout == Layout::u16());
+
+            let tag_id_sym = env.unique_symbol();
+            let cast_to_u16 = build_cast_to_u16(env, tag_id_sym);
+
+            let hole = Stmt::Let(assigned, Expr::Call(cast_to_u16), Layout::u16(), hole);
+            Stmt::Let(
+                tag_id_sym,
+                Expr::GetTagId {
+                    structure: tag_sym,
+                    union_layout: tag_union_layout,
+                },
+                tag_id_layout,
+                env.arena.alloc(hole),
+            )
+        }
     }
 }
 
