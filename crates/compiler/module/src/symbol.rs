@@ -1485,9 +1485,26 @@ define_builtins! {
         25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
         26 DECODE_FROM_BYTES: "fromBytes"
     }
-    13 JSON: "Json" => {
+    13 HASH: "Hash" => {
+        0 HASH_HASH_ABILITY: "Hash" exposed_type=true
+        1 HASH_HASH: "hash"
+        2 HASH_HASHER: "Hasher" exposed_type=true
+        3  HASH_ADD_BYTES: "addBytes"
+        4  HASH_ADD_U8: "addU8"
+        5  HASH_ADD_U16: "addU16"
+        6  HASH_ADD_U32: "addU32"
+        7  HASH_ADD_U64: "addU64"
+        8  HASH_ADD_U128: "addU128"
+        9  HASH_ADD_I8: "addI8"
+        10 HASH_ADD_I16: "addI16"
+        11 HASH_ADD_I32: "addI32"
+        12 HASH_ADD_I64: "addI64"
+        13 HASH_ADD_I128: "addI128"
+        14 HASH_COMPLETE: "complete"
+    }
+    14 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

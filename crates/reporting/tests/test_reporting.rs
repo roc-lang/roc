@@ -3623,7 +3623,7 @@ mod test_reporting {
         Set
         List
         Dict
-        Result
+        Hash
 
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -7585,10 +7585,10 @@ All branches in an `if` must have the same type!
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
+        Hash
         List
         Num
         Box
-        Set
     "###
     );
 
@@ -8189,31 +8189,31 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [] to "./platform"
 
-            Hash a b c has
-              hash : a -> U64 | a has Hash
+            MHash a b c has
+              hash : a -> U64 | a has MHash
             "#
         ),
-        @r#"
-        ── ABILITY HAS TYPE VARIABLES ──────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ABILITY HAS TYPE VARIABLES ──────────────────────────── /code/proj/Main.roc ─
 
-        The definition of the `Hash` ability includes type variables:
+    The definition of the `MHash` ability includes type variables:
 
-        3│  Hash a b c has
-                 ^^^^^
+    3│  MHash a b c has
+              ^^^^^
 
-        Abilities cannot depend on type variables, but their member values
-        can!
+    Abilities cannot depend on type variables, but their member values
+    can!
 
-        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        `Hash` is not used anywhere in your code.
+    `MHash` is not used anywhere in your code.
 
-        3│  Hash a b c has
-            ^^^^
+    3│  MHash a b c has
+        ^^^^^
 
-        If you didn't intend on using `Hash` then remove it so future readers of
-        your code don't wonder why it is there.
-        "#
+    If you didn't intend on using `MHash` then remove it so future readers
+    of your code don't wonder why it is there.
+    "###
     );
 
     test_report!(
@@ -8222,17 +8222,17 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+            MHash has hash : a, b -> Num.U64 | a has MHash, b has Bool.Bool
             "#
         ),
-        @r#"
-        ── HAS CLAUSE IS NOT AN ABILITY ────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── HAS CLAUSE IS NOT AN ABILITY ────────────────────────── /code/proj/Main.roc ─
 
-        The type referenced in this "has" clause is not an ability:
+    The type referenced in this "has" clause is not an ability:
 
-        3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
-                                                                ^^^^^^^^^
-        "#
+    3│  MHash has hash : a, b -> Num.U64 | a has MHash, b has Bool.Bool
+                                                              ^^^^^^^^^
+    "###
     );
 
     test_report!(
@@ -8360,36 +8360,36 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [f] to "./platform"
 
-            Hash has hash : (a | a has Hash) -> Num.U64
+            MHash has hash : (a | a has MHash) -> Num.U64
 
-            f : a -> Num.U64 | a has Hash
+            f : a -> Num.U64 | a has MHash
             "#
         ),
-        @r#"
-        ── ILLEGAL HAS CLAUSE ──────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ILLEGAL HAS CLAUSE ──────────────────────────────────── /code/proj/Main.roc ─
 
-        A `has` clause is not allowed here:
+    A `has` clause is not allowed here:
 
-        3│  Hash has hash : (a | a has Hash) -> Num.U64
-                                 ^^^^^^^^^^
+    3│  MHash has hash : (a | a has MHash) -> Num.U64
+                              ^^^^^^^^^^^
 
-        `has` clauses can only be specified on the top-level type annotations.
+    `has` clauses can only be specified on the top-level type annotations.
 
-        ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────── /code/proj/Main.roc ─
+    ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────── /code/proj/Main.roc ─
 
-        The definition of the ability member `hash` does not include a `has`
-        clause binding a type variable to the ability `Hash`:
+    The definition of the ability member `hash` does not include a `has`
+    clause binding a type variable to the ability `MHash`:
 
-        3│  Hash has hash : (a | a has Hash) -> Num.U64
-                     ^^^^
+    3│  MHash has hash : (a | a has MHash) -> Num.U64
+                  ^^^^
 
-        Ability members must include a `has` clause binding a type variable to
-        an ability, like
+    Ability members must include a `has` clause binding a type variable to
+    an ability, like
 
-            a has Hash
+        a has MHash
 
-        Otherwise, the function does not need to be part of the ability!
-        "#
+    Otherwise, the function does not need to be part of the ability!
+    "###
     );
 
     test_report!(
@@ -8398,9 +8398,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
-            Id := U32 has [Hash {hash}]
+            Id := U32 has [MHash {hash}]
 
             hash = \@Id n -> n
             "#
@@ -8458,8 +8458,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
             hash = \_ -> 0u64
             "#
@@ -8483,11 +8483,11 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, One, Two] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            One := {} has [Hash {hash}]
-            Two := {} has [Hash {hash}]
+            One := {} has [MHash {hash}]
+            Two := {} has [MHash {hash}]
 
             hash = \_ -> 0u64
             "#
@@ -8499,8 +8499,8 @@ All branches in an `if` must have the same type!
     This ability member specialization is already claimed to specialize
     another opaque type:
 
-    7│  Two := {} has [Hash {hash}]
-                             ^^^^
+    7│  Two := {} has [MHash {hash}]
+                              ^^^^
 
     Previously, we found it to specialize `hash` for `One`.
 
@@ -8520,7 +8520,7 @@ All branches in an `if` must have the same type!
 
     But the type annotation on `hash` says it must match:
 
-        a -> U64 | a has Hash
+        a -> U64 | a has MHash
 
     Note: The specialized type is too general, and does not provide a
     concrete type where a type variable is bound to an ability.
@@ -8537,11 +8537,11 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, One, Two] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            One := {} has [Hash {hash}]
-            Two := {} has [Hash {hash}]
+            One := {} has [MHash {hash}]
+            Two := {} has [MHash {hash}]
 
             hash = \@One _ -> 0u64
             "#
@@ -8552,8 +8552,8 @@ All branches in an `if` must have the same type!
     This ability member specialization is already claimed to specialize
     another opaque type:
 
-    7│  Two := {} has [Hash {hash}]
-                             ^^^^
+    7│  Two := {} has [MHash {hash}]
+                              ^^^^
 
     Previously, we found it to specialize `hash` for `One`.
 
@@ -8603,10 +8603,10 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash : Id -> U32
             hash = \@Id n -> n
@@ -8652,10 +8652,10 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [noGoodVeryBadTerrible] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -8676,7 +8676,7 @@ All branches in an `if` must have the same type!
     15│          notYet: hash (A 1),
                                ^^^
 
-    Roc can't generate an implementation of the `#UserApp.Hash` ability for
+    Roc can't generate an implementation of the `#UserApp.MHash` ability for
 
         [A (Num a)]b
 
@@ -8689,7 +8689,7 @@ All branches in an `if` must have the same type!
     14│          nope: hash (@User {}),
                              ^^^^^^^^
 
-    The type `User` does not fully implement the ability `Hash`.
+    The type `User` does not fully implement the ability `MHash`.
     "###
     );
 
@@ -8700,8 +8700,8 @@ All branches in an `if` must have the same type!
             app "test" provides [main] to "./platform"
 
             main =
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
                 123
             "#
@@ -8711,8 +8711,8 @@ All branches in an `if` must have the same type!
 
         This ability definition is not on the top-level of a module:
 
-        4│>      Hash has
-        5│>          hash : a -> U64 | a has Hash
+        4│>      MHash has
+        5│>          hash : a -> U64 | a has MHash
 
         Abilities can only be defined on the top-level of a Roc module.
         "#
@@ -8724,39 +8724,39 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, hashable] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            hashable : a | a has Hash
+            hashable : a | a has MHash
             hashable = @Id 15
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with the body of the `hashable` definition:
+    Something is off with the body of the `hashable` definition:
 
-         9│  hashable : a | a has Hash
-        10│  hashable = @Id 15
-                        ^^^^^^
+     9│  hashable : a | a has MHash
+    10│  hashable = @Id 15
+                    ^^^^^^
 
-        This Id opaque wrapping has the type:
+    This Id opaque wrapping has the type:
 
-            Id
+        Id
 
-        But the type annotation on `hashable` says it should be:
+    But the type annotation on `hashable` says it should be:
 
-            a | a has Hash
+        a | a has MHash
 
-        Tip: The type annotation uses the type variable `a` to say that this
-        definition can produce any value implementing the `Hash` ability. But in
-        the body I see that it will only produce a `Id` value of a single
-        specific type. Maybe change the type annotation to be more specific?
-        Maybe change the code to be more general?
-        "#
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any value implementing the `MHash` ability. But
+    in the body I see that it will only produce a `Id` value of a single
+    specific type. Maybe change the type annotation to be more specific?
+    Maybe change the code to be more general?
+    "###
     );
 
     test_report!(
@@ -8765,50 +8765,50 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : Hash, Hash -> U64
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : MHash, MHash -> U64
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash: hashId}]
+            Id := U64 has [MHash {hash: hashId}]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash {hash: hashThree}]
+            Three := {} has [MHash {hash: hashThree}]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
-        @r#"
-        ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
-        You are attempting to use the ability `Hash` as a type directly:
+    You are attempting to use the ability `MHash` as a type directly:
 
-        6│  mulHashes : Hash, Hash -> U64
-                        ^^^^
+    6│  mulMHashes : MHash, MHash -> U64
+                     ^^^^^
 
-        Abilities can only be used in type annotations to constrain type
-        variables.
+    Abilities can only be used in type annotations to constrain type
+    variables.
 
-        Hint: Perhaps you meant to include a `has` annotation, like
+    Hint: Perhaps you meant to include a `has` annotation, like
 
-            a has Hash
+        a has MHash
 
-        ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
-        You are attempting to use the ability `Hash` as a type directly:
+    You are attempting to use the ability `MHash` as a type directly:
 
-        6│  mulHashes : Hash, Hash -> U64
-                              ^^^^
+    6│  mulMHashes : MHash, MHash -> U64
+                            ^^^^^
 
-        Abilities can only be used in type annotations to constrain type
-        variables.
+    Abilities can only be used in type annotations to constrain type
+    variables.
 
-        Hint: Perhaps you meant to include a `has` annotation, like
+    Hint: Perhaps you meant to include a `has` annotation, like
 
-            b has Hash
-        "#
+        b has MHash
+    "###
     );
 
     test_report!(
@@ -9735,9 +9735,9 @@ All branches in an `if` must have the same type!
 
             F a b := b | a has Foo
 
-            Hash := {}
+            MHash := {}
 
-            x : F Hash {}
+            x : F MHash {}
             "#
         ),
         @r###"
@@ -10093,7 +10093,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, Id] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
             Id := {}
 
@@ -10119,9 +10119,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, Id, Id2] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
-            Id := {} has [Hash {hash}]
+            Id := {} has [MHash {hash}]
             Id2 := {}
 
             hash = \@Id2 _ -> 0

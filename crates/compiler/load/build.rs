@@ -22,6 +22,7 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::BOX, "Box.roc"),
     (ModuleId::ENCODE, "Encode.roc"),
     (ModuleId::DECODE, "Decode.roc"),
+    (ModuleId::HASH, "Hash.roc"),
     (ModuleId::JSON, "Json.roc"),
 ];
 
