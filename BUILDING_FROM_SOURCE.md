@@ -31,7 +31,7 @@ sh <(curl -L https://nixos.org/nix/install) --daemon
 Open a new terminal and install nixFlakes in your environment:
 
 ```sh
-nix-env -iA nixpkgs.nixFlakes
+nix-env -iA nixpkgs.nixVersions.stable
 ```
 
 Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
