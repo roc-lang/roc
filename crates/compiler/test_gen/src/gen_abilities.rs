@@ -1566,5 +1566,34 @@ mod hash {
                 RocList<u8>
             )
         }
+
+        #[test]
+        #[ignore = "TODO"]
+        fn hash_recursive_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        ConsList : [Cons U8 ConsList, Nil]
+
+                        c : ConsList
+                        c = Cons 1 (Cons 2 Nil)
+
+                        main =
+                            @THasher []
+                            |> Hash.hash c
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[0]),
+                RocList<u8>
+            )
+        }
     }
 }
