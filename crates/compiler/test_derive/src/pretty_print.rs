@@ -5,7 +5,9 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
 
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Interns;
+
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
@@ -100,8 +102,12 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                 .append(expr(c, Free, f, &loc_cond.value))
                 .append(f.text(" is"))
                 .append(
-                    f.concat(branches.iter().map(|b| f.line().append(branch(c, f, b))))
-                        .group(),
+                    f.concat(
+                        branches
+                            .iter()
+                            .map(|b| f.hardline().append(branch(c, f, b)))
+                    )
+                    .group(),
                 )
                 .nest(2)
                 .group()
@@ -134,7 +140,10 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             )
             .group(),
         LetRec(_, _, _) => todo!(),
-        LetNonRec(_, _) => todo!(),
+        LetNonRec(loc_def, body) => def(c, f, loc_def)
+            .append(f.hardline())
+            .append(expr(c, Free, f, &body.value))
+            .group(),
         Call(fun, args, _) => {
             let (_, fun, _, _) = &**fun;
             maybe_paren!(
@@ -154,7 +163,27 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .nest(2)
             )
         }
-        RunLowLevel { .. } => todo!(),
+        RunLowLevel { op, args, .. } => {
+            let op = match op {
+                LowLevel::TagDiscriminant => "@tag_discriminant",
+                _ => unreachable!(),
+            };
+
+            maybe_paren!(
+                Free,
+                p,
+                f.reflow(op)
+                    .append(
+                        f.concat(
+                            args.iter()
+                                .map(|le| f.line().append(expr(c, AppArg, f, &le.1)))
+                        )
+                        .group()
+                    )
+                    .group()
+                    .nest(2)
+            )
+        }
         ForeignCall { .. } => todo!(),
         Closure(ClosureData {
             arguments,

@@ -200,3 +200,70 @@ fn two_field_record() {
         )
     })
 }
+
+#[test]
+fn tag_two_labels() {
+    derive_test(Hash, v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U8 Str U16, B Str]
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 3,B 1](0)]]
+        #Derived.hash_[A 3,B 1] =
+          \#Derived.hasher, #Derived.union ->
+            #Derived.discrHasher =
+              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
+            when #Derived.union is
+              A #Derived.4 #Derived.5 #Derived.6 ->
+                Hash.hash
+                  (Hash.hash (Hash.hash #Derived.discrHasher #Derived.4) #Derived.5)
+                  #Derived.6
+              B #Derived.7 -> Hash.hash #Derived.discrHasher #Derived.7
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_two_labels_no_payloads() {
+    derive_test(Hash, v!([A, B]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A, B]
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 0,B 0](0)]]
+        #Derived.hash_[A 0,B 0] =
+          \#Derived.hasher, #Derived.union ->
+            #Derived.discrHasher =
+              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
+            when #Derived.union is
+              A -> #Derived.discrHasher
+              B -> #Derived.discrHasher
+        "###
+        )
+    })
+}
+
+#[test]
+fn recursive_tag_union() {
+    derive_test(Hash, v!([Nil, Cons v!(U8) v!(^lst) ] as lst), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [Cons U8 $rec, Nil] as $rec
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[Cons 2,Nil 0](0)]]
+        #Derived.hash_[Cons 2,Nil 0] =
+          \#Derived.hasher, #Derived.union ->
+            #Derived.discrHasher =
+              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
+            when #Derived.union is
+              Cons #Derived.4 #Derived.5 ->
+                Hash.hash (Hash.hash #Derived.discrHasher #Derived.4) #Derived.5
+              Nil -> #Derived.discrHasher
+        "###
+        )
+    })
+}
