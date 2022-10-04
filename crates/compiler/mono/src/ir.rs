@@ -5444,6 +5444,41 @@ pub fn with_hole<'a>(
 
                     Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
                 }
+                TagDiscriminant => {
+                    debug_assert_eq!(arg_symbols.len(), 1);
+                    let x = arg_symbols[0];
+                    let x_layout = layout_cache.from_var(arena, args[0].0, env.subs).expect(
+                        "TagDiscriminant only built in derived impls, which must type-check",
+                    );
+
+                    let x_union_layout = match x_layout {
+                        Layout::Union(un) => un,
+                        _ => internal_error!("TagDiscriminant can only apply to tags"),
+                    };
+                    let tag_id_layout = x_union_layout.tag_id_layout();
+                    debug_assert!(tag_id_layout == Layout::u8() || tag_id_layout == Layout::u16());
+
+                    let tag_id_sym = env.unique_symbol();
+
+                    let cast_to_u16 = self::Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::NumIntCast,
+                            update_mode: env.next_update_mode_id(),
+                        },
+                        arguments: env.arena.alloc([tag_id_sym]),
+                    };
+
+                    let hole = Stmt::Let(assigned, Expr::Call(cast_to_u16), Layout::u16(), hole);
+                    Stmt::Let(
+                        tag_id_sym,
+                        Expr::GetTagId {
+                            structure: x,
+                            union_layout: x_union_layout,
+                        },
+                        tag_id_layout,
+                        env.arena.alloc(hole),
+                    )
+                }
                 _ => {
                     let call = self::Call {
                         call_type: CallType::LowLevel {
