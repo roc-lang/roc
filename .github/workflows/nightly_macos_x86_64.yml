@@ -12,7 +12,7 @@ jobs:
         os: [ macos-11, macos-12 ]
     env:
       ZIG_VERSION: 0.9.1
-      LLVM_SYS_130_PREFIX: /usr/local/opt/llvm
+      LLVM_SYS_130_PREFIX: /opt/homebrew/opt/llvm@13
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
