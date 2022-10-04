@@ -1239,6 +1239,55 @@ each bit. `0b0000_1000` evaluates to decimal `8`
 The integer type can be specified as a suffix to the binary literal,
 so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
 
+## Crashing
+
+Ideally, Roc programs would never crash. However, there are some circumstances in which they may:
+
+1. When doing normal integer arithmetic (e.g. `x + y`) that overflows.
+2. When the system runs out of memory.
+3. When a variable-length collection (like a `List` or `Str`) gets too long to be representible in the operating system's address space. (A 64-bit operating system's address space can represent several [exibytes](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units) of data, so this case should not come up often.)
+
+Crashes are not like [`try`/`catch` exceptions](https://en.wikipedia.org/wiki/Exception_handling)
+found in some other programming languages. There is no way to "catch" a crash. It immediately
+ends the program, and what happens next is defined by the platform. (For example, a command-line
+interface platform might exit with a nonzero [exit code](https://en.wikipedia.org/wiki/Exit_status),
+whereas a web server platform might have the current request respond with a
+[HTTP 500 error](https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#500).)
+
+You can intentionally crash a Roc program, for example if you encounter a conditional branch that
+you believe is unreachable. For example, you might know for certain that a particular `List U8`
+contains valid UTF-8, and so when you call `Str.fromUtf8` on it, the `Result` it returns will
+definitely be `Ok`. In that scenario, you can use the `crash` keyword to handle the `Err` case
+like so:
+
+```elm
+answer : Str
+answer =
+    when Str.fromUtf8 definitelyValidUtf8 is
+        Ok str -> str
+        Err _ -> crash "This should never happen!"
+```
+
+If the unthinkable happens, and somehow the program reaches this `Err` branch even though that
+was thought to be impossible, then it will crash - just like if the system had run out of memory.
+The string passed to `crash` will be provided to the platform as context; each platform may do
+something different with it.
+
+Another use for `crash` is as a TODO marker when you're in the middle of building something:
+
+```elm
+if x > y then
+    transmogrify (x * 2)
+else
+    crash "TODO handle the x <= y case"
+```
+
+This lets you do things like write tests for the non-`crash` branch, and then come back and finish
+the other branch later.
+
+> **Note:** `crash` is a keyword and not a function; you can't assign `crash` to a variable
+> or pass it to a function.
+
 ## Interface modules
 
 [This part of the tutorial has not been written yet. Coming soon!]
