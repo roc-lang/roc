@@ -1560,7 +1560,7 @@ mod hash {
                     15, 23, // payloads A
                     1, 0,  // discr B
                     37, // payloads B
-                    2, 0, // discr B
+                    2, 0, // discr C
                     97, 98, 99 // payloads C
                 ]),
                 RocList<u8>
