@@ -30,7 +30,7 @@ roc run helloWorld.roc
 Some examples like `crates/cli_testing_examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.
 
-[crates/cli_testing_examples/benchmarks](crates/cli_testing_examples/benchmarks) contains larger examples.
+[crates/cli_testing_examples/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli_testing_examples/benchmarks) contains larger examples.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 

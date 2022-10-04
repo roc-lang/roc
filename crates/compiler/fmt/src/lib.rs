@@ -86,6 +86,12 @@ impl<'a> Buf<'a> {
         self.text.push_str(s);
     }
 
+    pub fn push_char_literal(&mut self, c: char) {
+        self.flush_spaces();
+
+        self.text.push(c);
+    }
+
     pub fn spaces(&mut self, count: usize) {
         self.spaces_to_flush += count;
     }

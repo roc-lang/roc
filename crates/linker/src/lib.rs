@@ -195,10 +195,14 @@ fn preprocess(
         println!("Targeting: {}", target);
     }
 
+    let endianness = target
+        .endianness()
+        .unwrap_or(target_lexicon::Endianness::Little);
+
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             crate::elf::preprocess_elf(
-                target,
+                endianness,
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
@@ -367,4 +371,70 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
         .unwrap_or_else(|e| internal_error!("{e}"));
 
     unsafe { MmapMut::map_mut(&out_file).unwrap_or_else(|e| internal_error!("{e}")) }
+}
+
+/// # dbg_hex
+/// display dbg result in hexadecimal `{:#x?}` format.
+#[macro_export]
+macro_rules! dbg_hex {
+    // NOTE: We cannot use `concat!` to make a static string as a format argument
+    // of `eprintln!` because `file!` could contain a `{` or
+    // `$val` expression could be a block (`{ .. }`), in which case the `eprintln!`
+    // will be malformed.
+    () => {
+        eprintln!("[{}:{}]", file!(), line!());
+    };
+    ($val:expr $(,)?) => {
+        // Use of `match` here is intentional because it affects the lifetimes
+        // of temporaries - https://stackoverflow.com/a/48732525/1063961
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}] {} = {:#x?}",
+                    file!(), line!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg_hex!($val)),+,)
+    };
+}
+
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
+#[cfg(test)]
+#[cfg(windows)]
+#[allow(unused_imports)]
+use windows_roc_platform_functions::*;
+
+#[cfg(test)]
+#[cfg(windows)]
+mod windows_roc_platform_functions {
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        libc::malloc(size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        libc::realloc(c_ptr, new_size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        libc::free(c_ptr)
+    }
 }

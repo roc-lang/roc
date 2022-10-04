@@ -47,10 +47,13 @@ impl Scope {
         initial_ident_ids: IdentIds,
         starting_abilities_store: PendingAbilitiesStore,
     ) -> Scope {
-        let imports = Symbol::default_in_scope()
-            .into_iter()
-            .map(|(a, (b, c))| (a, b, c))
-            .collect();
+        let default_imports =
+            // Add all `Apply` types.
+            (Symbol::apply_types_in_scope().into_iter())
+            // Add all tag names we might want to suggest as hints in error messages.
+            .chain(Symbol::symbols_in_scope_for_hints());
+
+        let default_imports = default_imports.map(|(a, (b, c))| (a, b, c)).collect();
 
         Scope {
             home,
@@ -59,7 +62,7 @@ impl Scope {
             aliases: VecMap::default(),
             abilities_store: starting_abilities_store,
             shadows: VecMap::default(),
-            imports,
+            imports: default_imports,
         }
     }
 
@@ -281,14 +284,14 @@ impl Scope {
         &mut self,
         ident: &Ident,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+    ) -> Result<Symbol, (Symbol, Region, Loc<Ident>)> {
         match self.introduce_help(ident.as_str(), region) {
-            Err((_, original_region)) => {
+            Err((symbol, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
                 };
-                Err((original_region, shadow))
+                Err((symbol, original_region, shadow))
             }
             Ok(symbol) => Ok(symbol),
         }
@@ -692,9 +695,9 @@ mod test {
             &[
                 Ident::from("Str"),
                 Ident::from("List"),
+                Ident::from("Box"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Box"),
             ]
         );
     }
@@ -715,9 +718,9 @@ mod test {
             &[
                 Ident::from("Str"),
                 Ident::from("List"),
+                Ident::from("Box"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Box"),
             ]
         );
 
