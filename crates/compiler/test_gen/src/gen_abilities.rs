@@ -1102,3 +1102,190 @@ fn decode_record_of_record() {
         RocStr
     )
 }
+
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+mod hash_immediate {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    use indoc::indoc;
+    use roc_std::RocList;
+
+    const TEST_HASHER: &str = indoc!(
+        r#"
+        THasher := List U8 has [Hasher {
+            addBytes: tAddBytes,
+            addU8: tAddU8,
+            addU16: tAddU16,
+            addU32: tAddU32,
+            addU64: tAddU64,
+            addU128: tAddU128,
+            addI8: tAddI8,
+            addI16: tAddI16,
+            addI32: tAddI32,
+            addI64: tAddI64,
+            addI128: tAddI128,
+            complete: tComplete,
+        }]
+
+        # ignores endian-ness
+        byteAt = \n, shift ->
+            Num.bitwiseAnd (Num.shiftRightBy n (shift * 8)) 0xFF
+            |> Num.toU8
+
+        do8 = \total, n ->
+            total
+            |> List.append (byteAt n 0)
+
+        do16 = \total, n ->
+            total
+            |> do8 (n |> Num.toU8)
+            |> do8 (Num.shiftRightBy n 8 |> Num.toU8)
+
+        do32 = \total, n ->
+            total
+            |> do16 (n |> Num.toU16)
+            |> do16 (Num.shiftRightBy n 16 |> Num.toU16)
+
+        do64 = \total, n ->
+            total
+            |> do32 (n |> Num.toU32)
+            |> do32 (Num.shiftRightBy n 32 |> Num.toU32)
+
+        do128 = \total, n ->
+            total
+            |> do64 (n |> Num.toU64)
+            |> do64 (Num.shiftRightBy n 64 |> Num.toU64)
+
+        tAddBytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
+        tAddU8 = \@THasher total, n -> @THasher (do8 total n)
+        tAddU16 = \@THasher total, n -> @THasher (do16 total n)
+        tAddU32 = \@THasher total, n -> @THasher (do32 total n)
+        tAddU64 = \@THasher total, n -> @THasher (do64 total n)
+        tAddU128 = \@THasher total, n -> @THasher (do128 total n)
+        tAddI8 = \@THasher total, n -> @THasher (do8 total (Num.toU8 n))
+        tAddI16 = \@THasher total, n -> @THasher (do16 total (Num.toU16 n))
+        tAddI32 = \@THasher total, n -> @THasher (do32 total (Num.toU32 n))
+        tAddI64 = \@THasher total, n -> @THasher (do64 total (Num.toU64 n))
+        tAddI128 = \@THasher total, n -> @THasher (do128 total (Num.toU128 n))
+        tComplete = \@THasher _ -> Num.maxU64
+
+        tRead = \@THasher bytes -> bytes
+        "#
+    );
+
+    fn build_test(input: &str) -> String {
+        format!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                {}
+
+                main =
+                    @THasher []
+                    |> Hash.hash ({})
+                    |> tRead
+                "#
+            ),
+            TEST_HASHER, input,
+        )
+    }
+
+    #[test]
+    fn i8() {
+        assert_evals_to!(
+            &build_test("-2i8"),
+            RocList::from_slice(&[254]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn u8() {
+        assert_evals_to!(
+            &build_test("254u8"),
+            RocList::from_slice(&[254]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn i16() {
+        assert_evals_to!(
+            &build_test("-2i16"),
+            RocList::from_slice(&[254, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn u16() {
+        assert_evals_to!(
+            &build_test("Num.maxU16 - 1"),
+            RocList::from_slice(&[254, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn i32() {
+        assert_evals_to!(
+            &build_test("-2i32"),
+            RocList::from_slice(&[254, 255, 255, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn u32() {
+        assert_evals_to!(
+            &build_test("Num.maxU32 - 1"),
+            RocList::from_slice(&[254, 255, 255, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn i64() {
+        assert_evals_to!(
+            &build_test("-2i64"),
+            RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn u64() {
+        assert_evals_to!(
+            &build_test("Num.maxU64 - 1"),
+            RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn i128() {
+        assert_evals_to!(
+            &build_test("-2i128"),
+            RocList::from_slice(&[
+                254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            ]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn u128() {
+        assert_evals_to!(
+            &build_test("Num.maxU128 - 1"),
+            RocList::from_slice(&[
+                254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+            ]),
+            RocList<u8>
+        )
+    }
+}
