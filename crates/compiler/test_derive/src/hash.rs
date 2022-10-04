@@ -6,9 +6,10 @@
 
 use crate::{
     test_key_eq, test_key_neq,
-    util::{check_derivable, check_single_lset_immediate, check_underivable},
+    util::{check_derivable, check_single_lset_immediate, check_underivable, derive_test},
     v,
 };
+use insta::assert_snapshot;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
@@ -84,4 +85,67 @@ fn derivable_record_with_record_ext() {
         v!({ b: v!(STR), }{ a: v!(STR), } ),
         DeriveKey::Hash(FlatHashKey::Record(vec!["a".into(), "b".into()])),
     );
+}
+
+#[test]
+fn empty_record() {
+    derive_test(Hash, v!(EMPTY_RECORD), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for {}
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_{}(0)]]
+        #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
+        "###
+        )
+    })
+}
+
+#[test]
+fn zero_field_record() {
+    derive_test(Hash, v!({}), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for {}
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_{}(0)]]
+        #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
+        "###
+        )
+    })
+}
+
+#[test]
+fn one_field_record() {
+    derive_test(Hash, v!({ a: v!(U8), }), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for { a : U8 }
+        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher has Hasher
+        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_{a}(0)]]
+        #Derived.hash_{a} =
+          \#Derived.hasher, #Derived.rcd -> Hash.hash #Derived.hasher #Derived.rcd.a
+        "###
+        )
+    })
+}
+
+#[test]
+fn two_field_record() {
+    derive_test(Hash, v!({ a: v!(U8), b: v!(STR), }), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for { a : U8, b : Str }
+        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_{a,b}(0)]]
+        #Derived.hash_{a,b} =
+          \#Derived.hasher, #Derived.rcd ->
+            Hash.hash (Hash.hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
+        "###
+        )
+    })
 }
