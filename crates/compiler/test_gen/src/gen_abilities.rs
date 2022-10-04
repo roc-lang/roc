@@ -1288,4 +1288,22 @@ mod hash_immediate {
             RocList<u8>
         )
     }
+
+    #[test]
+    fn string() {
+        assert_evals_to!(
+            &build_test(r#""ab☃AB""#),
+            RocList::from_slice(&[97, 98, 226, 152, 131, 65, 66]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn list_u8() {
+        assert_evals_to!(
+            &build_test(r#"[15u8, 23u8, 37u8]"#),
+            RocList::from_slice(&[15, 23, 37]),
+            RocList<u8>
+        )
+    }
 }

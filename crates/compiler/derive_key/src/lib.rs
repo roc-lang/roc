@@ -56,7 +56,14 @@ impl DeriveKey {
 pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
+    ///
+    /// Immediates refer to ability members that are "inlined" at the derivation call site.
     Immediate(Symbol),
+    /// Like an [Derived::Immediate], but with the additional constraint that the immediate
+    /// symbol is statically known to have exactly one lamdba set.
+    /// This unlocks some optimization opportunities, as regioned lambda sets do not need to be
+    /// chased.
+    SingleLambdaSetImmediate(Symbol),
     /// Key of the derived implementation to use. This allows association of derived implementation
     /// names to a key, when the key is known ahead-of-time but the implementation (and it's name)
     /// is yet-to-be-made.
@@ -100,7 +107,9 @@ impl Derived {
                 FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
             },
             DeriveBuiltin::Hash => match hash::FlatHash::from_var(subs, var)? {
-                FlatHash::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatHash::SingleLambdaSetImmediate(imm) => {
+                    Ok(Derived::SingleLambdaSetImmediate(imm))
+                }
                 FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
             },
         }

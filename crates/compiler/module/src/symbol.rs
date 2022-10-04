@@ -1504,6 +1504,8 @@ define_builtins! {
         12 HASH_ADD_I64: "addI64"
         13 HASH_ADD_I128: "addI128"
         14 HASH_COMPLETE: "complete"
+        15 HASH_HASH_STR_BYTES: "hashStrBytes"
+        16 HASH_HASH_LIST: "hashList"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

@@ -5487,6 +5487,8 @@ fn late_resolve_ability_specialization<'a>(
     } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
         env.subs.get_content_without_compacting(specialization_var)
     {
+        dbg!(member, env.subs.get_lambda_set(*lambda_set));
+
         // Fast path: the member is a function, so the lambda set will tell us the
         // specialization.
         use roc_types::subs::LambdaSet;
@@ -5524,8 +5526,9 @@ fn late_resolve_ability_specialization<'a>(
                 .expect("specialization var not derivable!");
 
                 match derive_key {
-                    roc_derive_key::Derived::Immediate(imm) => {
-                        // The immediate is an ability member itself, so it must be resolved!
+                    roc_derive_key::Derived::Immediate(imm)
+                    | roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {
+                        // The immediate may be an ability member itself, so it must be resolved!
                         late_resolve_ability_specialization(env, imm, None, specialization_var)
                     }
                     roc_derive_key::Derived::Key(derive_key) => {

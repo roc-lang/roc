@@ -252,6 +252,18 @@ where
     assert_eq!(key, Ok(Derived::Immediate(immediate)));
 }
 
+pub(crate) fn check_single_lset_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Ok(Derived::SingleLambdaSetImmediate(immediate)));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assemble_derived_golden(
     subs: &mut Subs,
