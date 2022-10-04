@@ -1374,6 +1374,159 @@ mod hash {
         }
 
         #[test]
+        fn hash_singleton_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A]
+                        a = A
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[0, 0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_bool_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A, B]
+                        a = A
+
+                        b : [A, B]
+                        b = B
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> Hash.hash b
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, 0, // A
+                    1, 0, // B
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_byte_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        l : List [A, B, C, D, E, F, G, H]
+                        l = [A, B, C, D, E, F, G, H]
+
+                        main =
+                            @THasher []
+                            |> Hash.hash l
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, 0, // A
+                    1, 0, // B
+                    2, 0, // C
+                    3, 0, // D
+                    4, 0, // E
+                    5, 0, // F
+                    6, 0, // G
+                    7, 0, // H
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_newtype_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A U8 U8 U8]
+                        a = A 15 23 47
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, 0, // A
+                    15, 23, 47
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_newtype_by_void_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : Result [A U8 U8 U8] []
+                        a = Ok (A 15 23 47)
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, 0, // Ok
+                    0, 0, // A
+                    15, 23, 47
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
         fn hash_heterogenous_tags() {
             assert_evals_to!(
                 &format!(
