@@ -100,22 +100,46 @@ fn num_ceil_checked_division_success() {
 
 #[test]
 fn bool_in_record() {
-    expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
+    expect_success("{ x: 1 == 1 }", "{ x: Bool.true } : { x : Bool }");
     expect_success(
         "{ z: { y: { x: 1 == 1 } } }",
-        "{ z: { y: { x: True } } } : { z : { y : { x : Bool } } }",
+        "{ z: { y: { x: Bool.true } } } : { z : { y : { x : Bool } } }",
     );
-    expect_success("{ x: 1 != 1 }", "{ x: False } : { x : Bool }");
+    expect_success("{ x: 1 != 1 }", "{ x: Bool.false } : { x : Bool }");
     expect_success(
         "{ x: 1 == 1, y: 1 != 1 }",
-        "{ x: True, y: False } : { x : Bool, y : Bool }",
+        "{ x: Bool.true, y: Bool.false } : { x : Bool, y : Bool }",
     );
 }
 
 #[test]
 fn bool_basic_equality() {
-    expect_success("1 == 1", "True : Bool");
-    expect_success("1 != 1", "False : Bool");
+    expect_success("1 == 1", "Bool.true : Bool");
+    expect_success("1 != 1", "Bool.false : Bool");
+}
+
+#[test]
+fn bool_true() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.true
+            "#
+        ),
+        r#"Bool.true : Bool"#,
+    );
+}
+
+#[test]
+fn bool_false() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.false
+            "#
+        ),
+        r#"Bool.false : Bool"#,
+    );
 }
 
 #[test]
@@ -395,9 +419,9 @@ fn list_concat() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn list_contains() {
-    expect_success("List.contains [] 0", "False : Bool");
-    expect_success("List.contains [1, 2, 3] 2", "True : Bool");
-    expect_success("List.contains [1, 2, 3] 4", "False : Bool");
+    expect_success("List.contains [] 0", "Bool.false : Bool");
+    expect_success("List.contains [1, 2, 3] 2", "Bool.true : Bool");
+    expect_success("List.contains [1, 2, 3] 4", "Bool.false : Bool");
 }
 
 #[cfg(not(feature = "wasm"))]
