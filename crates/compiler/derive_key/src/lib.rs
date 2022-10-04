@@ -15,10 +15,12 @@
 
 pub mod decoding;
 pub mod encoding;
+pub mod hash;
 mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
+use hash::{FlatHash, FlatHashKey};
 
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
@@ -37,6 +39,7 @@ pub enum DeriveError {
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
     Decoder(FlatDecodableKey),
+    Hash(FlatHashKey),
 }
 
 impl DeriveKey {
@@ -44,6 +47,7 @@ impl DeriveKey {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
+            DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
         }
     }
 }
@@ -64,6 +68,7 @@ pub enum Derived {
 pub enum DeriveBuiltin {
     ToEncoder,
     Decoder,
+    Hash,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -73,6 +78,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
         match value {
             Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
+            Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
             _ => Err(value),
         }
     }
@@ -92,6 +98,10 @@ impl Derived {
             DeriveBuiltin::Decoder => match decoding::FlatDecodable::from_var(subs, var)? {
                 FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
                 FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
+            },
+            DeriveBuiltin::Hash => match hash::FlatHash::from_var(subs, var)? {
+                FlatHash::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
             },
         }
     }

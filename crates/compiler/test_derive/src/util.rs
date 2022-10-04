@@ -50,6 +50,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::DECODE),
             builtins_path.join("Decode.roc"),
         ),
+        DeriveBuiltin::Hash => (
+            ModuleId::HASH,
+            module_source(ModuleId::HASH),
+            builtins_path.join("Hash.roc"),
+        ),
     }
 }
 
