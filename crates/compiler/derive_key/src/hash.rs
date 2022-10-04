@@ -16,9 +16,7 @@ pub enum FlatHashKey {}
 
 impl FlatHashKey {
     pub(crate) fn debug_name(&self) -> String {
-        match self {
-            _ => unreachable!(),
-        }
+        unreachable!() // yet
     }
 }
 
