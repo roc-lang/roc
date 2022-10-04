@@ -5597,6 +5597,24 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn ability_member_doc_comments() {
+        module_formats_same(indoc!(
+            r#"
+            interface Foo exposes [] imports []
+
+            A has
+                ## This is member ab
+                ab : a -> a | a has A
+
+                ## This is member de
+                de : a -> a | a has A
+
+            f = g
+            "#
+        ));
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {
