@@ -790,7 +790,10 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
-                    $ident_id:literal $ident_const:ident: $ident_name:literal $($imported:ident)?
+                    $ident_id:literal $ident_const:ident: $ident_name:literal
+                    $(exposed_apply_type=$exposed_apply_type:literal)?
+                    $(exposed_type=$exposed_type:literal)?
+                    $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
             }
         )+
@@ -941,23 +944,63 @@ macro_rules! define_builtins {
                 )*
             )+
 
-            /// The default idents that should be in scope,
+            /// The default `Apply` types that should be in scope,
             /// and what symbols they should resolve to.
             ///
-            /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> VecMap<Ident, (Symbol, Region)> {
+            /// This is for type aliases that don't have a concrete Roc representation and as such
+            /// we hide their implementation, like `Str` and `List`.
+            pub fn apply_types_in_scope() -> VecMap<Ident, (Symbol, Region)> {
                 let mut scope = VecMap::default();
 
                 $(
                     $(
                         $(
-                            // TODO is there a cleaner way to do this?
-                            // The goal is to make sure that we only
-                            // actually import things into scope if
-                            // they are tagged as "imported" in define_builtins!
-                            let $imported = true;
+                            if $exposed_apply_type {
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
+                            }
+                        )?
+                    )*
+                )+
 
-                            if $imported {
+                scope
+            }
+
+            /// Types from a builtin module that should always be added to the default scope.
+            #[track_caller]
+            pub fn builtin_types_in_scope(module_id: ModuleId) -> &'static [(&'static str, (Symbol, Region))] {
+                match module_id {
+                    $(
+                    ModuleId::$module_const => {
+                        const LIST : &'static [(&'static str, (Symbol, Region))] = &[
+                            $(
+                                $(
+                                    if $exposed_type {
+                                        ($ident_name, (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()))
+                                    } else {
+                                        unreachable!()
+                                    },
+                                )?
+                            )*
+                        ];
+                        LIST
+                    }
+                    )+
+                    m => roc_error_macros::internal_error!("{:?} is not a builtin module!", m),
+                }
+            }
+
+            /// Symbols that should be added to the default scope, for hints as suggestions of
+            /// names you might want to use.
+            ///
+            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
+            /// really we should be extracting tag names from candidate type aliases in scope.
+            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
+                let mut scope = VecMap::default();
+
+                $(
+                    $(
+                        $(
+                            if $in_scope_for_hints {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
@@ -1038,21 +1081,21 @@ define_builtins! {
     2 DERIVED_GEN: "#Derived_gen" => {
     }
     3 NUM: "Num" => {
-        0 NUM_NUM: "Num"  // the Num.Num type alias
-        1 NUM_I128: "I128"  // the Num.I128 type alias
-        2 NUM_U128: "U128"  // the Num.U128 type alias
-        3 NUM_I64: "I64"  // the Num.I64 type alias
-        4 NUM_U64: "U64"  // the Num.U64 type alias
-        5 NUM_I32: "I32"  // the Num.I32 type alias
-        6 NUM_U32: "U32"  // the Num.U32 type alias
-        7 NUM_I16: "I16"  // the Num.I16 type alias
-        8 NUM_U16: "U16"  // the Num.U16 type alias
-        9 NUM_I8: "I8"  // the Num.I8 type alias
-        10 NUM_U8: "U8"  // the Num.U8 type alias
-        11 NUM_INTEGER: "Integer" // Int : Num Integer
-        12 NUM_F64: "F64"  // the Num.F64 type alias
-        13 NUM_F32: "F32"  // the Num.F32 type alias
-        14 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
+        0 NUM_NUM: "Num" exposed_type=true  // the Num.Num type alias
+        1 NUM_I128: "I128" exposed_type=true  // the Num.I128 type alias
+        2 NUM_U128: "U128" exposed_type=true  // the Num.U128 type alias
+        3 NUM_I64: "I64" exposed_type=true  // the Num.I64 type alias
+        4 NUM_U64: "U64" exposed_type=true  // the Num.U64 type alias
+        5 NUM_I32: "I32" exposed_type=true  // the Num.I32 type alias
+        6 NUM_U32: "U32" exposed_type=true  // the Num.U32 type alias
+        7 NUM_I16: "I16" exposed_type=true  // the Num.I16 type alias
+        8 NUM_U16: "U16" exposed_type=true  // the Num.U16 type alias
+        9 NUM_I8: "I8" exposed_type=true  // the Num.I8 type alias
+        10 NUM_U8: "U8" exposed_type=true  // the Num.U8 type alias
+        11 NUM_INTEGER: "Integer" exposed_type=true // Int : Num Integer
+        12 NUM_F64: "F64" exposed_type=true  // the Num.F64 type alias
+        13 NUM_F32: "F32" exposed_type=true  // the Num.F32 type alias
+        14 NUM_FLOATINGPOINT: "FloatingPoint" exposed_type=true // Float : Num FloatingPoint
         15 NUM_MAX_F32: "maxF32"
         16 NUM_MIN_F32: "minF32"
         17 NUM_ABS: "abs"
@@ -1095,18 +1138,18 @@ define_builtins! {
         54 NUM_ATAN: "atan"
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
-        57 NUM_SIGNED128: "Signed128"
-        58 NUM_SIGNED64: "Signed64"
-        59 NUM_SIGNED32: "Signed32"
-        60 NUM_SIGNED16: "Signed16"
-        61 NUM_SIGNED8: "Signed8"
-        62 NUM_UNSIGNED128: "Unsigned128"
-        63 NUM_UNSIGNED64: "Unsigned64"
-        64 NUM_UNSIGNED32: "Unsigned32"
-        65 NUM_UNSIGNED16: "Unsigned16"
-        66 NUM_UNSIGNED8: "Unsigned8"
-        67 NUM_BINARY64: "Binary64"
-        68 NUM_BINARY32: "Binary32"
+        57 NUM_SIGNED128: "Signed128" exposed_type=true
+        58 NUM_SIGNED64: "Signed64" exposed_type=true
+        59 NUM_SIGNED32: "Signed32" exposed_type=true
+        60 NUM_SIGNED16: "Signed16" exposed_type=true
+        61 NUM_SIGNED8: "Signed8" exposed_type=true
+        62 NUM_UNSIGNED128: "Unsigned128" exposed_type=true
+        63 NUM_UNSIGNED64: "Unsigned64" exposed_type=true
+        64 NUM_UNSIGNED32: "Unsigned32" exposed_type=true
+        65 NUM_UNSIGNED16: "Unsigned16" exposed_type=true
+        66 NUM_UNSIGNED8: "Unsigned8" exposed_type=true
+        67 NUM_BINARY64: "Binary64" exposed_type=true
+        68 NUM_BINARY32: "Binary32" exposed_type=true
         69 NUM_BITWISE_AND: "bitwiseAnd"
         70 NUM_BITWISE_XOR: "bitwiseXor"
         71 NUM_BITWISE_OR: "bitwiseOr"
@@ -1119,14 +1162,14 @@ define_builtins! {
         78 NUM_MUL_WRAP: "mulWrap"
         79 NUM_MUL_CHECKED: "mulChecked"
         80 NUM_MUL_SATURATED: "mulSaturated"
-        81 NUM_INT: "Int"
-        82 NUM_FRAC: "Frac"
-        83 NUM_NATURAL: "Natural"
-        84 NUM_NAT: "Nat"
+        81 NUM_INT: "Int" exposed_type=true
+        82 NUM_FRAC: "Frac" exposed_type=true
+        83 NUM_NATURAL: "Natural" exposed_type=true
+        84 NUM_NAT: "Nat" exposed_type=true
         85 NUM_INT_CAST: "intCast"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
-        87 NUM_DECIMAL: "Decimal"
-        88 NUM_DEC: "Dec"  // the Num.Dectype alias
+        87 NUM_DECIMAL: "Decimal" exposed_type=true
+        88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
         89 NUM_BYTES_TO_U16: "bytesToU16"
         90 NUM_BYTES_TO_U32: "bytesToU32"
         91 NUM_CAST_TO_NAT: "#castToNat"
@@ -1186,7 +1229,7 @@ define_builtins! {
         145 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
     }
     4 BOOL: "Bool" => {
-        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
+        0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
         1 BOOL_FALSE: "false"
         2 BOOL_TRUE: "true"
         3 BOOL_AND: "and"
@@ -1197,7 +1240,7 @@ define_builtins! {
         8 BOOL_NEQ: "isNotEq"
     }
     5 STR: "Str" => {
-        0 STR_STR: "Str" imported // the Str.Str type alias
+        0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
@@ -1252,7 +1295,7 @@ define_builtins! {
         52 STR_REPLACE_LAST: "replaceLast"
     }
     6 LIST: "List" => {
-        0 LIST_LIST: "List" imported // the List.List type alias
+        0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
         3 LIST_SET: "set"
@@ -1329,11 +1372,9 @@ define_builtins! {
         74 LIST_MAP_TRY: "mapTry"
     }
     7 RESULT: "Result" => {
-        0 RESULT_RESULT: "Result" // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
-                                   // NB: not strictly needed; used for finding tag names in error suggestions
-        2 RESULT_ERR: "Err" imported // Result.Result a e = [Ok a, Err e]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
+        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
@@ -1343,7 +1384,7 @@ define_builtins! {
         9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
-        0 DICT_DICT: "Dict" // the Dict.Dict type alias
+        0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
         3 DICT_GET: "get"
@@ -1365,7 +1406,7 @@ define_builtins! {
         16 DICT_CAPACITY: "capacity"
     }
     9 SET: "Set" => {
-        0 SET_SET: "Set" // the Set.Set type alias
+        0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
         3 SET_LEN: "len"
@@ -1383,15 +1424,15 @@ define_builtins! {
         15 SET_CAPACITY: "capacity"
     }
     10 BOX: "Box" => {
-        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
     11 ENCODE: "Encode" => {
-        0 ENCODE_ENCODER: "Encoder"
-        1 ENCODE_ENCODING: "Encoding"
+        0 ENCODE_ENCODER: "Encoder" exposed_type=true
+        1 ENCODE_ENCODING: "Encoding" exposed_type=true
         2 ENCODE_TO_ENCODER: "toEncoder"
-        3 ENCODE_ENCODERFORMATTING: "EncoderFormatting"
+        3 ENCODE_ENCODERFORMATTING: "EncoderFormatting" exposed_type=true
         4 ENCODE_U8: "u8"
         5 ENCODE_U16: "u16"
         6 ENCODE_U32: "u32"
@@ -1416,12 +1457,12 @@ define_builtins! {
         25 ENCODE_TO_BYTES: "toBytes"
     }
     12 DECODE: "Decode" => {
-        0 DECODE_DECODE_ERROR: "DecodeError"
-        1 DECODE_DECODE_RESULT: "DecodeResult"
-        2 DECODE_DECODER_OPAQUE: "Decoder"
-        3 DECODE_DECODING: "Decoding"
+        0 DECODE_DECODE_ERROR: "DecodeError" exposed_type=true
+        1 DECODE_DECODE_RESULT: "DecodeResult" exposed_type=true
+        2 DECODE_DECODER_OPAQUE: "Decoder" exposed_type=true
+        3 DECODE_DECODING: "Decoding" exposed_type=true
         4 DECODE_DECODER: "decoder"
-        5 DECODE_DECODERFORMATTING: "DecoderFormatting"
+        5 DECODE_DECODERFORMATTING: "DecoderFormatting" exposed_type=true
         6 DECODE_U8: "u8"
         7 DECODE_U16: "u16"
         8 DECODE_U32: "u32"

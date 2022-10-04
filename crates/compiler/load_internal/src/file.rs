@@ -80,58 +80,6 @@ const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
-/// TODO: how can we populate these at compile/runtime from the standard library?
-/// Consider updating the macro in symbol to do this?
-const PRELUDE_TYPES: [(&str, Symbol); 33] = [
-    ("Num", Symbol::NUM_NUM),
-    ("Int", Symbol::NUM_INT),
-    ("Frac", Symbol::NUM_FRAC),
-    ("Integer", Symbol::NUM_INTEGER),
-    ("FloatingPoint", Symbol::NUM_FLOATINGPOINT),
-    ("Binary32", Symbol::NUM_BINARY32),
-    ("Binary64", Symbol::NUM_BINARY64),
-    ("Signed128", Symbol::NUM_SIGNED128),
-    ("Signed64", Symbol::NUM_SIGNED64),
-    ("Signed32", Symbol::NUM_SIGNED32),
-    ("Signed16", Symbol::NUM_SIGNED16),
-    ("Signed8", Symbol::NUM_SIGNED8),
-    ("Unsigned128", Symbol::NUM_UNSIGNED128),
-    ("Unsigned64", Symbol::NUM_UNSIGNED64),
-    ("Unsigned32", Symbol::NUM_UNSIGNED32),
-    ("Unsigned16", Symbol::NUM_UNSIGNED16),
-    ("Unsigned8", Symbol::NUM_UNSIGNED8),
-    ("Natural", Symbol::NUM_NATURAL),
-    ("Decimal", Symbol::NUM_DECIMAL),
-    ("Nat", Symbol::NUM_NAT),
-    ("I8", Symbol::NUM_I8),
-    ("I16", Symbol::NUM_I16),
-    ("I32", Symbol::NUM_I32),
-    ("I64", Symbol::NUM_I64),
-    ("I128", Symbol::NUM_I128),
-    ("U8", Symbol::NUM_U8),
-    ("U16", Symbol::NUM_U16),
-    ("U32", Symbol::NUM_U32),
-    ("U64", Symbol::NUM_U64),
-    ("U128", Symbol::NUM_U128),
-    ("F32", Symbol::NUM_F32),
-    ("F64", Symbol::NUM_F64),
-    ("Dec", Symbol::NUM_DEC),
-];
-
-const MODULE_ENCODE_TYPES: &[(&str, Symbol)] = &[
-    ("Encoder", Symbol::ENCODE_ENCODER),
-    ("Encoding", Symbol::ENCODE_ENCODING),
-    ("EncoderFormatting", Symbol::ENCODE_ENCODERFORMATTING),
-];
-
-const MODULE_DECODE_TYPES: &[(&str, Symbol)] = &[
-    ("DecodeError", Symbol::DECODE_DECODE_ERROR),
-    ("DecodeResult", Symbol::DECODE_DECODE_RESULT),
-    ("Decoder", Symbol::DECODE_DECODER_OPAQUE),
-    ("Decoding", Symbol::DECODE_DECODING),
-    ("DecoderFormatting", Symbol::DECODE_DECODERFORMATTING),
-];
-
 macro_rules! log {
     ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
 }
@@ -2036,13 +1984,16 @@ fn report_unused_imported_modules<'a>(
     constrained_module: &ConstrainedModule,
 ) {
     let mut unused_imported_modules = constrained_module.imported_modules.clone();
+    let mut unused_imports = constrained_module.module.exposed_imports.clone();
 
     for symbol in constrained_module.module.referenced_values.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(symbol);
     }
 
     for symbol in constrained_module.module.referenced_types.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(symbol);
     }
 
     let existing = match state.module_cache.can_problems.entry(module_id) {
@@ -2052,9 +2003,28 @@ fn report_unused_imported_modules<'a>(
 
     for (unused, region) in unused_imported_modules.drain() {
         if !unused.is_builtin() {
-            existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+            existing.push(roc_problem::can::Problem::UnusedModuleImport(
+                unused, region,
+            ));
         }
     }
+
+    for (unused, region) in unused_imports.drain() {
+        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+    }
+}
+
+fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
+    header
+        .package_qualified_imported_modules
+        .insert(PackageQualified::Unqualified(module));
+
+    header.imported_modules.insert(module, Region::zero());
+
+    let types = Symbol::builtin_types_in_scope(module)
+        .iter()
+        .map(|(name, info)| (Ident::from(*name), *info));
+    header.exposed_imports.extend(types);
 }
 
 fn update<'a>(
@@ -2158,134 +2128,25 @@ fn update<'a>(
             let mut header = header;
 
             if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::RESULT));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::RESULT, Region::zero());
-
-                header.exposed_imports.insert(
-                    Ident::from("Result"),
-                    (Symbol::RESULT_RESULT, Region::zero()),
-                );
+                extend_header_with_builtin(&mut header, ModuleId::RESULT);
             }
 
             if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::NUM));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::NUM, Region::zero());
-
-                for (type_name, symbol) in PRELUDE_TYPES {
-                    header
-                        .exposed_imports
-                        .insert(Ident::from(type_name), (symbol, Region::zero()));
-                }
+                extend_header_with_builtin(&mut header, ModuleId::NUM);
             }
 
-            if header.module_id != ModuleId::BOOL {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::BOOL));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::BOOL, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
-            }
-
-            if header.module_id == ModuleId::NUM {
-                header
-                    .exposed_imports
-                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
+            if ![ModuleId::BOOL].contains(&header.module_id) {
+                extend_header_with_builtin(&mut header, ModuleId::BOOL);
             }
 
             if !header.module_id.is_builtin() {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::BOX));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::BOX, Region::zero());
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::STR));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::STR, Region::zero());
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::DICT));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::DICT, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Dict"), (Symbol::DICT_DICT, Region::zero()));
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::SET));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::SET, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Set"), (Symbol::SET_SET, Region::zero()));
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::LIST));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::LIST, Region::zero());
-
-                // ENCODE
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::ENCODE, Region::zero());
-
-                for (type_name, symbol) in MODULE_ENCODE_TYPES {
-                    header
-                        .exposed_imports
-                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
-                }
-
-                // DECODE
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::DECODE));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::DECODE, Region::zero());
-
-                for (type_name, symbol) in MODULE_DECODE_TYPES {
-                    header
-                        .exposed_imports
-                        .insert(Ident::from(*type_name), (*symbol, Region::zero()));
-                }
+                extend_header_with_builtin(&mut header, ModuleId::BOX);
+                extend_header_with_builtin(&mut header, ModuleId::STR);
+                extend_header_with_builtin(&mut header, ModuleId::DICT);
+                extend_header_with_builtin(&mut header, ModuleId::SET);
+                extend_header_with_builtin(&mut header, ModuleId::LIST);
+                extend_header_with_builtin(&mut header, ModuleId::ENCODE);
+                extend_header_with_builtin(&mut header, ModuleId::DECODE);
             }
 
             state
@@ -3687,7 +3548,7 @@ fn send_header<'a>(
         }
     };
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
@@ -3759,7 +3620,11 @@ fn send_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -3898,7 +3763,7 @@ fn send_header_two<'a>(
     let declared_name: ModuleName = "".into();
     let mut symbols_from_requires = Vec::with_capacity(requires.len());
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
 
@@ -3983,7 +3848,11 @@ fn send_header_two<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -4805,7 +4674,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Ident>) {
+fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -4813,7 +4682,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {
@@ -4828,7 +4697,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {

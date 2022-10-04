@@ -18,7 +18,7 @@ interface Parser.Str
         digits,
         strFromRaw,
     ]
-    imports [Parser.Core.{ Parser, ParseResult, const, fail, map, map2, apply, many, oneOrMore, parse, parsePartial, buildPrimitiveParser, between }]
+    imports [Parser.Core.{ Parser, ParseResult, map, oneOrMore, parse, parsePartial, buildPrimitiveParser }]
 
 # Specific string-based parsers:
 RawStr : List U8

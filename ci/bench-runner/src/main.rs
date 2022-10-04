@@ -231,11 +231,6 @@ fn check_if_bench_executables_changed() -> bool {
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
 
-    dbg!(Command::new("tree")
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output());
-
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");

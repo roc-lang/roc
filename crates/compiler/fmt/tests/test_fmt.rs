@@ -5567,6 +5567,21 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn format_chars() {
+        expr_formats_same(indoc!(
+            r#"
+            ' '
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            '\n'
+            "#
+        ));
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {
