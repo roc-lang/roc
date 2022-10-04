@@ -81,7 +81,7 @@ impl<'a> ExpectMemory<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_expects<'a, W: std::io::Write>(
+pub fn run_toplevel_expects<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
     arena: &'a Bump,

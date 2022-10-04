@@ -412,7 +412,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let (failed, passed) = roc_repl_expect::run::run_expects(
+    let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
