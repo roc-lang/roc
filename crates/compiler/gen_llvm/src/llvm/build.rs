@@ -6575,7 +6575,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
-        BoxExpr | UnboxExpr => {
+        BoxExpr | UnboxExpr | TagDiscriminant => {
             unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
