@@ -10,5 +10,7 @@ pub(crate) fn derive_hash(
     key: FlatHashKey,
     _def_symbol: Symbol,
 ) -> DerivedBody {
-    match key {}
+    match key {
+        FlatHashKey::Record(_) => todo!(),
+    }
 }
