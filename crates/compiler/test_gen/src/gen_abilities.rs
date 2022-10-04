@@ -1330,4 +1330,47 @@ mod hash {
             )
         }
     }
+
+    mod derived {
+        use super::{assert_evals_to, build_test};
+        use roc_std::RocList;
+
+        #[test]
+        fn empty_record() {
+            assert_evals_to!(
+                &build_test(r#"{}"#),
+                RocList::from_slice(&[] as &[u8]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_u8_and_str() {
+            assert_evals_to!(
+                &build_test(r#"{ a: 15u8, b: "bc" }"#),
+                RocList::from_slice(&[15, 98, 99]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_records() {
+            assert_evals_to!(
+                &build_test(r#"{ a: { b: 15u8, c: "bc" }, d: { b: 23u8, e: "ef" } }"#),
+                RocList::from_slice(&[15, 98, 99, 23, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_list_of_records() {
+            assert_evals_to!(
+                &build_test(
+                    r#"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"#
+                ),
+                RocList::from_slice(&[15, 23, 45, 73]),
+                RocList<u8>
+            )
+        }
+    }
 }
