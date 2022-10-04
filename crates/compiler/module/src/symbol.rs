@@ -50,6 +50,7 @@ const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
+    (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
