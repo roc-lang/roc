@@ -20,10 +20,10 @@ fn hash_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -43,14 +43,14 @@ fn hash_specialization_multiple_add() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [ Hash {hash: hashId} ]
+            Id := U64 has [ MHash {hash: hashId} ]
 
             hashId = \@Id n -> n
 
-            One := {} has [ Hash {hash: hashOne} ]
+            One := {} has [ MHash {hash: hashOne} ]
 
             hashOne = \@One _ -> 1
 
@@ -70,16 +70,16 @@ fn alias_member_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
             main =
-                aliasedHash = hash
-                aliasedHash (@Id 1234)
+                aliasedMHash = hash
+                aliasedMHash (@Id 1234)
             "#
         ),
         1234,
@@ -95,16 +95,16 @@ fn ability_constrained_in_non_member_usage() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : a, a -> U64 | a has Hash
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : a, a -> U64 | a has MHash
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulHashes (@Id 5) (@Id 7)
+            result = mulMHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -120,15 +120,15 @@ fn ability_constrained_in_non_member_usage_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulHashes (@Id 5) (@Id 7)
+            result = mulMHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -144,19 +144,19 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : a, b -> U64 | a has Hash, b has Hash
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : a, b -> U64 | a has MHash, b has MHash
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -172,18 +172,18 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -199,19 +199,19 @@ fn ability_used_as_type_still_compiles() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : Hash, Hash -> U64
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : MHash, MHash -> U64
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,

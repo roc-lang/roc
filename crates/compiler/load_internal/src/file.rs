@@ -177,6 +177,7 @@ impl Default for ModuleCache<'_> {
             BOX,
             ENCODE,
             DECODE,
+            HASH,
             JSON,
         }
 
@@ -2251,6 +2252,7 @@ fn update<'a>(
                 extend_header_with_builtin(&mut header, ModuleId::LIST);
                 extend_header_with_builtin(&mut header, ModuleId::ENCODE);
                 extend_header_with_builtin(&mut header, ModuleId::DECODE);
+                extend_header_with_builtin(&mut header, ModuleId::HASH);
             }
 
             state
@@ -3284,6 +3286,7 @@ fn load_module<'a>(
         "Box", ModuleId::BOX
         "Encode", ModuleId::ENCODE
         "Decode", ModuleId::DECODE
+        "Hash", ModuleId::HASH
         "Json", ModuleId::JSON
     }
 
@@ -4768,7 +4771,11 @@ fn canonicalize_and_constrain<'a>(
             Vacant(vacant) => {
                 let should_include_builtin = matches!(
                     name.module_id(),
-                    ModuleId::ENCODE | ModuleId::DECODE | ModuleId::DICT | ModuleId::SET
+                    ModuleId::ENCODE
+                        | ModuleId::DECODE
+                        | ModuleId::DICT
+                        | ModuleId::SET
+                        | ModuleId::HASH
                 );
 
                 if !name.is_builtin() || should_include_builtin {

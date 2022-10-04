@@ -1325,10 +1325,10 @@ fn specialize_ability_call() {
         r#"
         app "test" provides [main] to "./platform"
 
-        Hash has
-            hash : a -> U64 | a has Hash
+        MHash has
+            hash : a -> U64 | a has MHash
 
-        Id := U64 has [Hash {hash}]
+        Id := U64 has [MHash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n

@@ -5956,10 +5956,10 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash] to "./platform"
 
-                Hash has hash : a -> U64 | a has Hash
+                MHash has hash : a -> U64 | a has MHash
                 "#
             ),
-            "a -> U64 | a has Hash",
+            "a -> U64 | a has MHash",
         )
     }
 
@@ -5970,14 +5970,14 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash] to "./platform"
 
-                Hash has hash : a -> U64 | a has Hash
+                MHash has hash : a -> U64 | a has MHash
 
-                Id := U64 has [Hash {hash}]
+                Id := U64 has [MHash {hash}]
 
                 hash = \@Id n -> n
                 "#
             ),
-            [("Hash:hash", "Id")],
+            [("MHash:hash", "Id")],
         )
     }
 
@@ -5988,17 +5988,17 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash, hash32] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
-                    hash32 : a -> U32 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
+                    hash32 : a -> U32 | a has MHash
 
-                Id := U64 has [Hash {hash, hash32}]
+                Id := U64 has [MHash {hash, hash32}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
                 "#
             ),
-            [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
+            [("MHash:hash", "Id"), ("MHash:hash32", "Id")],
         )
     }
 
@@ -6009,15 +6009,15 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash, hash32, eq, le] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
-                    hash32 : a -> U32 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
+                    hash32 : a -> U32 | a has MHash
 
                 Ord has
                     eq : a, a -> Bool | a has Ord
                     le : a, a -> Bool | a has Ord
 
-                Id := U64 has [Hash {hash, hash32}, Ord {eq, le}]
+                Id := U64 has [MHash {hash, hash32}, Ord {eq, le}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
@@ -6027,8 +6027,8 @@ mod solve_expr {
                 "#
             ),
             [
-                ("Hash:hash", "Id"),
-                ("Hash:hash32", "Id"),
+                ("MHash:hash", "Id"),
+                ("MHash:hash32", "Id"),
                 ("Ord:eq", "Id"),
                 ("Ord:le", "Id"),
             ],
@@ -6042,16 +6042,16 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
-                Id := U64 has [Hash {hash}]
+                Id := U64 has [MHash {hash}]
 
                 hash : Id -> U64
                 hash = \@Id n -> n
                 "#
             ),
-            [("Hash:hash", "Id")],
+            [("MHash:hash", "Id")],
         )
     }
 
@@ -6062,15 +6062,15 @@ mod solve_expr {
                 r#"
                 app "test" provides [hash] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
-                Id := U64 has [Hash {hash}]
+                Id := U64 has [MHash {hash}]
 
                 hash : Id -> U64
                 "#
             ),
-            [("Hash:hash", "Id")],
+            [("MHash:hash", "Id")],
         )
     }
 
@@ -6081,10 +6081,10 @@ mod solve_expr {
                 r#"
                 app "test" provides [zero] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
-                Id := U64 has [Hash {hash}]
+                Id := U64 has [MHash {hash}]
 
                 hash = \@Id n -> n
 
@@ -6102,15 +6102,15 @@ mod solve_expr {
                 r#"
                 app "test" provides [thething] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
                 thething =
                     itis = hash
                     itis
                 "#
             ),
-            "a -> U64 | a has Hash",
+            "a -> U64 | a has MHash",
         )
     }
 
@@ -6138,14 +6138,14 @@ mod solve_expr {
                 r#"
                 app "test" provides [hashEq] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
-                hashEq : a, a -> Bool | a has Hash
+                hashEq : a, a -> Bool | a has MHash
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, a -> Bool | a has Hash",
+            "a, a -> Bool | a has MHash",
         )
     }
 
@@ -6156,13 +6156,13 @@ mod solve_expr {
                 r#"
                 app "test" provides [hashEq] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, a1 -> Bool | a has Hash, a1 has Hash",
+            "a, a1 -> Bool | a has MHash, a1 has MHash",
         )
     }
 
@@ -6173,12 +6173,12 @@ mod solve_expr {
                 r#"
                 app "test" provides [result] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
                 hashEq = \x, y -> hash x == hash y
 
-                Id := U64 has [Hash {hash}]
+                Id := U64 has [MHash {hash}]
                 hash = \@Id n -> n
 
                 result = hashEq (@Id 100) (@Id 101)
@@ -6195,18 +6195,18 @@ mod solve_expr {
                 r#"
                 app "test" provides [result] to "./platform"
 
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
-                mulHashes = \x, y -> hash x * hash y
+                mulMHashes = \x, y -> hash x * hash y
 
-                Id := U64 has [Hash { hash: hashId }]
+                Id := U64 has [MHash { hash: hashId }]
                 hashId = \@Id n -> n
 
-                Three := {} has [Hash { hash: hashThree }]
+                Three := {} has [MHash { hash: hashThree }]
                 hashThree = \@Three _ -> 3
 
-                result = mulHashes (@Id 100) (@Three {})
+                result = mulMHashes (@Id 100) (@Three {})
                 "#
             ),
             "U64",
@@ -7821,6 +7821,24 @@ mod solve_expr {
                 "#
             ),
             "Result Str [] -> Str",
+        );
+    }
+
+    #[test]
+    fn custom_implement_hash() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Noop := {} has [Hash {hash}]
+
+                hash = \@Noop {}, hasher -> hasher
+
+                main = \hasher -> hash (@Noop {}) hasher
+                "#
+            ),
+            "hasher -> hasher | hasher has Hasher",
         );
     }
 }
