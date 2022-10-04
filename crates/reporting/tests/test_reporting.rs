@@ -10850,6 +10850,171 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        derive_hash_for_function,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A a := a -> a has [Hash]
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Hash.Hash` for `A`:
+
+    3│  A a := a -> a has [Hash]
+                           ^^^^
+
+    Note: `Hash` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Hash.Hash` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_hash_for_non_hash_opaque,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Hash]
+
+             B := {}
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    Roc can't derive an implementation of the `Hash.Hash` for `A`:
+
+    3│  A := B has [Hash]
+                    ^^^^
+
+    Tip: `B` does not implement `Hash`. Consider adding a custom
+    implementation or `has Hash.Hash` to the definition of `B`.
+
+    Tip: You can define a custom implementation of `Hash.Hash` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_hash_for_other_has_hash,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Hash]
+
+             B := {} has [Hash]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_recursive_deriving,
+        indoc!(
+            r#"
+             app "test" provides [MyNat] to "./platform"
+
+             MyNat := [S MyNat, Z] has [Hash]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_record,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo {a: "", b: 1}
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_tag,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             t : [A {}, B U8 U64, C Str]
+
+             main = foo t
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        cannot_derive_hash_for_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo (\x -> x)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (\x -> x)
+                    ^^^^^^^
+
+    Roc can't generate an implementation of the `Hash.Hash` ability for
+
+        a -> a
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_derive_hash_for_structure_containing_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo (A (\x -> x) B)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (A (\x -> x) B)
+                    ^^^^^^^^^^^^^
+
+    Roc can't generate an implementation of the `Hash.Hash` ability for
+
+        [A (a -> a) [B]a]b
+
+    In particular, an implementation for
+
+        a -> a
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
         shift_by_negative,
         indoc!(
             r#"

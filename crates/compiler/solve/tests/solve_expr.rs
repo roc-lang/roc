@@ -7833,9 +7833,9 @@ mod solve_expr {
 
                 Noop := {} has [Hash {hash}]
 
-                hash = \@Noop {}, hasher -> hasher
+                hash = \hasher, @Noop {} -> hasher
 
-                main = \hasher -> hash (@Noop {}) hasher
+                main = \hasher -> hash hasher (@Noop {})
                 "#
             ),
             "hasher -> hasher | hasher has Hasher",
