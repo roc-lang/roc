@@ -1306,4 +1306,13 @@ mod hash_immediate {
             RocList<u8>
         )
     }
+
+    #[test]
+    fn list_string() {
+        assert_evals_to!(
+            &build_test(r#"["ab", "cd", "ef"]"#),
+            RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
+            RocList<u8>
+        )
+    }
 }
