@@ -163,11 +163,8 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .nest(2)
             )
         }
-        RunLowLevel { op, args, .. } => {
-            let op = match op {
-                LowLevel::TagDiscriminant => "@tag_discriminant",
-                _ => unreachable!(),
-            };
+        RunLowLevel { args, .. } => {
+            let op = "LowLevel";
 
             maybe_paren!(
                 Free,

@@ -84,7 +84,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::PtrCast => unimplemented!(),
                 LowLevel::RefCountInc => unimplemented!(),
                 LowLevel::RefCountDec => unimplemented!(),
-                LowLevel::TagDiscriminant => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
