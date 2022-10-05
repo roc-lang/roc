@@ -5615,6 +5615,37 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn leading_comments_preserved() {
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            interface Foo
+                exposes []
+                imports []
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            app "test" packages {} imports [] provides [] to "./platform"
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            platform "hello-world"
+                requires {} { main : Str }
+                exposes []
+                packages {}
+                imports []
+                provides [mainForHost]
+            "#
+        ));
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

@@ -7935,11 +7935,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     //         (xor arg shifted) - shifted
 
     let bd = env.builder;
-    let ctx = env.context;
     let shifted_name = "abs_shift_right";
     let shifted_alloca = {
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
-        let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
+        let shift_val = int_type.const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
         let alloca = bd.build_alloca(int_type, "#int_abs_help");
 

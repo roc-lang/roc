@@ -1263,3 +1263,24 @@ fn record_of_poly_function_and_string() {
         r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
     );
 }
+
+#[test]
+fn newtype_by_void_is_wrapped() {
+    expect_success(
+        indoc!(
+            r#"
+            Result.try (Err 42) (\x -> Err (x+1))
+            "#
+        ),
+        r#"Err 42 : Result b (Num *)"#,
+    );
+
+    expect_success(
+        indoc!(
+            r#"
+            Result.try (Ok 42) (\x -> Ok (x+1))
+            "#
+        ),
+        r#"Ok 43 : Result (Num *) err"#,
+    );
+}

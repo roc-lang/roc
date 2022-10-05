@@ -357,7 +357,6 @@ fn gen_and_eval_llvm<'a>(
         &loaded.interns,
         DebugPrint::NOTHING,
     );
-    let content = *loaded.subs.get_content_without_compacting(main_fn_var);
 
     let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
@@ -381,7 +380,7 @@ fn gen_and_eval_llvm<'a>(
         &mut app,
         main_fn_name,
         main_fn_layout,
-        &content,
+        main_fn_var,
         &subs,
         &interns,
         layout_interner.into_global().fork(),

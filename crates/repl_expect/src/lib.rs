@@ -54,8 +54,6 @@ pub fn get_values<'a>(
         let expr = {
             let variable = *variable;
 
-            let content = subs.get_content_without_compacting(variable);
-
             // TODO: pass layout_cache to jit_to_ast directly
             let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
@@ -71,7 +69,7 @@ pub fn get_values<'a>(
                 app,
                 "expect_repl_main_fn",
                 proc_layout,
-                content,
+                variable,
                 subs,
                 interns,
                 layout_interner.fork(),
