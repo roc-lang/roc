@@ -99,6 +99,17 @@ impl Symbol {
         DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
     }
 
+    /// A symbol that should never be exposed to userspace, but needs to be exposed
+    /// to compiled modules for deriving abilities for structural types.
+    pub fn is_exposed_for_builtin_derivers(&self) -> bool {
+        matches!(
+            self,
+            // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
+            // low-level implementation.
+            &Self::EQ_STRUCTURAL_EQ
+        ) && false
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids

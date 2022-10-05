@@ -374,6 +374,7 @@ pub fn canonicalize_module_defs<'a>(
         if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
+            && !symbol.is_exposed_for_builtin_derivers()
         {
             env.problem(Problem::UnusedDef(symbol, region));
         }

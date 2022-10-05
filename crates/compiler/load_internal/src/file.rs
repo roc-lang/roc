@@ -4469,7 +4469,11 @@ fn run_solve_solve(
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
+            .filter(|(k, _)| {
+                exposed_symbols.contains(k)
+                    || is_specialization_symbol(*k)
+                    || k.is_exposed_for_builtin_derivers()
+            })
             .collect();
 
         (

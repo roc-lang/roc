@@ -3,6 +3,7 @@ interface Eq
     Eq,
     isEq,
     isNotEq,
+    structuralEq,
   ]
   imports [
     Bool,
@@ -37,3 +38,7 @@ Eq has
 ## `a != b` is shorthand for `Eq.isNotEq a b`.
 isNotEq : a, a -> Bool | a has Eq
 isNotEq = \a, b -> Bool.not (isEq a b)
+
+# INTERNAL COMPILER USE ONLY: used to lower calls to `isEq` to structural
+# equality via the `Eq` low-level for derived types.
+structuralEq : a, a -> Bool

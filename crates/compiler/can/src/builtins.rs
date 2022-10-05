@@ -70,6 +70,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
             // Below, we explicitly handle some exceptions to the pattern where a lowlevel maps
             // directly to a symbol. If you are unsure if your lowlevel is an exception, assume
             // that it isn't and just see if that works.
+            #[allow(unreachable_patterns)] // TODO: remove after we replace `BOOL_EQ` with `EQ_EQ` wholly
             match lowlevel {
                 $(
                 LowLevel::$lowlevel => Symbol::$symbol,
@@ -192,6 +193,7 @@ map_symbol_to_lowlevel_and_arity! {
     NumToStr; NUM_TO_STR; 1,
 
     Eq; BOOL_EQ; 2,
+    Eq; EQ_STRUCTURAL_EQ; 2,
     NotEq; BOOL_NEQ; 2,
     And; BOOL_AND; 2,
     Or; BOOL_OR; 2,

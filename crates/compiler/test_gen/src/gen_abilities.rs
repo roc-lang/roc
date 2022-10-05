@@ -1639,4 +1639,19 @@ mod eq {
             RocStr
         )
     }
+
+    #[test]
+    fn derive_structural_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Eq.isEq 10u8 10u8
+                "#
+            ),
+            true,
+            bool
+        )
+    }
 }
