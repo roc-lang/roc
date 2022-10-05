@@ -8,9 +8,11 @@ use roc_build::link::{LinkType, LinkingStrategy};
 use roc_build::program::Problems;
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
+use roc_intern::SingleThreadedInterner;
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_mono::layout::Layout;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -561,6 +563,7 @@ pub fn build(
             total_time,
             expectations,
             interns,
+            layout_interner,
         }) => {
             match config {
                 BuildOnly => {
@@ -573,7 +576,7 @@ pub fn build(
 
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
-                    std::mem::forget(arena);
+                    // std::mem::forget(arena);
 
                     print_problems(problems, total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
@@ -596,7 +599,16 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
+                    roc_run(
+                        &arena,
+                        opt_level,
+                        triple,
+                        args,
+                        bytes,
+                        expectations,
+                        interns,
+                        layout_interner,
+                    )
                 }
                 BuildAndRunIfNoErrors => {
                     debug_assert!(
@@ -617,7 +629,16 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
+                    roc_run(
+                        &arena,
+                        opt_level,
+                        triple,
+                        args,
+                        bytes,
+                        expectations,
+                        interns,
+                        layout_interner,
+                    )
                 }
             }
         }
@@ -683,13 +704,14 @@ fn print_problems(problems: Problems, total_time: std::time::Duration) {
 }
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
-    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
     triple: Triple,
     args: I,
     binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
+    layout_interner: SingleThreadedInterner<Layout>,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -728,7 +750,15 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations, interns),
+        _ => roc_run_native(
+            arena,
+            opt_level,
+            args,
+            binary_bytes,
+            expectations,
+            interns,
+            layout_interner,
+        ),
     }
 }
 
@@ -777,12 +807,13 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 /// Run on the native OS (not on wasm)
 #[cfg(target_family = "unix")]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    arena: Bump,
+    arena: &Bump,
     opt_level: OptLevel,
     args: I,
     binary_bytes: &[u8],
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
+    layout_interner: SingleThreadedInterner<Layout>,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
@@ -794,18 +825,24 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         match opt_level {
-            OptLevel::Development => {
-                roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-            }
+            OptLevel::Development => roc_run_native_debug(
+                arena,
+                executable,
+                argv,
+                envp,
+                expectations,
+                interns,
+                layout_interner,
+            ),
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
             }
@@ -882,14 +919,67 @@ impl ExecutableFile {
 
 // with Expect
 #[cfg(target_family = "unix")]
-unsafe fn roc_run_native_debug(
-    _executable: ExecutableFile,
-    _argv: &[*const c_char],
-    _envp: &[*const c_char],
-    _expectations: VecMap<ModuleId, Expectations>,
-    _interns: Interns,
+fn roc_run_native_debug(
+    arena: &Bump,
+    executable: ExecutableFile,
+    argv: bumpalo::collections::Vec<*const c_char>,
+    envp: bumpalo::collections::Vec<*const c_char>,
+    mut expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
+    layout_interner: SingleThreadedInterner<Layout>,
 ) {
-    todo!()
+    use roc_repl_expect::run::ExpectMemory;
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    let layout_interner = layout_interner.into_global();
+
+    let mut writer = std::io::stdout();
+
+    match unsafe { libc::fork() } {
+        0 => unsafe {
+            // we are the child
+
+            executable.execve(&argv, &envp);
+        },
+        -1 => {
+            // something failed
+
+            // Display a human-friendly error message
+            println!("Error {:?}", std::io::Error::last_os_error());
+
+            std::process::exit(1)
+        }
+        1.. => {
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => {
+                        // done!
+                        return;
+                    }
+                    SIGUSR1 => {
+                        // this is the signal we use for an expect failure. Let's see what the child told us
+
+                        roc_repl_expect::run::render_expects_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -60,7 +60,7 @@ pub struct ThreadLocalInterner<'a, K> {
 ///
 /// The only way to construct such an interner is to collapse a shared [GlobalInterner] into
 /// a [SingleThreadedInterner], via [GlobalInterner::unwrap].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SingleThreadedInterner<'a, K> {
     map: BumpMap<&'a K, Interned<K>>,
     vec: Vec<&'a K>,

@@ -19,7 +19,7 @@ use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
 use target_lexicon::Triple;
 
-pub(crate) struct ExpectMemory<'a> {
+pub struct ExpectMemory<'a> {
     ptr: *mut u8,
     length: usize,
     shm_name: Option<std::ffi::CString>,
@@ -39,7 +39,7 @@ impl<'a> ExpectMemory<'a> {
         }
     }
 
-    fn create_or_reuse_mmap(shm_name: &str) -> Self {
+    pub fn create_or_reuse_mmap(shm_name: &str) -> Self {
         let cstring = std::ffi::CString::new(shm_name).unwrap();
         Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
     }
@@ -323,14 +323,16 @@ fn run_expect_fx<'a, W: std::io::Write>(
     }
 }
 
-pub fn roc_dev_expect<'a>(
+pub fn render_expects_in_memory<'a>(
     writer: &mut impl std::io::Write,
     arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
-    shared_ptr: *mut u8,
+    memory: &ExpectMemory,
 ) -> std::io::Result<usize> {
+    let shared_ptr = memory.ptr;
+
     let frame = ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
     let module_id = frame.module_id;
 

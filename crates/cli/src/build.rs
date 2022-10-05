@@ -5,6 +5,7 @@ use roc_build::{
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
+use roc_intern::SingleThreadedInterner;
 use roc_load::{
     EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
@@ -30,12 +31,13 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     .unwrap()
 }
 
-pub struct BuiltFile {
+pub struct BuiltFile<'a> {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
     pub expectations: VecMap<ModuleId, Expectations>,
     pub interns: Interns,
+    pub layout_interner: SingleThreadedInterner<'a, roc_mono::layout::Layout<'a>>,
 }
 
 pub enum BuildOrdering {
@@ -69,7 +71,7 @@ pub fn build_file<'a>(
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
     order: BuildOrdering,
-) -> Result<BuiltFile, BuildFileError<'a>> {
+) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
 
@@ -242,6 +244,7 @@ pub fn build_file<'a>(
     let mut loaded = loaded;
     let problems = program::report_problems_monomorphized(&mut loaded);
     let expectations = std::mem::take(&mut loaded.expectations);
+    let layout_interner = loaded.layout_interner.clone();
     let loaded = loaded;
 
     let interns = loaded.interns.clone();
@@ -388,6 +391,7 @@ pub fn build_file<'a>(
         total_time,
         interns,
         expectations,
+        layout_interner,
     })
 }
 
