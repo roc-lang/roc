@@ -621,12 +621,16 @@ fn various_sized_abs() {
     assert_evals_to!("Num.abs -6i16", 6, i16);
     assert_evals_to!("Num.abs -6i32", 6, i32);
     assert_evals_to!("Num.abs -6i64", 6, i64);
-    assert_evals_to!("Num.abs -6i128", 6, i128);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs -6i128", 6, i128);
+    }
     assert_evals_to!("Num.abs 6u8", 6, u8);
     assert_evals_to!("Num.abs 6u16", 6, u16);
     assert_evals_to!("Num.abs 6u32", 6, u32);
     assert_evals_to!("Num.abs 6u64", 6, u64);
-    assert_evals_to!("Num.abs 6u128", 6, u128);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs 6u128", 6, u128);
+    }
 }
 
 #[test]
