@@ -1427,8 +1427,8 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, // A
-                    1, 0, // B
+                    0, // A
+                    1, // B
                 ]),
                 RocList<u8>
             )
@@ -1456,14 +1456,14 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, // A
-                    1, 0, // B
-                    2, 0, // C
-                    3, 0, // D
-                    4, 0, // E
-                    5, 0, // F
-                    6, 0, // G
-                    7, 0, // H
+                    0, // A
+                    1, // B
+                    2, // C
+                    3, // D
+                    4, // E
+                    5, // F
+                    6, // G
+                    7, // H
                 ]),
                 RocList<u8>
             )
@@ -1520,7 +1520,7 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, // Ok
+                    1, // Ok
                     // A is skipped because it is a newtype
                     15, 23, 47
                 ]),
@@ -1558,11 +1558,11 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, // dicsr A
+                    0, // dicsr A
                     15, 23, // payloads A
-                    1, 0,  // discr B
+                    1,  // discr B
                     37, // payloads B
-                    2, 0, // discr C
+                    2,  // discr C
                     97, 98, 99 // payloads C
                 ]),
                 RocList<u8>
@@ -1593,9 +1593,9 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, 1, // Cons 1
-                    0, 0, 2, // Cons 2
-                    1, 0, // Nil
+                    0, 1, // Cons 1
+                    0, 2, // Cons 2
+                    1, // Nil
                 ]),
                 RocList<u8>
             )
