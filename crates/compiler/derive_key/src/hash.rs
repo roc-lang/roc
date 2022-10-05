@@ -140,7 +140,8 @@ impl FlatHash {
             },
             Content::RangedNumber(_) => Err(Underivable),
             //
-            Content::RecursionVar { .. } => Err(Underivable),
+            Content::RecursionVar { structure, .. } => Self::from_var(subs, structure),
+            //
             Content::Error => Err(Underivable),
             Content::FlexVar(_)
             | Content::RigidVar(_)

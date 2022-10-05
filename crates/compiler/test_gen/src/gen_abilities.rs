@@ -1568,7 +1568,6 @@ mod hash {
         }
 
         #[test]
-        #[ignore = "TODO"]
         fn hash_recursive_tag_union() {
             assert_evals_to!(
                 &format!(
@@ -1591,7 +1590,11 @@ mod hash {
                     ),
                     TEST_HASHER,
                 ),
-                RocList::from_slice(&[0]),
+                RocList::from_slice(&[
+                    0, 0, 1, // Cons 1
+                    0, 0, 2, // Cons 2
+                    1, 0, // Nil
+                ]),
                 RocList<u8>
             )
         }
