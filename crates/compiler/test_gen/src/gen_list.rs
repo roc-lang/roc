@@ -2720,7 +2720,7 @@ fn list_range() {
     assert_evals_to!("List.range 0 0", RocList::from_slice(&[0]), RocList<i64>);
     assert_evals_to!(
         "List.range 0 5",
-        RocList::from_slice(&[0, 1, 2, 3, 4]),
+        RocList::from_slice(&[0, 1, 2, 3, 4, 5]),
         RocList<i64>
     );
 }
