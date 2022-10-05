@@ -207,14 +207,9 @@ pub fn gen_from_mono_module<'a>(
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
-        CodeGenBackend::Llvm => gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            roc_file_path,
-            target,
-            code_gen_options.opt_level,
-            code_gen_options.emit_debug_info,
-        ),
+        CodeGenBackend::Llvm => {
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
         CodeGenBackend::Wasm => unreachable!(),
     }
 }
@@ -227,8 +222,7 @@ fn gen_from_mono_module_llvm<'a>(
     loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -278,6 +272,12 @@ fn gen_from_mono_module_llvm<'a>(
         }
     }
 
+    let CodeGenOptions {
+        backend: _,
+        opt_level,
+        emit_debug_info,
+    } = code_gen_options;
+
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -293,7 +293,11 @@ fn gen_from_mono_module_llvm<'a>(
         interns: loaded.interns,
         module,
         target_info,
-        mode: LlvmBackendMode::BinaryDev,
+        mode: match opt_level {
+            OptLevel::Development => LlvmBackendMode::BinaryDev,
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        },
+
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
