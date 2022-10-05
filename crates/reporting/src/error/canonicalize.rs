@@ -1009,7 +1009,9 @@ pub fn can_problem<'b>(
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.intersperse(
-        [alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)],
+        DERIVABLE_ABILITIES
+            .iter()
+            .map(|(ab, _)| alloc.symbol_unqualified(*ab)),
         alloc.reflow(", "),
     )
 }

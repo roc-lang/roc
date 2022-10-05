@@ -317,7 +317,7 @@ fn report_unfulfilled_ability<'a>(
             .chain(reason)
             .chain(std::iter::once(alloc.tip().append(alloc.concat([
                 alloc.reflow("You can define a custom implementation of "),
-                alloc.symbol_qualified(ability),
+                alloc.symbol_unqualified(ability),
                 alloc.reflow(" for "),
                 alloc.symbol_unqualified(opaque),
                 alloc.reflow("."),

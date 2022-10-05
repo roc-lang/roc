@@ -9475,18 +9475,18 @@ All branches in an `if` must have the same type!
             A := {} has [Ab]
             "#
         ),
-        @r#"
-        ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
 
-        This ability cannot be derived:
+    This ability cannot be derived:
 
-        5│  A := {} has [Ab]
-                         ^^
+    5│  A := {} has [Ab]
+                     ^^
 
-        Only builtin abilities can be derived.
+    Only builtin abilities can be derived.
 
-        Note: The builtin abilities are `Encode.Encoding`
-        "#
+    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`
+    "###
     );
 
     test_report!(
@@ -9498,18 +9498,18 @@ All branches in an `if` must have the same type!
             A a := a -> a has [Encode.Encoding]
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    Roc can't derive an implementation of the `Encode.Encoding` for `A`:
 
-        3│  A a := a -> a has [Encode.Encoding]
-                               ^^^^^^^^^^^^^^^
+    3│  A a := a -> a has [Encode.Encoding]
+                           ^^^^^^^^^^^^^^^
 
-        Note: `Encoding` cannot be generated for functions.
+    Note: `Encoding` cannot be generated for functions.
 
-        Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
-        "#
+    Tip: You can define a custom implementation of `Encoding` for `A`.
+    "###
     );
 
     test_report!(
@@ -9523,19 +9523,19 @@ All branches in an `if` must have the same type!
             B := {}
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    Roc can't derive an implementation of the `Encode.Encoding` for `A`:
 
-        3│  A := B has [Encode.Encoding]
-                        ^^^^^^^^^^^^^^^
+    3│  A := B has [Encode.Encoding]
+                    ^^^^^^^^^^^^^^^
 
-        Tip: `B` does not implement `Encoding`. Consider adding a custom
-        implementation or `has Encode.Encoding` to the definition of `B`.
+    Tip: `B` does not implement `Encoding`. Consider adding a custom
+    implementation or `has Encode.Encoding` to the definition of `B`.
 
-        Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
-        "#
+    Tip: You can define a custom implementation of `Encoding` for `A`.
+    "###
     );
 
     test_report!(
@@ -10212,7 +10212,7 @@ All branches in an `if` must have the same type!
 
     Note: `Decoding` cannot be generated for functions.
 
-    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    Tip: You can define a custom implementation of `Decoding` for `A`.
     "###
     );
 
@@ -10238,7 +10238,7 @@ All branches in an `if` must have the same type!
     Tip: `B` does not implement `Decoding`. Consider adding a custom
     implementation or `has Decode.Decoding` to the definition of `B`.
 
-    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    Tip: You can define a custom implementation of `Decoding` for `A`.
     "###
     );
 
@@ -10868,7 +10868,7 @@ All branches in an `if` must have the same type!
 
     Note: `Hash` cannot be generated for functions.
 
-    Tip: You can define a custom implementation of `Hash.Hash` for `A`.
+    Tip: You can define a custom implementation of `Hash` for `A`.
     "###
     );
 
@@ -10894,7 +10894,7 @@ All branches in an `if` must have the same type!
     Tip: `B` does not implement `Hash`. Consider adding a custom
     implementation or `has Hash.Hash` to the definition of `B`.
 
-    Tip: You can define a custom implementation of `Hash.Hash` for `A`.
+    Tip: You can define a custom implementation of `Hash` for `A`.
     "###
     );
 
@@ -11120,7 +11120,7 @@ All branches in an `if` must have the same type!
 
     Note: `Eq` cannot be generated for functions.
 
-    Tip: You can define a custom implementation of `Eq.Eq` for `A`.
+    Tip: You can define a custom implementation of `Eq` for `A`.
     "###
     );
 
@@ -11178,7 +11178,7 @@ All branches in an `if` must have the same type!
     in Roc, `NaN` is never comparable to `NaN`. If a type doesn't support
     total equality, it cannot support the `Eq` ability!
 
-    Tip: You can define a custom implementation of `Eq.Eq` for `A`.
+    Tip: You can define a custom implementation of `Eq` for `A`.
     "###
     );
 
@@ -11204,7 +11204,7 @@ All branches in an `if` must have the same type!
     in Roc, `NaN` is never comparable to `NaN`. If a type doesn't support
     total equality, it cannot support the `Eq` ability!
 
-    Tip: You can define a custom implementation of `Eq.Eq` for `A`.
+    Tip: You can define a custom implementation of `Eq` for `A`.
     "###
     );
 
@@ -11230,7 +11230,7 @@ All branches in an `if` must have the same type!
     Tip: `B` does not implement `Eq`. Consider adding a custom implementation
     or `has Eq.Eq` to the definition of `B`.
 
-    Tip: You can define a custom implementation of `Eq.Eq` for `A`.
+    Tip: You can define a custom implementation of `Eq` for `A`.
     "###
     );
 
