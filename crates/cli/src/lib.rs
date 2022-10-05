@@ -814,12 +814,17 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // envp is an array of pointers to strings, conventionally of the
     // form key=value, which are passed as the environment of the new
     // program.  The envp array must be terminated by a NULL pointer.
+    let mut buffer = Vec::with_capacity(100);
     let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-        .flat_map(|(k, v)| {
-            [
-                CString::new(k.as_bytes()).unwrap(),
-                CString::new(v.as_bytes()).unwrap(),
-            ]
+        .map(|(k, v)| {
+            buffer.clear();
+
+            use std::io::Write;
+            buffer.write_all(k.as_bytes()).unwrap();
+            buffer.write_all(b"=").unwrap();
+            buffer.write_all(v.as_bytes()).unwrap();
+
+            CString::new(buffer.as_slice()).unwrap()
         })
         .collect_in(arena);
 
