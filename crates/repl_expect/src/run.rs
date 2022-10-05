@@ -20,8 +20,8 @@ use roc_target::TargetInfo;
 use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
-    pub ptr: *mut u8,
-    pub length: usize,
+    ptr: *mut u8,
+    length: usize,
     shm_name: Option<std::ffi::CString>,
     _marker: std::marker::PhantomData<&'a ()>,
 }

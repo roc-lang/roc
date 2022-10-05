@@ -12,7 +12,7 @@ use std::str;
 use tempfile::tempdir;
 
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 
 fn zig_executable() -> String {
     match std::env::var("ROC_ZIG") {
@@ -45,7 +45,11 @@ fn main() {
 
     generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
     generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
-    // generate_bc_file( &bitcode_path, "ir-windows-x86_64", "builtins-windows-x86_64",);
+    generate_bc_file(
+        &bitcode_path,
+        "ir-windows-x86_64",
+        "builtins-windows-x86_64",
+    );
 
     // OBJECT FILES
     #[cfg(windows)]

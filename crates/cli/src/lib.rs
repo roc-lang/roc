@@ -459,8 +459,9 @@ pub fn build(
     use build::build_file;
     use BuildConfig::*;
 
-    let arena = Bump::new();
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    // the process will end after this function,
+    // so we don't want to spend time freeing these values
+    let arena = ManuallyDrop::new(Bump::new());
 
     let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
         CodeGenBackend::Wasm
@@ -520,6 +521,8 @@ pub fn build(
         // We make an exception for Wasm, because cross-compiling is the norm in that case.
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
+
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
     let path = Path::new(filename);
 
     // Spawn the root task
@@ -700,7 +703,7 @@ fn print_problems(problems: Problems, total_time: std::time::Duration) {
 }
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
-    arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    arena: &Bump,
     opt_level: OptLevel,
     triple: Triple,
     args: I,
