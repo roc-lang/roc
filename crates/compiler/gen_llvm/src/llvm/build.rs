@@ -714,7 +714,7 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(275);
+            pmb.set_inliner_with_threshold(750);
         }
     }
 
