@@ -8,6 +8,6 @@ Bounds : { height : F32, width : F32 }
 
 Elem : [Rect { color : Rgba, left : F32, top : F32, width : F32, height : F32 }, Text { text : Str, color : Rgba, left : F32, top : F32, size : F32 }]
 
-KeyCode : [Left, Right, Other]
+KeyCode : [Left, Right, Other, Up, Down]
 
 Event : [Resize { width : F32, height : F32 }, KeyDown KeyCode, KeyUp KeyCode, Tick U128]

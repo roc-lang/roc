@@ -142,9 +142,11 @@ impl RocEvent {
 #[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocKeyCode {
-    Left = 0,
+    Down = 0,
+    Left,
     Other,
     Right,
+    Up,
 }
 
 impl From<VirtualKeyCode> for RocKeyCode {
@@ -154,6 +156,8 @@ impl From<VirtualKeyCode> for RocKeyCode {
         match keycode {
             Left => RocKeyCode::Left,
             Right => RocKeyCode::Right,
+            Up => RocKeyCode::Up,
+            Down => RocKeyCode::Down,
             _ => RocKeyCode::Other,
         }
     }
