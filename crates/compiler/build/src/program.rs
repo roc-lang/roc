@@ -173,33 +173,47 @@ impl Deref for CodeObject {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CodeGenBackend {
+    Assembly,
+    Llvm,
+    Wasm,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodeGenOptions {
+    pub backend: CodeGenBackend,
+    pub opt_level: OptLevel,
+    pub emit_debug_info: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn gen_from_mono_module(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> (CodeObject, CodeGenTiming) {
-    match opt_level {
-        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            roc_file_path,
-            target,
-            opt_level,
-            emit_debug_info,
-        ),
-        OptLevel::Development => gen_from_mono_module_dev(
+    match code_gen_options.backend {
+        CodeGenBackend::Assembly => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
+        CodeGenBackend::Llvm => gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            roc_file_path,
+            target,
+            code_gen_options.opt_level,
+            code_gen_options.emit_debug_info,
+        ),
+        CodeGenBackend::Wasm => unreachable!(),
     }
 }
 

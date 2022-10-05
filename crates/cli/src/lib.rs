@@ -5,7 +5,7 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_build::program::Problems;
+use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_intern::SingleThreadedInterner;
@@ -465,16 +465,30 @@ pub fn build(
 
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let opt_level = match (
-        matches.is_present(FLAG_OPTIMIZE),
-        matches.is_present(FLAG_OPT_SIZE),
-        matches.is_present(FLAG_DEV),
-    ) {
-        (true, false, false) => OptLevel::Optimize,
-        (false, true, false) => OptLevel::Size,
-        (false, false, true) => OptLevel::Development,
-        (false, false, false) => OptLevel::Normal,
-        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+
+    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
+        CodeGenBackend::Wasm
+    } else {
+        match matches.is_present(FLAG_DEV) {
+            true => CodeGenBackend::Assembly,
+            false => CodeGenBackend::Llvm,
+        }
+    };
+
+    let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
+        OptLevel::Development
+    } else {
+        match (
+            matches.is_present(FLAG_OPTIMIZE),
+            matches.is_present(FLAG_OPT_SIZE),
+        ) {
+            (true, false) => OptLevel::Optimize,
+            (false, true) => OptLevel::Size,
+            (false, false) => OptLevel::Normal,
+            (true, true) => {
+                user_error!("build can be only one of `--optimize` and `--opt-size`")
+            }
+        }
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
@@ -490,7 +504,7 @@ pub fn build(
     };
 
     let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
-        && matches!(triple.architecture, Architecture::Wasm32);
+        && matches!(code_gen_backend, CodeGenBackend::Wasm);
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
@@ -541,12 +555,18 @@ pub fn build(
         BuildAndRunIfNoErrors => BuildOrdering::BuildIfChecks,
         _ => BuildOrdering::AlwaysBuild,
     };
+
+    let code_gen_options = CodeGenOptions {
+        backend: code_gen_backend,
+        opt_level,
+        emit_debug_info,
+    };
+
     let res_binary_path = build_file(
         &arena,
         &triple,
         path.to_path_buf(),
-        opt_level,
-        emit_debug_info,
+        code_gen_options,
         emit_timings,
         link_type,
         linking_strategy,
@@ -837,8 +857,6 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
             .collect_in(arena);
-
-        let opt_level = OptLevel::Development;
 
         match opt_level {
             OptLevel::Development => roc_run_native_debug(

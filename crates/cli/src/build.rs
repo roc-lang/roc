@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
-    program::{self, Problems},
+    program::{self, CodeGenOptions, Problems},
 };
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
@@ -62,8 +62,7 @@ pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     app_module_path: PathBuf,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
@@ -123,7 +122,7 @@ pub fn build_file<'a>(
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
-                if matches!(opt_level, OptLevel::Development) {
+                if matches!(code_gen_options.opt_level, OptLevel::Development) {
                     ("wasm", "wasm", Some("wasm"))
                 } else {
                     ("zig", "bc", Some("wasm"))
@@ -182,7 +181,7 @@ pub fn build_file<'a>(
     };
 
     let rebuild_thread = spawn_rebuild_thread(
-        opt_level,
+        code_gen_options.opt_level,
         linking_strategy,
         prebuilt,
         host_input_path.clone(),
@@ -272,8 +271,7 @@ pub fn build_file<'a>(
         loaded,
         &app_module_path,
         target,
-        opt_level,
-        emit_debug_info,
+        code_gen_options,
         &preprocessed_host_path,
         wasm_dev_stack_bytes,
     );
@@ -352,7 +350,7 @@ pub fn build_file<'a>(
 
             let str_host_obj_path = bitcode::get_builtins_host_obj_path();
 
-            if matches!(opt_level, OptLevel::Development) {
+            if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
                 inputs.push(&str_host_obj_path);
             }
 
