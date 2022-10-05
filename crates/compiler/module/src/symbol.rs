@@ -1513,9 +1513,15 @@ define_builtins! {
         15 HASH_HASH_STR_BYTES: "hashStrBytes"
         16 HASH_HASH_LIST: "hashList"
     }
-    14 JSON: "Json" => {
+    14 EQ: "Eq" => {
+        0 EQ_EQ: "Eq" exposed_type=true
+        1 EQ_IS_EQ: "isEq"
+        2 EQ_IS_NOT_EQ: "isNotEq"
+        3 EQ_STRUCTURAL_EQ: "structuralEq"
+    }
+    15 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

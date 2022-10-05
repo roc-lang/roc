@@ -7972,4 +7972,22 @@ mod solve_expr {
             "O",
         );
     }
+
+    #[test]
+    fn custom_implement_eq() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Trivial := {} has [Eq {isEq}]
+
+                isEq = \@Trivial {}, @Trivial {} -> Bool.true
+
+                main = Eq.isEq (@Trivial {}) (@Trivial {})
+                "#
+            ),
+            "Bool",
+        );
+    }
 }
