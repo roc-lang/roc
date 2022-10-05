@@ -612,13 +612,13 @@ range = \start, end ->
         GT -> []
         EQ -> [start]
         LT ->
-            length = Num.intCast (end - start)
+            length = Num.intCast (end - start + 1)
 
             rangeHelp (List.withCapacity length) start end
 
 rangeHelp : List (Int a), Int a, Int a -> List (Int a)
 rangeHelp = \accum, start, end ->
-    if end <= start then
+    if start > end then
         accum
     else
         rangeHelp (List.appendUnsafe accum start) (start + 1) end
