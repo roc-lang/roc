@@ -942,7 +942,7 @@ fn roc_run_native_debug(
 
     // let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
     let shm_name = "/roc_expect_buffer";
-    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+    let memory = ExpectMemory::create_or_reuse_mmap(shm_name);
 
     let layout_interner = layout_interner.into_global();
 
