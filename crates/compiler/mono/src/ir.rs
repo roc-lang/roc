@@ -5524,8 +5524,9 @@ fn late_resolve_ability_specialization<'a>(
                 .expect("specialization var not derivable!");
 
                 match derive_key {
-                    roc_derive_key::Derived::Immediate(imm) => {
-                        // The immediate is an ability member itself, so it must be resolved!
+                    roc_derive_key::Derived::Immediate(imm)
+                    | roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {
+                        // The immediate may be an ability member itself, so it must be resolved!
                         late_resolve_ability_specialization(env, imm, None, specialization_var)
                     }
                     roc_derive_key::Derived::Key(derive_key) => {

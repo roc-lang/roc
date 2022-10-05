@@ -2820,7 +2820,7 @@ fn unify_rigid_able<M: MetaCollector>(
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(env, ctx, RigidVar(*name))
+            merge(env, ctx, RigidAbleVar(*name, ability))
         }
         FlexAbleVar(_, other_ability) => {
             if ability == *other_ability {

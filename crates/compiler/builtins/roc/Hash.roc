@@ -15,7 +15,12 @@ interface Hash
         addI64,
         addI128,
         complete,
-    ] imports []
+        hashStrBytes,
+        hashList,
+    ] imports [
+        List,
+        Str,
+    ]
 
 ## A value that can hashed.
 Hash has
@@ -66,3 +71,13 @@ Hasher has
     ## Completes the hasher, extracting a hash value from its
     ## accumulated hash state.
     complete : a -> U64 | a has Hasher
+
+## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
+hashStrBytes = \hasher, s ->
+    Str.walkUtf8WithIndex s hasher \accumHasher, byte, _ ->
+        addU8 accumHasher byte
+
+## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
+hashList = \hasher, lst ->
+    List.walk lst hasher \accumHasher, elem ->
+        hash accumHasher elem
