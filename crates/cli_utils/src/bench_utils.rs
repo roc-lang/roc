@@ -16,6 +16,7 @@ fn exec_bench_w_input<T: Measurement>(
     let compile_out = run_roc(
         ["build", OPTIMIZE_FLAG, file.to_str().unwrap()],
         &[stdin_str],
+        &[],
     );
 
     if !compile_out.stderr.is_empty() && compile_out.stderr != "🔨 Rebuilding platform...\n" {

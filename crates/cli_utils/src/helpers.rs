@@ -22,7 +22,7 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
-pub fn run_roc<I, S>(args: I, stdin_vals: &[&str]) -> Out
+pub fn run_roc<I, S>(args: I, stdin_vals: &[&str], extra_env: &[(&str, &str)]) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -62,7 +62,7 @@ where
         }
     }
 
-    run_with_stdin(&roc_binary_path, args, stdin_vals)
+    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
 }
 
 pub fn run_glue<I, S>(args: I) -> Out
@@ -122,10 +122,27 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_with_stdin_and_env(path, args, stdin_vals, &[])
+}
+
+pub fn run_with_stdin_and_env<I, S>(
+    path: &Path,
+    args: I,
+    stdin_vals: &[&str],
+    extra_env: &[(&str, &str)],
+) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = Command::new(path);
 
     for arg in args {
         cmd.arg(arg);
+    }
+
+    for (k, v) in extra_env {
+        cmd.env(k, v);
     }
 
     let mut child = cmd
