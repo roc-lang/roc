@@ -565,7 +565,6 @@ pub fn build(
             interns,
             layout_interner,
         }) => {
-            dbg!(expectations.len());
             match config {
                 BuildOnly => {
                     // If possible, report the generated executable name relative to the current dir.
@@ -935,7 +934,7 @@ fn roc_run_native_debug(
     mut expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
     layout_interner: SingleThreadedInterner<Layout>,
-) {
+) -> ! {
     use roc_repl_expect::run::ExpectMemory;
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
 
@@ -954,6 +953,11 @@ fn roc_run_native_debug(
             // we are the child
 
             executable.execve(&argv, &envp);
+
+            // Display a human-friendly error message
+            println!("Error {:?}", std::io::Error::last_os_error());
+
+            std::process::exit(1);
         },
         -1 => {
             // something failed
@@ -966,10 +970,7 @@ fn roc_run_native_debug(
         1.. => {
             for sig in &mut signals {
                 match sig {
-                    SIGCHLD => {
-                        // done!
-                        return;
-                    }
+                    SIGCHLD => break,
                     SIGUSR1 => {
                         // this is the signal we use for an expect failure. Let's see what the child told us
 
@@ -986,11 +987,11 @@ fn roc_run_native_debug(
                     _ => println!("received signal {}", sig),
                 }
             }
+
+            std::process::exit(0)
         }
         _ => unreachable!(),
     }
-
-    println!("done?");
 }
 
 #[cfg(target_os = "linux")]
