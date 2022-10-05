@@ -5,6 +5,7 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
+use roc_build::program::Problems;
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{Expectations, LoadingProblem, Threading};
@@ -566,89 +567,36 @@ pub fn build(
                     // If possible, report the generated executable name relative to the current dir.
                     let generated_filename = binary_path
                         .strip_prefix(env::current_dir().unwrap())
-                        .unwrap_or(&binary_path);
+                        .unwrap_or(&binary_path)
+                        .to_str()
+                        .unwrap();
 
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
                     std::mem::forget(arena);
 
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while successfully building:\n\n    {}",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                        generated_filename.to_str().unwrap()
-                    );
+                    print_problems(problems, total_time);
+                    println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
                     Ok(problems.exit_code())
                 }
                 BuildAndRun => {
                     if problems.errors > 0 || problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
-                            if problems.errors == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.errors,
-                            if problems.errors == 1 {
-                                "error"
-                            } else {
-                                "errors"
-                            },
-                            if problems.warnings == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let bytes = std::fs::read(&binary_path).unwrap();
+                    // don't waste time deallocating; the process ends anyway
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
                 }
                 BuildAndRunIfNoErrors => {
                     debug_assert!(
@@ -656,21 +604,16 @@ pub fn build(
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
+                    // don't waste time deallocating; the process ends anyway
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
@@ -686,40 +629,17 @@ pub fn build(
 
             let problems = roc_build::program::report_problems_typechecked(&mut module);
 
-            let mut output = format!(
-                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
-                if problems.errors == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.errors,
-                if problems.errors == 1 {
-                    "error"
-                } else {
-                    "errors"
-                },
-                if problems.warnings == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.warnings,
-                if problems.warnings == 1 {
-                    "warning"
-                } else {
-                    "warnings"
-                },
-                total_time.as_millis(),
-            );
+            print_problems(problems, total_time);
+
+            print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
             // If you're running "main.roc" then you can just do `roc run`
             // to re-run the program.
             if filename != DEFAULT_ROC_FILENAME {
-                output.push(' ');
-                output.push_str(&filename.to_string_lossy());
+                print!(" {}", &filename.to_string_lossy());
             }
 
-            println!("{}\x1B[39m", output);
+            println!("\x1B[39m");
 
             Ok(problems.exit_code())
         }
@@ -732,6 +652,34 @@ pub fn build(
             panic!("build_file failed with error:\n{:?}", other);
         }
     }
+}
+
+fn print_problems(problems: Problems, total_time: std::time::Duration) {
+    const GREEN: usize = 32;
+    const YELLOW: usize = 33;
+
+    print!(
+        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
+        match problems.errors {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.errors,
+        match problems.errors {
+            1 => "error",
+            _ => "errors",
+        },
+        match problems.warnings {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.warnings,
+        match problems.warnings {
+            1 => "warning",
+            _ => "warnings",
+        },
+        total_time.as_millis(),
+    );
 }
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
