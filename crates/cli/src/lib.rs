@@ -6,13 +6,9 @@ use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
-use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_intern::SingleThreadedInterner;
-use roc_load::{Expectations, LoadingProblem, Threading};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
-use roc_mono::layout::Layout;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -581,9 +577,7 @@ pub fn build(
             binary_path,
             problems,
             total_time,
-            expectations,
-            interns,
-            layout_interner,
+            expect_metadata,
         }) => {
             match config {
                 BuildOnly => {
@@ -619,16 +613,7 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(
-                        &arena,
-                        opt_level,
-                        triple,
-                        args,
-                        bytes,
-                        expectations,
-                        interns,
-                        layout_interner,
-                    )
+                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
                     debug_assert!(
@@ -649,16 +634,7 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(
-                        &arena,
-                        opt_level,
-                        triple,
-                        args,
-                        bytes,
-                        expectations,
-                        interns,
-                        layout_interner,
-                    )
+                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
             }
         }
@@ -729,9 +705,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     triple: Triple,
     args: I,
     binary_bytes: &[u8],
-    expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
-    layout_interner: SingleThreadedInterner<Layout>,
+    expect_metadata: ExpectMetadata,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -770,15 +744,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(
-            arena,
-            opt_level,
-            args,
-            binary_bytes,
-            expectations,
-            interns,
-            layout_interner,
-        ),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expect_metadata),
     }
 }
 
@@ -836,9 +802,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &[u8],
-    expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
-    layout_interner: SingleThreadedInterner<Layout>,
+    expect_metadata: ExpectMetadata,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
@@ -859,15 +823,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .collect_in(arena);
 
         match opt_level {
-            OptLevel::Development => roc_run_native_debug(
-                arena,
-                executable,
-                argv,
-                envp,
-                expectations,
-                interns,
-                layout_interner,
-            ),
+            OptLevel::Development => roc_dev_native(arena, executable, argv, envp, expect_metadata),
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
             }
@@ -944,17 +900,21 @@ impl ExecutableFile {
 
 // with Expect
 #[cfg(target_family = "unix")]
-fn roc_run_native_debug(
+fn roc_dev_native(
     arena: &Bump,
     executable: ExecutableFile,
     argv: bumpalo::collections::Vec<*const c_char>,
     envp: bumpalo::collections::Vec<*const c_char>,
-    mut expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
-    layout_interner: SingleThreadedInterner<Layout>,
+    expect_metadata: ExpectMetadata,
 ) -> ! {
     use roc_repl_expect::run::ExpectMemory;
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let ExpectMetadata {
+        mut expectations,
+        interns,
+        layout_interner,
+    } = expect_metadata;
 
     let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
 

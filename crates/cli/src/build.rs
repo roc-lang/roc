@@ -4,13 +4,10 @@ use roc_build::{
     program::{self, CodeGenOptions, Problems},
 };
 use roc_builtins::bitcode;
-use roc_collections::VecMap;
-use roc_intern::SingleThreadedInterner;
 use roc_load::{
-    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
+    EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
 };
-use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -35,9 +32,7 @@ pub struct BuiltFile<'a> {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
-    pub expectations: VecMap<ModuleId, Expectations>,
-    pub interns: Interns,
-    pub layout_interner: SingleThreadedInterner<'a, roc_mono::layout::Layout<'a>>,
+    pub expect_metadata: ExpectMetadata<'a>,
 }
 
 pub enum BuildOrdering {
@@ -242,11 +237,7 @@ pub fn build_file<'a>(
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
     let problems = program::report_problems_monomorphized(&mut loaded);
-    let expectations = std::mem::take(&mut loaded.expectations);
-    let layout_interner = loaded.layout_interner.clone();
     let loaded = loaded;
-
-    let interns = loaded.interns.clone();
 
     enum HostRebuildTiming {
         BeforeApp(u128),
@@ -266,7 +257,7 @@ pub fn build_file<'a>(
         HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
     };
 
-    let (roc_app_bytes, code_gen_timing) = program::gen_from_mono_module(
+    let (roc_app_bytes, code_gen_timing, expect_metadata) = program::gen_from_mono_module(
         arena,
         loaded,
         &app_module_path,
@@ -387,9 +378,7 @@ pub fn build_file<'a>(
         binary_path,
         problems,
         total_time,
-        interns,
-        expectations,
-        layout_interner,
+        expect_metadata,
     })
 }
 
