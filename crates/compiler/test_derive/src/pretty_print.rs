@@ -5,7 +5,6 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
 
-use roc_module::low_level::LowLevel;
 use roc_module::symbol::Interns;
 
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
