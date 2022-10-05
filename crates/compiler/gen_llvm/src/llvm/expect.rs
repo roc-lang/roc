@@ -93,6 +93,26 @@ fn write_state<'a, 'ctx, 'env>(
     env.builder.build_store(offset_ptr, offset);
 }
 
+pub(crate) fn read_env_shared_buffer(env: &Env) {
+    let func = env
+        .module
+        .get_function(bitcode::UTILS_EXPECT_READ_ENV_SHARED_BUFFER)
+        .unwrap();
+
+    env.builder
+        .build_call(func, &[], "call_expect_read_env_shared_buffer");
+}
+
+pub(crate) fn finalize(env: &Env) {
+    let func = env
+        .module
+        .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+        .unwrap();
+
+    env.builder
+        .build_call(func, &[], "call_expect_failed_finalize");
+}
+
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,

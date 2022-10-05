@@ -87,7 +87,9 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 
 const Unit = extern struct {};
 
-pub export fn main() callconv(.C) u8 {
+pub fn main() !u8 {
+    const stderr = std.io.getStdErr().writer();
+
     // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
     const size = std.math.max(@intCast(usize, roc__mainForHost_size()), 8);
     const raw_output = roc_alloc(@intCast(usize, size), @alignOf(u64)).?;
@@ -108,7 +110,6 @@ pub export fn main() callconv(.C) u8 {
     const nanos = timer.read();
     const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
-    const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;

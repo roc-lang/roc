@@ -565,6 +565,7 @@ pub fn build(
             interns,
             layout_interner,
         }) => {
+            dbg!(expectations.len());
             match config {
                 BuildOnly => {
                     // If possible, report the generated executable name relative to the current dir.
@@ -792,12 +793,17 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // envp is an array of pointers to strings, conventionally of the
     // form key=value, which are passed as the environment of the new
     // program.  The envp array must be terminated by a NULL pointer.
+    let mut buffer = Vec::with_capacity(100);
     let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-        .flat_map(|(k, v)| {
-            [
-                CString::new(k.as_bytes()).unwrap(),
-                CString::new(v.as_bytes()).unwrap(),
-            ]
+        .map(|(k, v)| {
+            buffer.clear();
+
+            use std::io::Write;
+            buffer.write_all(k.as_bytes()).unwrap();
+            buffer.write_all(b"=").unwrap();
+            buffer.write_all(v.as_bytes()).unwrap();
+
+            CString::new(buffer.as_slice()).unwrap()
         })
         .collect_in(arena);
 
@@ -819,7 +825,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
     unsafe {
         let executable = roc_run_executable_file_path(binary_bytes)?;
-        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, &executable, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
@@ -832,6 +838,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
             .collect_in(arena);
+
+        let opt_level = OptLevel::Development;
 
         match opt_level {
             OptLevel::Development => roc_run_native_debug(
@@ -933,7 +941,8 @@ fn roc_run_native_debug(
 
     let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
 
-    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    // let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let shm_name = "/roc_expect_buffer";
     let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
@@ -980,6 +989,8 @@ fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
+
+    println!("done?");
 }
 
 #[cfg(target_os = "linux")]

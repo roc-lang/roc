@@ -277,7 +277,7 @@ fn gen_from_mono_module_llvm(
         interns: loaded.interns,
         module,
         target_info,
-        mode: LlvmBackendMode::Binary,
+        mode: LlvmBackendMode::BinaryDev,
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 

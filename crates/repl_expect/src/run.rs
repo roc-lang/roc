@@ -20,8 +20,8 @@ use roc_target::TargetInfo;
 use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
-    ptr: *mut u8,
-    length: usize,
+    pub ptr: *mut u8,
+    pub length: usize,
     shm_name: Option<std::ffi::CString>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
@@ -53,6 +53,7 @@ impl<'a> ExpectMemory<'a> {
         let ptr = unsafe {
             let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
 
+            libc::ftruncate(shared_fd, 0);
             libc::ftruncate(shared_fd, Self::SHM_SIZE as _);
 
             libc::mmap(
@@ -64,6 +65,9 @@ impl<'a> ExpectMemory<'a> {
                 0,
             )
         };
+
+        // puts in the initial header
+        let _ = ExpectSequence::new(ptr as *mut u8);
 
         Self {
             ptr: ptr.cast(),
@@ -78,6 +82,33 @@ impl<'a> ExpectMemory<'a> {
         let mut result = RocCallResult::default();
         unsafe { set_shared_buffer((self.ptr, self.length), &mut result) };
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_inline_expects<'a, W: std::io::Write>(
+    writer: &mut W,
+    render_target: RenderTarget,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    expects: ExpectFunctions<'_>,
+) -> std::io::Result<(usize, usize)> {
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    run_expects_with_memory(
+        writer,
+        render_target,
+        arena,
+        interns,
+        layout_interner,
+        lib,
+        expectations,
+        expects,
+        &mut memory,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
