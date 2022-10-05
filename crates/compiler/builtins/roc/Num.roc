@@ -868,7 +868,7 @@ bitwiseOr : Int a, Int a -> Int a
 ## >>> 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
 ##
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
-shiftLeftBy : Int a, Int a -> Int a
+shiftLeftBy : Int a, U8 -> Int a
 
 ## Bitwise arithmetic shift of a number by another
 ##
@@ -881,7 +881,7 @@ shiftLeftBy : Int a, Int a -> Int a
 ## >>> 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
-shiftRightBy : Int a, Int a -> Int a
+shiftRightBy : Int a, U8 -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
@@ -895,7 +895,7 @@ shiftRightBy : Int a, Int a -> Int a
 ## >>> 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
-shiftRightZfBy : Int a, Int a -> Int a
+shiftRightZfBy : Int a, U8 -> Int a
 
 ## Round off the given fraction to the nearest integer.
 round : Frac * -> Int *

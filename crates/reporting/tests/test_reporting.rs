@@ -11013,4 +11013,63 @@ All branches in an `if` must have the same type!
     Note: `Hash` cannot be generated for functions.
     "###
     );
+
+    test_report!(
+        shift_by_negative,
+        indoc!(
+            r#"
+            {
+                a: Num.shiftLeftBy 1 -1,
+                b: Num.shiftRightBy 1 -1,
+                c: Num.shiftRightZfBy 1 -1,
+            }
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftRightZfBy` has an unexpected type:
+
+    7│          c: Num.shiftRightZfBy 1 -1,
+                                        ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftRightZfBy` needs its 2nd argument to be:
+
+        U8
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftRightBy` has an unexpected type:
+
+    6│          b: Num.shiftRightBy 1 -1,
+                                      ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftRightBy` needs its 2nd argument to be:
+
+        U8
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftLeftBy` has an unexpected type:
+
+    5│          a: Num.shiftLeftBy 1 -1,
+                                     ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftLeftBy` needs its 2nd argument to be:
+
+        U8
+    "###
+    );
 }

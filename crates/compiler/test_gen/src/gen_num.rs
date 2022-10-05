@@ -2075,6 +2075,7 @@ fn shift_left_by() {
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 0", 0b0000_0001, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 1", 0b0000_0010, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0011 2", 0b0000_1100, i64);
+    assert_evals_to!("Num.shiftLeftBy 2u16 2", 8, u16);
 }
 
 #[test]
@@ -2104,7 +2105,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy -12 1", -6, i64);
     assert_evals_to!("Num.shiftRightBy 12 8", 0, i64);
     assert_evals_to!("Num.shiftRightBy -12 8", -1, i64);
-    assert_evals_to!("Num.shiftRightBy 12 -1", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 1", 0, i64);
 
@@ -2120,8 +2120,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy 12i8 8", 0, i8);
 
     if !is_llvm_release_mode {
-        assert_evals_to!("Num.shiftRightBy 0 -1", 0, i64);
-        assert_evals_to!("Num.shiftRightBy -12 -1", -1, i64);
         assert_evals_to!("Num.shiftRightBy -12i8 8", -1, i8);
     }
 }
