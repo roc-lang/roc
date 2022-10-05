@@ -117,7 +117,7 @@ impl Derived {
             DeriveBuiltin::IsEq => {
                 // If obligation checking passes, we always lower derived implementations of `isEq`
                 // to the `Eq` low-level, to be fulfilled by the backends.
-                Ok(Derived::SingleLambdaSetImmediate(Symbol::BOOL_EQ))
+                Ok(Derived::SingleLambdaSetImmediate(Symbol::EQ_STRUCTURAL_EQ))
             }
         }
     }
