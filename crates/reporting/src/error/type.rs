@@ -9,7 +9,8 @@ use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
+    Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -430,6 +431,18 @@ fn underivable_hint<'b>(
                     alloc.reflow("Maybe you wanted to use a "),
                     alloc.symbol_unqualified(Symbol::RESULT_RESULT),
                     alloc.reflow("?"),
+                ])))
+            }
+        },
+        NotDerivableContext::Eq(reason) => match reason {
+            NotDerivableEq::FloatingPoint => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("I can't derive "),
+                    alloc.symbol_qualified(Symbol::EQ_IS_EQ),
+                    alloc.reflow(" for floating-point types. That's because Roc's floating-point numbers cannot be compared for total equality - in Roc, `NaN` is never comparable to `NaN`."),
+                    alloc.reflow(" If a type doesn't support total equality, it cannot support the "),
+                    alloc.symbol_unqualified(Symbol::EQ_EQ),
+                    alloc.reflow(" ability!"),
                 ])))
             }
         },

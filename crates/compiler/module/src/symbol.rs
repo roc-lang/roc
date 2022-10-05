@@ -51,6 +51,7 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
+    (Symbol::EQ_EQ, &[Symbol::EQ_IS_EQ]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
