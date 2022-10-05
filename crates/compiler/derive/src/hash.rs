@@ -17,7 +17,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::{
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        RedundantMark, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
     },
     types::RecordField,
 };
@@ -27,7 +27,13 @@ use crate::{synth_var, util::Env, DerivedBody};
 pub(crate) fn derive_hash(env: &mut Env<'_>, key: FlatHashKey, def_symbol: Symbol) -> DerivedBody {
     let (body_type, body) = match key {
         FlatHashKey::Record(fields) => hash_record(env, def_symbol, fields),
-        FlatHashKey::TagUnion(tags) => hash_tag_union(env, def_symbol, tags),
+        FlatHashKey::TagUnion(tags) => {
+            if tags.len() == 1 {
+                hash_newtype_tag_union(env, def_symbol, tags.into_iter().next().unwrap())
+            } else {
+                hash_tag_union(env, def_symbol, tags)
+            }
+        }
     };
 
     let specialization_lambda_sets =
@@ -105,7 +111,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
         env,
         fn_name,
         (hasher_var, hasher_sym),
-        (record_var, rcd_sym),
+        (record_var, Pattern::Identifier(rcd_sym)),
         (body_var, body),
     )
 }
@@ -256,7 +262,91 @@ fn hash_tag_union(
         env,
         fn_name,
         (hasher_var, hasher_sym),
-        (union_var, union_sym),
+        (union_var, Pattern::Identifier(union_sym)),
+        (body_var, body_expr),
+    )
+}
+
+/// Build a `hash` implementation for a newtype (singleton) tag union.
+/// If a tag union is a newtype, we do not need to hash its discriminant.
+fn hash_newtype_tag_union(
+    env: &mut Env<'_>,
+    fn_name: Symbol,
+    tag: (TagName, u16),
+) -> (Variable, Expr) {
+    // Suppose tags = [ A p1 .. pn ]
+    // Build a generalized type t_tags = [ A t1 .. tn ],
+    // with fresh t1, ..., tn, so that we can re-use the derived impl for many
+    // unions of the same tag and payload arity.
+    let (union_var, tag_name, payload_variables) = {
+        let (label, arity) = tag;
+
+        let variables_slice = VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+        for var_index in variables_slice {
+            env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
+        }
+
+        let variables_slices_slice =
+            SubsSlice::extend_new(&mut env.subs.variable_slices, [variables_slice]);
+        let tag_name_index = SubsIndex::push_new(&mut env.subs.tag_names, label.clone());
+
+        let union_tags = UnionTags::from_slices(tag_name_index.as_slice(), variables_slices_slice);
+        let tag_union_var = synth_var(
+            env.subs,
+            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+        );
+
+        (
+            tag_union_var,
+            label,
+            env.subs.get_subs_slice(variables_slice).to_vec(),
+        )
+    };
+
+    // Now, a hasher for this tag union is
+    //
+    // hash_union : hasher, [ A t1 .. tn ] -> hasher | hasher has Hasher
+    // hash_union = \hasher, A x1 .. xn ->
+    //   Hash.hash (... (Hash.hash discrHasher x1) ...) xn
+    let hasher_sym = env.new_symbol("hasher");
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+
+    // A
+    let tag_name = tag_name;
+    // t1 .. tn
+    let payload_vars = payload_variables;
+    // x11 .. x1n
+    let payload_syms: Vec<_> = std::iter::repeat_with(|| env.unique_symbol())
+        .take(payload_vars.len())
+        .collect();
+
+    // `A x1 .. x1n` pattern
+    let pattern = Pattern::AppliedTag {
+        whole_var: union_var,
+        tag_name,
+        ext_var: Variable::EMPTY_TAG_UNION,
+        // (t1, v1) (t2, v2)
+        arguments: (payload_vars.iter())
+            .zip(payload_syms.iter())
+            .map(|(var, sym)| (*var, Loc::at_zero(Pattern::Identifier(*sym))))
+            .collect(),
+    };
+
+    // Fold up `Hash.hash (... (Hash.hash discrHasher x11) ...) x1n`
+    let (body_var, body_expr) = (payload_vars.into_iter()).zip(payload_syms).fold(
+        (hasher_var, Expr::Var(hasher_sym)),
+        |total_hasher, (payload_var, payload_sym)| {
+            call_hash_hash(env, total_hasher, (payload_var, Expr::Var(payload_sym)))
+        },
+    );
+
+    // Finally, build the closure
+    // \hasher, rcd -> body
+    build_outer_derived_closure(
+        env,
+        fn_name,
+        (hasher_var, hasher_sym),
+        (union_var, pattern),
         (body_var, body_expr),
     )
 }
@@ -331,11 +421,11 @@ fn build_outer_derived_closure(
     env: &mut Env<'_>,
     fn_name: Symbol,
     hasher: (Variable, Symbol),
-    val: (Variable, Symbol),
+    val: (Variable, Pattern),
     body: (Variable, Expr),
 ) -> (Variable, Expr) {
     let (hasher_var, hasher_sym) = hasher;
-    let (val_var, val_sym) = val;
+    let (val_var, val_pattern) = val;
     let (body_var, body_expr) = body;
 
     let (fn_var, fn_clos_var) = {
@@ -381,7 +471,7 @@ fn build_outer_derived_closure(
             (
                 val_var,
                 AnnotatedMark::known_exhaustive(),
-                Loc::at_zero(Pattern::Identifier(val_sym)),
+                Loc::at_zero(val_pattern),
             ),
         ],
         loc_body: Box::new(Loc::at_zero(body_expr)),

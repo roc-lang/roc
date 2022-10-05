@@ -1394,7 +1394,9 @@ mod hash {
                     ),
                     TEST_HASHER,
                 ),
-                RocList::from_slice(&[0, 0]),
+                RocList::from_slice(&[
+                    // hash nothing because this is a newtype of a unit layout.
+                ] as &[u8]),
                 RocList<u8>
             )
         }
@@ -1489,7 +1491,7 @@ mod hash {
                     TEST_HASHER,
                 ),
                 RocList::from_slice(&[
-                    0, 0, // A
+                    // discriminant is skipped because it's a newtype
                     15, 23, 47
                 ]),
                 RocList<u8>
@@ -1519,7 +1521,7 @@ mod hash {
                 ),
                 RocList::from_slice(&[
                     0, 0, // Ok
-                    0, 0, // A
+                    // A is skipped because it is a newtype
                     15, 23, 47
                 ]),
                 RocList<u8>
