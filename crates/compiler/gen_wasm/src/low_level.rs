@@ -1858,7 +1858,7 @@ impl<'a> LowLevelCall<'a> {
 
             Eq | NotEq => self.eq_or_neq(backend),
 
-            BoxExpr | UnboxExpr | TagDiscriminant => {
+            BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
 
