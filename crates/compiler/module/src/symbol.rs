@@ -1373,6 +1373,7 @@ define_builtins! {
         72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
+        75 LIST_WALK_TRY: "walkTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
