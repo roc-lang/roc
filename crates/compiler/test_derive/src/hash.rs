@@ -206,16 +206,11 @@ fn tag_one_label_no_payloads() {
     derive_test(Hash, v!([A]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A]
-        # a, [A] -[[hash_[A 0](0)]]-> a | a has Hasher
-        # a, [A] -[[hash_[A 0](0)]]-> a | a has Hasher
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 0](0)]]
-        #Derived.hash_[A 0] =
-          \#Derived.hasher, #Derived.union ->
-            #Derived.discrHasher =
-              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
-            when #Derived.union is
-              A -> #Derived.discrHasher
+        #Derived.hash_[A 0] = \#Derived.hasher, A -> #Derived.hasher
         "###
         )
     })
@@ -226,17 +221,13 @@ fn tag_one_label_newtype() {
     derive_test(Hash, v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str]
-        # a, [A a1 a2] -[[hash_[A 2](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
-        # a, [A a1 a2] -[[hash_[A 2](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 2](0)]]
         #Derived.hash_[A 2] =
-          \#Derived.hasher, #Derived.union ->
-            #Derived.discrHasher =
-              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
-            when #Derived.union is
-              A #Derived.4 #Derived.5 ->
-                Hash.hash (Hash.hash #Derived.discrHasher #Derived.4) #Derived.5
+          \#Derived.hasher, A #Derived.2 #Derived.3 ->
+            Hash.hash (Hash.hash #Derived.hasher #Derived.2) #Derived.3
         "###
         )
     })
@@ -253,14 +244,14 @@ fn tag_two_labels() {
         #   @<1>: [[hash_[A 3,B 1](0)]]
         #Derived.hash_[A 3,B 1] =
           \#Derived.hasher, #Derived.union ->
-            #Derived.discrHasher =
-              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
             when #Derived.union is
-              A #Derived.4 #Derived.5 #Derived.6 ->
+              A #Derived.3 #Derived.4 #Derived.5 ->
                 Hash.hash
-                  (Hash.hash (Hash.hash #Derived.discrHasher #Derived.4) #Derived.5)
-                  #Derived.6
-              B #Derived.7 -> Hash.hash #Derived.discrHasher #Derived.7
+                  (Hash.hash
+                    (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
+                    #Derived.4)
+                  #Derived.5
+              B #Derived.6 -> Hash.hash (Hash.addU8 #Derived.hasher 1) #Derived.6
         "###
         )
     })
@@ -277,11 +268,9 @@ fn tag_two_labels_no_payloads() {
         #   @<1>: [[hash_[A 0,B 0](0)]]
         #Derived.hash_[A 0,B 0] =
           \#Derived.hasher, #Derived.union ->
-            #Derived.discrHasher =
-              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
             when #Derived.union is
-              A -> #Derived.discrHasher
-              B -> #Derived.discrHasher
+              A -> Hash.addU8 #Derived.hasher 0
+              B -> Hash.addU8 #Derived.hasher 1
         "###
         )
     })
@@ -298,12 +287,12 @@ fn recursive_tag_union() {
         #   @<1>: [[hash_[Cons 2,Nil 0](0)]]
         #Derived.hash_[Cons 2,Nil 0] =
           \#Derived.hasher, #Derived.union ->
-            #Derived.discrHasher =
-              Hash.hash #Derived.hasher (@tag_discriminant #Derived.union)
             when #Derived.union is
-              Cons #Derived.4 #Derived.5 ->
-                Hash.hash (Hash.hash #Derived.discrHasher #Derived.4) #Derived.5
-              Nil -> #Derived.discrHasher
+              Cons #Derived.3 #Derived.4 ->
+                Hash.hash
+                  (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
+                  #Derived.4
+              Nil -> Hash.addU8 #Derived.hasher 1
         "###
         )
     })
