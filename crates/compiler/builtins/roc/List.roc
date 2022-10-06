@@ -39,6 +39,7 @@ interface List
         max,
         map4,
         mapTry,
+        walkTry,
         dropFirst,
         joinMap,
         any,
@@ -959,7 +960,6 @@ mapTry = \list, toResult ->
 
 ## This is the same as `iterate` but with Result instead of [Continue, Break].
 ## Using `Result` saves a conditional in `mapTry`.
-## It might be useful to expose this in userspace?
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)
