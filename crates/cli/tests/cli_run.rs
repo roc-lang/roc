@@ -381,6 +381,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(cli_platform)]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -495,6 +496,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
             "examples/cli",
@@ -582,6 +584,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(cli_platform)]
     fn with_env_vars() {
         test_roc_app(
             "examples/cli",
