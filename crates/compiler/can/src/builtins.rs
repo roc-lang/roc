@@ -55,6 +55,8 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
 
+                Symbol::NUM_IS_ZERO => Some(to_num_is_zero(Symbol::NUM_IS_ZERO, var_store)),
+
                 _ => None,
             }
         }
@@ -533,5 +535,35 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         var_store,
         body,
         ret_var,
+    )
+}
+
+fn to_num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+
+    let body = Expr::RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (num_var, Var(Symbol::ARG_1)),
+            (
+                num_var,
+                Num(
+                    var_store.fresh(),
+                    "0".to_string().into_boxed_str(),
+                    crate::expr::IntValue::I128(0i128.to_ne_bytes()),
+                    roc_types::num::NumBound::None,
+                ),
+            ),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        bool_var,
     )
 }
