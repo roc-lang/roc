@@ -958,7 +958,7 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with Result instead of [Continue, Break].
+## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
 ## Using `Result` saves a conditional in `mapTry`.
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
