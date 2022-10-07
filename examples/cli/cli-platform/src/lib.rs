@@ -290,6 +290,13 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
     eprintln!("{}", string);
 }
 
+#[no_mangle]
+pub extern "C" fn roc_fx_stderrWrite(text: &RocStr) {
+    let string = text.as_str();
+    eprint!("{}", string);
+    io::stderr().flush().unwrap();
+}
+
 // #[no_mangle]
 // pub extern "C" fn roc_fx_fileWriteUtf8(
 //     roc_path: &RocList<u8>,
