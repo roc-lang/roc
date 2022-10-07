@@ -63,6 +63,8 @@ interface List
     ]
     imports [
         Bool.{ Bool },
+        Result.{ Result },
+        Num.{ Nat, Num, Int },
     ]
 
 ## Types
