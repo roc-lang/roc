@@ -89,7 +89,7 @@ impl_space_problem! {
     EIf<'a>,
     EImports,
     EInParens<'a>,
-    ELambda<'a>,
+    EClosure<'a>,
     EList<'a>,
     EPackageEntry<'a>,
     EPackages<'a>,
@@ -354,7 +354,7 @@ pub enum EExpr<'a> {
 
     Expect(EExpect<'a>, Position),
 
-    Lambda(ELambda<'a>, Position),
+    Closure(EClosure<'a>, Position),
     Underscore(Position),
 
     InParens(EInParens<'a>, Position),
@@ -428,7 +428,7 @@ pub enum EInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ELambda<'a> {
+pub enum EClosure<'a> {
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),

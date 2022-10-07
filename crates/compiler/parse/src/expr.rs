@@ -9,7 +9,7 @@ use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
-    trailing_sep_by0, word1, word2, EExpect, EExpr, EIf, EInParens, ELambda, EList, ENumber,
+    trailing_sep_by0, word1, word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber,
     EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{loc_closure_param, loc_has_parser};
@@ -205,7 +205,10 @@ fn parse_loc_term_or_underscore_or_conditional<'a>(
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(specialize(
+            EExpr::Closure,
+            closure_help(min_indent, options)
+        )),
         loc!(underscore_expression()),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
@@ -230,7 +233,10 @@ fn parse_loc_term_or_underscore<'a>(
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(specialize(
+            EExpr::Closure,
+            closure_help(min_indent, options)
+        )),
         loc!(underscore_expression()),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
@@ -253,7 +259,10 @@ fn parse_loc_term<'a>(
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(specialize(
+            EExpr::Closure,
+            closure_help(min_indent, options)
+        )),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(map_with_arena!(
@@ -355,7 +364,10 @@ fn parse_expr_start<'a>(
             when::expr_help(min_indent, options)
         )),
         loc!(specialize(EExpr::Expect, expect_help(min_indent, options))),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(specialize(
+            EExpr::Closure,
+            closure_help(min_indent, options)
+        )),
         loc!(move |a, s| parse_expr_operator_chain(min_indent, options, start_column, a, s)),
         fail_expr_start_e()
     ]
@@ -1973,36 +1985,36 @@ pub fn toplevel_defs<'a>(min_indent: u32) -> impl Parser<'a, Defs<'a>, EExpr<'a>
 fn closure_help<'a>(
     min_indent: u32,
     options: ExprParseOptions,
-) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     map_with_arena!(
         skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            word1(b'\\', ELambda::Start),
+            word1(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             and!(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
-                    word1(b',', ELambda::Comma),
+                    word1(b',', EClosure::Comma),
                     space0_around_ee(
-                        specialize(ELambda::Pattern, loc_closure_param(min_indent)),
+                        specialize(EClosure::Pattern, loc_closure_param(min_indent)),
                         min_indent,
-                        ELambda::IndentArg,
-                        ELambda::IndentArrow
+                        EClosure::IndentArg,
+                        EClosure::IndentArrow
                     ),
-                    ELambda::Arg,
+                    EClosure::Arg,
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
-                    word2(b'-', b'>', ELambda::Arrow),
+                    word2(b'-', b'>', EClosure::Arrow),
                     // Parse the body
                     space0_before_e(
-                        specialize_ref(ELambda::Body, move |arena, state| {
+                        specialize_ref(EClosure::Body, move |arena, state| {
                             parse_loc_expr_with_options(min_indent, options, arena, state)
                         }),
                         min_indent,
-                        ELambda::IndentBody
+                        EClosure::IndentBody
                     )
                 )
             )
