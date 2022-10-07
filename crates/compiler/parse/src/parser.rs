@@ -1452,6 +1452,31 @@ where
     }
 }
 
+pub fn parse_word1<'a, ToError, E>(
+    state: State<'a>,
+    min_indent: u32,
+    word: u8,
+    to_error: ToError,
+) -> ParseResult<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word, b'\n');
+
+    if min_indent > state.column() {
+        return Err((NoProgress, to_error(state.pos()), state));
+    }
+
+    match state.bytes().first() {
+        Some(x) if *x == word => {
+            let state = state.advance(1);
+            Ok((MadeProgress, (), state))
+        }
+        _ => Err((NoProgress, to_error(state.pos()), state)),
+    }
+}
+
 pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
