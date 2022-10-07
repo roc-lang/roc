@@ -93,20 +93,6 @@ pub const RocList = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn allocate(
-        alignment: u32,
-        length: usize,
-        element_size: usize,
-    ) RocList {
-        const data_bytes = length * element_size;
-
-        return RocList{
-            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
-            .length = length,
-            .capacity = length,
-        };
-    }
-
     pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
@@ -140,7 +126,108 @@ pub const RocList = extern struct {
         return new_list;
     }
 
+    // We follow rougly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
+    // Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
+    //
+    // (1) initial size
+    //     Instead of growing to size 1 from empty, fbvector allocates at least
+    //     64 bytes. You may still use reserve to reserve a lesser amount of
+    //     memory.
+    // (2) 1.5x
+    //     For medium-sized vectors, the growth strategy is 1.5x. See the docs
+    //     for details.
+    //     This does not apply to very small or very large fbvectors. This is a
+    //     heuristic.
+    //
+    // In our case, we exposed allocate and reallocate, which will use a smart growth stategy.
+    // We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
+
+    // calculateCapacity should only be called in cases the list will be growing.
+    // requested_length should always be greater than old_capacity.
+    inline fn calculateCapacity(
+        old_capacity: usize,
+        requested_length: usize,
+        element_width: usize,
+    ) usize {
+        var new_capacity: usize = 0;
+        if (old_capacity == 0) {
+            new_capacity = 64 / element_width;
+        } else if (old_capacity < 4096 / element_width) {
+            new_capacity = old_capacity * 2;
+        } else if (old_capacity > 4096 * 32 / element_width) {
+            new_capacity = old_capacity * 2;
+        } else {
+            new_capacity = (old_capacity * 3 + 1) / 2;
+        }
+        return @maximum(new_capacity, requested_length);
+    }
+
+    pub fn allocate(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const capacity = calculateCapacity(0, length, element_width);
+        const data_bytes = capacity * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity = capacity,
+        };
+    }
+
+    pub fn allocateExact(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const data_bytes = length * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity = length,
+        };
+    }
+
     pub fn reallocate(
+        self: RocList,
+        alignment: u32,
+        new_length: usize,
+        element_width: usize,
+    ) RocList {
+        if (self.bytes) |source_ptr| {
+            if (self.isUnique()) {
+                if (self.capacity >= new_length) {
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
+                } else {
+                    const new_capacity = calculateCapacity(self.capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_capacity, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
+                }
+            }
+            // TODO: Investigate the performance of this.
+            // Maybe we should just always reallocate to the new_length instead of expanding capacity?
+            if (self.capacity >= new_length) {
+                var output = self.reallocateFresh(alignment, self.capacity, element_width);
+                output.length = new_length;
+            } else {
+                const new_capacity = calculateCapacity(self.capacity, new_length, element_width);
+                var output = self.reallocateFresh(alignment, new_capacity, element_width);
+                output.length = new_length;
+            }
+        }
+        return RocList.allocate(alignment, new_length, element_width);
+    }
+
+    pub fn reallocateExact(
         self: RocList,
         alignment: u32,
         new_length: usize,
@@ -155,9 +242,9 @@ pub const RocList = extern struct {
                     return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
                 }
             }
+            return self.reallocateFresh(alignment, new_length, element_width);
         }
-
-        return self.reallocateFresh(alignment, new_length, element_width);
+        return RocList.allocateExact(alignment, new_length, element_width);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -174,7 +261,6 @@ pub const RocList = extern struct {
         const first_slot = utils.allocateWithRefcount(data_bytes, alignment);
 
         // transfer the memory
-
         if (self.bytes) |source_ptr| {
             const dest_ptr = first_slot;
 
@@ -412,7 +498,7 @@ pub fn listWithCapacity(
     alignment: u32,
     element_width: usize,
 ) callconv(.C) RocList {
-    var output = RocList.allocate(alignment, capacity, element_width);
+    var output = RocList.allocateExact(alignment, capacity, element_width);
     output.length = 0;
     return output;
 }
