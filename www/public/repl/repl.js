@@ -42,7 +42,7 @@ const repl = {
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
-  repl.elemHistory.querySelector('#loading-message').remove();
+  repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder =
     "Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)";
@@ -54,8 +54,7 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
 // ----------------------------------------------------------------------------
 
 function onInputChange(event) {
-  const inputText = event.target.value;
-  if (!inputText) return;
+  const inputText = event.target.value.trim();
 
   event.target.value = "";
 
@@ -122,13 +121,15 @@ async function processInputQueue() {
     repl.inputHistoryIndex = createHistoryEntry(inputText);
     repl.inputStash = "";
 
-    let outputText;
+    let outputText = "";
     let ok = true;
-    try {
-      outputText = await roc_repl_wasm.entrypoint_from_js(inputText);
-    } catch (e) {
-      outputText = `${e}`;
-      ok = false;
+    if (inputText) {
+      try {
+        outputText = await roc_repl_wasm.entrypoint_from_js(inputText);
+      } catch (e) {
+        outputText = `${e}`;
+        ok = false;
+      }
     }
 
     updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
