@@ -14,6 +14,7 @@ hosted Effect
         setCwd,
         exePath,
         stdoutLine,
+        stdoutWrite,
         stderrLine,
         stdinLine,
         sendRequest,
@@ -26,6 +27,7 @@ hosted Effect
     generates Effect with [after, map, always, forever, loop]
 
 stdoutLine : Str -> Effect {}
+stdoutWrite : Str -> Effect {}
 stderrLine : Str -> Effect {}
 stdinLine : Effect Str
 

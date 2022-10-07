@@ -12,6 +12,7 @@ use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
+use std::io::{self, Write};
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
@@ -274,6 +275,13 @@ pub extern "C" fn roc_fx_stdinLine() -> RocStr {
 pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_stdoutWrite(text: &RocStr) {
+    let string = text.as_str();
+    print!("{}", string);
+    io::stdout().flush().unwrap();
 }
 
 #[no_mangle]
