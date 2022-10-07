@@ -455,7 +455,7 @@ fn to_drawable(
                 wgpu_glyph::HorizontalAlign::Left
             });
 
-            let section = owned_section_from_str(text.as_str(), bounds, layout);
+            let section = owned_section_from_str(text.text.as_str(),text.color, text.size, bounds, layout);
 
             // Calculate the bounds and offset by measuring glyphs
             let text_bounds;
@@ -481,7 +481,7 @@ fn to_drawable(
             }
 
             let drawable = Drawable {
-                pos: (0.0, 0.0).into(), // TODO store the pos in Text and read it here
+                pos: (text.left, text.top).into(),
                 bounds: text_bounds,
                 content: DrawableContent::Text(section, offset),
             };
@@ -493,13 +493,11 @@ fn to_drawable(
 
 fn owned_section_from_str(
     string: &str,
+    color: Rgba,
+    size: f32,
     bounds: Bounds,
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
 ) -> OwnedSection {
-    // TODO don't hardcode any of this!
-    let color = Rgba::WHITE;
-    let size: f32 = 40.0;
-
     OwnedSection {
         bounds: (bounds.width, bounds.height),
         layout,

@@ -3,7 +3,7 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeDef, TypeHeader,
+    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, TypeAnnotation, TypeDef, TypeHeader,
     ValueDef,
 };
 use roc_region::all::Loc;
@@ -135,12 +135,20 @@ impl<'a> Formattable for TypeDef<'a> {
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
                     buf.push_str(" ");
-                    members[0].format(buf, indent + INDENT);
+                    members[0].format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::No,
+                        indent + INDENT,
+                    );
                 } else {
-                    for demand in members.iter() {
-                        buf.newline();
-                        buf.indent(indent + INDENT);
-                        demand.format(buf, indent + INDENT);
+                    for member in members.iter() {
+                        member.format_with_options(
+                            buf,
+                            Parens::NotNeeded,
+                            Newlines::Yes,
+                            indent + INDENT,
+                        );
                     }
                 }
             }
@@ -408,8 +416,18 @@ impl<'a> Formattable for AbilityMember<'a> {
         self.name.value.is_multiline() || self.typ.is_multiline()
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
-        buf.push_str(self.name.value.extract_spaces().item);
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Spaces { before, item, .. } = self.name.value.extract_spaces();
+        fmt_spaces(buf, before.iter(), indent);
+
+        buf.indent(indent);
+        buf.push_str(item);
         buf.spaces(1);
         buf.push(':');
         buf.spaces(1);

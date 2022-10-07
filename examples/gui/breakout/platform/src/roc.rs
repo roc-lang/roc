@@ -142,9 +142,11 @@ impl RocEvent {
 #[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocKeyCode {
-    Left = 0,
+    Down = 0,
+    Left,
     Other,
     Right,
+    Up,
 }
 
 impl From<VirtualKeyCode> for RocKeyCode {
@@ -154,6 +156,8 @@ impl From<VirtualKeyCode> for RocKeyCode {
         match keycode {
             Left => RocKeyCode::Left,
             Right => RocKeyCode::Right,
+            Up => RocKeyCode::Up,
+            Down => RocKeyCode::Down,
             _ => RocKeyCode::Other,
         }
     }
@@ -210,7 +214,7 @@ pub struct ElemId(*const RocElemEntry);
 #[repr(C)]
 pub union RocElemEntry {
     pub rect: ManuallyDrop<RocRect>,
-    pub text: ManuallyDrop<RocStr>,
+    pub text: ManuallyDrop<RocText>,
 }
 
 #[repr(u8)]
@@ -282,6 +286,16 @@ pub struct RocRect {
     pub left: f32,
     pub top: f32,
     pub width: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct RocText {
+    pub text: RocStr,
+    pub color: Rgba,
+    pub left: f32,
+    pub size: f32,
+    pub top: f32,
 }
 
 impl Clone for RocElem {

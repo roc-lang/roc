@@ -318,7 +318,7 @@ fn import_transitive_alias() {
             ),
         ),
         (
-            "Main",
+            "Other",
             indoc!(
                 r#"
                         interface Other exposes [empty] imports [RBTree]
@@ -908,4 +908,165 @@ fn import_builtin_in_platform_and_check_app() {
 
     let result = multiple_modules("import_builtin_in_platform_and_check_app", modules);
     assert!(result.is_ok(), "should check");
+}
+
+#[test]
+fn module_doesnt_match_file_path() {
+    let modules = vec![(
+        "Age",
+        indoc!(
+            r#"
+                interface NotAge exposes [Age] imports []
+
+                Age := U32
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("module_doesnt_match_file_path", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
+
+            This module name does not correspond with the file path it is defined
+            in:
+
+            1│  interface NotAge exposes [Age] imports []
+                          ^^^^^^
+
+            Module names must correspond with the file paths they are defined in.
+            For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
+            defined in Math/Sin.roc."#
+        ),
+        "\n{}",
+        err
+    );
+}
+
+#[test]
+fn module_cyclic_import_itself() {
+    let modules = vec![(
+        "Age",
+        indoc!(
+            r#"
+            interface Age exposes [] imports [Age]
+            "#
+        ),
+    )];
+
+    let err = multiple_modules("module_cyclic_import_itself", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
+
+            I can't compile Age because it depends on itself through the following
+            chain of module imports:
+
+                ┌─────┐
+                │     Age
+                │     ↓
+                │     Age
+                └─────┘
+
+            Cyclic dependencies are not allowed in Roc! Can you restructure a
+            module in this import chain so that it doesn't have to depend on
+            itself?"#
+        ),
+        "\n{}",
+        err
+    );
+}
+
+#[test]
+fn module_cyclic_import_transitive() {
+    let modules = vec![
+        (
+            "Age",
+            indoc!(
+                r#"
+                interface Age exposes [] imports [Person]
+                "#
+            ),
+        ),
+        (
+            "Person",
+            indoc!(
+                r#"
+                interface Person exposes [] imports [Age]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_cyclic_import_transitive", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
+
+            I can't compile Age because it depends on itself through the following
+            chain of module imports:
+
+                ┌─────┐
+                │     Age
+                │     ↓
+                │     Person
+                │     ↓
+                │     Age
+                └─────┘
+
+            Cyclic dependencies are not allowed in Roc! Can you restructure a
+            module in this import chain so that it doesn't have to depend on
+            itself?"#
+        ),
+        "\n{}",
+        err
+    );
+}
+
+#[test]
+fn nested_module_has_incorrect_name() {
+    let modules = vec![
+        (
+            "Dep/Foo.roc",
+            indoc!(
+                r#"
+                interface Foo exposes [] imports []
+                "#
+            ),
+        ),
+        (
+            "I.roc",
+            indoc!(
+                r#"
+                interface I exposes [] imports [Dep.Foo]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("nested_module_has_incorrect_name", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
+
+            This module has a different name than I expected:
+
+            1│  interface Foo exposes [] imports []
+                          ^^^
+
+            Based on the nesting and use of this module, I expect it to have name
+
+                Dep.Foo"#
+        ),
+        "\n{}",
+        err
+    );
 }

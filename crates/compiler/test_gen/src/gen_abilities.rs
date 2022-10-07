@@ -20,10 +20,10 @@ fn hash_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -43,14 +43,14 @@ fn hash_specialization_multiple_add() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [ Hash {hash: hashId} ]
+            Id := U64 has [ MHash {hash: hashId} ]
 
             hashId = \@Id n -> n
 
-            One := {} has [ Hash {hash: hashOne} ]
+            One := {} has [ MHash {hash: hashOne} ]
 
             hashOne = \@One _ -> 1
 
@@ -70,16 +70,16 @@ fn alias_member_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
             main =
-                aliasedHash = hash
-                aliasedHash (@Id 1234)
+                aliasedMHash = hash
+                aliasedMHash (@Id 1234)
             "#
         ),
         1234,
@@ -95,16 +95,16 @@ fn ability_constrained_in_non_member_usage() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : a, a -> U64 | a has Hash
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : a, a -> U64 | a has MHash
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulHashes (@Id 5) (@Id 7)
+            result = mulMHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -120,15 +120,15 @@ fn ability_constrained_in_non_member_usage_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulHashes (@Id 5) (@Id 7)
+            result = mulMHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -144,19 +144,19 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : a, b -> U64 | a has Hash, b has Hash
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : a, b -> U64 | a has MHash, b has MHash
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -172,18 +172,18 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -199,19 +199,19 @@ fn ability_used_as_type_still_compiles() {
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : Hash, Hash -> U64
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : MHash, MHash -> U64
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash { hash: hashId }]
+            Id := U64 has [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash { hash: hashThree }]
+            Three := {} has [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -1101,4 +1101,276 @@ fn decode_record_of_record() {
         RocStr::from("ab10"),
         RocStr
     )
+}
+
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+mod hash {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    use indoc::indoc;
+
+    const TEST_HASHER: &str = indoc!(
+        r#"
+        THasher := List U8 has [Hasher {
+            addBytes: tAddBytes,
+            addU8: tAddU8,
+            addU16: tAddU16,
+            addU32: tAddU32,
+            addU64: tAddU64,
+            addU128: tAddU128,
+            addI8: tAddI8,
+            addI16: tAddI16,
+            addI32: tAddI32,
+            addI64: tAddI64,
+            addI128: tAddI128,
+            complete: tComplete,
+        }]
+
+        # ignores endian-ness
+        byteAt = \n, shift ->
+            Num.bitwiseAnd (Num.shiftRightBy n (shift * 8)) 0xFF
+            |> Num.toU8
+
+        do8 = \total, n ->
+            total
+            |> List.append (byteAt n 0)
+
+        do16 = \total, n ->
+            total
+            |> do8 (n |> Num.toU8)
+            |> do8 (Num.shiftRightBy n 8 |> Num.toU8)
+
+        do32 = \total, n ->
+            total
+            |> do16 (n |> Num.toU16)
+            |> do16 (Num.shiftRightBy n 16 |> Num.toU16)
+
+        do64 = \total, n ->
+            total
+            |> do32 (n |> Num.toU32)
+            |> do32 (Num.shiftRightBy n 32 |> Num.toU32)
+
+        do128 = \total, n ->
+            total
+            |> do64 (n |> Num.toU64)
+            |> do64 (Num.shiftRightBy n 64 |> Num.toU64)
+
+        tAddBytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
+        tAddU8 = \@THasher total, n -> @THasher (do8 total n)
+        tAddU16 = \@THasher total, n -> @THasher (do16 total n)
+        tAddU32 = \@THasher total, n -> @THasher (do32 total n)
+        tAddU64 = \@THasher total, n -> @THasher (do64 total n)
+        tAddU128 = \@THasher total, n -> @THasher (do128 total n)
+        tAddI8 = \@THasher total, n -> @THasher (do8 total (Num.toU8 n))
+        tAddI16 = \@THasher total, n -> @THasher (do16 total (Num.toU16 n))
+        tAddI32 = \@THasher total, n -> @THasher (do32 total (Num.toU32 n))
+        tAddI64 = \@THasher total, n -> @THasher (do64 total (Num.toU64 n))
+        tAddI128 = \@THasher total, n -> @THasher (do128 total (Num.toU128 n))
+        tComplete = \@THasher _ -> Num.maxU64
+
+        tRead = \@THasher bytes -> bytes
+        "#
+    );
+
+    fn build_test(input: &str) -> String {
+        format!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                {}
+
+                main =
+                    @THasher []
+                    |> Hash.hash ({})
+                    |> tRead
+                "#
+            ),
+            TEST_HASHER, input,
+        )
+    }
+
+    mod immediate {
+        use super::{assert_evals_to, build_test};
+        use roc_std::RocList;
+
+        #[test]
+        fn i8() {
+            assert_evals_to!(
+                &build_test("-2i8"),
+                RocList::from_slice(&[254]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn u8() {
+            assert_evals_to!(
+                &build_test("254u8"),
+                RocList::from_slice(&[254]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn i16() {
+            assert_evals_to!(
+                &build_test("-2i16"),
+                RocList::from_slice(&[254, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn u16() {
+            assert_evals_to!(
+                &build_test("Num.maxU16 - 1"),
+                RocList::from_slice(&[254, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn i32() {
+            assert_evals_to!(
+                &build_test("-2i32"),
+                RocList::from_slice(&[254, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn u32() {
+            assert_evals_to!(
+                &build_test("Num.maxU32 - 1"),
+                RocList::from_slice(&[254, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn i64() {
+            assert_evals_to!(
+                &build_test("-2i64"),
+                RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn u64() {
+            assert_evals_to!(
+                &build_test("Num.maxU64 - 1"),
+                RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn i128() {
+            assert_evals_to!(
+                &build_test("-2i128"),
+                RocList::from_slice(&[
+                    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn u128() {
+            assert_evals_to!(
+                &build_test("Num.maxU128 - 1"),
+                RocList::from_slice(&[
+                    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn string() {
+            assert_evals_to!(
+                &build_test(r#""ab☃AB""#),
+                RocList::from_slice(&[97, 98, 226, 152, 131, 65, 66]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn list_u8() {
+            assert_evals_to!(
+                &build_test(r#"[15u8, 23u8, 37u8]"#),
+                RocList::from_slice(&[15, 23, 37]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn list_string() {
+            assert_evals_to!(
+                &build_test(r#"["ab", "cd", "ef"]"#),
+                RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn list_list_string() {
+            assert_evals_to!(
+                &build_test(r#"[[ "ab", "cd" ], [ "ef" ]]"#),
+                RocList::from_slice(&[97, 98, 99, 100, 101, 102]),
+                RocList<u8>
+            )
+        }
+    }
+
+    mod derived {
+        use super::{assert_evals_to, build_test};
+        use roc_std::RocList;
+
+        #[test]
+        fn empty_record() {
+            assert_evals_to!(
+                &build_test(r#"{}"#),
+                RocList::from_slice(&[] as &[u8]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_u8_and_str() {
+            assert_evals_to!(
+                &build_test(r#"{ a: 15u8, b: "bc" }"#),
+                RocList::from_slice(&[15, 98, 99]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_records() {
+            assert_evals_to!(
+                &build_test(r#"{ a: { b: 15u8, c: "bc" }, d: { b: 23u8, e: "ef" } }"#),
+                RocList::from_slice(&[15, 98, 99, 23, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn record_of_list_of_records() {
+            assert_evals_to!(
+                &build_test(
+                    r#"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"#
+                ),
+                RocList::from_slice(&[15, 23, 45, 73]),
+                RocList<u8>
+            )
+        }
+    }
 }

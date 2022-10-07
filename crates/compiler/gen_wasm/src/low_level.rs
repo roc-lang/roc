@@ -1686,7 +1686,7 @@ impl<'a> LowLevelCall<'a> {
                         let bit_width = 8 * self
                             .ret_layout
                             .stack_size(backend.env.layout_interner, TARGET_INFO);
-                        if bit_width < 32 && symbol_is_signed_int(backend, bits) {
+                        if bit_width < 32 && symbol_is_signed_int(backend, num) {
                             let mask = (1 << bit_width) - 1;
 
                             backend

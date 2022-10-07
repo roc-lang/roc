@@ -616,6 +616,25 @@ fn i64_abs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn various_sized_abs() {
+    assert_evals_to!("Num.abs -6i8", 6, i8);
+    assert_evals_to!("Num.abs -6i16", 6, i16);
+    assert_evals_to!("Num.abs -6i32", 6, i32);
+    assert_evals_to!("Num.abs -6i64", 6, i64);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs -6i128", 6, i128);
+    }
+    assert_evals_to!("Num.abs 6u8", 6, u8);
+    assert_evals_to!("Num.abs 6u16", 6, u16);
+    assert_evals_to!("Num.abs 6u32", 6, u32);
+    assert_evals_to!("Num.abs 6u64", 6, u64);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs 6u128", 6, u128);
+    }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
 )]
@@ -2075,6 +2094,7 @@ fn shift_left_by() {
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 0", 0b0000_0001, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 1", 0b0000_0010, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0011 2", 0b0000_1100, i64);
+    assert_evals_to!("Num.shiftLeftBy 2u16 2", 8, u16);
 }
 
 #[test]
@@ -2104,7 +2124,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy -12 1", -6, i64);
     assert_evals_to!("Num.shiftRightBy 12 8", 0, i64);
     assert_evals_to!("Num.shiftRightBy -12 8", -1, i64);
-    assert_evals_to!("Num.shiftRightBy 12 -1", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 1", 0, i64);
 
@@ -2120,8 +2139,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy 12i8 8", 0, i8);
 
     if !is_llvm_release_mode {
-        assert_evals_to!("Num.shiftRightBy 0 -1", 0, i64);
-        assert_evals_to!("Num.shiftRightBy -12 -1", -1, i64);
         assert_evals_to!("Num.shiftRightBy -12i8 8", -1, i8);
     }
 }

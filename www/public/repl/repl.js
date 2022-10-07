@@ -212,7 +212,7 @@ function updateHistoryEntry(index, ok, outputText) {
   outputElem.classList.add("output");
   outputElem.classList.add(ok ? "output-ok" : "output-error");
 
-  const historyItem = repl.elemHistory.childNodes[index];
+  const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
 
   repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;

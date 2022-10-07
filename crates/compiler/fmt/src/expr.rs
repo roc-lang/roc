@@ -1382,9 +1382,9 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::LessThanOrEq
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
-                    | BinOp::Or => true,
-                    BinOp::Pizza
-                    | BinOp::Assignment
+                    | BinOp::Or
+                    | BinOp::Pizza => true,
+                    BinOp::Assignment
                     | BinOp::IsAliasType
                     | BinOp::IsOpaqueType
                     | BinOp::Backpassing => false,

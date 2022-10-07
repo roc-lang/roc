@@ -1,7 +1,7 @@
 use crate::annotation::{Formattable, Newlines};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
-use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
+use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
@@ -31,6 +31,8 @@ pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
 pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a InterfaceHeader<'a>) {
     let indent = INDENT;
 
+    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
+
     buf.indent(0);
     buf.push_str("interface");
 
@@ -55,6 +57,8 @@ pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a Interface
 
 pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader<'a>) {
     let indent = INDENT;
+
+    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
 
     buf.indent(0);
     buf.push_str("hosted");
@@ -94,6 +98,9 @@ pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader
 
 pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) {
     let indent = INDENT;
+
+    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
+
     buf.indent(0);
     buf.push_str("app");
 
@@ -129,6 +136,8 @@ pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) 
 
 pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
     let indent = INDENT;
+
+    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
 
     buf.indent(0);
     buf.push_str("platform");

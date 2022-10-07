@@ -20,6 +20,7 @@ interface Dict
         Bool.{ Bool },
         Result.{ Result },
         List,
+        Num.{ Nat },
     ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.

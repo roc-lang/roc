@@ -50,6 +50,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::DECODE),
             builtins_path.join("Decode.roc"),
         ),
+        DeriveBuiltin::Hash => (
+            ModuleId::HASH,
+            module_source(ModuleId::HASH),
+            builtins_path.join("Hash.roc"),
+        ),
     }
 }
 
@@ -245,6 +250,18 @@ where
     let key = Derived::builtin(builtin, &subs, var);
 
     assert_eq!(key, Ok(Derived::Immediate(immediate)));
+}
+
+pub(crate) fn check_single_lset_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Ok(Derived::SingleLambdaSetImmediate(immediate)));
 }
 
 #[allow(clippy::too_many_arguments)]
