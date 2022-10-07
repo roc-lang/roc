@@ -3868,11 +3868,11 @@ fn flat_type_to_err_type(
                     ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
                 }
 
-                ErrorType::FlexVar(var) => {
+                ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
                     ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
                 }
 
-                ErrorType::RigidVar(var) => {
+                ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
                 }
 
@@ -3896,11 +3896,11 @@ fn flat_type_to_err_type(
                     ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
                 }
 
-                ErrorType::FlexVar(var) => {
+                ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
                     ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
                 }
 
-                ErrorType::RigidVar(var) => {
+                ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
                 }
 

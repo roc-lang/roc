@@ -70,7 +70,11 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc([CMD_CHECK, file.to_str().unwrap()].iter().chain(flags), &[]);
+        let compile_out = run_roc(
+            [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),
+            &[],
+            &[],
+        );
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
 
@@ -82,7 +86,7 @@ mod cli_run {
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
-        let out = run_roc([CMD_FORMAT, file.to_str().unwrap(), CHECK_FLAG], &[]);
+        let out = run_roc([CMD_FORMAT, file.to_str().unwrap(), CHECK_FLAG], &[], &[]);
 
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
@@ -92,6 +96,7 @@ mod cli_run {
         args: I,
         stdin: &[&str],
         roc_app_args: &[String],
+        env: &[(&str, &str)],
     ) -> Out {
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
@@ -100,6 +105,7 @@ mod cli_run {
                 .chain([file.to_str().unwrap().to_string(), "--".to_string()])
                 .chain(roc_app_args.iter().cloned()),
             stdin,
+            env,
         );
 
         let ignorable = "🔨 Rebuilding platform...\n";
@@ -150,7 +156,13 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[], &[]);
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_BUILD).chain(flags.clone()),
+                        &[],
+                        &[],
+                        &[],
+                    );
 
                     if use_valgrind && ALLOW_VALGRIND {
                         let mut valgrind_args = vec![file
@@ -207,25 +219,18 @@ mod cli_run {
                 }
                 CliMode::Roc => {
                     if !extra_env.is_empty() {
-                        // TODO: environment is not currently forwarded by Roc to the target
-                        // binary, so this would fail!
+                        // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
                         continue;
                     }
-                    run_roc_on(file, flags.clone(), stdin, roc_app_args)
+                    run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
                 }
-                CliMode::RocRun => {
-                    if !extra_env.is_empty() {
-                        // TODO: environment is not currently forwarded by Roc to the target
-                        // binary, so this would fail!
-                        continue;
-                    }
-                    run_roc_on(
-                        file,
-                        iter::once(CMD_RUN).chain(flags.clone()),
-                        stdin,
-                        roc_app_args,
-                    )
-                }
+                CliMode::RocRun => run_roc_on(
+                    file,
+                    iter::once(CMD_RUN).chain(flags.clone()),
+                    stdin,
+                    roc_app_args,
+                    extra_env,
+                ),
             };
 
             if !&out.stdout.ends_with(expected_ending) {
@@ -305,7 +310,7 @@ mod cli_run {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.
-                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
+                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
                 return;
             }
             "swiftui" | "rocLovesSwift" => {
@@ -316,7 +321,7 @@ mod cli_run {
                     );
                     return;
                 } else {
-                    run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[]);
+                    run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
                     return;
                 }
             }

@@ -2,6 +2,8 @@ use roc_region::all::{Position, Region};
 use std::fmt;
 
 /// A position in a source file.
+// NB: [Copy] is explicitly NOT derived to reduce the chance of bugs due to accidentally re-using
+// parser state.
 #[derive(Clone)]
 pub struct State<'a> {
     /// The raw input bytes from the file.

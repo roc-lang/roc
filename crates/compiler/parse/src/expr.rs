@@ -1257,8 +1257,17 @@ mod ability {
                         IndentLevel::Exact(wanted) if state.column() > wanted => {
                             // This demand is not indented correctly
                             let indent_difference = state.column() as i32 - wanted as i32;
+
+                            // We might be trying to parse at EOF, at which case the indent level
+                            // will be off, but there is actually nothing left.
+                            let progress = if state.has_reached_end() {
+                                NoProgress
+                            } else {
+                                MadeProgress
+                            };
+
                             Err((
-                                MadeProgress,
+                                progress,
                                 EAbility::DemandAlignment(indent_difference, state.pos()),
                                 initial,
                             ))

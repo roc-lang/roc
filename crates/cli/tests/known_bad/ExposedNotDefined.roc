@@ -1,3 +1,3 @@
-interface Foo
+interface ExposedNotDefined
     exposes [bar]
     imports []
