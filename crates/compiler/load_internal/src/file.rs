@@ -2232,24 +2232,15 @@ fn update<'a>(
             // add the prelude
             let mut header = header;
 
-            if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
-                extend_header_with_builtin(&mut header, ModuleId::RESULT);
-            }
-
-            if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
-                extend_header_with_builtin(&mut header, ModuleId::NUM);
-            }
-
-            if ![ModuleId::BOOL].contains(&header.module_id) {
-                extend_header_with_builtin(&mut header, ModuleId::BOOL);
-            }
-
             if !header.module_id.is_builtin() {
-                extend_header_with_builtin(&mut header, ModuleId::BOX);
+                extend_header_with_builtin(&mut header, ModuleId::NUM);
+                extend_header_with_builtin(&mut header, ModuleId::BOOL);
                 extend_header_with_builtin(&mut header, ModuleId::STR);
+                extend_header_with_builtin(&mut header, ModuleId::LIST);
+                extend_header_with_builtin(&mut header, ModuleId::RESULT);
                 extend_header_with_builtin(&mut header, ModuleId::DICT);
                 extend_header_with_builtin(&mut header, ModuleId::SET);
-                extend_header_with_builtin(&mut header, ModuleId::LIST);
+                extend_header_with_builtin(&mut header, ModuleId::BOX);
                 extend_header_with_builtin(&mut header, ModuleId::ENCODE);
                 extend_header_with_builtin(&mut header, ModuleId::DECODE);
                 extend_header_with_builtin(&mut header, ModuleId::HASH);

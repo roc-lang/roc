@@ -20,6 +20,7 @@ interface Hash
     ] imports [
         List,
         Str,
+        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128 },
     ]
 
 ## A value that can hashed.
