@@ -121,6 +121,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
     StrGetCapacity; STR_CAPACITY; 1,
+    StrWithCapacity; STR_WITH_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
