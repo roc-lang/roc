@@ -581,7 +581,7 @@ formatHelpHelp = \n, cmdHelp ->
                             Arg c -> Some c
                             _ -> None)
 
-            positionaConfigs =
+            positionalConfigs =
                 filterMap
                     configs
                     (\config ->
@@ -605,11 +605,11 @@ formatHelpHelp = \n, cmdHelp ->
                     """
 
             fmtPositionalsHelp =
-                if List.isEmpty positionaConfigs then
+                if List.isEmpty positionalConfigs then
                     ""
                 else
                     helpStr =
-                        positionaConfigs
+                        positionalConfigs
                         |> List.map (\c -> formatPositionalConfig (n + indentLevel) c)
                         |> Str.joinWith "\n"
 
