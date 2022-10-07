@@ -1884,7 +1884,7 @@ fn pattern_to_vars_by_symbol(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
