@@ -215,14 +215,8 @@ pub const RocList = extern struct {
             }
             // TODO: Investigate the performance of this.
             // Maybe we should just always reallocate to the new_length instead of expanding capacity?
-            if (self.capacity >= new_length) {
-                var output = self.reallocateFresh(alignment, self.capacity, element_width);
-                output.length = new_length;
-            } else {
-                const new_capacity = calculateCapacity(self.capacity, new_length, element_width);
-                var output = self.reallocateFresh(alignment, new_capacity, element_width);
-                output.length = new_length;
-            }
+            const new_capacity = if (self.capacity >= new_length) self.capacity else calculateCapacity(self.capacity, new_length, element_width);
+            return self.reallocateFresh(alignment, new_length, new_capacity, element_width);
         }
         return RocList.allocate(alignment, new_length, element_width);
     }
@@ -242,7 +236,7 @@ pub const RocList = extern struct {
                     return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
                 }
             }
-            return self.reallocateFresh(alignment, new_length, element_width);
+            return self.reallocateFresh(alignment, new_length, new_length, element_width);
         }
         return RocList.allocateExact(alignment, new_length, element_width);
     }
@@ -252,12 +246,13 @@ pub const RocList = extern struct {
         self: RocList,
         alignment: u32,
         new_length: usize,
+        new_capacity: usize,
         element_width: usize,
     ) RocList {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
-        const data_bytes = new_length * element_width;
+        const data_bytes = new_capacity * element_width;
         const first_slot = utils.allocateWithRefcount(data_bytes, alignment);
 
         // transfer the memory
@@ -271,7 +266,7 @@ pub const RocList = extern struct {
         const result = RocList{
             .bytes = first_slot,
             .length = new_length,
-            .capacity = new_length,
+            .capacity = new_capacity,
         };
 
         utils.decref(self.bytes, old_length * element_width, alignment);
