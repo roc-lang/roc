@@ -165,7 +165,7 @@ findOneArg = \long, short, { args, taken } ->
     if !found then
         Err NotFound
     else
-        # Return the next arg after the given one
+        # Return the next argument after the given one
         List.get args (argIndex + 1)
         |> Result.mapErr (\_ -> NotFound)
         |> Result.map
@@ -385,7 +385,7 @@ program = \parser, { name, help ? "" } ->
 # TODO panics in alias analysis when this annotation is included
 # parse : NamedParser a, List Str -> Result a (ParseError*)
 parse = \@NamedParser parser, args ->
-    # By convention the first string in the arg list is the program name.
+    # By convention the first string in the argument list is the program name.
     if
         List.isEmpty args
     then
@@ -654,9 +654,9 @@ formatPositionalConfig = \n, { name, help } ->
 formatOptionType : OptionType -> Str
 formatOptionType = \type ->
     when type is
-        Bool -> "bool"
+        Bool -> "boolean"
         Str -> "string"
-        I64 -> "i64"
+        I64 -> "integer, 64-bit signed"
 
 quote = \s -> "\"\(s)\""
 
@@ -720,53 +720,53 @@ withParser = \arg1, arg2 -> andMap arg2 arg1
 
 mark = \args -> { args, taken: Set.empty }
 
-# bool undashed long option is missing
+# boolean undashed long optional is missing
 expect
     parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["foo"]) == Err (MissingRequiredOption "foo")
 
-# bool dashed long option without value is missing
+# boolean dashed long optional without value is missing
 expect
     parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["--foo"]) == Err (MissingRequiredOption "foo")
 
-# bool dashed long option with value is determined true
+# boolean dashed long optional with value is determined true
 expect
     parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["--foo", "true"]) == Ok Bool.true
 
-# bool dashed long option with value is determined false
+# boolean dashed long optional with value is determined false
 expect
     parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["--foo", "false"]) == Ok Bool.false
 
-# bool dashed long option with value is determined wrong type
+# boolean dashed long optional with value is determined wrong type
 expect
     parser = boolOption { long: "foo" }
 
-    parseHelp parser (mark ["--foo", "not-a-bool"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["--foo", "not-a-boolean"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
 
-# bool dashed short option with value is determined true
+# boolean dashed short optional with value is determined true
 expect
     parser = boolOption { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "true"]) == Ok Bool.true
 
-# bool dashed short option with value is determined false
+# boolean dashed short optional with value is determined false
 expect
     parser = boolOption { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "false"]) == Ok Bool.false
 
-# bool dashed short option with value is determined wrong type
+# boolean dashed short optional with value is determined wrong type
 expect
     parser = boolOption { long: "foo", short: "F" }
 
-    parseHelp parser (mark ["-F", "not-a-bool"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["-F", "not-a-boolean"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
 
 # string dashed long option without value is missing
 expect
@@ -851,19 +851,19 @@ expect
         ]
         (\b -> b)
 
-# string and bool parsers build help
+# string and boolean parsers build help
 expect
     parser =
         succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
         |> withParser (strOption { long: "foo", help: "the foo option" })
         |> withParser (strOption { long: "bar", short: "B" })
-        |> withParser (boolOption { long: "bool" })
+        |> withParser (boolOption { long: "boolean" })
 
     toHelp parser
     == Config [
         Option { long: "foo", short: "", help: "the foo option", type: Str },
         Option { long: "bar", short: "B", help: "", type: Str },
-        Option { long: "bool", short: "", help: "", type: Bool },
+        Option { long: "boolean", short: "", help: "", type: Bool },
     ]
 
 # format option is missing
@@ -886,7 +886,7 @@ expect
         Err e ->
             err = formatError e
 
-            err == "The option `--foo` expects a value of type bool!"
+            err == "The option `--foo` expects a value of type boolean!"
 
 # format help menu with only options
 expect
@@ -895,7 +895,7 @@ expect
         |> withParser (strOption { long: "foo", help: "the foo option" })
         |> withParser (strOption { long: "bar", short: "B" })
         |> withParser (strOption { long: "baz", short: "z", help: "the baz option" })
-        |> withParser (boolOption { long: "bool" })
+        |> withParser (boolOption { long: "boolean" })
         |> program { name: "test" }
 
     formatHelp parser
@@ -907,7 +907,7 @@ expect
         --foo    the foo option  (string)
         --bar, -B  (string)
         --baz, -z    the baz option  (string)
-        --bool  (bool)
+        --boolean  (boolean)
     """
 
 # format help menu with subcommands
