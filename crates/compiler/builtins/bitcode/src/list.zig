@@ -150,7 +150,12 @@ pub const RocList = extern struct {
         element_width: usize,
     ) usize {
         var new_capacity: usize = 0;
-        if (old_capacity == 0) {
+        // TODO: I think this shouldn't be done here.
+        // We should have a smarter way to deal with this that doesn't lead
+        // to allocating a refcount for zero width elements.
+        if (element_width == 0) {
+            return requested_length;
+        } else if (old_capacity == 0) {
             new_capacity = 64 / element_width;
         } else if (old_capacity < 4096 / element_width) {
             new_capacity = old_capacity * 2;
