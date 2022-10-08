@@ -50,7 +50,7 @@ install-zig-llvm-valgrind:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind
-    COPY --dir crates examples Cargo.toml Cargo.lock version.txt www ./
+    COPY --dir crates Cargo.toml Cargo.lock version.txt www ./
 
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
@@ -60,11 +60,11 @@ prep-bench-folder:
     ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
     RUN --mount=type=cache,target=$SCCACHE_DIR cd crates/cli && cargo criterion --no-run
+    RUN mkdir -p bench-folder/crates/cli_testing_examples/benchmarks
     RUN mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
     RUN mkdir -p bench-folder/target/release/deps
-    RUN mkdir -p bench-folder/examples/benchmarks
-    RUN cp examples/benchmarks/*.roc bench-folder/examples/benchmarks/
-    RUN cp -r examples/benchmarks/platform bench-folder/examples/benchmarks/
+    RUN cp crates/cli_testing_examples/benchmarks/*.roc bench-folder/crates/cli_testing_examples/benchmarks/
+    RUN cp -r crates/cli_testing_examples/benchmarks/platform bench-folder/crates/cli_testing_examples/benchmarks/
     RUN cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
     RUN cp target/release/roc bench-folder/target/release
     # copy the most recent time bench to bench-folder

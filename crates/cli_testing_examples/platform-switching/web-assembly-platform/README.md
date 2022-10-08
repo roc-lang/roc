@@ -3,12 +3,12 @@
 To run this website, first compile either of these identical apps:
 
 ```bash
-# Option A: Compile examples/platform-switching/rocLovesWebAssembly.roc
-cargo run -- build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+# Option A: Compile crates/cli_testing_examples/platform-switching/rocLovesWebAssembly.roc
+cargo run -- build --target=wasm32 crates/cli_testing_examples/platform-switching/rocLovesWebAssembly.roc
 
-# Option B: Compile examples/platform-switching/main.roc with `pf: "web-assembly-platform/main.roc"` and move the result
-cargo run -- build --target=wasm32 examples/platform-switching/main.roc
-(cd examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWebAssembly.wasm)
+# Option B: Compile crates/cli_testing_examples/platform-switching/main.roc with `pf: "web-assembly-platform/main.roc"` and move the result
+cargo run -- build --target=wasm32 crates/cli_testing_examples/platform-switching/main.roc
+(cd crates/cli_testing_examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWebAssembly.wasm)
 ```
 
 Then `cd` into the website directory
@@ -16,7 +16,7 @@ and run any web server that can handle WebAssembly.
 For example, with `http-server`:
 
 ```bash
-cd examples/platform-switching/web-assembly-platform
+cd crates/cli_testing_examples/platform-switching/web-assembly-platform
 npm install -g http-server
 http-server
 ```
