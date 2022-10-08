@@ -3469,7 +3469,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v",
+            "Dict k v, k, v -> Dict k v | k has Eq",
         );
     }
 
@@ -3730,7 +3730,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Dict position position, position -> List position
+                reconstructPath : Dict position position, position -> List position | position has Eq
                 reconstructPath = \cameFrom, goal ->
                     when Dict.get cameFrom goal is
                         Err KeyNotFound ->
@@ -3742,7 +3742,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Dict position position, position -> List position",
+            "Dict position position, position -> List position | position has Eq",
         );
     }
 
@@ -3777,7 +3777,7 @@ mod solve_expr {
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound]*
+                cheapestOpen : Model position -> Result position [KeyNotFound]* | position has Eq
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3792,14 +3792,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound]*
+                astar : Model position -> Result position [KeyNotFound]* | position has Eq
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound]*",
+            "Model position -> Result position [KeyNotFound]* | position has Eq",
         );
     }
 
@@ -4441,7 +4441,7 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4555,7 +4555,7 @@ mod solve_expr {
                     _ ->
                       Empty
 
-                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v
+                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4585,7 +4585,7 @@ mod solve_expr {
 
                 main : RBTree I64 I64
                 main =
-                    removeHelp 1 Empty
+                    removeHelp 1i64 Empty
                 "#
             ),
             "RBTree I64 I64",
@@ -4643,7 +4643,7 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v
+                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v | k has Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4678,7 +4678,7 @@ mod solve_expr {
 
                 removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4701,7 +4701,7 @@ mod solve_expr {
 
                 main : RBTree I64 I64
                 main =
-                    removeHelp 1 Empty
+                    removeHelp 1i64 Empty
                 "#
             ),
             "RBTree I64 I64",
