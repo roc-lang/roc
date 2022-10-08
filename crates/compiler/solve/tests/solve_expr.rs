@@ -7940,4 +7940,22 @@ mod solve_expr {
             "U32 -> U32",
         );
     }
+
+    #[test]
+    fn issue_4246_admit_recursion_between_opaque_functions() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [b] to "./platform"
+
+                O := {} -> {}
+
+                a = @O \{} -> ((\@O f -> f {}) b)
+
+                b = a
+                "#
+            ),
+            "O",
+        );
+    }
 }

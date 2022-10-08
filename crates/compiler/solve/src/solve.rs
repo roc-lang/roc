@@ -1522,8 +1522,9 @@ fn solve(
 
                     symbols.iter().any(|(s, _)| {
                         let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
-                        let content = subs.get_content_without_compacting(var);
-                        !matches!(content, Error | Structure(FlatType::Func(..)))
+                        let (_, underlying_content) = chase_alias_content(subs, var);
+
+                        !matches!(underlying_content, Error | Structure(FlatType::Func(..)))
                     })
                 };
 
@@ -1553,6 +1554,17 @@ fn solve(
     }
 
     state
+}
+
+fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::Alias(_, _, real_var, _) => {
+                var = *real_var;
+            }
+            content => return (var, content),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
