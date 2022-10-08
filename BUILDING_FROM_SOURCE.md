@@ -28,13 +28,7 @@ sh <(curl -L https://nixos.org/nix/install) --no-daemon
 sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
-Open a new terminal and install nixFlakes in your environment:
-
-```sh
-nix-env -iA nixpkgs.nixFlakes
-```
-
-Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
+Open a new terminal and edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
 
 ```text
 experimental-features = nix-command flakes
