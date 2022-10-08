@@ -7843,6 +7843,20 @@ mod solve_expr {
     }
 
     #[test]
+    fn dispatch_tag_union_function_inferred() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                g = if Bool.true then A else B
+
+                g ""
+                "#
+            ),
+            "[A Str, B Str]*",
+        );
+    }
+
+    #[test]
     fn check_char_as_u8() {
         infer_eq_without_problem(
             indoc!(
