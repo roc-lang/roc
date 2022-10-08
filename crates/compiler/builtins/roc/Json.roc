@@ -34,6 +34,7 @@ interface Json
             Dec,
         },
         Bool.{ Bool },
+        Eq.{ Eq },
         Result,
     ]
 

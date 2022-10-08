@@ -6,7 +6,7 @@ interface Eq
     structuralEq,
   ]
   imports [
-    Bool,
+    Bool.{ Bool },
   ]
 
 ## A type that can be compared for total equality.

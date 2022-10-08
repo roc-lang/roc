@@ -1,5 +1,5 @@
 interface Bool
-    exposes [Bool, true, false, and, or, not, isEq, isNotEq]
+    exposes [Bool, true, false, and, or, not, isNotEq]
     imports []
 
 Bool := [True, False]
@@ -66,21 +66,6 @@ or : Bool, Bool -> Bool
 # xor : Bool, Bool -> Bool # currently unimplemented
 ## Returns `Bool.false` when given `Bool.true`, and vice versa.
 not : Bool -> Bool
-
-## Returns `Bool.true` if the two values are *structurally equal*, and `Bool.false` otherwise.
-##
-## `a == b` is shorthand for `Bool.isEq a b`
-##
-## Structural equality works as follows:
-##
-## 1. Tags are equal if they have the same tag name, and also their contents (if any) are equal.
-## 2. Records are equal if all their fields are equal.
-## 3. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
-## 4. [Num](Num#Num) values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `Bool.false`. See `Num.isNaN` for more about *NaN*.
-##
-## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
-## accept arguments whose types contain functions.
-isEq : a, a -> Bool
 
 ## Calls [isEq] on the given values, then calls [not] on the result.
 ##
