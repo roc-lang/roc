@@ -6266,7 +6266,7 @@ All branches in an `if` must have the same type!
         inference_var_conflict_in_rigid_links,
         indoc!(
             r#"
-            f : a -> (_ -> b)
+            f : a -> (_ -> b) | a has Eq
             f = \x -> \y -> if x == y then x else y
             f
             "#
@@ -6277,19 +6277,19 @@ All branches in an `if` must have the same type!
 
     Something is off with the body of the `f` definition:
 
-    4│      f : a -> (_ -> b)
+    4│      f : a -> (_ -> b) | a has Eq
     5│      f = \x -> \y -> if x == y then x else y
                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The body is an anonymous function of type:
 
-        a -> a
+        a -> a | a has Eq, a has Eq
 
     But the type annotation on `f` says it should be:
 
-        a -> b
+        a -> b | a has Eq
 
-    Tip: Your type annotation uses `a` and `b` as separate type variables.
+    Tip: Your type annotation uses `b` and `a` as separate type variables.
     Your code seems to be saying they are the same though. Maybe they
     should be the same in your type annotation? Maybe your code uses them
     in a weird way?
@@ -11097,7 +11097,7 @@ All branches in an `if` must have the same type!
 
     But `contains` needs its 2nd argument to be:
 
-        U8
+        Int Unsigned8
     "###
     );
 
