@@ -664,7 +664,7 @@ formatError : ParseError [] -> Str
 formatError = \err ->
     when err is
         ProgramNameNotProvided programName ->
-            "The program name \"\(programName)\" was not probided as a first argument!"
+            "The program name \"\(programName)\" was not provided as a first argument!"
 
         MissingPositional arg ->
             "The positional argument `\(arg)` is required but was not provided!"
