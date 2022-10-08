@@ -1296,6 +1296,7 @@ define_builtins! {
         50 STR_REPLACE_EACH: "replaceEach"
         51 STR_REPLACE_FIRST: "replaceFirst"
         52 STR_REPLACE_LAST: "replaceLast"
+        53 STR_WITH_CAPACITY: "withCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1373,6 +1374,7 @@ define_builtins! {
         72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
+        75 LIST_WALK_TRY: "walkTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
