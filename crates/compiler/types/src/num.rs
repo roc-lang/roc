@@ -328,6 +328,26 @@ pub enum NumBound {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SingleQuoteBound {
+    AtLeast { width: IntLitWidth },
+}
+
+impl SingleQuoteBound {
+    pub fn from_char(c: char) -> Self {
+        let n = c as u32;
+        let width = if n > u16::MAX as _ {
+            IntLitWidth::U32
+        } else if n > u8::MAX as _ {
+            IntLitWidth::U16
+        } else {
+            IntLitWidth::U8
+        };
+
+        Self::AtLeast { width }
+    }
+}
+
 pub const fn int_lit_width_to_variable(w: IntLitWidth) -> Variable {
     match w {
         IntLitWidth::U8 => Variable::U8,

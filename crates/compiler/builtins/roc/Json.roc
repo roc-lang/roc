@@ -204,9 +204,8 @@ takeWhile = \list, predicate ->
 
     helper { taken: [], rest: list }
 
-asciiByte = \b -> Num.toU8 b
-
-digits = List.range (asciiByte '0') (asciiByte '9' + 1)
+digits : List U8
+digits = List.range '0' ('9' + 1)
 
 takeDigits = \bytes ->
     takeWhile bytes \n -> List.contains digits n
@@ -215,10 +214,10 @@ takeFloat = \bytes ->
     { taken: intPart, rest } = takeDigits bytes
 
     when List.get rest 0 is
-        Ok 46 -> # 46 = .
+        Ok '.' ->
             { taken: floatPart, rest: afterAll } = takeDigits (List.split rest 1).others
             builtFloat =
-                List.concat (List.append intPart (asciiByte '.')) floatPart
+                List.concat (List.append intPart '.') floatPart
 
             { taken: builtFloat, rest: afterAll }
 
@@ -322,14 +321,14 @@ decodeBool = Decode.custom \bytes, @Json {} ->
     # Note: this could be more performant by traversing both branches char-by-char.
     # Doing that would also make `rest` more correct in the erroring case.
     if
-        maybeFalse == [asciiByte 'f', asciiByte 'a', asciiByte 'l', asciiByte 's', asciiByte 'e']
+        maybeFalse == ['f', 'a', 'l', 's', 'e']
     then
         { result: Ok Bool.false, rest: afterFalse }
     else
         { before: maybeTrue, others: afterTrue } = List.split bytes 4
 
         if
-            maybeTrue == [asciiByte 't', asciiByte 'r', asciiByte 'u', asciiByte 'e']
+            maybeTrue == ['t', 'r', 'u', 'e']
         then
             { result: Ok Bool.true, rest: afterTrue }
         else
@@ -340,10 +339,10 @@ jsonString = \bytes ->
     { before, others: afterStartingQuote } = List.split bytes 1
 
     if
-        before == [asciiByte '"']
+        before == ['"']
     then
         # TODO: handle escape sequences
-        { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != asciiByte '"'
+        { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != '"'
 
         when Str.fromUtf8 strSequence is
             Ok s ->
@@ -368,7 +367,7 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
                             { before: afterElem, others } = List.split rest 1
 
                             if
-                                afterElem == [asciiByte ',']
+                                afterElem == [',']
                             then
                                 decodeElems others (List.append accum val)
                             else
@@ -379,7 +378,7 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
         { before, others: afterStartingBrace } = List.split bytes 1
 
         if
-            before == [asciiByte '[']
+            before == ['[']
         then
             # TODO: empty lists
             when decodeElems afterStartingBrace [] is
@@ -388,7 +387,7 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
                     { before: maybeEndingBrace, others: afterEndingBrace } = List.split rest 1
 
                     if
-                        maybeEndingBrace == [asciiByte ']']
+                        maybeEndingBrace == [']']
                     then
                         { result: Ok vals, rest: afterEndingBrace }
                     else
@@ -410,10 +409,10 @@ parseExactChar = \bytes, char ->
         Err _ -> { result: Err TooShort, rest: bytes }
 
 openBrace : List U8 -> DecodeResult {}
-openBrace = \bytes -> parseExactChar bytes (asciiByte '{')
+openBrace = \bytes -> parseExactChar bytes '{'
 
 closingBrace : List U8 -> DecodeResult {}
-closingBrace = \bytes -> parseExactChar bytes (asciiByte '}')
+closingBrace = \bytes -> parseExactChar bytes '}'
 
 recordKey : List U8 -> DecodeResult Str
 recordKey = \bytes -> jsonString bytes
@@ -422,10 +421,10 @@ anything : List U8 -> DecodeResult {}
 anything = \bytes -> { result: Err TooShort, rest: bytes }
 
 colon : List U8 -> DecodeResult {}
-colon = \bytes -> parseExactChar bytes (asciiByte ':')
+colon = \bytes -> parseExactChar bytes ':'
 
 comma : List U8 -> DecodeResult {}
-comma = \bytes -> parseExactChar bytes (asciiByte ',')
+comma = \bytes -> parseExactChar bytes ','
 
 tryDecode : DecodeResult a, ({ val : a, rest : List U8 } -> DecodeResult b) -> DecodeResult b
 tryDecode = \{ result, rest }, mapper ->

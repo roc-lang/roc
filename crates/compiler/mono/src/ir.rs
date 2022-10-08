@@ -4027,12 +4027,18 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        SingleQuote(character) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
-            Layout::int_width(IntWidth::I32),
-            hole,
-        ),
+        SingleQuote(_, _, character, _) => {
+            let layout = layout_cache
+                .from_var(env.arena, variable, env.subs)
+                .unwrap();
+
+            Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
+                layout,
+                hole,
+            )
+        }
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,
@@ -8883,10 +8889,12 @@ fn from_can_pattern_help<'a>(
             IntOrFloatValue::Float(*float),
         )),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(c) => Ok(Pattern::IntLiteral(
-            (*c as i128).to_ne_bytes(),
-            IntWidth::I32,
-        )),
+        SingleQuote(var, _, c, _) => match layout_cache.from_var(env.arena, *var, env.subs) {
+            Ok(Layout::Builtin(Builtin::Int(width))) => {
+                Ok(Pattern::IntLiteral((*c as i128).to_ne_bytes(), width))
+            }
+            o => internal_error!("an integer width was expected, but we found {:?}", o),
+        },
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
