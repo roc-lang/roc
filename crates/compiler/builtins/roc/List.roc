@@ -61,6 +61,7 @@ interface List
         sortAsc,
         sortDesc,
         reserve,
+        walkBackwardsUntil,
     ]
     imports [
         Bool.{ Bool },
@@ -433,6 +434,13 @@ walkBackwardsHelp = \list, state, f, indexPlusOne ->
 walkUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
 walkUntil = \list, initial, step ->
     when List.iterate list initial step is
+        Continue new -> new
+        Break new -> new
+
+## Same as [List.walkUntil], but does it from the end of the list instead.
+walkBackwardsUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
+walkBackwardsUntil = \list, initial, func ->
+    when List.iterateBackwards list initial func is
         Continue new -> new
         Break new -> new
 
