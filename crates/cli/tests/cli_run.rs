@@ -763,6 +763,8 @@ mod cli_run {
             flags: &[&str],
             expected_ending: &str,
         ) {
+            use super::{TARGET_FLAG, CMD_BUILD, run_roc, concatcp};
+
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
@@ -770,6 +772,7 @@ mod cli_run {
                 [CMD_BUILD, file.to_str().unwrap()]
                     .iter()
                     .chain(flags.as_slice()),
+                &[],
                 &[],
             );
             if !compile_out.stderr.is_empty() {
