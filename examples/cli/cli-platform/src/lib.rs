@@ -3,6 +3,7 @@
 mod file_glue;
 mod glue;
 
+use backtrace::Backtrace;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
@@ -64,6 +65,8 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
             let string = slice.to_str().unwrap();
             eprintln!("Roc hit a panic: {}", string);
+            eprintln!("Printing backtrace. If it looks wrong, try rerunning your app without `--optimize` and with `--linker=legacy`");
+            eprintln!("{:?}", Backtrace::new());
             std::process::exit(1);
         }
         _ => todo!(),
