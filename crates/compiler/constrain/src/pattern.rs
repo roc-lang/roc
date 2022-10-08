@@ -71,7 +71,7 @@ fn headers_from_annotation_help(
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | StrLiteral(_) => true,
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
@@ -320,9 +320,32 @@ pub fn constrain_pattern(
             ));
         }
 
-        SingleQuote(_) => {
+        &SingleQuote(num_var, precision_var, _, bound) => {
+            // First constraint on the free num var; this improves the resolved type quality in
+            // case the bound is an alias.
+            let num_type = builtins::add_numeric_bound_constr(
+                constraints,
+                &mut state.constraints,
+                num_var,
+                num_var,
+                bound,
+                region,
+                Category::Int,
+            );
+
+            // Link the free num var with the int var and our expectation.
+            let int_type = builtins::num_int(Type::Variable(precision_var));
+
+            state.constraints.push(constraints.equal_types(
+                num_type.clone(), // TODO check me if something breaks!
+                Expected::NoExpectation(int_type),
+                Category::Int,
+                region,
+            ));
+
+            // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(constraints.equal_pattern_types(
-                builtins::num_u32(),
+                num_type,
                 expected,
                 PatternCategory::Character,
                 region,

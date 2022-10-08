@@ -1930,3 +1930,31 @@ fn when_on_strings() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10
+            "#
+        ),
+        RocStr::from(""),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity_concat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10 |> Str.concat "Forty-two"
+            "#
+        ),
+        RocStr::from("Forty-two"),
+        RocStr
+    );
+}

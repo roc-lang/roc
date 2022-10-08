@@ -28,7 +28,7 @@ jobs:
         run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
       - name: test roc hello world
-        run: ./roc examples/hello-world/main.roc
+        run: ./roc examples/helloWorld.roc
 
 
         

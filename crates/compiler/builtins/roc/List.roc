@@ -39,6 +39,7 @@ interface List
         max,
         map4,
         mapTry,
+        walkTry,
         dropFirst,
         joinMap,
         any,
@@ -63,6 +64,8 @@ interface List
     ]
     imports [
         Bool.{ Bool },
+        Result.{ Result },
+        Num.{ Nat, Num, Int },
     ]
 
 ## Types
@@ -85,9 +88,8 @@ interface List
 ##
 ## ## Performance Details
 ##
-## Under the hood, a list is a record containing a `len : Nat` field as well
-## as a pointer to a reference count and a flat array of bytes. Unique lists
-## store a capacity #Nat instead of a reference count.
+## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
+## field, and a pointer to a reference count and a flat array of bytes.
 ##
 ## ## Shared Lists
 ##
@@ -109,9 +111,8 @@ interface List
 ## begins with a refcount of 1, because so far only `ratings` is referencing it.
 ##
 ## The second line alters this refcount. `{ foo: ratings` references
-## the `ratings` list, which will result in its refcount getting incremented
-## from 0 to 1. Similarly, `bar: ratings }` also references the `ratings` list,
-## which will result in its refcount getting incremented from 1 to 2.
+## the `ratings` list, and so does `bar: ratings }`. This will result in its
+## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
 ##
@@ -129,11 +130,11 @@ interface List
 ##
 ## Since `ratings` represented a way to reference the list, and that way is no
 ## longer accessible, the list's refcount gets decremented when `ratings` goes
-## out of scope. It will decrease from 2 back down to 1.
+## out of scope. It will decrease from 3 back down to 2.
 ##
 ## Putting these together, when we call `getRatings 5`, what we get back is
 ## a record with two fields, `foo`, and `bar`, each of which refers to the same
-## list, and that list has a refcount of 1.
+## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
 ##
@@ -957,9 +958,8 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with Result instead of [Continue, Break].
+## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
 ## Using `Result` saves a conditional in `mapTry`.
-## It might be useful to expose this in userspace?
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)

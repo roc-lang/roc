@@ -175,7 +175,7 @@ escapedCsvField = between escapedContents dquote dquote
 escapedContents = many
     (
         oneOf [
-            twodquotes |> map (\_ -> 34), # An escaped double quote
+            twodquotes |> map (\_ -> '"'),
             comma,
             cr,
             lf,
@@ -187,10 +187,10 @@ twodquotes = Parser.Str.string "\"\""
 
 nonescapedCsvField : Parser RawStr CSVField
 nonescapedCsvField = many textdata
-comma = codeunit 44 # ','
-dquote = codeunit 34 # '"'
+comma = codeunit ','
+dquote = codeunit '"'
 endOfLine = alt (ignore crlf) (ignore lf)
-cr = codeunit 13 # '\r'
-lf = codeunit 10 # '\n'
+cr = codeunit '\r'
+lf = codeunit '\n'
 crlf = Parser.Str.string "\r\n"
 textdata = codeunitSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126)) # Any printable char except " (34) and , (44)

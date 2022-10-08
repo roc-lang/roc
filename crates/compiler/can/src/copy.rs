@@ -247,7 +247,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Int(v1, v2, str, val, bound) => Int(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Float(v1, v2, str, val, bound) => Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Str(str) => Str(str.clone()),
-        SingleQuote(char) => SingleQuote(*char),
+        SingleQuote(v1, v2, char, bound) => SingleQuote(sub!(*v1), sub!(*v2), *char, *bound),
         List {
             elem_var,
             loc_elems,
@@ -713,7 +713,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
             FloatLiteral(sub!(*v1), sub!(*v2), s.clone(), *n, *bound)
         }
         StrLiteral(s) => StrLiteral(s.clone()),
-        SingleQuote(c) => SingleQuote(*c),
+        SingleQuote(v1, v2, c, bound) => SingleQuote(sub!(*v1), sub!(*v2), *c, *bound),
         Underscore => Underscore,
         AbilityMemberSpecialization { ident, specializes } => AbilityMemberSpecialization {
             ident: *ident,
