@@ -50,6 +50,7 @@ const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
+    (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -425,7 +426,7 @@ impl fmt::Debug for ModuleId {
 /// 4. throw away short names. stash the module id in the can env under the resolved module name
 /// 5. test:
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageQualified<'a, T> {
     Unqualified(T),
     Qualified(&'a str, T),
@@ -1194,39 +1195,41 @@ define_builtins! {
         110 NUM_MAX_U64: "maxU64"
         111 NUM_MIN_I128: "minI128"
         112 NUM_MAX_I128: "maxI128"
-        113 NUM_TO_I8: "toI8"
-        114 NUM_TO_I8_CHECKED: "toI8Checked"
-        115 NUM_TO_I16: "toI16"
-        116 NUM_TO_I16_CHECKED: "toI16Checked"
-        117 NUM_TO_I32: "toI32"
-        118 NUM_TO_I32_CHECKED: "toI32Checked"
-        119 NUM_TO_I64: "toI64"
-        120 NUM_TO_I64_CHECKED: "toI64Checked"
-        121 NUM_TO_I128: "toI128"
-        122 NUM_TO_I128_CHECKED: "toI128Checked"
-        123 NUM_TO_U8: "toU8"
-        124 NUM_TO_U8_CHECKED: "toU8Checked"
-        125 NUM_TO_U16: "toU16"
-        126 NUM_TO_U16_CHECKED: "toU16Checked"
-        127 NUM_TO_U32: "toU32"
-        128 NUM_TO_U32_CHECKED: "toU32Checked"
-        129 NUM_TO_U64: "toU64"
-        130 NUM_TO_U64_CHECKED: "toU64Checked"
-        131 NUM_TO_U128: "toU128"
-        132 NUM_TO_U128_CHECKED: "toU128Checked"
-        133 NUM_TO_NAT: "toNat"
-        134 NUM_TO_NAT_CHECKED: "toNatChecked"
-        135 NUM_TO_F32: "toF32"
-        136 NUM_TO_F32_CHECKED: "toF32Checked"
-        137 NUM_TO_F64: "toF64"
-        138 NUM_TO_F64_CHECKED: "toF64Checked"
-        139 NUM_MAX_F64: "maxF64"
-        140 NUM_MIN_F64: "minF64"
-        141 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
-        142 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
-        143 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
-        144 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
-        145 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        113 NUM_MIN_U128: "minU128"
+        114 NUM_MAX_U128: "maxU128"
+        115 NUM_TO_I8: "toI8"
+        116 NUM_TO_I8_CHECKED: "toI8Checked"
+        117 NUM_TO_I16: "toI16"
+        118 NUM_TO_I16_CHECKED: "toI16Checked"
+        119 NUM_TO_I32: "toI32"
+        120 NUM_TO_I32_CHECKED: "toI32Checked"
+        121 NUM_TO_I64: "toI64"
+        122 NUM_TO_I64_CHECKED: "toI64Checked"
+        123 NUM_TO_I128: "toI128"
+        124 NUM_TO_I128_CHECKED: "toI128Checked"
+        125 NUM_TO_U8: "toU8"
+        126 NUM_TO_U8_CHECKED: "toU8Checked"
+        127 NUM_TO_U16: "toU16"
+        128 NUM_TO_U16_CHECKED: "toU16Checked"
+        129 NUM_TO_U32: "toU32"
+        130 NUM_TO_U32_CHECKED: "toU32Checked"
+        131 NUM_TO_U64: "toU64"
+        132 NUM_TO_U64_CHECKED: "toU64Checked"
+        133 NUM_TO_U128: "toU128"
+        134 NUM_TO_U128_CHECKED: "toU128Checked"
+        135 NUM_TO_NAT: "toNat"
+        136 NUM_TO_NAT_CHECKED: "toNatChecked"
+        137 NUM_TO_F32: "toF32"
+        138 NUM_TO_F32_CHECKED: "toF32Checked"
+        139 NUM_TO_F64: "toF64"
+        140 NUM_TO_F64_CHECKED: "toF64Checked"
+        141 NUM_MAX_F64: "maxF64"
+        142 NUM_MIN_F64: "minF64"
+        143 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
+        144 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
+        145 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
+        146 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        147 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1370,6 +1373,7 @@ define_builtins! {
         72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
+        75 LIST_WALK_TRY: "walkTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1485,9 +1489,28 @@ define_builtins! {
         25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
         26 DECODE_FROM_BYTES: "fromBytes"
     }
-    13 JSON: "Json" => {
+    13 HASH: "Hash" => {
+        0 HASH_HASH_ABILITY: "Hash" exposed_type=true
+        1 HASH_HASH: "hash"
+        2 HASH_HASHER: "Hasher" exposed_type=true
+        3  HASH_ADD_BYTES: "addBytes"
+        4  HASH_ADD_U8: "addU8"
+        5  HASH_ADD_U16: "addU16"
+        6  HASH_ADD_U32: "addU32"
+        7  HASH_ADD_U64: "addU64"
+        8  HASH_ADD_U128: "addU128"
+        9  HASH_ADD_I8: "addI8"
+        10 HASH_ADD_I16: "addI16"
+        11 HASH_ADD_I32: "addI32"
+        12 HASH_ADD_I64: "addI64"
+        13 HASH_ADD_I128: "addI128"
+        14 HASH_COMPLETE: "complete"
+        15 HASH_HASH_STR_BYTES: "hashStrBytes"
+        16 HASH_HASH_LIST: "hashList"
+    }
+    14 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

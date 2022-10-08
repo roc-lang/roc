@@ -39,6 +39,7 @@ interface List
         max,
         map4,
         mapTry,
+        walkTry,
         dropFirst,
         joinMap,
         any,
@@ -63,6 +64,8 @@ interface List
     ]
     imports [
         Bool.{ Bool },
+        Result.{ Result },
+        Num.{ Nat, Num, Int },
     ]
 
 ## Types
@@ -957,9 +960,8 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with Result instead of [Continue, Break].
+## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
 ## Using `Result` saves a conditional in `mapTry`.
-## It might be useful to expose this in userspace?
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)

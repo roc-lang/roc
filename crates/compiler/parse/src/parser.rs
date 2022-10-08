@@ -126,6 +126,8 @@ pub enum EHeader<'a> {
     AppName(EString<'a>, Position),
     PlatformName(EPackageName<'a>, Position),
     IndentStart(Position),
+
+    InconsistentModuleName(Region),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

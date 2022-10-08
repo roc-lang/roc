@@ -2036,6 +2036,7 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType, Option<Symbol>),
     OptionalRequiredMismatch(Lowercase),
     OpaqueComparedToNonOpaque,
+    BoolVsBoolTag(TagName),
 }
 
 fn problems_to_tip<'b>(
@@ -2576,6 +2577,23 @@ fn to_diff<'b>(
                 status: args_diff.status,
                 left_able: args_diff.left_able,
                 right_able: args_diff.right_able,
+            }
+        }
+
+        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _)) | (TagUnion(tags, _), Alias(Symbol::BOOL_BOOL, _, _, _))
+            if tags.len() == 1
+                && tags.keys().all(|t| t.0.as_str() == "True" || t.0.as_str() == "False") =>
+        {
+            let written_tag = tags.keys().next().unwrap().clone();
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Different(vec![Problem::BoolVsBoolTag(written_tag)]),
+                left_able,
+                right_able,
             }
         }
 
@@ -3706,6 +3724,18 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow(" I can create an instance of this opaque type by doing "),
             alloc.type_str("@Age 23"),
             alloc.reflow("."),
+        ])),
+
+        (BoolVsBoolTag(tag), _) => alloc.tip().append(alloc.concat([
+            alloc.reflow("Did you mean to use "),
+            alloc.symbol_qualified(if tag.0.as_str() == "True" {
+                Symbol::BOOL_TRUE
+            } else {
+                Symbol::BOOL_FALSE
+            }),
+            alloc.reflow(" rather than "),
+            alloc.tag_name(tag),
+            alloc.reflow("?"),
         ])),
     }
 }

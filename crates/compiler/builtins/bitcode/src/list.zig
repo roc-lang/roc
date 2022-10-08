@@ -517,17 +517,25 @@ pub fn listSublist(
     len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    if (len == 0) {
+    const size = list.len();
+    if (len == 0 or start >= size) {
+        if (list.isUnique()) {
+            // Decrement the reference counts of all elements.
+            if (list.bytes) |source_ptr| {
+                var i: usize = 0;
+                while (i < size) : (i += 1) {
+                    const element = source_ptr + i * element_width;
+                    dec(element);
+                }
+                var output = list;
+                output.length = 0;
+                return output;
+            }
+        }
         return RocList.empty();
     }
 
     if (list.bytes) |source_ptr| {
-        const size = list.len();
-
-        if (start >= size) {
-            return RocList.empty();
-        }
-
         const keep_len = std.math.min(len, size - start);
         const drop_start_len = start;
         const drop_end_len = size - (start + keep_len);
@@ -546,10 +554,17 @@ pub fn listSublist(
             dec(element);
         }
 
-        if (start == 0 and list.isUnique()) {
+        if (list.isUnique()) {
             var output = list;
             output.length = keep_len;
-            return output;
+            if (start == 0) {
+                return output;
+            } else {
+                // We want memmove due to aliasing. Zig does not expose it directly.
+                // Instead use copy which can write to aliases as long as the dest is before the source.
+                mem.copy(u8, source_ptr[0 .. keep_len * element_width], source_ptr[start * element_width .. (start + keep_len) * element_width]);
+                return output;
+            }
         } else {
             const output = RocList.allocate(alignment, keep_len, element_width);
             const target_ptr = output.bytes orelse unreachable;
