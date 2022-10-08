@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          # TODO re-enable>> ref: "main"
+          ref: "main"
           clean: "true"
 
       - name: Earthly version
