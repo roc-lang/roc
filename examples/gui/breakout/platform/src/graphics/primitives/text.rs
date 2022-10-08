@@ -127,7 +127,7 @@ pub fn build_glyph_brush(
     render_format: wgpu::TextureFormat,
 ) -> Result<GlyphBrush<()>, InvalidFont> {
     let inconsolata = FontArc::try_from_slice(include_bytes!(
-        "../../../../../../crates/editor/Inconsolata-Regular.ttf"
+        "../../../../../../../crates/editor/Inconsolata-Regular.ttf"
     ))?;
 
     Ok(GlyphBrushBuilder::using_font(inconsolata).build(gpu_device, render_format))
