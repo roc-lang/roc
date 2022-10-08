@@ -6035,6 +6035,20 @@ fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_TRIM_RIGHT,
             )
         }
+        StrWithCapacity => {
+            // Str.withCapacity : Nat -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let str_len = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[str_len],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_CAPACITY,
+            )
+        }
         ListLen => {
             // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
@@ -6157,7 +6171,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
         StrGetUnsafe => {
-            // List.getUnsafe : Str, Nat -> u8
+            // Str.getUnsafe : Str, Nat -> u8
             debug_assert_eq!(args.len(), 2);
 
             let wrapper_struct = load_symbol(scope, &args[0]);
