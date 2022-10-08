@@ -14,7 +14,7 @@ Run examples as follows:
     roc run hello-world/main.roc
     ```
 
-`examples/benchmarks/` contains some larger examples.
+`crates/cli_testing_examples/benchmarks/` contains some larger examples.
 
-Some examples like `examples/benchmarks/NQueens.roc` require input after running.
+Some examples like `crates/cli_testing_examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.
