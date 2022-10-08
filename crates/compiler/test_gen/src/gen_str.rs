@@ -1930,3 +1930,27 @@ fn when_on_strings() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn str_with_prefix() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withPrefix "world!" "Hello "
+            "#
+        ),
+        RocStr::from("Hello world!"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "two" |> Str.withPrefix "Forty "
+            "#
+        ),
+        RocStr::from("Forty two"),
+        RocStr
+    );
+}
