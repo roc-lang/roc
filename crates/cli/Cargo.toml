@@ -61,7 +61,7 @@ roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
 roc_tracing = { path = "../tracing" }
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
-const_format = { version = "0.2.23", features = ["const_generics"] }
+const_format = { version = "0.2.28", features = ["const_generics"] }
 bumpalo = { version = "3.11.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }
 libc = "0.2.133"
