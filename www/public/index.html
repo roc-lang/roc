@@ -196,12 +196,11 @@
 
 <p>In contrast, if you do `roc build` (or `roc run`) on that same machine, it will take closer to 500
   milliseconds instead. Almost all that extra time is spent waiting for LLVM to generate (unoptimized)
-  machine code, and then for the system linker to assemble an executable from it. This is because on
-  macOS we don't yet have a development backend or surgical linking set up yet.</p>
+  machine code, and then for the system linker to assemble an executable from it.</p>
 
-<p>In contrast, on an x86 Linux machine, you can enable the development backend to eliminate
-almost all of those extra 490 millisconds of build time. This skips LLVM and compiles directly from
-Roc's internal representation to machine code, like most compilers did before LLVM. (LLVM can optimize
+<p> Fortunately, we can eliminate almost all of those extra 490 millisconds of build time by using
+Roc's (work in progress) development backend instead of LLVM. This compiles directly from Roc's
+internal representation to machine code, like most compilers did before LLVM. (LLVM can optimize
 code into running very fast, but even when it performs no optimization at all, LLVM itself takes a lot
 longer to run than generating unoptimized machine code directly.)</p>
 
