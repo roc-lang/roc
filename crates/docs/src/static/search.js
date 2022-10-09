@@ -45,11 +45,20 @@
 
   search();
 
-  window.addEventListener("keydown", (e) => {
-    if (e.code === 'F3' || ((e.ctrlKey || e.metaKey) && e.code === 'KeyF')) { 
-      e.preventDefault();
+  // Capture '/' keypress for quick search 
+  window.addEventListener("keyup", (e) => {
+
+    if (e.code === "Slash") {
+      e.preventDefault;
       searchBox.focus();
+      searchBox.value = "";
     }
+
+    if (e.code === "Escape" && document.activeElement === searchBox) {
+      e.preventDefault;
+      searchBox.blur();
+    }
+
   });
-  
+
 })();
