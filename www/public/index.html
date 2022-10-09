@@ -88,7 +88,7 @@
     compilers, to check whether we're generating equivalent instructions.</p>
 
   <p>That said, there are also cases where Roc has strictly more runtime overhead than languages
-    like C, C++, Zig, and Rust do. The most significant is automatic memory management, which Roc
+    like C, C++, Zig, and Rust do. The most costly is automatic memory management, which Roc
     implements using automatic reference counting. Static reference count optimizations like
     elision and reuse (thanks to Morphic and
     <a href="https://www.microsoft.com/en-us/research/publication/perceus-garbage-free-reference-counting-with-reuse/">Perceus</a>)
@@ -105,11 +105,11 @@
 
 <p>Overall, we expect Roc's performance in the use cases mentioned above (servers, CLIs, GUIs, etc.)
    to be about the same as the equivalent C++ code would be, if all that C++ code
-   (including dependencies other than the stdlib) were written in a restricted subset of C++
-   which always did array bounds checks and used shared pointers for all heap allocations.
-   The Roc code might even run somewhat faster, thanks to its static reference count optimizations,
-   but then again Roc also has a bit of overhead to perform opportunistic in-place mutation instead
-   of direct mutation.</p>
+   (including its dependencies) were written in a restricted subset of C++ which always did array
+   bounds checks and used shared pointers for all heap allocations.
+   The Roc code might even run somewhat faster, because its reference counts are non-atomic by default,
+   and can be statically optimized away in some cases—but then again, Roc also has a bit of overhead
+   to perform opportunistic in-place mutation instead of direct mutation.</p>
 
 <p>To be clear, we don't expect this because we've benchmarked a bunch of programs written in Roc
   and in this restricted C++ subset, and found that the numbers were about the same (although if
