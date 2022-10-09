@@ -1,38 +1,34 @@
 interface Num
     exposes [
         Num,
-        Int,
         Frac,
+        Int,
+        Fraction,
         Integer,
+        Signed,
+        Unsigned,
+        Static8Bits,
+        Static16Bits,
+        Static32Bits,
+        Static64Bits,
+        Static128Bits,
+        Dynamic32Or64BitsPerSystem,
+        FixedPoint,
         FloatingPoint,
-        I128,
-        I64,
-        I32,
-        I16,
         I8,
-        U128,
-        U64,
-        U32,
-        U16,
+        I16,
+        I32,
+        I64,
+        I128,
         U8,
-        Signed128,
-        Signed64,
-        Signed32,
-        Signed16,
-        Signed8,
-        Unsigned128,
-        Unsigned64,
-        Unsigned32,
-        Unsigned16,
-        Unsigned8,
+        U16,
+        U32,
+        U64,
+        U128,
         Nat,
-        Dec,
         F32,
         F64,
-        Natural,
-        Decimal,
-        Binary32,
-        Binary64,
+        Dec,
         abs,
         neg,
         add,
@@ -333,7 +329,7 @@ Num range := range
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
 ## If you need to do math outside these bounds, consider using a larger numeric size.
-Int range : Num (Integer range)
+Int signedness bits : Num (Integer signedness bits)
 
 ## A fixed-size number with a fractional component.
 ##
@@ -402,37 +398,33 @@ Int range : Num (Integer range)
 ## loops and conditionals. If you need to do performance-critical trigonometry
 ## or square roots, either [F64] or [F32] is probably a better choice than the
 ## usual default choice of [Dec], despite the precision problems they bring.
-Frac range : Num (FloatingPoint range)
+Frac pointSystem bits : Num (Fraction pointSystem bits)
 
-Signed128 := []
-Signed64 := []
-Signed32 := []
-Signed16 := []
-Signed8 := []
+Integer signedness bits := { signedness, bits }
 
-Unsigned128 := []
-Unsigned64 := []
-Unsigned32 := []
-Unsigned16 := []
-Unsigned8 := []
+Signed := []
+Unsigned := []
 
-Natural := []
-
-Integer range := range
-
-I128 : Num (Integer Signed128)
-I64 : Num (Integer Signed64)
-I32 : Num (Integer Signed32)
-I16 : Num (Integer Signed16)
+Static8Bits := []
+Static16Bits := []
+Static32Bits := []
+Static64Bits := []
+Static128Bits := []
+Dynamic32Or64BitsPerSystem := []
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int Signed8
+I8 : Int Signed Static8Bits
+I16 : Int Signed Static16Bits
+I32 : Int Signed Static32Bits
+I64 : Int Signed Static64Bits
+I128 : Int Signed Static128Bits
 
-U128 : Num (Integer Unsigned128)
-U64 : Num (Integer Unsigned64)
-U32 : Num (Integer Unsigned32)
-U16 : Num (Integer Unsigned16)
-U8 : Num (Integer Unsigned8)
+## An unsigned 8-bit integer, ranging from 0 to 255
+U8 : Int Unsigned Static8Bits
+U16 : Int Unsigned Static16Bits
+U32 : Int Unsigned Static32Bits
+U64 : Int Unsigned Static64Bits
+U128 : Int Unsigned Static128Bits
 
 ## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
 ## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
@@ -444,16 +436,14 @@ U8 : Num (Integer Unsigned8)
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
 ## good fit for [List.len] regardless of system.
-Nat : Num (Integer Natural)
+Nat : Int Unsigned Dynamic32Or64BitsPerSystem
 
-Decimal := []
-Binary64 := []
-Binary32 := []
+Fraction pointSystem bits := { pointSystem, bits }
 
-FloatingPoint range := range
+FloatingPoint := []
 
-F64 : Num (FloatingPoint Binary64)
-F32 : Num (FloatingPoint Binary32)
+F32 : Frac FloatingPoint Static32Bits
+F64 : Frac FloatingPoint Static64Bits
 
 ## A decimal number.
 ##
@@ -487,7 +477,9 @@ F32 : Num (FloatingPoint Binary32)
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
-Dec : Num (FloatingPoint Decimal)
+Dec : Frac FixedPoint Static128Bits
+
+FixedPoint := []
 
 # ------- Functions
 ## Convert a number to a [Str].
