@@ -619,7 +619,7 @@ formatHelpHelp = \n, cmdHelp ->
                     \(helpStr)
                     """
 
-            Str.concat fmtOptionsHelp fmtPositionalsHelp
+            Str.concat fmtPositionalsHelp fmtOptionsHelp
 
 formatSubCommand = \n, { name, help } ->
     indented = indent n
