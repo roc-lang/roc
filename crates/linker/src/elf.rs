@@ -987,6 +987,10 @@ pub(crate) fn surgery_elf(
 
     if app_obj
         .sections()
+        .filter(|sec| {
+            let name = sec.name().unwrap_or_default();
+            !name.starts_with(".debug") && !name.starts_with(".eh")
+        })
         .flat_map(|sec| sec.relocations())
         .any(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
     {
