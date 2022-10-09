@@ -44,4 +44,12 @@
   searchBox.addEventListener("input", search);
 
   search();
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === 'F3' || ((e.ctrlKey || e.metaKey) && e.code === 'KeyF')) { 
+      e.preventDefault();
+      searchBox.focus();
+    }
+  });
+  
 })();
