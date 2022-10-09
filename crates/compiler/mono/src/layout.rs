@@ -12,7 +12,7 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, UnionTags,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
     UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
@@ -3152,16 +3152,18 @@ fn layout_from_flat_type<'a>(
 
             layout_from_non_recursive_union(env, &tags).map(Ok)
         }
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
             debug_assert!(
                 ext_var_is_empty_tag_union(subs, ext_var),
                 "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
             );
 
-            let union_tags = UnionTags::from_tag_name_index(tag_name);
-            let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
+            let tag_names = subs.get_subs_slice(tag_names);
+            let unsorted_tags = UnsortedUnionLabels {
+                tags: tag_names.iter().map(|t| (t, &[] as &[Variable])).collect(),
+            };
 
-            layout_from_non_recursive_union(env, &tags).map(Ok)
+            layout_from_non_recursive_union(env, &unsorted_tags).map(Ok)
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);

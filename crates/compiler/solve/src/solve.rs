@@ -1522,8 +1522,9 @@ fn solve(
 
                     symbols.iter().any(|(s, _)| {
                         let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
-                        let content = subs.get_content_without_compacting(var);
-                        !matches!(content, Error | Structure(FlatType::Func(..)))
+                        let (_, underlying_content) = chase_alias_content(subs, var);
+
+                        !matches!(underlying_content, Error | Structure(FlatType::Func(..)))
                     })
                 };
 
@@ -1553,6 +1554,17 @@ fn solve(
     }
 
     state
+}
+
+fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::Alias(_, _, real_var, _) => {
+                var = *real_var;
+            }
+            content => return (var, content),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2299,10 +2311,11 @@ fn type_to_variable<'a>(
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }
 
-                let slice = SubsIndex::new(subs.tag_names.len() as u32);
-                subs.tag_names.push(tag_name.clone());
+                let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name.clone()]);
+                let symbols = SubsSlice::extend_new(&mut subs.closure_names, [*symbol]);
 
-                let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
+                let content =
+                    Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }

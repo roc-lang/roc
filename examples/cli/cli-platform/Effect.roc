@@ -14,7 +14,9 @@ hosted Effect
         setCwd,
         exePath,
         stdoutLine,
+        stdoutWrite,
         stderrLine,
+        stderrWrite,
         stdinLine,
         sendRequest,
         fileReadBytes,
@@ -26,7 +28,9 @@ hosted Effect
     generates Effect with [after, map, always, forever, loop]
 
 stdoutLine : Str -> Effect {}
+stdoutWrite : Str -> Effect {}
 stderrLine : Str -> Effect {}
+stderrWrite : Str -> Effect {}
 stdinLine : Effect Str
 
 fileWriteBytes : List U8, List U8 -> Effect (Result {} InternalFile.WriteErr)

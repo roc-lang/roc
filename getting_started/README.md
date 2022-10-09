@@ -12,9 +12,9 @@ If you have a specific question, the [FAQ](../FAQ.md) might have an answer, alth
 
 ## Installation
 
-- [Linux x86](linux_x86.md)
+- [Linux x86_64](linux_x86_64.md)
 - [MacOS Apple Silicon](macos_apple_silicon.md)
-- [MacOS x86](macos_x86.md)
+- [MacOS x86_64](macos_x86_64.md)
 - [Windows](windows.md)
 - [Other](other.md)
 
