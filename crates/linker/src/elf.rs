@@ -985,6 +985,16 @@ pub(crate) fn surgery_elf(
         }
     };
 
+    if app_obj
+        .sections()
+        .flat_map(|sec| sec.relocations())
+        .any(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
+    {
+        eprintln!("The surgical linker currently has issue #3609 and would fail linking your app.");
+        eprintln!("Please use `--linker=legacy` to avoid the issue for now.");
+        std::process::exit(1);
+    }
+
     let total_start = Instant::now();
 
     let loading_metadata_start = total_start;
