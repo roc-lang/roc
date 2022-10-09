@@ -20,7 +20,7 @@ use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
-use roc_parse::parser::{EExpr, ELambda, SyntaxError};
+use roc_parse::parser::{EClosure, EExpr, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
@@ -136,7 +136,7 @@ impl Validator for InputValidator {
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::DefMissingFinalExpr(_), _))
                 | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
-                | Err((_, EExpr::Lambda(ELambda::Body(_, _), _), _)) => {
+                | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
                     Ok(ValidationResult::Incomplete)
                 }
                 _ => Ok(ValidationResult::Valid(None)),
