@@ -60,18 +60,21 @@
 
   <h3>Goal</h3>
 
-  <p>The goal is that Roc runs so fast that in practice, you wouldn't expect a significant
-    performance boost from switching to a more popular language unless that language runs
-    at least as fast as C.</p>
+  <p>We want Roc to run faster than any non-systems language (like C, C++, Rust, or Zig)
+    that sees mainstream use in industry. The goal is that nobody should find themselves
+    thinking "I should rewrite my Roc program in [some mainstream garbage-collected language]
+    because that will make it run significantly faster."
+    </p>
 
-  <p>When benchmarking Roc code against similarly-optimized <a href="https://go.dev">Go</a>,
+  <p>When benchmarking Roc code against similarly-optimized programs written in
+    <a href="https://go.dev">Go</a>,
     <a href="https://www.swift.com/">Swift</a>, <a href="https://www.java.com">Java</a>,
-    <a href="https://learn.microsoft.com/en-us/dotnet/csharp">C#</a>, and
+    <a href="https://learn.microsoft.com/en-us/dotnet/csharp">C#</a>, or
     <a href="https://www.ecma-international.org/publications-and-standards/standards/ecma-262">JavaScript</a>,
     we generally aim for Roc to outperform all of those languages. Outperforming systems
     languages like Rust, Zig, C, D, and C++ is a non-goal, as is outperforming research languages
-    that see little or no use in industry. (Presumably there will always be certain specific
-    benchmarks where some popular slower-than-C languages outperform Roc, but the goal is to
+    that see little or no use in industry. (Realistically, there will always be certain specific
+    benchmarks where some popular non-systems-level languages outperform Roc, but the goal is to
     usually be at the front of that pack.)</p>
 
   <h4>Current progress</h4>
