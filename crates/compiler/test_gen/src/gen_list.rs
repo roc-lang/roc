@@ -3395,3 +3395,59 @@ fn list_let_generalization() {
         usize
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_until_sum() {
+    assert_evals_to!(
+        r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_implements_position() {
+    assert_evals_to!(
+        r#"
+        Option a : [Some a, None]
+
+        find : List a, a -> Option Nat
+        find = \list, needle ->
+            findHelp list needle
+                |> .v
+
+        findHelp = \list, needle ->
+            List.walkBackwardsUntil list { n: 0, v: None } \{ n, v }, element ->
+                if element == needle then
+                    Break { n, v: Some n }
+                else
+                    Continue { n: n + 1, v }
+
+        when find [1, 2, 3] 3 is
+            None -> 0
+            Some v -> v
+        "#,
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_until_even_prefix_sum() {
+    assert_evals_to!(
+        r#"
+        helper = \a, b ->
+            if Num.isEven b then
+                Continue (a + b)
+
+            else
+                Break a
+
+        List.walkBackwardsUntil [9, 8, 4, 2] 0 helper"#,
+        2 + 4 + 8,
+        i64
+    );
+}
