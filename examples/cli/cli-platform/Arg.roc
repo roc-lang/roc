@@ -6,10 +6,10 @@ interface Arg
         toHelp,
         parseFormatted,
         succeed,
-        bool,
+        boolOption,
+        strOption,
+        i64Option,
         str,
-        i64,
-        positional,
         subCommand,
         choice,
         withParser,
@@ -32,7 +32,7 @@ NamedParser a := {
 ## needs, consider transforming it into a [NamedParser].
 Parser a := [
     Succeed a,
-    Arg ArgConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } (ParseError [])),
+    Option OptionConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } (ParseError [])),
     Positional PositionalConfig (MarkedArgs -> Result { newlyTaken : Taken, val : a } (ParseError [])),
     # TODO: hiding the record behind an alias currently causes a panic
     SubCommand
@@ -59,15 +59,15 @@ MarkedArgs : { args : List Str, taken : Taken }
 ParseError a : [
     ## The program name was not found as the first argument to be parsed.
     ProgramNameNotProvided Str,
-    ## An argument is required, but it was not found.
-    MissingRequiredArg Str,
-    ## A positional argument is required, but it was not found.
-    MissingPositionalArg Str,
-    ## An argument was found, but it didn't have the expected [Type].
-    WrongType
+    ## A positional argument (inherently required) was not found.
+    MissingPositional Str,
+    ## An option argument is required, but it was not found.
+    MissingRequiredOption Str,
+    ## An argument was found, but it didn't have the expected [OptionType].
+    WrongOptionType
         {
             arg : Str,
-            expected : Type,
+            expected : OptionType,
         },
     ## A subcommand is required, but it was not found.
     SubCommandNotFound
@@ -82,9 +82,9 @@ ParseError a : [
         },
 ]a
 
-## Expected type of an argument, in an argument list being parsed.
-## Describes how a string argument should be interpreted as a certain type.
-Type : [
+## Expected type of an option, in an argument list being parsed.
+## Describes how a string option should be interpreted as a certain type.
+OptionType : [
     Str,
     Bool,
     I64,
@@ -96,11 +96,11 @@ Help : [
     Config (List Config),
 ]
 
-ArgConfig : {
+OptionConfig : {
     long : Str,
     short : Str,
     help : Str,
-    type : Type,
+    type : OptionType,
 }
 
 PositionalConfig : {
@@ -108,7 +108,7 @@ PositionalConfig : {
     help : Str,
 }
 
-Config : [Arg ArgConfig, Positional PositionalConfig]
+Config : [Option OptionConfig, Positional PositionalConfig]
 
 ## Generates help metadata from a [Parser].
 ##
@@ -133,8 +133,8 @@ toHelpHelper = \@Parser parser, configs ->
         WithConfig innerParser config ->
             toHelpHelper innerParser (List.append configs config)
 
-        Arg config _ ->
-            List.append configs (Arg config)
+        Option config _ ->
+            List.append configs (Option config)
             |> Config
 
         SubCommand commands ->
@@ -165,7 +165,7 @@ findOneArg = \long, short, { args, taken } ->
     if !found then
         Err NotFound
     else
-        # Return the next arg after the given one
+        # Return the next argument after the given one
         List.get args (argIndex + 1)
         |> Result.mapErr (\_ -> NotFound)
         |> Result.map
@@ -194,8 +194,8 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    Arg config run ->
-                        Arg config \args ->
+                    Option config run ->
+                        Option config \args ->
                             run args
                             |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
@@ -211,16 +211,16 @@ andMap = \@Parser parser, @Parser mapper ->
                         List.map cmds mapSubParser
                         |> SubCommand
 
-            Arg config run ->
+            Option config run ->
                 when parser is
                     Succeed a ->
-                        Arg config \args ->
+                        Option config \args ->
                             when run args is
                                 Ok { val: fn, newlyTaken } -> Ok { val: fn a, newlyTaken }
                                 Err err -> Err err
 
                     Lazy thunk ->
-                        Arg config \args ->
+                        Option config \args ->
                             when run args is
                                 Ok { val: fn, newlyTaken } -> Ok { val: fn (thunk {}), newlyTaken }
                                 Err err -> Err err
@@ -230,9 +230,9 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config2
 
-                    Arg config2 run2 ->
+                    Option config2 run2 ->
                         # Parse first the one and then the other.
-                        combinedParser = Arg config2 \args ->
+                        combinedParser = Option config2 \args ->
                             when run args is
                                 Ok { val: fn, newlyTaken } ->
                                     run2 (updateTaken args newlyTaken)
@@ -242,7 +242,7 @@ andMap = \@Parser parser, @Parser mapper ->
 
                         # Store the extra config.
                         @Parser combinedParser
-                        |> WithConfig (Arg config)
+                        |> WithConfig (Option config)
 
                     Positional config2 run2 ->
                         combinedParser = Positional config2 \args ->
@@ -255,7 +255,7 @@ andMap = \@Parser parser, @Parser mapper ->
 
                         # Store the extra config.
                         @Parser combinedParser
-                        |> WithConfig (Arg config)
+                        |> WithConfig (Option config)
 
                     SubCommand cmds ->
                         # For each subcommand, first run the subcommand, then
@@ -285,9 +285,9 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config2
 
-                    Arg config2 run2 ->
+                    Option config2 run2 ->
                         # Parse first the one and then the other.
-                        combinedParser = Arg config2 \args ->
+                        combinedParser = Option config2 \args ->
                             when run args is
                                 Ok { val: fn, newlyTaken } ->
                                     run2 (updateTaken args newlyTaken)
@@ -336,8 +336,8 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    Arg config run ->
-                        Arg config \args ->
+                    Option config run ->
+                        Option config \args ->
                             run args
                             |> Result.map (\{ val, newlyTaken } -> { val: fn val, newlyTaken })
 
@@ -385,7 +385,7 @@ program = \parser, { name, help ? "" } ->
 # TODO panics in alias analysis when this annotation is included
 # parse : NamedParser a, List Str -> Result a (ParseError*)
 parse = \@NamedParser parser, args ->
-    # By convention the first string in the arg list is the program name.
+    # By convention the first string in the argument list is the program name.
     if
         List.isEmpty args
     then
@@ -399,7 +399,7 @@ parseHelp : Parser a, MarkedArgs -> Result a (ParseError [])
 parseHelp = \@Parser parser, args ->
     when parser is
         Succeed val -> Ok val
-        Arg _ run ->
+        Option _ run ->
             run args
             |> Result.map .val
 
@@ -444,51 +444,51 @@ nextUnmarked = \marked ->
 
     help 0
 
-## Creates a parser for a boolean flag argument.
-## Flags of value "true" and "false" will be parsed as [Bool.true] and [Bool.false], respectively.
-## All other values will result in a `WrongType` error.
-bool : _ -> Parser Bool # TODO: panics if parameter annotation given
-bool = \{ long, short ? "", help ? "" } ->
+## Creates a parser for a boolean option argument.
+## Options of value "true" and "false" will be parsed as [Bool.true] and [Bool.false], respectively.
+## All other values will result in a `WrongOptionType` error.
+boolOption : _ -> Parser Bool # TODO: panics if parameter annotation given
+boolOption = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (MissingRequiredArg long)
+            Err NotFound -> Err (MissingRequiredOption long)
             Ok { val, newlyTaken } ->
                 when val is
                     "true" -> Ok { val: Bool.true, newlyTaken }
                     "false" -> Ok { val: Bool.false, newlyTaken }
-                    _ -> Err (WrongType { arg: long, expected: Bool })
+                    _ -> Err (WrongOptionType { arg: long, expected: Bool })
 
-    @Parser (Arg { long, short, help, type: Bool } fn)
+    @Parser (Option { long, short, help, type: Bool } fn)
 
-## Creates a parser for a string flag argument.
-str : _ -> Parser Str # TODO: panics if parameter annotation given
-str = \{ long, short ? "", help ? "" } ->
+## Creates a parser for a string option argument.
+strOption : _ -> Parser Str # TODO: panics if parameter annotation given
+strOption = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (MissingRequiredArg long)
+            Err NotFound -> Err (MissingRequiredOption long)
             Ok { val, newlyTaken } -> Ok { val, newlyTaken }
 
-    @Parser (Arg { long, short, help, type: Str } fn)
+    @Parser (Option { long, short, help, type: Str } fn)
 
-## Creates a parser for a 64-bit signed integer ([I64]).
-i64 : _ -> Parser I64 # TODO: panics if parameter annotation given
-i64 = \{ long, short ? "", help ? "" } ->
+## Creates a parser for a 64-bit signed integer ([I64]) option argument.
+i64Option : _ -> Parser I64 # TODO: panics if parameter annotation given
+i64Option = \{ long, short ? "", help ? "" } ->
     fn = \args ->
         when findOneArg long short args is
-            Err NotFound -> Err (MissingRequiredArg long)
+            Err NotFound -> Err (MissingRequiredOption long)
             Ok { val, newlyTaken } ->
                 Str.toI64 val
-                |> Result.mapErr (\_ -> WrongType { arg: long, expected: I64 })
+                |> Result.mapErr (\_ -> WrongOptionType { arg: long, expected: I64 })
                 |> Result.map (\v -> { val: v, newlyTaken })
 
-    @Parser (Arg { long, short, help, type: I64 } fn)
+    @Parser (Option { long, short, help, type: I64 } fn)
 
 ## Parses a single positional argument as a string.
-positional : _ -> Parser Str
-positional = \{ name, help ? "" } ->
+str : _ -> Parser Str
+str = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args
-        |> Result.mapErr (\OutOfBounds -> MissingPositionalArg name)
+        |> Result.mapErr (\OutOfBounds -> MissingPositional name)
         |> Result.map (\{ val, index } -> { val, newlyTaken: Set.insert args.taken index })
 
     @Parser (Positional { name, help } fn)
@@ -573,12 +573,12 @@ formatHelpHelp = \n, cmdHelp ->
             """
 
         Config configs ->
-            argConfigs =
+            optionConfigs =
                 filterMap
                     configs
                     (\config ->
                         when config is
-                            Arg c -> Some c
+                            Option c -> Some c
                             _ -> None)
 
             positionalConfigs =
@@ -589,13 +589,13 @@ formatHelpHelp = \n, cmdHelp ->
                             Positional c -> Some c
                             _ -> None)
 
-            fmtArgsHelp =
-                if List.isEmpty argConfigs then
+            fmtOptionsHelp =
+                if List.isEmpty optionConfigs then
                     ""
                 else
                     helpStr =
-                        argConfigs
-                        |> List.map (\c -> formatArgConfig (n + indentLevel) c)
+                        optionConfigs
+                        |> List.map (\c -> formatOptionConfig (n + indentLevel) c)
                         |> Str.joinWith "\n"
 
                     """
@@ -615,11 +615,11 @@ formatHelpHelp = \n, cmdHelp ->
 
                     """
                     
-                    \(indented)POSITIONAL ARGUMENTS:
+                    \(indented)ARGS:
                     \(helpStr)
                     """
 
-            Str.concat fmtArgsHelp fmtPositionalsHelp
+            Str.concat fmtPositionalsHelp fmtOptionsHelp
 
 formatSubCommand = \n, { name, help } ->
     indented = indent n
@@ -628,14 +628,14 @@ formatSubCommand = \n, { name, help } ->
 
     "\(indented)\(name)\(fmtHelp)"
 
-formatArgConfig : Nat, ArgConfig -> Str
-formatArgConfig = \n, { long, short, help, type } ->
+formatOptionConfig : Nat, OptionConfig -> Str
+formatOptionConfig = \n, { long, short, help, type } ->
     indented = indent n
 
     formattedShort =
         mapNonEmptyStr short \s -> ", -\(s)"
 
-    formattedType = formatType type
+    formattedType = formatOptionType type
 
     formattedHelp =
         mapNonEmptyStr help \h -> "    \(h)"
@@ -651,12 +651,12 @@ formatPositionalConfig = \n, { name, help } ->
 
     "\(indented)\(name)\(formattedHelp)"
 
-formatType : Type -> Str
-formatType = \type ->
+formatOptionType : OptionType -> Str
+formatOptionType = \type ->
     when type is
-        Bool -> "bool"
+        Bool -> "boolean"
         Str -> "string"
-        I64 -> "i64"
+        I64 -> "integer, 64-bit signed"
 
 quote = \s -> "\"\(s)\""
 
@@ -664,18 +664,18 @@ formatError : ParseError [] -> Str
 formatError = \err ->
     when err is
         ProgramNameNotProvided programName ->
-            "The program name \"\(programName)\" was not probided as a first argument!"
+            "The program name \"\(programName)\" was not provided as a first argument!"
 
-        MissingRequiredArg arg ->
-            "Argument `--\(arg)` is required but was not provided!"
+        MissingPositional arg ->
+            "The argument `\(arg)` is required but was not provided!"
 
-        MissingPositionalArg arg ->
-            "A positional argument for `\(arg)` is required but was not provided!"
+        MissingRequiredOption arg ->
+            "The option `--\(arg)` is required but was not provided!"
 
-        WrongType { arg, expected } ->
-            formattedType = formatType expected
+        WrongOptionType { arg, expected } ->
+            formattedType = formatOptionType expected
 
-            "The argument `--\(arg)` expects a value of type \(formattedType)!"
+            "The option `--\(arg)` expects a value of type \(formattedType)!"
 
         SubCommandNotFound { choices } ->
             fmtChoices =
@@ -708,117 +708,117 @@ formatError = \err ->
 ## the result of `parser` to `mapper`.
 ##
 ## This provides a way to chain the results of multiple parsers together. For
-## example, to combine the results of two [str] arguments into a record, you
-## could use
+## example, to combine the results of two [strOption] arguments into a record,
+## you could use
 ##
 ## ```
 ## succeed (\host -> \port -> { host, port })
-## |> withParser (str { long: "host" })
-## |> withParser (str { long: "port" })
+## |> withParser (strOption { long: "host" })
+## |> withParser (strOption { long: "port" })
 ## ```
 withParser = \arg1, arg2 -> andMap arg2 arg1
 
 mark = \args -> { args, taken: Set.empty }
 
-# bool undashed long argument is missing
+# boolean undashed long optional is missing
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
-    parseHelp parser (mark ["foo"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["foo"]) == Err (MissingRequiredOption "foo")
 
-# bool dashed long argument without value is missing
+# boolean dashed long optional without value is missing
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
-    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredOption "foo")
 
-# bool dashed long argument with value is determined true
+# boolean dashed long optional with value is determined true
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["--foo", "true"]) == Ok Bool.true
 
-# bool dashed long argument with value is determined false
+# boolean dashed long optional with value is determined false
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
     parseHelp parser (mark ["--foo", "false"]) == Ok Bool.false
 
-# bool dashed long argument with value is determined wrong type
+# boolean dashed long optional with value is determined wrong type
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
-    parseHelp parser (mark ["--foo", "not-a-bool"]) == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["--foo", "not-a-boolean"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
 
-# bool dashed short argument with value is determined true
+# boolean dashed short optional with value is determined true
 expect
-    parser = bool { long: "foo", short: "F" }
+    parser = boolOption { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "true"]) == Ok Bool.true
 
-# bool dashed short argument with value is determined false
+# boolean dashed short optional with value is determined false
 expect
-    parser = bool { long: "foo", short: "F" }
+    parser = boolOption { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "false"]) == Ok Bool.false
 
-# bool dashed short argument with value is determined wrong type
+# boolean dashed short optional with value is determined wrong type
 expect
-    parser = bool { long: "foo", short: "F" }
+    parser = boolOption { long: "foo", short: "F" }
 
-    parseHelp parser (mark ["-F", "not-a-bool"]) == Err (WrongType { arg: "foo", expected: Bool })
+    parseHelp parser (mark ["-F", "not-a-boolean"]) == Err (WrongOptionType { arg: "foo", expected: Bool })
 
-# string dashed long argument without value is missing
+# string dashed long option without value is missing
 expect
-    parser = str { long: "foo" }
+    parser = strOption { long: "foo" }
 
-    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredOption "foo")
 
-# string dashed long argument with value is determined
+# string dashed long option with value is determined
 expect
-    parser = str { long: "foo" }
+    parser = strOption { long: "foo" }
 
     parseHelp parser (mark ["--foo", "itsme"]) == Ok "itsme"
 
-# string dashed short argument without value is missing
+# string dashed short option without value is missing
 expect
-    parser = str { long: "foo", short: "F" }
+    parser = strOption { long: "foo", short: "F" }
 
-    parseHelp parser (mark ["-F"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["-F"]) == Err (MissingRequiredOption "foo")
 
-# string dashed short argument with value is determined
+# string dashed short option with value is determined
 expect
-    parser = str { long: "foo", short: "F" }
+    parser = strOption { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "itsme"]) == Ok "itsme"
 
-# i64 dashed long argument without value is missing
+# i64 dashed long option without value is missing
 expect
-    parser = i64 { long: "foo" }
+    parser = i64Option { long: "foo" }
 
-    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["--foo"]) == Err (MissingRequiredOption "foo")
 
-# i64 dashed long argument with value is determined positive
+# i64 dashed long option with value is determined positive
 expect
-    parser = i64 { long: "foo" }
+    parser = i64Option { long: "foo" }
 
     parseHelp parser (mark ["--foo", "1234"]) == Ok 1234
 
-# i64 dashed long argument with value is determined negative
+# i64 dashed long option with value is determined negative
 expect
-    parser = i64 { long: "foo" }
+    parser = i64Option { long: "foo" }
 
     parseHelp parser (mark ["--foo", "-1234"]) == Ok -1234
 
-# i64 dashed short argument without value is missing
+# i64 dashed short option without value is missing
 expect
-    parser = i64 { long: "foo", short: "F" }
+    parser = i64Option { long: "foo", short: "F" }
 
-    parseHelp parser (mark ["-F"]) == Err (MissingRequiredArg "foo")
+    parseHelp parser (mark ["-F"]) == Err (MissingRequiredOption "foo")
 
-# i64 dashed short argument with value is determined
+# i64 dashed short option with value is determined
 expect
-    parser = i64 { long: "foo", short: "F" }
+    parser = i64Option { long: "foo", short: "F" }
 
     parseHelp parser (mark ["-F", "1234"]) == Ok 1234
 
@@ -826,8 +826,8 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> withParser (str { long: "foo" })
-        |> withParser (str { long: "bar" })
+        |> withParser (strOption { long: "foo" })
+        |> withParser (strOption { long: "bar" })
 
     cases = [
         ["--foo", "true", "--bar", "baz"],
@@ -841,61 +841,61 @@ expect
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo) bar: \(bar)")
-        |> withParser (str { long: "foo" })
-        |> withParser (str { long: "bar" })
+        |> withParser (strOption { long: "foo" })
+        |> withParser (strOption { long: "bar" })
 
     List.all
         [
-            parseHelp parser (mark ["--foo", "zaz"]) == Err (MissingRequiredArg "bar"),
-            parseHelp parser (mark ["--bar", "zaz"]) == Err (MissingRequiredArg "foo"),
+            parseHelp parser (mark ["--foo", "zaz"]) == Err (MissingRequiredOption "bar"),
+            parseHelp parser (mark ["--bar", "zaz"]) == Err (MissingRequiredOption "foo"),
         ]
         (\b -> b)
 
-# string and bool parsers build help
+# string and boolean parsers build help
 expect
     parser =
         succeed (\foo -> \bar -> \_bool -> "foo: \(foo) bar: \(bar)")
-        |> withParser (str { long: "foo", help: "the foo flag" })
-        |> withParser (str { long: "bar", short: "B" })
-        |> withParser (bool { long: "bool" })
+        |> withParser (strOption { long: "foo", help: "the foo option" })
+        |> withParser (strOption { long: "bar", short: "B" })
+        |> withParser (boolOption { long: "boolean" })
 
     toHelp parser
     == Config [
-        Arg { long: "foo", short: "", help: "the foo flag", type: Str },
-        Arg { long: "bar", short: "B", help: "", type: Str },
-        Arg { long: "bool", short: "", help: "", type: Bool },
+        Option { long: "foo", short: "", help: "the foo option", type: Str },
+        Option { long: "bar", short: "B", help: "", type: Str },
+        Option { long: "boolean", short: "", help: "", type: Bool },
     ]
 
-# format argument is missing
+# format option is missing
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
     when parseHelp parser (mark ["foo"]) is
         Ok _ -> Bool.false
         Err e ->
             err = formatError e
 
-            err == "Argument `--foo` is required but was not provided!"
+            err == "The option `--foo` is required but was not provided!"
 
-# format argument has wrong type
+# format option has wrong type
 expect
-    parser = bool { long: "foo" }
+    parser = boolOption { long: "foo" }
 
     when parseHelp parser (mark ["--foo", "12"]) is
         Ok _ -> Bool.false
         Err e ->
             err = formatError e
 
-            err == "The argument `--foo` expects a value of type bool!"
+            err == "The option `--foo` expects a value of type boolean!"
 
-# format help menu with only args
+# format help menu with only options
 expect
     parser =
         succeed (\_foo -> \_bar -> \_baz -> \_bool -> "")
-        |> withParser (str { long: "foo", help: "the foo flag" })
-        |> withParser (str { long: "bar", short: "B" })
-        |> withParser (str { long: "baz", short: "z", help: "the baz flag" })
-        |> withParser (bool { long: "bool" })
+        |> withParser (strOption { long: "foo", help: "the foo option" })
+        |> withParser (strOption { long: "bar", short: "B" })
+        |> withParser (strOption { long: "baz", short: "z", help: "the baz option" })
+        |> withParser (boolOption { long: "boolean" })
         |> program { name: "test" }
 
     formatHelp parser
@@ -904,10 +904,10 @@ expect
     test
     
     OPTIONS:
-        --foo    the foo flag  (string)
+        --foo    the foo option  (string)
         --bar, -B  (string)
-        --baz, -z    the baz flag  (string)
-        --bool  (bool)
+        --baz, -z    the baz option  (string)
+        --boolean  (boolean)
     """
 
 # format help menu with subcommands
@@ -915,12 +915,12 @@ expect
     parser =
         choice [
             succeed (\user -> \pw -> "\(user)\(pw)")
-            |> withParser (str { long: "user" })
-            |> withParser (str { long: "pw" })
+            |> withParser (strOption { long: "user" })
+            |> withParser (strOption { long: "pw" })
             |> subCommand "login",
             succeed (\file -> \url -> "\(file)\(url)")
-            |> withParser (str { long: "file" })
-            |> withParser (str { long: "url" })
+            |> withParser (strOption { long: "file" })
+            |> withParser (strOption { long: "url" })
             |> subCommand "publish",
         ]
         |> program { name: "test" }
@@ -963,12 +963,12 @@ expect
     parser =
         choice [
             succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-            |> withParser (str { long: "user" })
-            |> withParser (str { long: "pw" })
+            |> withParser (strOption { long: "user" })
+            |> withParser (strOption { long: "pw" })
             |> subCommand "login",
             succeed (\file -> \url -> "\(file)\(url)")
-            |> withParser (str { long: "file" })
-            |> withParser (str { long: "url" })
+            |> withParser (strOption { long: "file" })
+            |> withParser (strOption { long: "url" })
             |> subCommand "publish",
         ]
         |> program { name: "test" }
@@ -983,8 +983,8 @@ expect
         choice [
             choice [
                 succeed (\user -> \pw -> "logging in \(user) with \(pw)")
-                |> withParser (str { long: "user" })
-                |> withParser (str { long: "pw" })
+                |> withParser (strOption { long: "user" })
+                |> withParser (strOption { long: "pw" })
                 |> subCommand "login",
             ]
             |> subCommand "auth",
@@ -1031,18 +1031,18 @@ expect
             \t"auth", "publish"
             """
 
-# parse positional argument
+# parse positional
 expect
-    parser = positional { name: "foo" }
+    parser = str { name: "foo" }
 
     parseHelp parser (mark ["myArg"]) == Ok "myArg"
 
-# parse positional argument with argument flag
+# parse positional with option
 expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo), bar: \(bar)")
-        |> withParser (str { long: "foo" })
-        |> withParser (positional { name: "bar" })
+        |> withParser (strOption { long: "foo" })
+        |> withParser (str { name: "bar" })
 
     cases = [
         ["--foo", "true", "baz"],
@@ -1051,17 +1051,17 @@ expect
 
     List.all cases \args -> parseHelp parser (mark args) == Ok "foo: true, bar: baz"
 
-# parse positional argument with subcommand
+# parse positional with subcommand
 expect
     parser = choice [
-        positional { name: "bar" }
+        str { name: "bar" }
         |> subCommand "hello",
     ]
 
     parseHelp parser (mark ["hello", "foo"]) == Ok "foo"
 
-# missing positional argument
+# missing positional
 expect
-    parser = positional { name: "bar" }
+    parser = str { name: "bar" }
 
-    parseHelp parser (mark []) == Err (MissingPositionalArg "bar")
+    parseHelp parser (mark []) == Err (MissingPositional "bar")
