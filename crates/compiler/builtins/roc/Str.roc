@@ -44,6 +44,7 @@ interface Str
         walkScalars,
         walkScalarsUntil,
         withCapacity,
+        withPrefix,
     ]
     imports [
         Bool.{ Bool },
@@ -565,3 +566,7 @@ strToNumHelp = \string ->
         Ok result.aresult
     else
         Err InvalidNumStr
+
+## Adds the specified prefix to the string, like a reversed Str.concat
+withPrefix : Str, Str -> Str
+withPrefix = \str, prefix -> Str.concat prefix str
