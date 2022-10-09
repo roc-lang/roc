@@ -1296,7 +1296,8 @@ define_builtins! {
         50 STR_REPLACE_EACH: "replaceEach"
         51 STR_REPLACE_FIRST: "replaceFirst"
         52 STR_REPLACE_LAST: "replaceLast"
-        53 STR_WITH_PREFIX: "withPrefix"
+        53 STR_WITH_CAPACITY: "withCapacity"
+        54 STR_WITH_PREFIX: "withPrefix"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1375,6 +1376,7 @@ define_builtins! {
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
         75 LIST_WALK_TRY: "walkTry"
+        76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

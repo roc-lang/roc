@@ -43,6 +43,7 @@ interface Str
         appendScalar,
         walkScalars,
         walkScalarsUntil,
+        withCapacity,
         withPrefix,
     ]
     imports [
@@ -144,6 +145,9 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 ## >>> Str.isEmpty ""
 isEmpty : Str -> Bool
 concat : Str, Str -> Str
+
+## Returns a string of the specified capacity without any content
+withCapacity : Nat -> Str
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
