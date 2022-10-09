@@ -177,10 +177,9 @@ anyString = buildPrimitiveParser \fieldRawString ->
 digit : Parser RawStr U8
 digit =
     digitParsers =
-        List.range 0 10
+        List.range '0' ('9' + 1)
         |> List.map \digitNum ->
             digitNum
-            + 48
             |> codeunit
             |> map (\_ -> digitNum)
 

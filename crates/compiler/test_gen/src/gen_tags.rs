@@ -2004,3 +2004,21 @@ fn match_on_result_with_uninhabited_error_branch() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dispatch_tag_union_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            g = \b -> if b then H else J
+
+            when P ((g Bool.true) "") ((g Bool.false) "") is
+                P (H _) (J _) -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}

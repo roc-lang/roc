@@ -1,7 +1,10 @@
-use roc_module::symbol::Symbol;
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
-use crate::DeriveError;
+use crate::{
+    util::{check_derivable_ext_var, debug_name_record},
+    DeriveError,
+};
 
 #[derive(Hash)]
 pub enum FlatHash {
@@ -12,11 +15,16 @@ pub enum FlatHash {
 }
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
-pub enum FlatHashKey {}
+pub enum FlatHashKey {
+    // Unfortunate that we must allocate here, c'est la vie
+    Record(Vec<Lowercase>),
+}
 
 impl FlatHashKey {
     pub(crate) fn debug_name(&self) -> String {
-        unreachable!() // yet
+        match self {
+            FlatHashKey::Record(fields) => debug_name_record(fields),
+        }
     }
 }
 
@@ -31,8 +39,26 @@ impl FlatHash {
                     Symbol::STR_STR => Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_STR_BYTES)),
                     _ => Err(Underivable),
                 },
-                FlatType::Record(_fields, _ext) => {
-                    Err(Underivable) // yet
+                FlatType::Record(fields, ext) => {
+                    let (fields_iter, ext) = fields.unsorted_iterator_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyRecord))
+                    })?;
+
+                    let mut field_names = Vec::with_capacity(fields.len());
+                    for (field_name, record_field) in fields_iter {
+                        if record_field.is_optional() {
+                            // Can't derive a concrete decoder for optional fields, since those are
+                            // compile-time-polymorphic
+                            return Err(Underivable);
+                        }
+                        field_names.push(field_name.clone());
+                    }
+
+                    field_names.sort();
+
+                    Ok(Key(FlatHashKey::Record(field_names)))
                 }
                 FlatType::TagUnion(_tags, _ext) | FlatType::RecursiveTagUnion(_, _tags, _ext) => {
                     Err(Underivable) // yet
@@ -40,7 +66,7 @@ impl FlatHash {
                 FlatType::FunctionOrTagUnion(_name_index, _, _) => {
                     Err(Underivable) // yet
                 }
-                FlatType::EmptyRecord => Err(Underivable), // yet
+                FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }

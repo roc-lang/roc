@@ -374,7 +374,7 @@ pub fn build_zig_host_wasm32(
         "c",
         "-target",
         zig_target,
-        // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+        // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
         "-fPIC",
         "--strip",
     ];
@@ -635,6 +635,7 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
+
         let cargo_out_dir = cargo_dir.join("target").join(
             if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
                 "release"
@@ -1215,7 +1216,7 @@ fn link_wasm32(
             "-O",
             "ReleaseSmall",
             // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
         ])
         .spawn()?;
 

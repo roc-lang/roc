@@ -7841,4 +7841,135 @@ mod solve_expr {
             "hasher -> hasher | hasher has Hasher",
         );
     }
+
+    #[test]
+    fn dispatch_tag_union_function_inferred() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                g = if Bool.true then A else B
+
+                g ""
+                "#
+            ),
+            "[A Str, B Str]*",
+        );
+    }
+
+    #[test]
+    fn check_char_as_u8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U8
+                x = '.'
+
+                x
+                "#
+            ),
+            "U8",
+        );
+    }
+
+    #[test]
+    fn check_char_as_u16() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U16
+                x = '.'
+
+                x
+                "#
+            ),
+            "U16",
+        );
+    }
+
+    #[test]
+    fn check_char_as_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : U32
+                x = '.'
+
+                x
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
+    fn check_char_pattern_as_u8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U8 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U8 -> U8",
+        );
+    }
+
+    #[test]
+    fn check_char_pattern_as_u16() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U16 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U16 -> U16",
+        );
+    }
+
+    #[test]
+    fn check_char_pattern_as_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : U32 -> _
+                f = \c ->
+                    when c is
+                        '.' -> 'A'
+                        c1 -> c1
+
+                f
+                "#
+            ),
+            "U32 -> U32",
+        );
+    }
+
+    #[test]
+    fn issue_4246_admit_recursion_between_opaque_functions() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [b] to "./platform"
+
+                O := {} -> {}
+
+                a = @O \{} -> ((\@O f -> f {}) b)
+
+                b = a
+                "#
+            ),
+            "O",
+        );
+    }
 }

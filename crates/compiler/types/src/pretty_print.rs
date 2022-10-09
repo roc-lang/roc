@@ -1156,11 +1156,15 @@ fn write_flat_type<'a>(
             )
         }
 
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
             buf.push('[');
 
             let mut tags: MutMap<TagName, _> = MutMap::default();
-            tags.insert(subs[*tag_name].clone(), vec![]);
+            tags.extend(
+                subs.get_subs_slice(*tag_names)
+                    .iter()
+                    .map(|t| (t.clone(), vec![])),
+            );
             let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var);
 
             buf.push(']');
@@ -1241,8 +1245,12 @@ pub fn chase_ext_tag_union(
             push_union(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
-        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((subs[*tag_name].clone(), vec![]));
+        Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
+            fields.extend(
+                subs.get_subs_slice(*tag_names)
+                    .iter()
+                    .map(|t| (t.clone(), vec![])),
+            );
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }
