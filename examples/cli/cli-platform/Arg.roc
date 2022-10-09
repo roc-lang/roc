@@ -9,7 +9,7 @@ interface Arg
         boolOption,
         strOption,
         i64Option,
-        positional,
+        str,
         subCommand,
         choice,
         withParser,
@@ -59,7 +59,7 @@ MarkedArgs : { args : List Str, taken : Taken }
 ParseError a : [
     ## The program name was not found as the first argument to be parsed.
     ProgramNameNotProvided Str,
-    ## A positional argument is required, but it was not found.
+    ## A positional argument (inherently required) was not found.
     MissingPositional Str,
     ## An option argument is required, but it was not found.
     MissingRequiredOption Str,
@@ -484,8 +484,8 @@ i64Option = \{ long, short ? "", help ? "" } ->
     @Parser (Option { long, short, help, type: I64 } fn)
 
 ## Parses a single positional argument as a string.
-positional : _ -> Parser Str
-positional = \{ name, help ? "" } ->
+str : _ -> Parser Str
+str = \{ name, help ? "" } ->
     fn = \args ->
         nextUnmarked args
         |> Result.mapErr (\OutOfBounds -> MissingPositional name)
@@ -615,7 +615,7 @@ formatHelpHelp = \n, cmdHelp ->
 
                     """
                     
-                    \(indented)POSITIONAL ARGUMENTS:
+                    \(indented)ARGS:
                     \(helpStr)
                     """
 
@@ -667,7 +667,7 @@ formatError = \err ->
             "The program name \"\(programName)\" was not provided as a first argument!"
 
         MissingPositional arg ->
-            "The positional argument `\(arg)` is required but was not provided!"
+            "The argument `\(arg)` is required but was not provided!"
 
         MissingRequiredOption arg ->
             "The option `--\(arg)` is required but was not provided!"
@@ -1033,7 +1033,7 @@ expect
 
 # parse positional
 expect
-    parser = positional { name: "foo" }
+    parser = str { name: "foo" }
 
     parseHelp parser (mark ["myArg"]) == Ok "myArg"
 
@@ -1042,7 +1042,7 @@ expect
     parser =
         succeed (\foo -> \bar -> "foo: \(foo), bar: \(bar)")
         |> withParser (strOption { long: "foo" })
-        |> withParser (positional { name: "bar" })
+        |> withParser (str { name: "bar" })
 
     cases = [
         ["--foo", "true", "baz"],
@@ -1054,7 +1054,7 @@ expect
 # parse positional with subcommand
 expect
     parser = choice [
-        positional { name: "bar" }
+        str { name: "bar" }
         |> subCommand "hello",
     ]
 
@@ -1062,6 +1062,6 @@ expect
 
 # missing positional
 expect
-    parser = positional { name: "bar" }
+    parser = str { name: "bar" }
 
     parseHelp parser (mark []) == Err (MissingPositional "bar")
