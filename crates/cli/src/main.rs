@@ -24,6 +24,8 @@ use std::ffi::{OsStr, OsString};
 
 use roc_cli::build;
 
+const BUILTIN_DIR: &str = "./roc_std_builtins";
+
 fn main() -> io::Result<()> {
     let _tracing_guards = roc_tracing::setup_tracing!();
 
@@ -225,6 +227,106 @@ fn main() -> io::Result<()> {
                 let metadata = fs::metadata(os_str.clone())?;
                 roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
             }
+
+            // Populate builtin roc files
+            let builtin_dir = Path::new(BUILTIN_DIR);
+            if !builtin_dir.exists() {
+                fs::create_dir_all(builtin_dir)
+                    .expect("TODO gracefully handle failling to creat builtin tmp dir");
+            }
+
+            // Copy builtin Bool.roc
+            fs::write(
+                builtin_dir.join("Bool.roc"),
+                include_str!("../../compiler/builtins/roc/Bool.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Bool.roc");
+
+            // Copy builtin Box.roc
+            fs::write(
+                builtin_dir.join("Box.roc"),
+                include_str!("../../compiler/builtins/roc/Box.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Box.roc");
+
+            // Copy builtin Decode.roc
+            fs::write(
+                builtin_dir.join("Decode.roc"),
+                include_str!("../../compiler/builtins/roc/Decode.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Decode.roc");
+
+            // Copy builtin Dict.roc
+            fs::write(
+                builtin_dir.join("Dict.roc"),
+                include_str!("../../compiler/builtins/roc/Dict.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Dict.roc");
+
+            // Copy builtin Encode.roc
+            fs::write(
+                builtin_dir.join("Encode.roc"),
+                include_str!("../../compiler/builtins/roc/Encode.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Encode.roc");
+
+            // Copy builtin Hash.roc
+            fs::write(
+                builtin_dir.join("Hash.roc"),
+                include_str!("../../compiler/builtins/roc/Hash.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Hash.roc");
+
+            // Copy builtin Json.roc
+            fs::write(
+                builtin_dir.join("Json.roc"),
+                include_str!("../../compiler/builtins/roc/Json.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Json.roc");
+
+            // Copy builtin List.roc
+            fs::write(
+                builtin_dir.join("List.roc"),
+                include_str!("../../compiler/builtins/roc/List.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy List.roc");
+
+            // Copy builtin Num.roc
+            fs::write(
+                builtin_dir.join("Num.roc"),
+                include_str!("../../compiler/builtins/roc/Num.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Num.roc");
+
+            // Copy builtin Result.roc
+            fs::write(
+                builtin_dir.join("Result.roc"),
+                include_str!("../../compiler/builtins/roc/Result.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Result.roc");
+
+            // Copy builtin Set.roc
+            fs::write(
+                builtin_dir.join("Set.roc"),
+                include_str!("../../compiler/builtins/roc/Set.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Set.roc");
+
+            // Copy builtin Str.roc
+            fs::write(
+                builtin_dir.join("Str.roc"),
+                include_str!("../../compiler/builtins/roc/Str.roc"),
+            )
+            .expect("TODO gracefully handle failing to copy Str.roc");
+
+            // thread::sleep(time::Duration::from_millis(100));
+
+            roc_files_recursive(
+                builtin_dir,
+                fs::metadata(builtin_dir).unwrap().file_type(),
+                &mut roc_files,
+            )
+            .expect("TODO handle gracfully not writing builtin Roc files");
 
             generate_docs_html(roc_files);
 
