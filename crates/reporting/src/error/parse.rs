@@ -246,6 +246,16 @@ fn to_expr_report<'a>(
                     Context::InNode(Node::WhenBranch, _pos, _) => {
                         return to_unexpected_arrow_report(alloc, lines, filename, *pos, start);
                     }
+
+                    Context::InDef(_pos) => {
+                        vec![alloc.stack([
+                            alloc.concat([alloc.reflow(
+                                "Did you mean to define a function? Condider defining this as",
+                            )]),
+                            alloc.vcat(vec![alloc.text("id = \\x -> x")]),
+                        ])]
+                    }
+
                     _ => {
                         vec![alloc.stack([
                             alloc.concat([

@@ -5653,11 +5653,9 @@ All branches in an `if` must have the same type!
     4│      main = 5 -> 3
                      ^^
 
-    The arrow -> is only used to define cases in a `when`.
+    Did you mean to define a function? Condider defining this as
 
-        when color is
-            Red -> "stop!"
-            Green -> "go!"
+    id = \x -> x
     "###
     );
 
