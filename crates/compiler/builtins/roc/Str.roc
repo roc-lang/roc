@@ -45,6 +45,7 @@ interface Str
         walkScalarsUntil,
         withCapacity,
         withPrefix,
+        graphemes,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -179,6 +180,9 @@ repeat : Str, Nat -> Str
 ##     expect Str.countGraphemes "‰∏ÉÂ∑ßÊùø" == 9
 ##     expect Str.countGraphemes "üïä" == 4
 countGraphemes : Str -> Nat
+
+## Split a string into its constituent grapheme clusters
+graphemes : Str -> List Str
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
 ## equal to the given [U32], return `Bool.true`. Otherwise return `Bool.false`.

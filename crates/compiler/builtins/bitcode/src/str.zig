@@ -1,5 +1,6 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
+const grapheme = @import("helpers/grapheme.zig");
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
@@ -1212,7 +1213,6 @@ test "countSegments: string equals delimiter" {
 }
 
 // Str.countGraphemeClusters
-const grapheme = @import("helpers/grapheme.zig");
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
@@ -1301,6 +1301,43 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
 
     const count = countGraphemeClusters(str);
     try expectEqual(count, 10);
+}
+
+// Str.graphemes
+pub fn strGraphemes(string: RocStr) callconv(.C) RocList {
+    var list = RocList.allocate(@alignOf(RocStr), countGraphemeClusters(string), @sizeOf(RocStr));
+    const graphemes = @ptrCast([*]RocStr, @alignCast(@alignOf(RocStr), list.bytes));
+
+    const bytes_ptr = string.asU8ptr();
+    var bytes = bytes_ptr[0..string.len()];
+    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
+    var grapheme_break_state: ?grapheme.BoundClass = null;
+    var grapheme_break_state_ptr = &grapheme_break_state;
+    var opt_last_codepoint: ?u21 = null;
+
+    var list_index: usize = 0;
+    var start_index: usize = 0;
+    var str_index: usize = 0;
+    var cur_codepoint_len: usize = 0;
+
+    while (iter.nextCodepoint()) |cur_codepoint| {
+        cur_codepoint_len = unicode.utf8CodepointSequenceLength(cur_codepoint) catch unreachable;
+        if (opt_last_codepoint) |last_codepoint| {
+            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, grapheme_break_state_ptr);
+            if (did_break) {
+                graphemes[list_index] = RocStr.init(bytes_ptr + start_index, str_index - start_index + cur_codepoint_len);
+                list_index += 1;
+                start_index = str_index + cur_codepoint_len;
+                grapheme_break_state = null;
+            }
+            str_index += cur_codepoint_len;
+        }
+        opt_last_codepoint = cur_codepoint;
+    }
+    // Append last grapheme
+    graphemes[list_index] = RocStr.init(bytes_ptr + start_index, str_index - start_index + cur_codepoint_len);
+
+    return list;
 }
 
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
