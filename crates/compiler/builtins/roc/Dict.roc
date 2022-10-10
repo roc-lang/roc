@@ -128,6 +128,16 @@ remove = \@Dict list, key ->
             |> @Dict
 
 ## Insert or remove a value in a Dict based on its presence
+##
+##     alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+##     alterValue = \possibleValue ->
+##         when possibleValue is
+##             Missing -> Present Bool.false
+##             Present value -> if value then Missing else Present Bool.true
+##
+##     expect Dict.update Dict.empty "a" alterValue == Dict.single "a" Bool.false
+##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
+##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
@@ -144,8 +154,7 @@ alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
 alterValue = \possibleValue ->
     when possibleValue is
         Missing -> Present Bool.false
-        Present value if Bool.not value -> Present Bool.true
-        Present _ -> Missing
+        Present value -> if value then Missing else Present Bool.true
 
 expect update empty "a" alterValue == single "a" Bool.false
 expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true

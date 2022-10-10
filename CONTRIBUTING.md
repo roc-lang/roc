@@ -33,6 +33,16 @@ cargo clippy --workspace --tests -- --deny warnings
 
 Execute `cargo fmt --all` to fix the formatting.
 
+## Generating Docs
+
+If you make changes to [Roc's Standard Library](https://www.roc-lang.org/builtins/Str), you can add comments to the code following [the CommonMark Spec](https://spec.commonmark.org/current/) to further explain your intentions. You can view these changes locally with:
+
+```sh
+cargo run docs crates/compiler/builtins/roc
+```
+
+This command will generate the documentation in the [`generated-docs`](generated-docs) directory.
+
 ## Contribution Tips
 
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.
