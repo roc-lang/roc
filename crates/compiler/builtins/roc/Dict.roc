@@ -127,11 +127,7 @@ remove = \@Dict list, key ->
             |> @Dict
 
 ## Insert or remove a value in a Dict based on its presence
-update :
-    Dict k v,
-    k,
-    ([Present v, Missing] -> [Present v, Missing])
-    -> Dict k v | k has Eq
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
         get dict key
