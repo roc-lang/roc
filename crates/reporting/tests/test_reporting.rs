@@ -11343,4 +11343,91 @@ All branches in an `if` must have the same type!
     Note: `Eq` cannot be generated for functions.
     "###
     );
+
+    test_report!(
+        cannot_eq_functions,
+        indoc!(
+            r#"
+            (\x -> x) == (\x -> x)
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│      (\x -> x) == (\x -> x)
+             ^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        a -> a
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_not_eq_functions,
+        indoc!(
+            r#"
+            (\x -> x) == (\x -> x)
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│      (\x -> x) == (\x -> x)
+             ^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        a -> a
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_import_structural_eq_not_eq,
+        indoc!(
+            r#"
+            {
+                a: Bool.structuralEq,
+                b: Bool.structuralNotEq,
+            }
+            "#
+        ),
+        @r###"
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The Bool module does not expose `structuralEq`:
+
+    5│          a: Bool.structuralEq,
+                   ^^^^^^^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Bool.true
+        Bool.isNotEq
+        Bool.false
+        Bool.isEq
+
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The Bool module does not expose `structuralNotEq`:
+
+    6│          b: Bool.structuralNotEq,
+                   ^^^^^^^^^^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Bool.isNotEq
+        Bool.true
+        Bool.boolIsEq
+        Bool.false
+    "###
+    );
 }
