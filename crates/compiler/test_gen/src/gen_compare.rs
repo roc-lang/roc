@@ -96,7 +96,6 @@ fn neq_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "must support Eq on Bool directly"]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -114,7 +113,6 @@ fn eq_bool_tag() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "must support Eq on Bool directly"]
 fn neq_bool_tag() {
     assert_evals_to!(
         indoc!(

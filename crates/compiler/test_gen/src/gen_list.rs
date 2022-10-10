@@ -3499,7 +3499,7 @@ fn list_walk_backwards_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat
+        find : List a, a -> Option Nat | a has Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
