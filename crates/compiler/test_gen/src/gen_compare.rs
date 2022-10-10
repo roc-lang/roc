@@ -96,6 +96,7 @@ fn neq_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "must support Eq on Bool directly"]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -113,6 +114,7 @@ fn eq_bool_tag() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "must support Eq on Bool directly"]
 fn neq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -656,8 +658,8 @@ fn compare_nullable_recursive_union_same_content() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn boxed_eq_int() {
-    assert_evals_to!("Box.box 1 == Box.box 1", true, bool);
-    assert_evals_to!("Box.box 2 == Box.box 1", false, bool);
+    assert_evals_to!("Box.box 1i64 == Box.box 1", true, bool);
+    assert_evals_to!("Box.box 2i64 == Box.box 1", false, bool);
 }
 
 #[test]
