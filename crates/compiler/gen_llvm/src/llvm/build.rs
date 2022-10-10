@@ -6049,6 +6049,20 @@ fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
+        StrGraphemes => {
+            // Str.graphemes : Str -> List Str
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_GRAPHEMES,
+            )
+        }
         ListLen => {
             // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
