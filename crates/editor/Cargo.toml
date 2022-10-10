@@ -44,7 +44,7 @@ glyph_brush = "0.7.5"
 log = "0.4.14"
 futures = "0.3.24"
 cgmath = "0.18.0"
-snafu = { version = "0.7.1", features = ["backtraces"] }
+snafu = { version = "0.7.2", features = ["backtraces"] }
 colored = "2.0.0"
 pest = "2.3.1"
 pest_derive = "2.3.1"

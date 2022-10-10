@@ -21,7 +21,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight"}
 roc_reporting = { path = "../reporting"}
 bumpalo = { version = "3.11.0", features = ["collections"] }
-snafu = { version = "0.7.1", features = ["backtraces"] }
+snafu = { version = "0.7.2", features = ["backtraces"] }
 peg = "0.8.1"
 
 [dev-dependencies]
