@@ -18,8 +18,7 @@ interface Dict
         removeAll,
     ]
     imports [
-        Bool.{ Bool },
-        Eq.{ Eq },
+        Bool.{ Bool, Eq },
         Result.{ Result },
         List,
         Num.{ Nat },

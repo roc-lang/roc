@@ -14,7 +14,7 @@ interface Set
         intersection,
         difference,
     ]
-    imports [List, Bool.{ Bool }, Eq.{ Eq }, Dict.{ Dict }, Num.{ Nat }]
+    imports [List, Bool.{ Bool, Eq }, Dict.{ Dict }, Num.{ Nat }]
 
 Set k := Dict.Dict k {} has [Eq { isEq: setEq }]
 

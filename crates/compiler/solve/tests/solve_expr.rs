@@ -378,6 +378,7 @@ mod solve_expr {
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
             |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
+                    dbg!(impl_symbol);
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
@@ -7984,7 +7985,7 @@ mod solve_expr {
 
                 isEq = \@Trivial {}, @Trivial {} -> Bool.true
 
-                main = Eq.isEq (@Trivial {}) (@Trivial {})
+                main = Bool.isEq (@Trivial {}) (@Trivial {})
                 "#
             ),
             "Bool",

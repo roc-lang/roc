@@ -1629,7 +1629,7 @@ mod eq {
                     a = @LyingEq 10
                     b = @LyingEq 5
                     c = @LyingEq 5
-                    if Eq.isEq a b && !(Eq.isEq b c) then
+                    if Bool.isEq a b && !(Bool.isEq b c) then
                         "okay"
                     else
                         "fail"
@@ -1647,7 +1647,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                main = Eq.isEq 10u8 10u8
+                main = Bool.isEq 10u8 10u8
                 "#
             ),
             true,

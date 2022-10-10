@@ -86,7 +86,6 @@ impl ModuleName {
     pub const ENCODE: &'static str = "Encode";
     pub const DECODE: &'static str = "Decode";
     pub const HASH: &'static str = "Hash";
-    pub const EQ: &'static str = "Eq";
     pub const JSON: &'static str = "Json";
 
     pub fn as_str(&self) -> &str {

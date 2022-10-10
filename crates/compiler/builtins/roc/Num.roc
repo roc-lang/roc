@@ -146,7 +146,6 @@ interface Num
     imports [
         Bool.{ Bool },
         Result.{ Result },
-        Eq,
     ]
 
 ## Represents a number that could be either an [Int] or a [Frac].

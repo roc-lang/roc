@@ -65,8 +65,7 @@ interface List
         countIf,
     ]
     imports [
-        Bool.{ Bool },
-        Eq.{ Eq },
+        Bool.{ Bool, Eq },
         Result.{ Result },
         Num.{ Nat, Num, Int },
     ]

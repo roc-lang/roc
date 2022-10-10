@@ -409,7 +409,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Percent => (ModuleName::NUM, "rem"),
         Plus => (ModuleName::NUM, "add"),
         Minus => (ModuleName::NUM, "sub"),
-        Equals => (ModuleName::EQ, "isEq"),
+        Equals => (ModuleName::BOOL, "isEq"),
         NotEquals => (ModuleName::BOOL, "isNotEq"),
         LessThan => (ModuleName::NUM, "isLt"),
         GreaterThan => (ModuleName::NUM, "isGt"),
