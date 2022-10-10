@@ -808,6 +808,7 @@ macro_rules! define_builtins {
                     $(exposed_type=$exposed_type:literal)?
                     $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
+                $(unexposed $u_ident_id:literal $u_ident_const:ident: $u_ident_name:literal)*
             }
         )+
         num_modules: $total:literal
@@ -954,6 +955,9 @@ macro_rules! define_builtins {
             $(
                 $(
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
+                )*
+                $(
+                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($u_ident_id));
                 )*
             )+
 
@@ -1254,9 +1258,9 @@ define_builtins! {
         7 BOOL_NEQ: "isNotEq"
         8 EQ_EQ: "Eq" exposed_type=true
         9 EQ_IS_EQ: "isEq"
-        10 EQ_STRUCTURAL_EQ: "structuralEq"
-        11 EQ_STRUCTURAL_NOT_EQ: "structuralNotEq"
-        12 BOOL_IS_EQ_IMPL: "boolIsEq"
+        10 BOOL_IS_EQ_IMPL: "boolIsEq"
+        unexposed 11 EQ_STRUCTURAL_EQ: "structuralEq"
+        unexposed 12 EQ_STRUCTURAL_NOT_EQ: "structuralNotEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
