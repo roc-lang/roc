@@ -8676,7 +8676,7 @@ All branches in an `if` must have the same type!
     15│          notYet: hash (A 1),
                                ^^^
 
-    Roc can't generate an implementation of the `#UserApp.MHash` ability for
+    I can't generate an implementation of the `MHash` ability for
 
         [A (Num a)]b
 
@@ -9098,21 +9098,20 @@ All branches in an `if` must have the same type!
             main = Encode.toEncoder \x -> x
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        3│  main = Encode.toEncoder \x -> x
-                                    ^^^^^^^
+    3│  main = Encode.toEncoder \x -> x
+                                ^^^^^^^
 
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
+    I can't generate an implementation of the `Encoding` ability for
 
-            a -> a
+        a -> a
 
-        Note: `Encoding` cannot be generated for functions.
-        "#
+    Note: `Encoding` cannot be generated for functions.
+    "###
     );
 
     test_report!(
@@ -9135,8 +9134,7 @@ All branches in an `if` must have the same type!
     4│  main = Encode.toEncoder { x: @A {} }
                                 ^^^^^^^^^^^^
 
-    Roc can't generate an implementation of the `Encode.Encoding` ability
-    for
+    I can't generate an implementation of the `Encoding` ability for
 
         { x : A }
 
@@ -9501,7 +9499,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    I can't derive an implementation of the `Encoding` ability for `A`:
 
     3│  A a := a -> a has [Encode.Encoding]
                            ^^^^^^^^^^^^^^^
@@ -9526,7 +9524,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    I can't derive an implementation of the `Encoding` ability for `A`:
 
     3│  A := B has [Encode.Encoding]
                     ^^^^^^^^^^^^^^^
@@ -10205,7 +10203,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+    I can't derive an implementation of the `Decoding` ability for `A`:
 
     3│  A a := a -> a has [Decode.Decoding]
                            ^^^^^^^^^^^^^^^
@@ -10230,7 +10228,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+    I can't derive an implementation of the `Decoding` ability for `A`:
 
     3│  A := B has [Decode.Decoding]
                     ^^^^^^^^^^^^^^^
@@ -10289,8 +10287,7 @@ All branches in an `if` must have the same type!
     5│      myDecoder = decoder
                         ^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         a -> a
 
@@ -10321,8 +10318,7 @@ All branches in an `if` must have the same type!
     7│      myDecoder = decoder
                         ^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         { x : A }
 
@@ -10503,8 +10499,7 @@ All branches in an `if` must have the same type!
     6│          Ok rcd -> rcd.first rcd.second
                           ^^^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         a -> b
 
@@ -10526,24 +10521,23 @@ All branches in an `if` must have the same type!
              "#
         ),
         @r###"
-     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-     This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-     5│      myDecoder = decoder
-                         ^^^^^^^
+    5│      myDecoder = decoder
+                        ^^^^^^^
 
-     Roc can't generate an implementation of the `Decode.Decoding` ability
-     for
+    I can't generate an implementation of the `Decoding` ability for
 
-         { x : Str, y ? Str }
+        { x : Str, y ? Str }
 
-     Note: I can't derive decoding for a record with an optional field,
-     which in this case is `.y`. Optional record fields are polymorphic over
-     records that may or may not contain them at compile time, but are not
-     a concept that extends to runtime!
-     Maybe you wanted to use a `Result`?
-     "###
+    Note: I can't derive decoding for a record with an optional field,
+    which in this case is `.y`. Optional record fields are polymorphic over
+    records that may or may not contain them at compile time, but are not
+    a concept that extends to runtime!
+    Maybe you wanted to use a `Result`?
+    "###
     );
 
     test_report!(
@@ -10861,7 +10855,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Hash.Hash` for `A`:
+    I can't derive an implementation of the `Hash` ability for `A`:
 
     3│  A a := a -> a has [Hash]
                            ^^^^
@@ -10886,7 +10880,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Hash.Hash` for `A`:
+    I can't derive an implementation of the `Hash` ability for `A`:
 
     3│  A := B has [Hash]
                     ^^^^
@@ -10973,7 +10967,7 @@ All branches in an `if` must have the same type!
     5│  main = foo (\x -> x)
                     ^^^^^^^
 
-    Roc can't generate an implementation of the `Hash.Hash` ability for
+    I can't generate an implementation of the `Hash` ability for
 
         a -> a
 
@@ -11000,7 +10994,7 @@ All branches in an `if` must have the same type!
     5│  main = foo (A (\x -> x) B)
                     ^^^^^^^^^^^^^
 
-    Roc can't generate an implementation of the `Hash.Hash` ability for
+    I can't generate an implementation of the `Hash` ability for
 
         [A (a -> a) [B]a]b
 
@@ -11113,7 +11107,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Eq.Eq` for `A`:
+    I can't derive an implementation of the `Eq` ability for `A`:
 
     3│  A a := a -> a has [Eq]
                            ^^
@@ -11168,15 +11162,15 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Eq.Eq` for `A`:
+    I can't derive an implementation of the `Eq` ability for `A`:
 
     3│  A := F32 has [Eq]
                       ^^
 
-    Note: I can't derive `Eq.isEq` for floating-point types. That's because
-    Roc's floating-point numbers cannot be compared for total equality -
-    in Roc, `NaN` is never comparable to `NaN`. If a type doesn't support
-    total equality, it cannot support the `Eq` ability!
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
 
     Tip: You can define a custom implementation of `Eq` for `A`.
     "###
@@ -11194,15 +11188,15 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Eq.Eq` for `A`:
+    I can't derive an implementation of the `Eq` ability for `A`:
 
     3│  A := F64 has [Eq]
                       ^^
 
-    Note: I can't derive `Eq.isEq` for floating-point types. That's because
-    Roc's floating-point numbers cannot be compared for total equality -
-    in Roc, `NaN` is never comparable to `NaN`. If a type doesn't support
-    total equality, it cannot support the `Eq` ability!
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
 
     Tip: You can define a custom implementation of `Eq` for `A`.
     "###
@@ -11222,13 +11216,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Eq.Eq` for `A`:
+    I can't derive an implementation of the `Eq` ability for `A`:
 
     3│  A := B has [Eq]
                     ^^
 
     Tip: `B` does not implement `Eq`. Consider adding a custom implementation
-    or `has Eq.Eq` to the definition of `B`.
+    or `has Bool.Eq` to the definition of `B`.
 
     Tip: You can define a custom implementation of `Eq` for `A`.
     "###
@@ -11309,7 +11303,7 @@ All branches in an `if` must have the same type!
     5│  main = foo (\x -> x)
                     ^^^^^^^
 
-    Roc can't generate an implementation of the `Eq.Eq` ability for
+    I can't generate an implementation of the `Eq` ability for
 
         a -> a
 
@@ -11336,7 +11330,7 @@ All branches in an `if` must have the same type!
     5│  main = foo (A (\x -> x) B)
                     ^^^^^^^^^^^^^
 
-    Roc can't generate an implementation of the `Eq.Eq` ability for
+    I can't generate an implementation of the `Eq` ability for
 
         [A (a -> a) [B]a]b
 

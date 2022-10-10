@@ -284,8 +284,8 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't generate an implementation of the "),
-                    alloc.symbol_qualified(ability),
+                    alloc.reflow("I can't generate an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
                     alloc.reflow(" ability for"),
                 ]),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
@@ -305,10 +305,10 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't derive an implementation of the "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" for "),
-                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow("I can't derive an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability for "),
+                    alloc.symbol_foreign_qualified(opaque),
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(derive_region)),
