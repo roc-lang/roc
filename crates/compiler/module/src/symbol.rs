@@ -107,7 +107,7 @@ impl Symbol {
             // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
             // low-level implementation.
             &Self::EQ_STRUCTURAL_EQ
-        ) && false
+        )
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
