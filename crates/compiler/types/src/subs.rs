@@ -77,6 +77,7 @@ struct SubsHeader {
     record_fields: u64,
     variable_slices: u64,
     unspecialized_lambda_sets: u64,
+    uls_of_var: u64,
     exposed_vars_by_symbol: u64,
 }
 
@@ -95,6 +96,7 @@ impl SubsHeader {
             record_fields: subs.record_fields.len() as u64,
             variable_slices: subs.variable_slices.len() as u64,
             unspecialized_lambda_sets: subs.unspecialized_lambda_sets.len() as u64,
+            uls_of_var: subs.uls_of_var.len() as u64,
             exposed_vars_by_symbol: exposed_vars_by_symbol as u64,
         }
     }
@@ -144,6 +146,7 @@ impl Subs {
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
         written = Self::serialize_slice(&self.unspecialized_lambda_sets, writer, written)?;
+        written = Self::serialize_uls_of_var(&self.uls_of_var, writer, written)?;
         written = Self::serialize_slice(exposed_vars_by_symbol, writer, written)?;
 
         Ok(written)
@@ -190,6 +193,51 @@ impl Subs {
         Self::serialize_slice(&buf, writer, written)
     }
 
+    fn serialize_uls_of_var(
+        uls_of_vars: &UlsOfVar,
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let (uls_keys, uls_vals) = uls_of_vars.0.unzip_slices();
+        let written = Self::serialize_slice(uls_keys, writer, written)?;
+
+        // Serialize the keys Vec<VecSet<Variable>> to &[[Variable]]
+        let mut var_buf: Vec<Variable> = Vec::new();
+        let mut uls_var_slices: Vec<VariableSubsSlice> = Vec::new();
+
+        for uls_vars in uls_vals {
+            let slice = SubsSlice::extend_new(&mut var_buf, uls_vars.iter().copied());
+            uls_var_slices.push(slice);
+        }
+
+        let written = Self::serialize_slice(&uls_var_slices, writer, written)?;
+        Self::serialize_slice(&var_buf, writer, written)
+    }
+
+    fn deserialize_uls_of_var(bytes: &[u8], length: usize, offset: usize) -> (UlsOfVar, usize) {
+        let (uls_keys, offset) = Self::deserialize_slice(bytes, length, offset);
+
+        // The bytes are serialized as the list of uls_slices, and following all that, the vars
+        // that the uls_slices index into.
+        let (uls_slices, offset) =
+            Self::deserialize_slice::<VariableSubsSlice>(bytes, length, offset);
+
+        let (vars_slice, offset) = {
+            let total_uls_vars = uls_slices.iter().map(|s| s.len()).sum();
+            Self::deserialize_slice::<Variable>(bytes, total_uls_vars, offset)
+        };
+
+        let mut uls_var_lists = Vec::with_capacity(length);
+        for uls_slice in uls_slices {
+            let slice = &vars_slice[uls_slice.indices()];
+            uls_var_lists.push(VecSet::from_iter(slice.iter().copied()));
+        }
+
+        let uls_of_var = UlsOfVar(unsafe { VecMap::zip(uls_keys.to_vec(), uls_var_lists) });
+
+        (uls_of_var, offset)
+    }
+
     pub(crate) fn serialize_slice<T>(
         slice: &[T],
         writer: &mut impl std::io::Write,
@@ -229,6 +277,8 @@ impl Subs {
             Self::deserialize_slice(bytes, header.variable_slices as usize, offset);
         let (unspecialized_lambda_sets, offset) =
             Self::deserialize_slice(bytes, header.unspecialized_lambda_sets as usize, offset);
+        let (uls_of_var, offset) =
+            Self::deserialize_uls_of_var(bytes, header.uls_of_var as usize, offset);
         let (exposed_vars_by_symbol, _) =
             Self::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
@@ -244,7 +294,7 @@ impl Subs {
                 unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
                 tag_name_cache: Default::default(),
                 problems: Default::default(),
-                uls_of_var: Default::default(),
+                uls_of_var,
             },
             exposed_vars_by_symbol,
         )
