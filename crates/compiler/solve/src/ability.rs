@@ -1027,7 +1027,11 @@ impl DerivableVisitor for DeriveEq {
     fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if matches!(
             symbol,
-            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+            Symbol::LIST_LIST
+                | Symbol::SET_SET
+                | Symbol::DICT_DICT
+                | Symbol::STR_STR
+                | Symbol::BOX_BOX_TYPE,
         ) {
             Ok(Descend(true))
         } else {
