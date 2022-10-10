@@ -1369,7 +1369,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
     uls == sort_unspecialized_lambda_sets(subs, uls.to_vec())
 }
 
-#[must_use]
+#[must_use = "must use outcomes!"]
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
