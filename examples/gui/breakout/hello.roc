@@ -1,12 +1,12 @@
 app "breakout"
     packages { pf: "platform/main.roc" }
-    imports [pf.Game.{ Bounds, Elem, Event }]
+    imports [pf.Game.{ Bounds, Elem, Event, Rgba }]
     provides [program] { Model } to pf
 
-Model : { text : Str }
+Model : { text : Str, colors: List (Rgba) }
 
 init : Bounds -> Model
-init = \_ -> { text: "Hello, World!" }
+init = \_ -> { text: "Hello, World!", colors: List.repeat {r:1, g: 1, b: 1, a: 1 } 1}
 
 update : Model, Event -> Model
 update = \model, _ -> model
