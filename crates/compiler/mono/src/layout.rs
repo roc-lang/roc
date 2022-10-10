@@ -2216,7 +2216,7 @@ impl<'a> Layout<'a> {
             }
             FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
                 roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
-                    return todo_abilities!("Able var is unbound!");
+                    todo_abilities!("Able var is unbound!");
                 });
 
                 // If we encounter an unbound type var (e.g. `*` or `a`)
