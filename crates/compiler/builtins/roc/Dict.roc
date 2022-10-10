@@ -9,6 +9,7 @@ interface Dict
         insert,
         len,
         remove,
+        update,
         contains,
         keys,
         values,
@@ -121,6 +122,34 @@ remove = \@Dict list, key ->
             |> List.swap index lastIndex
             |> List.dropLast
             |> @Dict
+
+## Insert or remove a value in a Dict based on its presence
+update :
+    Dict k v,
+    k,
+    ([Present v, Missing] -> [Present v, Missing])
+    -> Dict k v
+update = \dict, key, alter ->
+    possibleValue =
+        get dict key
+        |> Result.map Present
+        |> Result.withDefault Missing
+
+    when alter possibleValue is
+        Present value -> insert dict key value
+        Missing -> remove dict key
+
+## Internal for testing only
+alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+alterValue = \possibleValue ->
+    when possibleValue is
+        Missing -> Present Bool.false
+        Present value if Bool.not value -> Present Bool.true
+        Present _ -> Missing
+
+expect update empty "a" alterValue == single "a" Bool.false
+expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true
+expect update (single "a" Bool.true) "a" alterValue == empty
 
 contains : Dict k v, k -> Bool
 contains = \@Dict list, needle ->
