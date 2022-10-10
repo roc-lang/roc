@@ -1291,7 +1291,7 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ## >>> Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Eq.isEq] always returns `Bool.false` if either argument is *NaN*.
+## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `Bool.false` if either argument is *NaN*.
 ## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `Bool.false` if either argument is *NaN*.
 ##
 ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)

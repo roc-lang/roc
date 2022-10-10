@@ -14,7 +14,7 @@ interface Bool
 Eq has
     ## Returns `Bool.true` if the two values are equal, and `Bool.false` otherwise.
     ##
-    ## `a == b` is shorthand for `Eq.isEq a b`.
+    ## `a == b` is shorthand for `Bool.isEq a b`.
     ##
     ## When `isEq` is derived by the Roc compiler, values are compared via
     ## structural equality. Structural equality works as follows:

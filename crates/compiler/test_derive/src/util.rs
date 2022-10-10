@@ -58,7 +58,7 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
         DeriveBuiltin::IsEq => (
             ModuleId::BOOL,
             module_source(ModuleId::BOOL),
-            builtins_path.join("Eq.roc"),
+            builtins_path.join("Bool.roc"),
         ),
     }
 }
