@@ -87,7 +87,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
-            Symbol::EQ_IS_EQ => Ok(DeriveBuiltin::IsEq),
+            Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
             _ => Err(value),
         }
     }
@@ -117,7 +117,9 @@ impl Derived {
             DeriveBuiltin::IsEq => {
                 // If obligation checking passes, we always lower derived implementations of `isEq`
                 // to the `Eq` low-level, to be fulfilled by the backends.
-                Ok(Derived::SingleLambdaSetImmediate(Symbol::EQ_STRUCTURAL_EQ))
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::BOOL_STRUCTURAL_EQ,
+                ))
             }
         }
     }

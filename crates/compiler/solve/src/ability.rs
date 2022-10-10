@@ -277,7 +277,7 @@ impl ObligationCache {
                 Some(DeriveHash::is_derivable(self, abilities_store, subs, var))
             }
 
-            Symbol::EQ_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
+            Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
 
             _ => None,
         };
@@ -1011,7 +1011,7 @@ impl DerivableVisitor for DeriveHash {
 
 struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
-    const ABILITY: Symbol = Symbol::EQ_EQ;
+    const ABILITY: Symbol = Symbol::BOOL_EQ;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {

@@ -438,10 +438,10 @@ fn underivable_hint<'b>(
             NotDerivableEq::FloatingPoint => {
                 Some(alloc.note("").append(alloc.concat([
                     alloc.reflow("I can't derive "),
-                    alloc.symbol_qualified(Symbol::EQ_IS_EQ),
+                    alloc.symbol_qualified(Symbol::BOOL_IS_EQ),
                     alloc.reflow(" for floating-point types. That's because Roc's floating-point numbers cannot be compared for total equality - in Roc, `NaN` is never comparable to `NaN`."),
                     alloc.reflow(" If a type doesn't support total equality, it cannot support the "),
-                    alloc.symbol_unqualified(Symbol::EQ_EQ),
+                    alloc.symbol_unqualified(Symbol::BOOL_EQ),
                     alloc.reflow(" ability!"),
                 ])))
             }

@@ -51,7 +51,7 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
-    (Symbol::EQ_EQ, &[Symbol::EQ_IS_EQ]),
+    (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -106,7 +106,7 @@ impl Symbol {
             self,
             // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
             // low-level implementation.
-            &Self::EQ_STRUCTURAL_EQ
+            &Self::BOOL_STRUCTURAL_EQ
         )
     }
 
@@ -1256,11 +1256,11 @@ define_builtins! {
         5 BOOL_NOT: "not"
         6 BOOL_XOR: "xor"
         7 BOOL_NEQ: "isNotEq"
-        8 EQ_EQ: "Eq" exposed_type=true
-        9 EQ_IS_EQ: "isEq"
+        8 BOOL_EQ: "Eq" exposed_type=true
+        9 BOOL_IS_EQ: "isEq"
         10 BOOL_IS_EQ_IMPL: "boolIsEq"
-        unexposed 11 EQ_STRUCTURAL_EQ: "structuralEq"
-        unexposed 12 EQ_STRUCTURAL_NOT_EQ: "structuralNotEq"
+        unexposed 11 BOOL_STRUCTURAL_EQ: "structuralEq"
+        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structuralNotEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
