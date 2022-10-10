@@ -1255,7 +1255,8 @@ define_builtins! {
         8 EQ_EQ: "Eq" exposed_type=true
         9 EQ_IS_EQ: "isEq"
         10 EQ_STRUCTURAL_EQ: "structuralEq"
-        11 BOOL_IS_EQ_IMPL: "boolIsEq"
+        11 EQ_STRUCTURAL_NOT_EQ: "structuralNotEq"
+        12 BOOL_IS_EQ_IMPL: "boolIsEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias

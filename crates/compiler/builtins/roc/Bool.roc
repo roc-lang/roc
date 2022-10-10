@@ -99,13 +99,13 @@ not : Bool -> Bool
 ##
 ## Note that `isNotEq` takes `'val` instead of `val`, which means `isNotEq` does not
 ## accept arguments whose types contain functions.
-isNotEq : a, a -> Bool
+isNotEq : a, a -> Bool | a has Eq
+isNotEq = \a, b -> structuralNotEq a b
 
-# ## Calls [isEq] on the given values, then calls [not] on the result.
-# ##
-# ## `a != b` is shorthand for `Eq.isNotEq a b`.
-# isNotEq : a, a -> Bool | a has Eq
-# isNotEq = \a, b -> Bool.not (isEq a b)
 # INTERNAL COMPILER USE ONLY: used to lower calls to `isEq` to structural
 # equality via the `Eq` low-level for derived types.
 structuralEq : a, a -> Bool
+
+# INTERNAL COMPILER USE ONLY: used to lower calls to `isNotEq` to structural
+# inequality via the `NotEq` low-level for derived types.
+structuralNotEq : a, a -> Bool
