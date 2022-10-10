@@ -267,25 +267,6 @@ pub fn unsafeReallocate(
     return new_source;
 }
 
-pub const RocResult = extern struct {
-    bytes: ?[*]u8,
-
-    pub fn isOk(self: RocResult) bool {
-        // assumptions
-        //
-        // - the tag is the first field
-        // - the tag is usize bytes wide
-        // - Ok has tag_id 1, because Err < Ok
-        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
-
-        return usizes[0] == 1;
-    }
-
-    pub fn isErr(self: RocResult) bool {
-        return !self.isOk();
-    }
-};
-
 pub const Ordering = enum(u8) {
     EQ = 0,
     GT = 1,
