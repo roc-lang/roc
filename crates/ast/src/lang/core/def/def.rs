@@ -536,7 +536,7 @@ fn canonicalize_pending_def<'a>(
                             // remove its generated name from the closure map.
                             let references =
                                 env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
+                            internal_error!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                             });
 
                             // TODO should we re-insert this function into env.closures?
@@ -574,7 +574,7 @@ fn canonicalize_pending_def<'a>(
                                     ..
                                 } => {
                                     if arguments.len() != type_arguments.len() {
-                                        panic!("argument number mismatch");
+                                        internal_error!("argument number mismatch");
                                     }
 
                                     let it: Vec<_> = closure_args
@@ -705,7 +705,7 @@ fn canonicalize_pending_def<'a>(
                     // remove its generated name from the closure map.
                     let references =
                         env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
+                            internal_error!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                         });
 
                     // TODO should we re-insert this function into env.closures?
@@ -1238,7 +1238,7 @@ pub fn sort_can_defs(
                     // )));
                     //
                     // declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
-                    panic!("Invalid Cycle");
+                    internal_error!("Invalid Cycle");
                 } else {
                     // slightly inefficient, because we know this becomes exactly one DeclareRec already
                     groups.push(cycle);

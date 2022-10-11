@@ -1,4 +1,5 @@
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -188,7 +189,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }

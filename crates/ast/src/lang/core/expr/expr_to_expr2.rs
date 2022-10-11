@@ -5,6 +5,7 @@ use roc_can::num::{
 };
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
@@ -667,31 +668,31 @@ pub fn expr_to_expr2<'a>(
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
         bad_expr @ ParensAround(_) => {
-            panic!(
+            internal_error!(
                 "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ SpaceBefore(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ SpaceAfter(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ BinOps { .. } => {
-            panic!(
+            internal_error!(
                 "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ UnaryOp(_, _) => {
-            panic!(
+            internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
                 bad_expr
             );
