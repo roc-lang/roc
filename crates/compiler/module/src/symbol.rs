@@ -1296,6 +1296,8 @@ define_builtins! {
         50 STR_REPLACE_EACH: "replaceEach"
         51 STR_REPLACE_FIRST: "replaceFirst"
         52 STR_REPLACE_LAST: "replaceLast"
+        53 STR_WITH_CAPACITY: "withCapacity"
+        54 STR_WITH_PREFIX: "withPrefix"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1373,6 +1375,8 @@ define_builtins! {
         72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
+        75 LIST_WALK_TRY: "walkTry"
+        76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1407,6 +1411,7 @@ define_builtins! {
 
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
+        17 DICT_UPDATE: "update"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias

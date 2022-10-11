@@ -145,6 +145,7 @@ interface Num
     ]
     imports [
         Bool.{ Bool },
+        Result.{ Result },
     ]
 
 ## Represents a number that could be either an [Int] or a [Frac].
@@ -574,7 +575,6 @@ isGte : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
-isZero = \x -> x == 0
 
 ## A number is even if dividing it by 2 gives a remainder of 0.
 ##

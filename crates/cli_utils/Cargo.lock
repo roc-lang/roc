@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "cli_utils"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "criterion",
@@ -2534,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "roc_alias_analysis"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "morphic_lib",
  "roc_collections",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "roc_ast"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
@@ -2571,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "roc_build"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "inkwell 0.1.0",
@@ -2604,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "roc_builtins"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "dunce",
  "lazy_static",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "roc_can"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitvec 1.0.0",
  "bumpalo",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "roc_cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "clap 3.1.17",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "roc_code_markup"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "itertools 0.10.1",
@@ -2677,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "roc_collections"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "roc_constrain"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
  "roc_builtins",
@@ -2703,11 +2703,11 @@ dependencies = [
 
 [[package]]
 name = "roc_debug_flags"
-version = "0.1.0"
+version = "0.0.1"
 
 [[package]]
 name = "roc_docs"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "peg",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "roc_editor"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
@@ -2775,11 +2775,11 @@ dependencies = [
 
 [[package]]
 name = "roc_error_macros"
-version = "0.1.0"
+version = "0.0.1"
 
 [[package]]
 name = "roc_exhaustive"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "roc_collections",
  "roc_module",
@@ -2789,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "roc_fmt"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_collections",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "roc_gen_dev"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "object 0.26.2",
@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "roc_gen_llvm"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "inkwell 0.1.0",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "roc_gen_wasm"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_builtins",
@@ -2854,7 +2854,7 @@ dependencies = [
 
 [[package]]
 name = "roc_highlight"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "peg",
  "roc_code_markup",
@@ -2862,11 +2862,11 @@ dependencies = [
 
 [[package]]
 name = "roc_ident"
-version = "0.1.0"
+version = "0.0.1"
 
 [[package]]
 name = "roc_linker"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
@@ -2884,7 +2884,7 @@ dependencies = [
 
 [[package]]
 name = "roc_load"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_builtins",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "roc_load_internal"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "crossbeam",
@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "roc_module"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "lazy_static",
@@ -2940,7 +2940,7 @@ dependencies = [
 
 [[package]]
 name = "roc_mono"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
@@ -2965,7 +2965,7 @@ dependencies = [
 
 [[package]]
 name = "roc_parse"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "encode_unicode",
@@ -2976,7 +2976,7 @@ dependencies = [
 
 [[package]]
 name = "roc_problem"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "roc_collections",
  "roc_module",
@@ -2987,14 +2987,14 @@ dependencies = [
 
 [[package]]
 name = "roc_region"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "static_assertions 1.1.0",
 ]
 
 [[package]]
 name = "roc_repl_cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "const_format",
@@ -3019,7 +3019,7 @@ dependencies = [
 
 [[package]]
 name = "roc_repl_eval"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_builtins",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "roc_reporting"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "distance",
@@ -3057,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "roc_solve"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
@@ -3074,21 +3074,21 @@ dependencies = [
 
 [[package]]
 name = "roc_std"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "static_assertions 0.1.1",
 ]
 
 [[package]]
 name = "roc_target"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "roc_types"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_collections",
@@ -3102,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "roc_unify"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitflags",
  "roc_collections",
@@ -3114,7 +3114,7 @@ dependencies = [
 
 [[package]]
 name = "roc_utils"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "snafu",
 ]
