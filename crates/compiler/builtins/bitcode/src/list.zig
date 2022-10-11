@@ -1,6 +1,5 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
