@@ -310,7 +310,7 @@ map_symbol_to_lowlevel! {
     NumShiftRightZfBy <= NUM_SHIFT_RIGHT_ZERO_FILL,
     NumToStr <= NUM_TO_STR,
     Eq <= BOOL_STRUCTURAL_EQ,
-    NotEq <= BOOL_NEQ,
+    NotEq <= BOOL_STRUCTURAL_NOT_EQ,
     And <= BOOL_AND,
     Or <= BOOL_OR,
     Not <= BOOL_NOT,
