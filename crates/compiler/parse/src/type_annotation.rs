@@ -426,10 +426,11 @@ fn ability_chain<'a>(
             ),
             zero_or_more!(skip_first!(
                 word1(b'&', EType::THasClause),
-                space0_before_e(
+                space0_before_optional_after(
                     specialize(EType::TApply, loc!(parse_concrete_type)),
                     min_indent,
                     EType::TIndentStart,
+                    EType::TIndentEnd,
                 )
             ))
         ),
