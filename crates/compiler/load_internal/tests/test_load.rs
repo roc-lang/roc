@@ -486,7 +486,7 @@ fn load_astar() {
             "reconstructPath" => "Dict position position, position -> List position",
             "updateCost" => "position, position, Model position -> Model position",
             "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound]*",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]*",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]* | position has Eq",
         },
     );
 }
