@@ -948,7 +948,7 @@ fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
             r#"
-                    wrappedNotEq : a, a -> Bool
+                    wrappedNotEq : a, a -> Bool | a has Eq
                     wrappedNotEq = \num1, num2 ->
                         num1 != num2
 

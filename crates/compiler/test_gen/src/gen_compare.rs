@@ -79,23 +79,6 @@ fn neq_u64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn neq_f64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    i : F64
-                    i = 1
-
-                    i != i
-                "#
-        ),
-        false,
-        bool
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
