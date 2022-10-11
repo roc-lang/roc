@@ -112,18 +112,10 @@ impl SubsHeader {
     }
 }
 
-unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
-    let ptr = slice.as_ptr();
-    let byte_length = std::mem::size_of::<T>() * slice.len();
-
-    unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_length) }
-}
-
-fn round_to_multiple_of(value: usize, base: usize) -> usize {
-    (value + (base - 1)) / base * base
-}
-
+#[derive(Clone, Copy)]
 struct SerializedTagName(SubsSlice<u8>);
+
+use roc_serialize::bytes;
 
 impl Subs {
     pub fn serialize(
@@ -139,15 +131,15 @@ impl Subs {
 
         written = self.utable.serialize(writer, written)?;
 
-        written = Self::serialize_slice(&self.variables, writer, written)?;
+        written = bytes::serialize_slice(&self.variables, writer, written)?;
         written = Self::serialize_tag_names(&self.tag_names, writer, written)?;
-        written = Self::serialize_slice(&self.closure_names, writer, written)?;
+        written = bytes::serialize_slice(&self.closure_names, writer, written)?;
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
-        written = Self::serialize_slice(&self.record_fields, writer, written)?;
-        written = Self::serialize_slice(&self.variable_slices, writer, written)?;
-        written = Self::serialize_slice(&self.unspecialized_lambda_sets, writer, written)?;
+        written = bytes::serialize_slice(&self.record_fields, writer, written)?;
+        written = bytes::serialize_slice(&self.variable_slices, writer, written)?;
+        written = bytes::serialize_slice(&self.unspecialized_lambda_sets, writer, written)?;
         written = Self::serialize_uls_of_var(&self.uls_of_var, writer, written)?;
-        written = Self::serialize_slice(exposed_vars_by_symbol, writer, written)?;
+        written = bytes::serialize_slice(exposed_vars_by_symbol, writer, written)?;
 
         Ok(written)
     }
@@ -167,9 +159,9 @@ impl Subs {
             slices.push(slice);
         }
 
-        let written = Self::serialize_slice(&slices, writer, written)?;
+        let written = bytes::serialize_slice(&slices, writer, written)?;
 
-        Self::serialize_slice(&buf, writer, written)
+        bytes::serialize_slice(&buf, writer, written)
     }
 
     /// Global tag names can be heap-allocated
@@ -188,9 +180,9 @@ impl Subs {
             slices.push(serialized);
         }
 
-        let written = Self::serialize_slice(&slices, writer, written)?;
+        let written = bytes::serialize_slice(&slices, writer, written)?;
 
-        Self::serialize_slice(&buf, writer, written)
+        bytes::serialize_slice(&buf, writer, written)
     }
 
     fn serialize_uls_of_var(
@@ -198,62 +190,25 @@ impl Subs {
         writer: &mut impl std::io::Write,
         written: usize,
     ) -> std::io::Result<usize> {
-        let (uls_keys, uls_vals) = uls_of_vars.0.unzip_slices();
-        let written = Self::serialize_slice(uls_keys, writer, written)?;
-
-        // Serialize the keys Vec<VecSet<Variable>> to &[[Variable]]
-        let mut var_buf: Vec<Variable> = Vec::new();
-        let mut uls_var_slices: Vec<VariableSubsSlice> = Vec::new();
-
-        for uls_vars in uls_vals {
-            let slice = SubsSlice::extend_new(&mut var_buf, uls_vars.iter().copied());
-            uls_var_slices.push(slice);
-        }
-
-        let written = Self::serialize_slice(&uls_var_slices, writer, written)?;
-        Self::serialize_slice(&var_buf, writer, written)
+        bytes::serialize_vec_map(
+            &uls_of_vars.0,
+            bytes::serialize_slice,
+            bytes::serialize_slice_of_slices,
+            writer,
+            written,
+        )
     }
 
     fn deserialize_uls_of_var(bytes: &[u8], length: usize, offset: usize) -> (UlsOfVar, usize) {
-        let (uls_keys, offset) = Self::deserialize_slice(bytes, length, offset);
+        let (vec_map, offset) = bytes::deserialize_vec_map(
+            bytes,
+            bytes::deserialize_vec,
+            bytes::deserialize_slice_of_slices,
+            length,
+            offset,
+        );
 
-        // The bytes are serialized as the list of uls_slices, and following all that, the vars
-        // that the uls_slices index into.
-        let (uls_slices, offset) =
-            Self::deserialize_slice::<VariableSubsSlice>(bytes, length, offset);
-
-        let (vars_slice, offset) = {
-            let total_uls_vars = uls_slices.iter().map(|s| s.len()).sum();
-            Self::deserialize_slice::<Variable>(bytes, total_uls_vars, offset)
-        };
-
-        let mut uls_var_lists = Vec::with_capacity(length);
-        for uls_slice in uls_slices {
-            let slice = &vars_slice[uls_slice.indices()];
-            uls_var_lists.push(VecSet::from_iter(slice.iter().copied()));
-        }
-
-        let uls_of_var = UlsOfVar(unsafe { VecMap::zip(uls_keys.to_vec(), uls_var_lists) });
-
-        (uls_of_var, offset)
-    }
-
-    pub(crate) fn serialize_slice<T>(
-        slice: &[T],
-        writer: &mut impl std::io::Write,
-        written: usize,
-    ) -> std::io::Result<usize> {
-        let alignment = std::mem::align_of::<T>();
-        let padding_bytes = round_to_multiple_of(written, alignment) - written;
-
-        for _ in 0..padding_bytes {
-            writer.write_all(&[0])?;
-        }
-
-        let bytes_slice = unsafe { slice_as_bytes(slice) };
-        writer.write_all(bytes_slice)?;
-
-        Ok(written + padding_bytes + bytes_slice.len())
+        (UlsOfVar(vec_map), offset)
     }
 
     pub fn deserialize(bytes: &[u8]) -> (Self, &[(Symbol, Variable)]) {
@@ -264,23 +219,24 @@ impl Subs {
 
         let (utable, offset) = UnificationTable::deserialize(bytes, header.utable as usize, offset);
 
-        let (variables, offset) = Self::deserialize_slice(bytes, header.variables as usize, offset);
+        let (variables, offset) =
+            bytes::deserialize_slice(bytes, header.variables as usize, offset);
         let (tag_names, offset) =
             Self::deserialize_tag_names(bytes, header.tag_names as usize, offset);
         let (closure_names, offset) =
-            Self::deserialize_slice(bytes, header.closure_names as usize, offset);
+            bytes::deserialize_slice(bytes, header.closure_names as usize, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names as usize, offset);
         let (record_fields, offset) =
-            Self::deserialize_slice(bytes, header.record_fields as usize, offset);
+            bytes::deserialize_slice(bytes, header.record_fields as usize, offset);
         let (variable_slices, offset) =
-            Self::deserialize_slice(bytes, header.variable_slices as usize, offset);
+            bytes::deserialize_slice(bytes, header.variable_slices as usize, offset);
         let (unspecialized_lambda_sets, offset) =
-            Self::deserialize_slice(bytes, header.unspecialized_lambda_sets as usize, offset);
+            bytes::deserialize_slice(bytes, header.unspecialized_lambda_sets as usize, offset);
         let (uls_of_var, offset) =
             Self::deserialize_uls_of_var(bytes, header.uls_of_var as usize, offset);
         let (exposed_vars_by_symbol, _) =
-            Self::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
+            bytes::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
         (
             Self {
@@ -305,7 +261,7 @@ impl Subs {
         length: usize,
         offset: usize,
     ) -> (Vec<Lowercase>, usize) {
-        let (slices, mut offset) = Self::deserialize_slice::<SubsSlice<u8>>(bytes, length, offset);
+        let (slices, mut offset) = bytes::deserialize_slice::<SubsSlice<u8>>(bytes, length, offset);
 
         let string_slice = &bytes[offset..];
 
@@ -323,7 +279,7 @@ impl Subs {
 
     fn deserialize_tag_names(bytes: &[u8], length: usize, offset: usize) -> (Vec<TagName>, usize) {
         let (slices, mut offset) =
-            Self::deserialize_slice::<SerializedTagName>(bytes, length, offset);
+            bytes::deserialize_slice::<SerializedTagName>(bytes, length, offset);
 
         let string_slice = &bytes[offset..];
 
@@ -339,24 +295,6 @@ impl Subs {
         }
 
         (tag_names, offset)
-    }
-
-    pub(crate) fn deserialize_slice<T>(
-        bytes: &[u8],
-        length: usize,
-        mut offset: usize,
-    ) -> (&[T], usize) {
-        let alignment = std::mem::align_of::<T>();
-        let size = std::mem::size_of::<T>();
-
-        offset = round_to_multiple_of(offset, alignment);
-
-        let byte_length = length * size;
-        let byte_slice = &bytes[offset..][..byte_length];
-
-        let slice = unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const T, length) };
-
-        (slice, offset + byte_length)
     }
 }
 
