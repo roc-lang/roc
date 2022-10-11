@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "host"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "indoc",
  "libc",
@@ -25,7 +25,7 @@ checksum = "56d855069fafbb9b344c0f962150cd2c1187975cb1c22c1522c240d8c4986714"
 
 [[package]]
 name = "roc_std"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "static_assertions",
 ]

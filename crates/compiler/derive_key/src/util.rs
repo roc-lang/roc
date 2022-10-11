@@ -1,4 +1,4 @@
-use roc_module::ident::Lowercase;
+use roc_module::ident::{Lowercase, TagName};
 use roc_types::subs::{Content, Subs, Variable};
 
 use crate::DeriveError;
@@ -40,5 +40,19 @@ pub(crate) fn debug_name_record(fields: &[Lowercase]) -> String {
         str.push_str(f.as_str());
     });
     str.push('}');
+    str
+}
+
+pub(crate) fn debug_name_tag(tags: &[(TagName, u16)]) -> String {
+    let mut str = String::from('[');
+    tags.iter().enumerate().for_each(|(i, (tag, arity))| {
+        if i > 0 {
+            str.push(',');
+        }
+        str.push_str(tag.0.as_str());
+        str.push(' ');
+        str.push_str(&arity.to_string());
+    });
+    str.push(']');
     str
 }

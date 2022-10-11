@@ -115,7 +115,7 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
+    packages { pf: "examples/cli/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
@@ -124,8 +124,8 @@ main = Stdout.line "I'm a Roc application!" |> Program.quick
 
 > **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
 > source code. If you'd like to put it somewhere else, you'll need to replace
-> `"examples/interactive/cli-platform/main.roc"` with the path to the
-> `examples/interactive/cli-platform/main.roc` file in that source code. In the future,
+> `"examples/cli/cli-platform/main.roc"` with the path to the
+> `examples/cli/cli-platform/main.roc` file in that source code. In the future,
 > Roc will have the tutorial built in, and this aside will no longer be
 > necessary!
 
@@ -1239,6 +1239,77 @@ each bit. `0b0000_1000` evaluates to decimal `8`
 The integer type can be specified as a suffix to the binary literal,
 so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
 
+## Tests and expectations
+
+You can write automated tests for your Roc code like so:
+
+```swift
+pluralize = \singular, plural, count ->
+    countStr = Num.toStr count
+
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        "\(countStr) \(plural)"
+
+expect pluralize "cactus" "cacti" 1 == "1 cactus"
+
+expect pluralize "cactus" "cacti" 2 == "2 cacti"
+```
+
+If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect`
+expressions (that is, the two `pluralize` calls) and report any that returned `false`.
+
+### Inline `expect`s
+
+For example:
+
+```swift
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        expect count > 0
+
+        "\(countStr) \(plural)"
+```
+
+This `expect` will fail if you call `pluralize` passing a count of 0, and it will fail
+regardless of whether the inline `expect` is reached when running your program via `roc dev`
+or in the course of running a test (with `roc test`).
+
+So for example, if we added this top-level `expect`...
+
+```swift
+expect pluralize "cactus" "cacti" 0 == "0 cacti"
+```
+
+...it would hit the inline `expect count > 0`, which would then fail the test.
+
+Note that inline `expect`s do not halt the program! They are designed to inform, not to affect
+control flow. In fact, if you do `roc build`, they are not even included in the final binary.
+
+If you try this code out, you may note that when an `expect` fails (either a top-level or inline
+one), the failure message includes the values of any named variables - such as `count` here.
+This leads to a useful technique, which we will see next.
+
+### Quick debugging with inline `expect`s
+
+An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
+`expect` to do this. Here's an example:
+
+```elm
+\arg ->
+    x = arg - 1
+
+    # Reports the value of `x` without stopping the program
+    expect x != x
+
+    Num.abs x
+```
+
+The failure output will include both the value of `x` as well as the comment immediately above it,
+which lets you use that comment for extra context in your output.
+
 ## Interface modules
 
 [This part of the tutorial has not been written yet. Coming soon!]
@@ -1273,7 +1344,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
+    packages { pf: "examples/cli/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Program]
     provides main to pf
 ```
@@ -1291,14 +1362,14 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages { pf: "examples/interactive/cli-platform/main.roc" }
+packages { pf: "examples/cli/cli-platform/main.roc" }
 imports [pf.Stdout, pf.Program]
 provides main to pf
 ```
 
-The `packages { pf: "examples/interactive/cli-platform/main.roc" }` part says two things:
+The `packages { pf: "examples/cli/cli-platform/main.roc" }` part says two things:
 
-- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform/main.roc"`
+- We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/cli-platform/main.roc"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
 The `imports [pf.Stdout, pf.Program]` line says that we want to import the `Stdout` and `Program` modules
@@ -1320,16 +1391,16 @@ which effectively makes it a simple Roc program.
 When we write `imports [pf.Stdout, pf.Program]`, it specifies that the `Stdout`
 and `Program` modules come from the `pf` package.
 
-Since `pf` was the name we chose for the `examples/interactive/cli-platform/main.roc`
-package (when we wrote `packages { pf: "examples/interactive/cli-platform/main.roc" }`),
+Since `pf` was the name we chose for the `examples/cli/cli-platform/main.roc`
+package (when we wrote `packages { pf: "examples/cli/cli-platform/main.roc" }`),
 this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
-`examples/interactive/cli-platform/main.roc` package.
+`examples/cli/cli-platform/main.roc` package.
 
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in `examples/interactive/cli-platform/main.roc` as an example!
+platforms. Let's use the CLI platform in `examples/cli/cli-platform/main.roc` as an example!
 
 In the CLI platform, we have four operations we can do:
 
@@ -1344,7 +1415,7 @@ First, let's do a basic "Hello World" using the tutorial app.
 
 ```coffee
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
+    packages { pf: "examples/cli/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
@@ -1382,7 +1453,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```swift
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
+    packages { pf: "examples/cli/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
     provides [main] to pf
 
@@ -1434,7 +1505,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```haskell
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
+    packages { pf: "examples/cli/cli-platform/main.roc" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
     provides [main] to pf
 

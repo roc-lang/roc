@@ -14,7 +14,7 @@ interface Set
         intersection,
         difference,
     ]
-    imports [List, Bool.{ Bool }, Dict.{ Dict }]
+    imports [List, Bool.{ Bool }, Dict.{ Dict }, Num.{ Nat }]
 
 Set k := Dict.Dict k {}
 

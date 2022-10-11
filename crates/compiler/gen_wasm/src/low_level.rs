@@ -50,6 +50,7 @@ impl From<Layout<'_>> for CodeGenNumType {
             || internal_error!("Tried to perform a Num low-level operation on {:?}", layout);
         match layout {
             Layout::Builtin(builtin) => match builtin {
+                Builtin::Bool => I32,
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::U8 => I32,
                     IntWidth::U16 => I32,
@@ -302,6 +303,7 @@ impl<'a> LowLevelCall<'a> {
             StrSubstringUnsafe => {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
+            StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
@@ -1723,6 +1725,7 @@ impl<'a> LowLevelCall<'a> {
                 let arg_type = CodeGenNumType::from(arg_layout);
                 let arg_width = match arg_layout {
                     Layout::Builtin(Builtin::Int(w)) => w,
+                    Layout::Builtin(Builtin::Bool) => IntWidth::U8,
                     x => internal_error!("Num.intCast is not defined for {:?}", x),
                 };
 

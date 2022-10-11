@@ -2596,6 +2596,10 @@ pub fn reserve(string: RocStr, capacity: usize) callconv(.C) RocStr {
     }
 }
 
+pub fn withCapacity(capacity: usize) callconv(.C) RocStr {
+    return RocStr.allocate(0, capacity);
+}
+
 pub fn getScalarUnsafe(string: RocStr, index: usize) callconv(.C) extern struct { bytesParsed: usize, scalar: u32 } {
     const slice = string.asSlice();
     const bytesParsed = @intCast(usize, std.unicode.utf8ByteSequenceLength(slice[index]) catch unreachable);

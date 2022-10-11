@@ -655,7 +655,7 @@ fn make_specialization_decision<P: Phase>(
                 })
             }
         }
-        Structure(_) | Alias(_, _, _, _) => {
+        Structure(_) | Alias(_, _, _, _) | RecursionVar { .. } => {
             let builtin = match ability_member.try_into() {
                 Ok(builtin) => builtin,
                 Err(_) => return SpecializeDecision::Drop,
@@ -691,7 +691,6 @@ fn make_specialization_decision<P: Phase>(
         | RigidAbleVar(..)
         | FlexVar(..)
         | RigidVar(..)
-        | RecursionVar { .. }
         | LambdaSet(..)
         | RangedNumber(..) => {
             internal_error!("unexpected")

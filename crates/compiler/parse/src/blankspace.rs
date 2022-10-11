@@ -345,7 +345,12 @@ fn eat_spaces<'a>(
                 state = state.advance(1);
                 return eat_line_comment(state, comments_and_newlines);
             }
-            _ => break,
+            _ => {
+                if !comments_and_newlines.is_empty() {
+                    state = state.mark_current_indent();
+                }
+                break;
+            }
         }
     }
 
@@ -398,7 +403,10 @@ fn eat_line_comment<'a>(
                                 index += 1;
                                 continue 'outer;
                             }
-                            _ => break,
+                            _ => {
+                                state = state.mark_current_indent();
+                                break;
+                            }
                         }
 
                         index += 1;
@@ -490,7 +498,10 @@ fn eat_line_comment<'a>(
                                         index += 1;
                                         continue 'outer;
                                     }
-                                    _ => break,
+                                    _ => {
+                                        state = state.mark_current_indent();
+                                        break;
+                                    }
                                 }
 
                                 index += 1;
@@ -554,7 +565,10 @@ fn eat_line_comment<'a>(
                                 index += 1;
                                 continue 'outer;
                             }
-                            _ => break,
+                            _ => {
+                                state = state.mark_current_indent();
+                                break;
+                            }
                         }
 
                         index += 1;
