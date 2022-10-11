@@ -20,6 +20,7 @@ roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
+roc_can = { path = "../can" }
 bumpalo = { version = "3.11.0", features = ["collections"] }
 
 [target.'cfg(not(windows))'.build-dependencies]

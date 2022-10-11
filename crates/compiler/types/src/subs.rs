@@ -211,7 +211,7 @@ impl Subs {
         (UlsOfVar(vec_map), offset)
     }
 
-    pub fn deserialize(bytes: &[u8]) -> (Self, &[(Symbol, Variable)]) {
+    pub fn deserialize(bytes: &[u8]) -> ((Self, &[(Symbol, Variable)]), usize) {
         let mut offset = 0;
         let header_slice = &bytes[..std::mem::size_of::<SubsHeader>()];
         offset += header_slice.len();
@@ -235,24 +235,27 @@ impl Subs {
             bytes::deserialize_slice(bytes, header.unspecialized_lambda_sets as usize, offset);
         let (uls_of_var, offset) =
             Self::deserialize_uls_of_var(bytes, header.uls_of_var as usize, offset);
-        let (exposed_vars_by_symbol, _) =
+        let (exposed_vars_by_symbol, offset) =
             bytes::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
         (
-            Self {
-                utable,
-                variables: variables.to_vec(),
-                tag_names: tag_names.to_vec(),
-                closure_names: closure_names.to_vec(),
-                field_names,
-                record_fields: record_fields.to_vec(),
-                variable_slices: variable_slices.to_vec(),
-                unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
-                tag_name_cache: Default::default(),
-                problems: Default::default(),
-                uls_of_var,
-            },
-            exposed_vars_by_symbol,
+            (
+                Self {
+                    utable,
+                    variables: variables.to_vec(),
+                    tag_names: tag_names.to_vec(),
+                    closure_names: closure_names.to_vec(),
+                    field_names,
+                    record_fields: record_fields.to_vec(),
+                    variable_slices: variable_slices.to_vec(),
+                    unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
+                    tag_name_cache: Default::default(),
+                    problems: Default::default(),
+                    uls_of_var,
+                },
+                exposed_vars_by_symbol,
+            ),
+            offset,
         )
     }
 
