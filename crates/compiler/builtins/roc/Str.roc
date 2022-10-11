@@ -299,7 +299,7 @@ replaceEach = \haystack, needle, flower ->
         Ok { before, after } ->
             # We found at least one needle, so start the buffer off with
             # `before` followed by the first replacement flower.
-            Str.reserve "" (Str.countUtf8Bytes haystack)
+            Str.withCapacity (Str.countUtf8Bytes haystack)
             |> Str.concat before
             |> Str.concat flower
             |> replaceEachHelp after needle flower
@@ -504,7 +504,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
     else
         state
 
-## Make sure at least some number of bytes fit in this string without reallocating
+## Enlarge the Str for at least capacity additional bytes
 reserve : Str, Nat -> Str
 
 ## is UB when the scalar is invalid
