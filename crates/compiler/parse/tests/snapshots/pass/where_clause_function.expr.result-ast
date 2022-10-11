@@ -40,11 +40,13 @@ Defs(
                     [
                         @20-27 HasClause {
                             var: @20-21 "a",
-                            ability: @26-27 Apply(
-                                "",
-                                "A",
-                                [],
-                            ),
+                            abilities: [
+                                @26-27 Apply(
+                                    "",
+                                    "A",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),

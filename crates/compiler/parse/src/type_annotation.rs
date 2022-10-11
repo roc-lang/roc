@@ -2,7 +2,9 @@ use crate::ast::{
     AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
     Spaced, Tag, TypeAnnotation, TypeHeader,
 };
-use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{
+    space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
+};
 use crate::expr::record_value_field;
 use crate::ident::lowercase_ident;
 use crate::keyword;
@@ -410,6 +412,37 @@ fn loc_applied_args_e<'a>(
     zero_or_more!(loc_applied_arg(min_indent, stop_at_surface_has))
 }
 
+// Hash & Eq & ...
+fn ability_chain<'a>(
+    min_indent: u32,
+) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
+    map!(
+        and!(
+            space0_before_optional_after(
+                specialize(EType::TApply, loc!(parse_concrete_type)),
+                min_indent,
+                EType::TIndentStart,
+                EType::TIndentEnd,
+            ),
+            zero_or_more!(skip_first!(
+                word1(b'&', EType::THasClause),
+                space0_before_e(
+                    specialize(EType::TApply, loc!(parse_concrete_type)),
+                    min_indent,
+                    EType::TIndentStart,
+                )
+            ))
+        ),
+        |(first_ability, mut other_abilities): (
+            Loc<TypeAnnotation<'a>>,
+            Vec<'a, Loc<TypeAnnotation<'a>>>
+        )| {
+            other_abilities.push(first_ability);
+            other_abilities
+        }
+    )
+}
+
 fn has_clause<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
     map!(
         // Suppose we are trying to parse "a has Hash"
@@ -427,20 +460,22 @@ fn has_clause<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasClause<'a>>, EType<
             then(
                 // Parse "has"; we don't care about this keyword
                 word3(b'h', b'a', b's', EType::THasClause),
-                // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
+                // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 |arena, state, _progress, _output| {
-                    space0_before_e(
-                        specialize(EType::TApply, loc!(parse_concrete_type)),
-                        state.column() + 1,
-                        EType::TIndentStart,
-                    )
-                    .parse(arena, state)
+                    ability_chain(state.column() + 1).parse(arena, state)
                 }
             )
         ),
-        |(var, ability): (Loc<Spaced<'a, &'a str>>, Loc<TypeAnnotation<'a>>)| {
-            let region = Region::span_across(&var.region, &ability.region);
-            let has_clause = HasClause { var, ability };
+        |(var, abilities): (Loc<Spaced<'a, &'a str>>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
+            let abilities_region = Region::span_across(
+                &abilities.first().unwrap().region,
+                &abilities.last().unwrap().region,
+            );
+            let region = Region::span_across(&var.region, &abilities_region);
+            let has_clause = HasClause {
+                var,
+                abilities: abilities.into_bump_slice(),
+            };
             Loc::at(region, has_clause)
         }
     )

@@ -450,7 +450,8 @@ pub fn find_type_def_symbols(
                 stack.push(&annotation.value);
 
                 for has_clause in clauses.iter() {
-                    stack.push(&has_clause.value.ability.value);
+                    // TODO(abilities)
+                    stack.push(&has_clause.value.abilities[0].value);
                 }
             }
             Inferred | Wildcard | Malformed(_) => {}
@@ -920,7 +921,7 @@ fn canonicalize_has_clause(
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, ability },
+        value: roc_parse::ast::HasClause { var, abilities },
     } = clause;
     let region = *region;
 
@@ -931,6 +932,8 @@ fn canonicalize_has_clause(
     );
     let var_name = Lowercase::from(var_name);
 
+    // TODO(abilities)
+    let ability = abilities[0];
     let ability = match ability.value {
         TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
             let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;

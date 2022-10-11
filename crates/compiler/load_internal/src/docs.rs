@@ -394,10 +394,11 @@ fn ability_member_type_to_docs(
             let has_clauses = has_clauses
                 .iter()
                 .map(|hc| {
-                    let ast::HasClause { var, ability } = hc.value;
+                    let ast::HasClause { var, abilities } = hc.value;
                     (
                         var.value.extract_spaces().item.to_string(),
-                        type_to_docs(false, ability.value),
+                        // TODO(abilities)
+                        type_to_docs(false, abilities[0].value),
                     )
                 })
                 .collect();
