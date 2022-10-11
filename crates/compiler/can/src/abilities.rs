@@ -20,7 +20,7 @@ pub struct MemberVariables {
 
 /// The member and its signature is defined locally, in the module the store is created for.
 /// We need to instantiate and introduce this during solving.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedMemberType(Variable);
 
 /// Member type information that needs to be resolved from imports.
@@ -48,7 +48,7 @@ impl ResolvePhase for Pending {
     type MemberType = PendingMemberType;
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct Resolved;
 impl ResolvePhase for Resolved {
     type MemberType = ResolvedMemberType;
@@ -57,7 +57,7 @@ impl ResolvePhase for Resolved {
 /// Stores information about an ability member definition, including the parent ability, the
 /// defining type, and what type variables need to be instantiated with instances of the ability.
 // TODO: SoA and put me in an arena
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AbilityMemberData<Phase: ResolvePhase> {
     pub parent_ability: Symbol,
     pub region: Region,
@@ -82,7 +82,7 @@ impl AbilityMemberData<Resolved> {
 pub type SpecializationLambdaSets = VecMap<u8, Variable>;
 
 /// A particular specialization of an ability member.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MemberSpecializationInfo<Phase: ResolvePhase> {
     _phase: std::marker::PhantomData<Phase>,
     pub symbol: Symbol,
@@ -674,6 +674,7 @@ mod serialize {
     use roc_collections::{MutMap, VecMap};
     use roc_module::symbol::Symbol;
     use roc_region::all::Region;
+    use roc_serialize::bytes;
     use roc_types::{
         subs::{SubsSlice, Variable},
         types::MemberImpl,
@@ -684,10 +685,7 @@ mod serialize {
         ResolvedMemberType, SpecializationId,
     };
 
-    use std::{
-        borrow::Borrow,
-        io::{self, Write},
-    };
+    use std::io::{self, Write};
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug)]
@@ -806,10 +804,10 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             members_of_ability,
-            serialize_slice,
-            serialize_slice_of_slices,
+            bytes::serialize_slice,
+            bytes::serialize_slice_of_slices,
             writer,
             written,
         )
@@ -820,15 +818,16 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<Symbol, Vec<Symbol>>, usize) {
-        deserialize_map(
+        bytes::deserialize_map(
             bytes,
-            deserialize_vec,
-            deserialize_slice_of_slices,
+            bytes::deserialize_vec,
+            bytes::deserialize_slice_of_slices,
             length,
             offset,
         )
     }
 
+    #[derive(Clone, Copy)]
     #[repr(C)]
     struct SerImplKey(Symbol, Symbol);
     impl From<&ImplKey> for SerImplKey {
@@ -850,11 +849,11 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             specialization_to_root,
-            serialize_slice,
+            bytes::serialize_slice,
             |keys, writer, written| {
-                serialize_slice(
+                bytes::serialize_slice(
                     &keys.iter().map(SerImplKey::from).collect::<Vec<_>>(),
                     writer,
                     written,
@@ -870,11 +869,11 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<Symbol, ImplKey>, usize) {
-        deserialize_map(
+        bytes::deserialize_map(
             bytes,
-            deserialize_vec,
+            bytes::deserialize_vec,
             |bytes, length, offset| {
-                let (slice, offset) = deserialize_slice::<SerImplKey>(bytes, length, offset);
+                let (slice, offset) = bytes::deserialize_slice::<SerImplKey>(bytes, length, offset);
                 (slice.iter().map(ImplKey::from).collect(), offset)
             },
             length,
@@ -882,6 +881,7 @@ mod serialize {
         )
     }
 
+    #[derive(Clone, Copy)]
     #[repr(C)]
     struct SerMemberData(Symbol, Region, Variable);
     impl From<&AbilityMemberData<Resolved>> for SerMemberData {
@@ -904,11 +904,11 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             ability_members,
-            serialize_slice,
+            bytes::serialize_slice,
             |keys, writer, written| {
-                serialize_slice(
+                bytes::serialize_slice(
                     &keys.iter().map(SerMemberData::from).collect::<Vec<_>>(),
                     writer,
                     written,
@@ -924,11 +924,12 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<Symbol, AbilityMemberData<Resolved>>, usize) {
-        deserialize_map(
+        bytes::deserialize_map(
             bytes,
-            deserialize_vec,
+            bytes::deserialize_vec,
             |bytes, length, offset| {
-                let (slice, offset) = deserialize_slice::<SerMemberData>(bytes, length, offset);
+                let (slice, offset) =
+                    bytes::deserialize_slice::<SerMemberData>(bytes, length, offset);
                 (slice.iter().map(AbilityMemberData::from).collect(), offset)
             },
             length,
@@ -936,6 +937,7 @@ mod serialize {
         )
     }
 
+    #[derive(Clone, Copy)]
     #[repr(C)]
     enum SerMemberImpl {
         Impl(Symbol),
@@ -966,11 +968,11 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             declared_implementations,
-            serialize_slice,
+            bytes::serialize_slice,
             |keys, writer, written| {
-                serialize_slice(
+                bytes::serialize_slice(
                     &keys.iter().map(SerMemberImpl::from).collect::<Vec<_>>(),
                     writer,
                     written,
@@ -986,11 +988,12 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<ImplKey, MemberImpl>, usize) {
-        deserialize_map(
+        bytes::deserialize_map(
             bytes,
-            deserialize_vec,
+            bytes::deserialize_vec,
             |bytes, length, offset| {
-                let (slice, offset) = deserialize_slice::<SerMemberImpl>(bytes, length, offset);
+                let (slice, offset) =
+                    bytes::deserialize_slice::<SerMemberImpl>(bytes, length, offset);
                 (slice.iter().map(MemberImpl::from).collect(), offset)
             },
             length,
@@ -998,6 +1001,7 @@ mod serialize {
         )
     }
 
+    #[derive(Clone, Copy)]
     #[repr(C)]
     struct SerMemberSpecInfo(Symbol, SubsSlice<u8>, SubsSlice<Variable>);
 
@@ -1006,9 +1010,9 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             specializations,
-            serialize_slice,
+            bytes::serialize_slice,
             |spec_info, writer, written| {
                 let mut spec_lambda_sets_regions: Vec<u8> = Vec::new();
                 let mut spec_lambda_sets_vars: Vec<Variable> = Vec::new();
@@ -1031,9 +1035,9 @@ mod serialize {
                     ser_member_spec_infos.push(SerMemberSpecInfo(*symbol, regions, vars));
                 }
 
-                let written = serialize_slice(&ser_member_spec_infos, writer, written)?;
-                let written = serialize_slice(&spec_lambda_sets_regions, writer, written)?;
-                let written = serialize_slice(&spec_lambda_sets_vars, writer, written)?;
+                let written = bytes::serialize_slice(&ser_member_spec_infos, writer, written)?;
+                let written = bytes::serialize_slice(&spec_lambda_sets_regions, writer, written)?;
+                let written = bytes::serialize_slice(&spec_lambda_sets_vars, writer, written)?;
 
                 Ok(written)
             },
@@ -1047,21 +1051,21 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<Symbol, MemberSpecializationInfo<Resolved>>, usize) {
-        deserialize_map(
+        bytes::deserialize_map(
             bytes,
-            deserialize_vec,
+            bytes::deserialize_vec,
             |bytes, length, offset| {
                 let (serialized_slices, offset) =
-                    deserialize_slice::<SerMemberSpecInfo>(bytes, length, offset);
+                    bytes::deserialize_slice::<SerMemberSpecInfo>(bytes, length, offset);
 
                 let (regions_slice, offset) = {
                     let total_items = serialized_slices.iter().map(|s| s.1.len()).sum();
-                    deserialize_slice::<u8>(bytes, total_items, offset)
+                    bytes::deserialize_slice::<u8>(bytes, total_items, offset)
                 };
 
                 let (vars_slice, offset) = {
                     let total_items = serialized_slices.iter().map(|s| s.2.len()).sum();
-                    deserialize_slice::<Variable>(bytes, total_items, offset)
+                    bytes::deserialize_slice::<Variable>(bytes, total_items, offset)
                 };
 
                 let mut spec_infos: Vec<MemberSpecializationInfo<Resolved>> =
@@ -1087,10 +1091,10 @@ mod serialize {
         writer: &mut impl Write,
         written: usize,
     ) -> io::Result<usize> {
-        serialize_map(
+        bytes::serialize_map(
             resolved_specializations,
-            serialize_slice,
-            serialize_slice,
+            bytes::serialize_slice,
+            bytes::serialize_slice,
             writer,
             written,
         )
@@ -1101,133 +1105,140 @@ mod serialize {
         length: usize,
         offset: usize,
     ) -> (MutMap<SpecializationId, Symbol>, usize) {
-        deserialize_map(bytes, deserialize_vec, deserialize_vec, length, offset)
-    }
-
-    fn serialize_map<K: Clone, V: Clone, W: Write>(
-        map: &MutMap<K, V>,
-        ser_keys: fn(&[K], &mut W, usize) -> io::Result<usize>,
-        ser_values: fn(&[V], &mut W, usize) -> io::Result<usize>,
-        writer: &mut W,
-        written: usize,
-    ) -> io::Result<usize> {
-        let keys = map.keys().cloned().collect::<Vec<_>>();
-        let values = map.values().cloned().collect::<Vec<_>>();
-
-        let written = ser_keys(keys.as_slice(), writer, written)?;
-        let written = ser_values(values.as_slice(), writer, written)?;
-
-        Ok(written)
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn deserialize_map<K, V>(
-        bytes: &[u8],
-        deser_keys: fn(&[u8], usize, usize) -> (Vec<K>, usize),
-        deser_values: fn(&[u8], usize, usize) -> (Vec<V>, usize),
-        length: usize,
-        offset: usize,
-    ) -> (MutMap<K, V>, usize)
-    where
-        K: Clone + std::hash::Hash + Eq,
-        V: Clone,
-    {
-        let (keys, offset) = deser_keys(bytes, length, offset);
-        let (values, offset) = deser_values(bytes, length, offset);
-
-        (
-            MutMap::from_iter((keys.iter().cloned()).zip(values.iter().cloned())),
+        bytes::deserialize_map(
+            bytes,
+            bytes::deserialize_vec,
+            bytes::deserialize_vec,
+            length,
             offset,
         )
     }
+}
 
-    fn serialize_slice_of_slices<'a, T, U>(
-        slice_of_slices: &[U],
-        writer: &mut impl Write,
-        written: usize,
-    ) -> io::Result<usize>
-    where
-        T: 'a + Copy,
-        U: 'a + Borrow<[T]> + Sized,
-    {
-        let mut item_buf: Vec<T> = Vec::new();
-        let mut serialized_slices: Vec<SubsSlice<T>> = Vec::new();
+#[cfg(test)]
+mod test {
+    use roc_collections::VecMap;
+    use roc_module::symbol::Symbol;
+    use roc_region::all::Region;
+    use roc_types::{subs::Variable, types::MemberImpl};
 
-        for slice in slice_of_slices {
-            let slice = SubsSlice::extend_new(&mut item_buf, slice.borrow().iter().copied());
-            serialized_slices.push(slice);
-        }
+    use super::{
+        AbilitiesStore, AbilityMemberData, ImplKey, MemberSpecializationInfo, ResolvedMemberType,
+    };
 
-        let written = serialize_slice(&serialized_slices, writer, written)?;
-        serialize_slice(&item_buf, writer, written)
-    }
+    #[test]
+    fn serde_abilities_store() {
+        let store = {
+            let mut store = AbilitiesStore::default();
+            store.register_ability(
+                Symbol::ARG_1,
+                [
+                    (
+                        Symbol::ARG_2,
+                        AbilityMemberData {
+                            parent_ability: Symbol::ARG_1,
+                            region: Region::zero(),
+                            typ: ResolvedMemberType(Variable::BOOL),
+                        },
+                    ),
+                    (
+                        Symbol::ARG_3,
+                        AbilityMemberData {
+                            parent_ability: Symbol::ARG_1,
+                            region: Region::zero(),
+                            typ: ResolvedMemberType(Variable::BOOL),
+                        },
+                    ),
+                ],
+            );
+            store.register_ability(
+                Symbol::ARG_4,
+                [(
+                    Symbol::ARG_5,
+                    AbilityMemberData {
+                        parent_ability: Symbol::ARG_4,
+                        region: Region::zero(),
+                        typ: ResolvedMemberType(Variable::BOOL),
+                    },
+                )],
+            );
 
-    fn deserialize_slice_of_slices<T: Clone>(
-        bytes: &[u8],
-        length: usize,
-        offset: usize,
-    ) -> (Vec<Vec<T>>, usize) {
-        let (serialized_slices, offset) = deserialize_slice::<SubsSlice<T>>(bytes, length, offset);
+            store.register_declared_implementations(
+                Symbol::ATTR_ATTR,
+                [
+                    (Symbol::ARG_2, MemberImpl::Impl(Symbol::ATTR_INVALID)),
+                    (Symbol::ARG_3, MemberImpl::Impl(Symbol::ARG_CLOSURE)),
+                ],
+            );
 
-        let (vars_slice, offset) = {
-            let total_items = serialized_slices.iter().map(|s| s.len()).sum();
-            deserialize_slice::<T>(bytes, total_items, offset)
+            store.register_declared_implementations(
+                Symbol::ATTR_ATTR,
+                [(Symbol::ARG_5, MemberImpl::Derived)],
+            );
+
+            store
+                .mark_implementation(
+                    ImplKey {
+                        opaque: Symbol::ATTR_ATTR,
+                        ability_member: Symbol::ARG_2,
+                    },
+                    Ok(MemberSpecializationInfo::new(Symbol::UNDERSCORE, {
+                        let mut map = VecMap::default();
+                        map.insert(1, Variable::BOOL);
+                        map.insert(2, Variable::U8);
+                        map
+                    })),
+                )
+                .unwrap();
+
+            store
+                .mark_implementation(
+                    ImplKey {
+                        opaque: Symbol::ATTR_ATTR,
+                        ability_member: Symbol::ARG_3,
+                    },
+                    Ok(MemberSpecializationInfo::new(Symbol::UNDERSCORE, {
+                        let mut map = VecMap::default();
+                        map.insert(1, Variable::BOOL);
+                        map.insert(2, Variable::U8);
+                        map.insert(3, Variable::U32);
+                        map.insert(4, Variable::U64);
+                        map
+                    })),
+                )
+                .unwrap();
+
+            let spec_id1 = store.fresh_specialization_id();
+            let spec_id2 = store.fresh_specialization_id();
+
+            store.insert_resolved(spec_id1, Symbol::ARG_2);
+            store.insert_resolved(spec_id2, Symbol::ARG_3);
+
+            store
         };
 
-        let mut slice_of_slices = Vec::with_capacity(length);
-        for slice in serialized_slices {
-            let deserialized_slice = &vars_slice[slice.indices()];
-            slice_of_slices.push(deserialized_slice.to_vec())
-        }
+        let mut bytes = Vec::new();
+        let written = store.serialize(&mut bytes).unwrap();
+        assert_eq!(bytes.len(), written);
 
-        (slice_of_slices, offset)
-    }
+        let AbilitiesStore {
+            members_of_ability,
+            specialization_to_root,
+            ability_members,
+            declared_implementations,
+            specializations,
+            next_specialization_id,
+            resolved_specializations,
+        } = store;
 
-    fn serialize_slice<'a, 'b, 'c, T: 'a>(
-        slice: &'b [T],
-        writer: &'c mut impl Write,
-        written: usize,
-    ) -> std::io::Result<usize> {
-        let alignment = std::mem::align_of::<T>();
-        let padding_bytes = round_to_multiple_of(written, alignment) - written;
+        let de_store = AbilitiesStore::deserialize(&bytes);
 
-        for _ in 0..padding_bytes {
-            writer.write_all(&[0])?;
-        }
-
-        let bytes_slice = unsafe { slice_as_bytes(slice) };
-        writer.write_all(bytes_slice)?;
-
-        Ok(written + padding_bytes + bytes_slice.len())
-    }
-
-    fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
-        let alignment = std::mem::align_of::<T>();
-        let size = std::mem::size_of::<T>();
-
-        offset = round_to_multiple_of(offset, alignment);
-
-        let byte_length = length * size;
-        let byte_slice = &bytes[offset..][..byte_length];
-
-        let slice = unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const T, length) };
-
-        (slice, offset + byte_length)
-    }
-
-    fn deserialize_vec<T: Clone>(bytes: &[u8], length: usize, offset: usize) -> (Vec<T>, usize) {
-        let (slice, offset) = deserialize_slice(bytes, length, offset);
-        (slice.to_vec(), offset)
-    }
-
-    unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
-        let ptr = slice.as_ptr();
-        let byte_length = std::mem::size_of::<T>() * slice.len();
-
-        std::slice::from_raw_parts(ptr as *const u8, byte_length)
-    }
-
-    fn round_to_multiple_of(value: usize, base: usize) -> usize {
-        (value + (base - 1)) / base * base
+        assert_eq!(members_of_ability, de_store.members_of_ability);
+        assert_eq!(specialization_to_root, de_store.specialization_to_root);
+        assert_eq!(ability_members, de_store.ability_members);
+        assert_eq!(declared_implementations, de_store.declared_implementations);
+        assert_eq!(specializations, de_store.specializations);
+        assert_eq!(next_specialization_id, de_store.next_specialization_id);
+        assert_eq!(resolved_specializations, de_store.resolved_specializations);
     }
 }

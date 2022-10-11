@@ -250,6 +250,31 @@ where
     }
 }
 
+impl<K, V> PartialEq for VecMap<K, V>
+where
+    K: PartialEq,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        for (k, v) in self.iter() {
+            match other.get(k) {
+                Some(v1) => {
+                    if v != v1 {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
+    }
+}
+
 #[cfg(test)]
 mod test_drain_filter {
     use crate::VecMap;

@@ -3380,6 +3380,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_serialize",
  "roc_types",
  "static_assertions",
 ]
