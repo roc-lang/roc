@@ -88,7 +88,7 @@ This is the general procedure I follow with some helpful links:
 
 ## Helpful Resources
 
-- [Compiler Explorer](godbolt.org) -
+- [Compiler Explorer](https://godbolt.org/) -
   Generates assembly from most languages.
   Really good for getting a reference for what is required to do something.
   Can answer questions like "how would x be implemented in arm assembly?"

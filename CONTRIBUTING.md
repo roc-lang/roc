@@ -2,7 +2,7 @@
 
 ## Code of Conduct
 
-We are committed to providing a friendly, safe and welcoming environment for all. Make sure to take a look at the [Code of Conduct](CodeOfConduct.md)!
+We are committed to providing a friendly, safe and welcoming environment for all. Make sure to take a look at the [Code of Conduct](CODE_OF_CONDUCT.md)!
 
 ## How to contribute
 
@@ -23,7 +23,7 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 
 ## Running Tests
 
-Most contributors execute the following commands befor pushing their code:
+Most contributors execute the following commands before pushing their code:
 
 ```sh
 cargo test
