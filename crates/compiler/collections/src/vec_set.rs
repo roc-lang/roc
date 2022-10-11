@@ -1,4 +1,4 @@
-use std::iter::FromIterator;
+use std::{borrow::Borrow, iter::FromIterator};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VecSet<T> {
@@ -129,5 +129,19 @@ impl<T> IntoIterator for VecSet<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.elements.into_iter()
+    }
+}
+
+impl<T> Borrow<[T]> for VecSet<T> {
+    fn borrow(&self) -> &[T] {
+        &self.elements
+    }
+}
+
+impl<T> From<Vec<T>> for VecSet<T> {
+    fn from(elements: Vec<T>) -> Self {
+        // Not totally safe, but good enough for our purposes - also, duplicates in the VecSet are
+        // fine, just inefficient.
+        Self { elements }
     }
 }

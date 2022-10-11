@@ -98,11 +98,15 @@ where
     serialize_slice(&item_buf, writer, written)
 }
 
-pub fn deserialize_slice_of_slices<T: Clone + Copy>(
+pub fn deserialize_slice_of_slices<T, Container>(
     bytes: &[u8],
     length: usize,
     offset: usize,
-) -> (Vec<Vec<T>>, usize) {
+) -> (Vec<Container>, usize)
+where
+    T: Copy,
+    Container: From<Vec<T>>,
+{
     let (serialized_slices, offset) = deserialize_slice::<VecSlice<T>>(bytes, length, offset);
 
     let (vars_slice, offset) = {
@@ -113,7 +117,7 @@ pub fn deserialize_slice_of_slices<T: Clone + Copy>(
     let mut slice_of_slices = Vec::with_capacity(length);
     for slice in serialized_slices {
         let deserialized_slice = &vars_slice[slice.indices()];
-        slice_of_slices.push(deserialized_slice.to_vec())
+        slice_of_slices.push(deserialized_slice.to_vec().into())
     }
 
     (slice_of_slices, offset)
@@ -201,7 +205,7 @@ fn round_to_multiple_of(value: usize, base: usize) -> usize {
 
 #[cfg(test)]
 mod test {
-    use roc_collections::{MutMap, VecMap};
+    use roc_collections::{MutMap, VecMap, VecSet};
 
     use super::{
         deserialize_map, deserialize_slice, deserialize_slice_of_slices, deserialize_vec,
@@ -254,7 +258,7 @@ mod test {
         serialize_slice_of_slices(input, &mut buf, 0).unwrap();
         assert!(buf.is_empty());
 
-        let (out, size) = deserialize_slice_of_slices::<u64>(&buf, 0, 0);
+        let (out, size) = deserialize_slice_of_slices::<u64, Vec<_>>(&buf, 0, 0);
         assert!(out.is_empty());
         assert_eq!(size, 0);
     }
@@ -267,9 +271,27 @@ mod test {
         serialize_slice_of_slices(input, &mut buf, 0).unwrap();
         assert!(!buf.is_empty());
 
-        let (out, size) = deserialize_slice_of_slices::<u64>(&buf, 3, 0);
+        let (out, size) = deserialize_slice_of_slices::<u64, Vec<_>>(&buf, 3, 0);
         assert_eq!(out, input);
         assert_eq!(size, buf.len());
+    }
+
+    #[test]
+    fn serde_slice_of_slices_into_vec_set() {
+        let input: &[&[u64]] = &[&[15, 23, 47], &[61, 72], &[85, 91]];
+
+        let mut buf = vec![];
+        serialize_slice_of_slices(input, &mut buf, 0).unwrap();
+        assert!(!buf.is_empty());
+
+        let (out, size) = deserialize_slice_of_slices::<u64, VecSet<_>>(&buf, 3, 0);
+        assert_eq!(size, buf.len());
+
+        let mut out = out.into_iter();
+        assert_eq!(out.next().unwrap().into_vec(), &[15, 23, 47]);
+        assert_eq!(out.next().unwrap().into_vec(), &[61, 72]);
+        assert_eq!(out.next().unwrap().into_vec(), &[85, 91]);
+        assert!(out.next().is_none());
     }
 
     #[test]
