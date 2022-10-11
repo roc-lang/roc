@@ -5,7 +5,7 @@ use roc_module::{
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 use crate::{
-    util::{check_derivable_ext_var, debug_name_record},
+    util::{check_derivable_ext_var, debug_name_record, debug_name_tag},
     DeriveError,
 };
 
@@ -32,19 +32,7 @@ impl FlatEncodableKey {
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
             FlatEncodableKey::Record(fields) => debug_name_record(fields),
-            FlatEncodableKey::TagUnion(tags) => {
-                let mut str = String::from('[');
-                tags.iter().enumerate().for_each(|(i, (tag, arity))| {
-                    if i > 0 {
-                        str.push(',');
-                    }
-                    str.push_str(tag.0.as_str());
-                    str.push(' ');
-                    str.push_str(&arity.to_string());
-                });
-                str.push(']');
-                str
-            }
+            FlatEncodableKey::TagUnion(tags) => debug_name_tag(tags),
         }
     }
 }
