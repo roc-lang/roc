@@ -96,6 +96,9 @@ dependencies = [
 [[package]]
 name = "arena-pool"
 version = "0.0.1"
+dependencies = [
+ "roc_error_macros",
+]
 
 [[package]]
 name = "arrayvec"
@@ -3285,6 +3288,7 @@ dependencies = [
  "morphic_lib",
  "roc_collections",
  "roc_debug_flags",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
 ]
