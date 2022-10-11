@@ -157,27 +157,27 @@ pub const RocStr = extern struct {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
+        if (self.isSmallStr() or !self.isUnique()) {
+            return self.reallocateFresh(new_length);
+        }
+
         if (self.str_bytes) |source_ptr| {
-            const unique = self.isUnique();
-            if (unique and old_capacity > new_length) {
+            if (old_capacity > new_length) {
                 var output = self;
                 output.setLen(new_length);
                 return output;
             }
-            if (unique and !self.isSmallStr()) {
-                const new_capacity = utils.calculateCapacity(old_capacity, new_length, element_width);
-                const new_source = utils.unsafeReallocate(
-                    source_ptr,
-                    RocStr.alignment,
-                    old_capacity,
-                    new_capacity,
-                    element_width,
-                );
+            const new_capacity = utils.calculateCapacity(old_capacity, new_length, element_width);
+            const new_source = utils.unsafeReallocate(
+                source_ptr,
+                RocStr.alignment,
+                old_capacity,
+                new_capacity,
+                element_width,
+            );
 
-                return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
-            }
+            return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
         }
-
         return self.reallocateFresh(new_length);
     }
 
