@@ -211,6 +211,7 @@ impl Subs {
         (UlsOfVar(vec_map), offset)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn deserialize(bytes: &[u8]) -> ((Self, &[(Symbol, Variable)]), usize) {
         let mut offset = 0;
         let header_slice = &bytes[..std::mem::size_of::<SubsHeader>()];
