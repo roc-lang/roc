@@ -2746,6 +2746,9 @@ fn type_to_variable<'a>(
             &Content::RigidVar(a) => {
                 subs.set_content(var, Content::RigidAbleVar(a, ability));
             }
+            &Content::RigidAbleVar(_, ab) if ab == ability => {
+                // pass, already bound
+            }
             _ => {
                 let flex_ability = subs.fresh(Descriptor {
                     content: Content::FlexAbleVar(None, ability),
