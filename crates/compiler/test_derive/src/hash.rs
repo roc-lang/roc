@@ -27,6 +27,20 @@ test_key_eq! {
         v!({ c: v!(U8), a: v!(U8), b: v!(U8), })
     explicit_empty_record_and_implicit_empty_record:
         v!(EMPTY_RECORD), v!({})
+
+    same_tag_union:
+        v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
+    same_tag_union_tags_diff_types:
+        v!([ A v!(U8) v!(U8), B v!(U8) ]), v!([ A v!(STR) v!(STR), B v!(STR) ])
+    same_tag_union_tags_any_order:
+        v!([ A v!(U8) v!(U8), B v!(U8), C ]), v!([ C, B v!(STR), A v!(STR) v!(STR) ])
+    explicit_empty_tag_union_and_implicit_empty_tag_union:
+        v!(EMPTY_TAG_UNION), v!([])
+
+    same_recursive_tag_union:
+        v!([ Nil, Cons v!(^lst)] as lst), v!([ Nil, Cons v!(^lst)] as lst)
+    same_tag_union_and_recursive_tag_union_fields:
+        v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(^lst)] as lst)
 }
 
 test_key_neq! {
@@ -36,6 +50,13 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+
+    different_tag_union_tags:
+        v!([ A v!(U8) ]), v!([ B v!(U8) ])
+    tag_union_empty_vs_nonempty:
+        v!(EMPTY_TAG_UNION), v!([ B v!(U8) ])
+    different_recursive_tag_union_tags:
+        v!([ Nil, Cons v!(^lst) ] as lst), v!([ Nil, Next v!(^lst) ] as lst)
 }
 
 #[test]
@@ -84,6 +105,36 @@ fn derivable_record_with_record_ext() {
         Hash,
         v!({ b: v!(STR), }{ a: v!(STR), } ),
         DeriveKey::Hash(FlatHashKey::Record(vec!["a".into(), "b".into()])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_var() {
+    check_derivable(
+        Hash,
+        v!([ A v!(STR) ]* ),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_ext_flex_able_var() {
+    check_derivable(
+        Hash,
+        v!([ A v!(STR) ]a has Symbol::ENCODE_TO_ENCODER),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![("A".into(), 1)])),
+    );
+}
+
+#[test]
+fn derivable_tag_with_tag_ext() {
+    check_derivable(
+        Hash,
+        v!([ B v!(STR) v!(U8) ][ A v!(STR) ]),
+        DeriveKey::Hash(FlatHashKey::TagUnion(vec![
+            ("A".into(), 1),
+            ("B".into(), 2),
+        ])),
     );
 }
 
@@ -145,6 +196,103 @@ fn two_field_record() {
         #Derived.hash_{a,b} =
           \#Derived.hasher, #Derived.rcd ->
             Hash.hash (Hash.hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_one_label_no_payloads() {
+    derive_test(Hash, v!([A]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A]
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 0](0)]]
+        #Derived.hash_[A 0] = \#Derived.hasher, A -> #Derived.hasher
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_one_label_newtype() {
+    derive_test(Hash, v!([A v!(U8) v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U8 Str]
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 2](0)]]
+        #Derived.hash_[A 2] =
+          \#Derived.hasher, A #Derived.2 #Derived.3 ->
+            Hash.hash (Hash.hash #Derived.hasher #Derived.2) #Derived.3
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_two_labels() {
+    derive_test(Hash, v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U8 Str U16, B Str]
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 3,B 1](0)]]
+        #Derived.hash_[A 3,B 1] =
+          \#Derived.hasher, #Derived.union ->
+            when #Derived.union is
+              A #Derived.3 #Derived.4 #Derived.5 ->
+                Hash.hash
+                  (Hash.hash
+                    (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
+                    #Derived.4)
+                  #Derived.5
+              B #Derived.6 -> Hash.hash (Hash.addU8 #Derived.hasher 1) #Derived.6
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_two_labels_no_payloads() {
+    derive_test(Hash, v!([A, B]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A, B]
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[A 0,B 0](0)]]
+        #Derived.hash_[A 0,B 0] =
+          \#Derived.hasher, #Derived.union ->
+            when #Derived.union is
+              A -> Hash.addU8 #Derived.hasher 0
+              B -> Hash.addU8 #Derived.hasher 1
+        "###
+        )
+    })
+}
+
+#[test]
+fn recursive_tag_union() {
+    derive_test(Hash, v!([Nil, Cons v!(U8) v!(^lst) ] as lst), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [Cons U8 $rec, Nil] as $rec
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # Specialization lambda sets:
+        #   @<1>: [[hash_[Cons 2,Nil 0](0)]]
+        #Derived.hash_[Cons 2,Nil 0] =
+          \#Derived.hasher, #Derived.union ->
+            when #Derived.union is
+              Cons #Derived.3 #Derived.4 ->
+                Hash.hash
+                  (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
+                  #Derived.4
+              Nil -> Hash.addU8 #Derived.hasher 1
         "###
         )
     })

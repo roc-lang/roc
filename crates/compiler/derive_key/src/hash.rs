@@ -1,8 +1,11 @@
-use roc_module::{ident::Lowercase, symbol::Symbol};
+use roc_module::{
+    ident::{Lowercase, TagName},
+    symbol::Symbol,
+};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 
 use crate::{
-    util::{check_derivable_ext_var, debug_name_record},
+    util::{check_derivable_ext_var, debug_name_record, debug_name_tag},
     DeriveError,
 };
 
@@ -18,12 +21,14 @@ pub enum FlatHash {
 pub enum FlatHashKey {
     // Unfortunate that we must allocate here, c'est la vie
     Record(Vec<Lowercase>),
+    TagUnion(Vec<(TagName, u16)>),
 }
 
 impl FlatHashKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
             FlatHashKey::Record(fields) => debug_name_record(fields),
+            FlatHashKey::TagUnion(tags) => debug_name_tag(tags),
         }
     }
 }
@@ -60,16 +65,40 @@ impl FlatHash {
 
                     Ok(Key(FlatHashKey::Record(field_names)))
                 }
-                FlatType::TagUnion(_tags, _ext) | FlatType::RecursiveTagUnion(_, _tags, _ext) => {
-                    Err(Underivable) // yet
+                FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
+                    // The recursion var doesn't matter, because the derived implementation will only
+                    // look on the surface of the tag union type, and more over the payloads of the
+                    // arguments will be left generic for the monomorphizer to fill in with the
+                    // appropriate type. That is,
+                    //   [ A t1, B t1 t2 ]
+                    // and
+                    //   [ A t1, B t1 t2 ] as R
+                    // look the same on the surface, because `R` is only somewhere inside of the
+                    // `t`-prefixed payload types.
+                    let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
+                    })?;
+
+                    let mut tag_names_and_payload_sizes: Vec<_> = tags_iter
+                        .tags
+                        .into_iter()
+                        .map(|(name, payload_slice)| {
+                            let payload_size = payload_slice.len();
+                            (name.clone(), payload_size as _)
+                        })
+                        .collect();
+
+                    tag_names_and_payload_sizes.sort_by(|(t1, _), (t2, _)| t1.cmp(t2));
+
+                    Ok(Key(FlatHashKey::TagUnion(tag_names_and_payload_sizes)))
                 }
-                FlatType::FunctionOrTagUnion(_name_index, _, _) => {
-                    Err(Underivable) // yet
-                }
+                FlatType::FunctionOrTagUnion(name_index, _, _) => Ok(Key(FlatHashKey::TagUnion(
+                    vec![(subs[name_index].clone(), 0)],
+                ))),
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
-                FlatType::EmptyTagUnion => {
-                    Err(Underivable) // yet
-                }
+                FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
                 FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
@@ -111,7 +140,8 @@ impl FlatHash {
             },
             Content::RangedNumber(_) => Err(Underivable),
             //
-            Content::RecursionVar { .. } => Err(Underivable),
+            Content::RecursionVar { structure, .. } => Self::from_var(subs, structure),
+            //
             Content::Error => Err(Underivable),
             Content::FlexVar(_)
             | Content::RigidVar(_)

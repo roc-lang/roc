@@ -217,7 +217,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::StrFromInt => unimplemented!(),
                 LowLevel::StrFromFloat => unimplemented!(),
                 LowLevel::NumIsFinite => unimplemented!(),
-
             }
         }
     };

@@ -879,15 +879,8 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn tag_id_layout(&self) -> Layout<'a> {
-        // TODO is it beneficial to return a more specific layout?
-        // e.g. Layout::bool() and Layout::VOID
-        match self.discriminant() {
-            Discriminant::U0 => Layout::u8(),
-            Discriminant::U1 => Layout::u8(),
-            Discriminant::U8 => Layout::u8(),
-            Discriminant::U16 => Layout::u16(),
-        }
+    pub fn tag_id_layout(&self) -> Layout<'static> {
+        self.discriminant().layout()
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
@@ -1137,6 +1130,17 @@ impl Discriminant {
 
     pub const fn alignment_bytes(&self) -> u32 {
         self.stack_size()
+    }
+
+    pub const fn layout(&self) -> Layout<'static> {
+        // TODO is it beneficial to return a more specific layout?
+        // e.g. Layout::bool() and Layout::VOID
+        match self {
+            Discriminant::U0 => Layout::u8(),
+            Discriminant::U1 => Layout::u8(),
+            Discriminant::U8 => Layout::u8(),
+            Discriminant::U16 => Layout::u16(),
+        }
     }
 }
 
@@ -2713,7 +2717,7 @@ impl<'a> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U8))
     }
 
-    pub fn u16() -> Layout<'a> {
+    pub const fn u16() -> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U16))
     }
 

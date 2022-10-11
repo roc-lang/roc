@@ -2948,7 +2948,6 @@ fn unify_flex_able<M: MetaCollector>(
         }
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
-        RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
@@ -2963,7 +2962,10 @@ fn unify_flex_able<M: MetaCollector>(
             )
         }
 
-        Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
+        RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _, AliasKind::Structural)
+        | RangedNumber(..) => {
             // Structural type wins.
             merge_flex_able_with_concrete(
                 env,
@@ -3046,9 +3048,21 @@ fn unify_recursion<M: MetaCollector>(
             mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other)
         }
 
-        FlexAbleVar(..) | RigidAbleVar(..) => {
+        RigidAbleVar(..) => {
             mismatch!("RecursionVar {:?} with able var {:?}", ctx.first, &other)
         }
+
+        FlexAbleVar(_, ability) => merge_flex_able_with_concrete(
+            env,
+            ctx,
+            ctx.second,
+            *ability,
+            RecursionVar {
+                structure,
+                opt_name: *opt_name,
+            },
+            Obligated::Adhoc(ctx.first),
+        ),
 
         FlexVar(_) => merge(
             env,
