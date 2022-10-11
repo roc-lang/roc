@@ -2,7 +2,7 @@ use roc_module::{
     ident::{Lowercase, TagName},
     symbol::Symbol,
 };
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 use crate::{
     util::{check_derivable_ext_var, debug_name_record, debug_name_tag},
@@ -94,8 +94,11 @@ impl FlatHash {
 
                     Ok(Key(FlatHashKey::TagUnion(tag_names_and_payload_sizes)))
                 }
-                FlatType::FunctionOrTagUnion(name_index, _, _) => Ok(Key(FlatHashKey::TagUnion(
-                    vec![(subs[name_index].clone(), 0)],
+                FlatType::FunctionOrTagUnion(names_index, _, _) => Ok(Key(FlatHashKey::TagUnion(
+                    subs.get_subs_slice(names_index)
+                        .iter()
+                        .map(|t| (t.clone(), 0))
+                        .collect(),
                 ))),
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
