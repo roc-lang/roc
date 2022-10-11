@@ -136,7 +136,7 @@ pub struct Module {
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
-    pub able: MutMap<Variable, (Lowercase, Symbol)>,
+    pub able: MutMap<Variable, (Lowercase, Vec<Symbol>)>,
     pub wildcards: VecSet<Variable>,
 }
 
@@ -387,7 +387,7 @@ pub fn canonicalize_module_defs<'a>(
     for able in output.introduced_variables.able {
         rigid_variables
             .able
-            .insert(able.variable, (able.name, able.ability));
+            .insert(able.variable, (able.name, able.abilities));
     }
 
     for var in output.introduced_variables.wildcards {
