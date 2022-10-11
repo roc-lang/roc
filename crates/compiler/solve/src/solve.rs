@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
@@ -2742,11 +2744,11 @@ fn type_to_variable<'a>(
     }
 
     for (Loc { value: var, region }, ability) in bind_to_ability {
-        match subs.get_content_unchecked(var) {
-            &Content::RigidVar(a) => {
+        match *subs.get_content_unchecked(var) {
+            Content::RigidVar(a) => {
                 subs.set_content(var, Content::RigidAbleVar(a, ability));
             }
-            &Content::RigidAbleVar(_, ab) if ab == ability => {
+            Content::RigidAbleVar(_, ab) if ab == ability => {
                 // pass, already bound
             }
             _ => {
