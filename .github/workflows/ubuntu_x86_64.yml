@@ -26,6 +26,9 @@ jobs:
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+        
+      - name: roc format check on builtins
+        run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
@@ -41,9 +44,6 @@ jobs:
 
       - name: run `roc test` on Str builtins
         run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
-
-      - name: run `roc format --check` on builtins
-        run: cargo run format --check crates/compiler/builtins/roc
 
       #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test
