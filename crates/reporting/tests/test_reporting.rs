@@ -10773,7 +10773,7 @@ All branches in an `if` must have the same type!
             app "test" imports [] provides [main] to "./platform"
 
             main =
-                if Bool.true then \{} -> {} else main
+                if Bool.true then {} else main
             "#
         ),
     @r###"
@@ -10782,7 +10782,7 @@ All branches in an `if` must have the same type!
     `main` is defined directly in terms of itself:
 
     3│>  main =
-    4│>      if Bool.true then \{} -> {} else main
+    4│>      if Bool.true then {} else main
 
     Since Roc evaluates values strict, running this program would create
     an infinite number of `main` values!

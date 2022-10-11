@@ -1453,7 +1453,6 @@ impl DefOrdering {
 
 #[inline(always)]
 pub(crate) fn sort_can_defs_new(
-    env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
     defs: CanDefs,
@@ -1524,67 +1523,48 @@ pub(crate) fn sort_can_defs_new(
                 let def = defs.pop().unwrap();
                 let index = group.first_one().unwrap();
 
-                let bad_recursion_body = if def_ordering.direct_references.get_row_col(index, index)
-                {
-                    // a definition like `x = x + 1`, which is invalid in roc.
-                    // We need to convert the body of the def to a runtime error.
-                    let symbol = def_ordering.get_symbol(index).unwrap();
+                if def_ordering.references.get_row_col(index, index) {
+                    // push the "header" for this group of recursive definitions
+                    let cycle_mark = IllegalCycleMark::new(var_store);
+                    declarations.push_recursive_group(1, cycle_mark);
 
-                    let entries = vec![make_cycle_entry(symbol, &def)];
+                    // then push the definition
+                    let (symbol, specializes) = match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => (symbol, None),
 
-                    let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
-                    env.problem(problem);
+                        Pattern::AbilityMemberSpecialization { ident, specializes } => {
+                            (ident, Some(specializes))
+                        }
 
-                    Some(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
-                } else {
-                    None
-                };
+                        _ => {
+                            internal_error!("destructures cannot participate in a recursive group; it's always a type error")
+                        }
+                    };
 
-                let is_illegally_self_recursive = bad_recursion_body.is_some();
-                let set_opt_invalid_recursion_body = |e: &mut Expr| match bad_recursion_body {
-                    Some(err) => *e = err,
-                    None => {}
-                };
-
-                if def_ordering.references.get_row_col(index, index) && !is_illegally_self_recursive
-                {
-                    // this function calls itself, and must be typechecked as a recursive def
-                    match def.loc_pattern.value {
-                        Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                            e => todo!("{:?}", e),
-                        },
-                        Pattern::AbilityMemberSpecialization {
-                            ident: symbol,
-                            specializes,
-                        } => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                            _ => todo!(),
-                        },
-                        _ => todo!("{:?}", &def.loc_pattern.value),
+                    match def.loc_expr.value {
+                        Closure(closure_data) => {
+                            declarations.push_recursive_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                Loc::at(def.loc_expr.region, closure_data),
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
+                        _ => {
+                            declarations.push_value_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
                     }
                 } else {
                     match def.loc_pattern.value {
                         Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(mut closure_data) => {
-                                set_opt_invalid_recursion_body(&mut closure_data.loc_body.value);
-
+                            Closure(closure_data) => {
                                 declarations.push_function_def(
                                     Loc::at(def.loc_pattern.region, symbol),
                                     Loc::at(def.loc_expr.region, closure_data),
@@ -1594,9 +1574,6 @@ pub(crate) fn sort_can_defs_new(
                                 );
                             }
                             _ => {
-                                let mut def = def;
-                                set_opt_invalid_recursion_body(&mut def.loc_expr.value);
-
                                 declarations.push_value_def(
                                     Loc::at(def.loc_pattern.region, symbol),
                                     def.loc_expr,
@@ -1610,9 +1587,7 @@ pub(crate) fn sort_can_defs_new(
                             ident: symbol,
                             specializes,
                         } => match def.loc_expr.value {
-                            Closure(mut closure_data) => {
-                                set_opt_invalid_recursion_body(&mut closure_data.loc_body.value);
-
+                            Closure(closure_data) => {
                                 declarations.push_function_def(
                                     Loc::at(def.loc_pattern.region, symbol),
                                     Loc::at(def.loc_expr.region, closure_data),
@@ -1622,9 +1597,6 @@ pub(crate) fn sort_can_defs_new(
                                 );
                             }
                             _ => {
-                                let mut def = def;
-                                set_opt_invalid_recursion_body(&mut def.loc_expr.value);
-
                                 declarations.push_value_def(
                                     Loc::at(def.loc_pattern.region, symbol),
                                     def.loc_expr,
@@ -1635,9 +1607,6 @@ pub(crate) fn sort_can_defs_new(
                             }
                         },
                         _ => {
-                            let mut def = def;
-                            set_opt_invalid_recursion_body(&mut def.loc_expr.value);
-
                             declarations.push_destructure_def(
                                 def.loc_pattern,
                                 def.loc_expr,
@@ -1749,17 +1718,7 @@ pub(crate) fn sort_can_defs(
                 Pattern::AbilityMemberSpecialization { .. }
             );
 
-            let declaration = if def_ordering.direct_references.get_row_col(index, index) {
-                // a definition like `x = x + 1`, which is invalid in roc
-                let symbol = def_ordering.get_symbol(index).unwrap();
-
-                let entries = vec![make_cycle_entry(symbol, &def)];
-
-                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
-                env.problem(problem);
-
-                Declaration::InvalidCycle(entries)
-            } else if def_ordering.references.get_row_col(index, index) {
+            let declaration = if def_ordering.references.get_row_col(index, index) {
                 debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
 
                 // this function calls itself, and must be typechecked as a recursive def
