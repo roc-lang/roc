@@ -134,7 +134,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 }
 
 fn sidebar_link_url(module: &ModuleDocumentation) -> String {
-    let url = format!("{baseUrl}{moduleName}/", baseUrl = base_url(), moduleName = module.name.as_str());
+    let url = format!("{}{}/", base_url(), module.name.as_str());
     url
 }
 
