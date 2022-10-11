@@ -11,6 +11,7 @@ const SKIP_SUBS_CACHE: bool = {
     }
 };
 
+// IFTTT: crates/compiler/load/src/lib.rs
 const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::BOOL, "Bool.roc"),
     (ModuleId::RESULT, "Result.roc"),
