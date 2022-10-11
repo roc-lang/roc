@@ -3,7 +3,7 @@ use std::{
     io::{self, Write},
 };
 
-use roc_collections::MutMap;
+use roc_collections::{MutMap, VecMap};
 
 pub fn serialize_slice<T: Copy>(
     slice: &[T],
@@ -156,6 +156,38 @@ where
     )
 }
 
+pub fn serialize_vec_map<K, V, W: Write>(
+    map: &VecMap<K, V>,
+    ser_keys: fn(&[K], &mut W, usize) -> io::Result<usize>,
+    ser_values: fn(&[V], &mut W, usize) -> io::Result<usize>,
+    writer: &mut W,
+    written: usize,
+) -> io::Result<usize> {
+    let (keys, values) = map.unzip_slices();
+
+    let written = ser_keys(keys, writer, written)?;
+    let written = ser_values(values, writer, written)?;
+
+    Ok(written)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn deserialize_vec_map<K, V>(
+    bytes: &[u8],
+    deser_keys: fn(&[u8], usize, usize) -> (Vec<K>, usize),
+    deser_values: fn(&[u8], usize, usize) -> (Vec<V>, usize),
+    length: usize,
+    offset: usize,
+) -> (VecMap<K, V>, usize)
+where
+    K: PartialEq,
+{
+    let (keys, offset) = deser_keys(bytes, length, offset);
+    let (values, offset) = deser_values(bytes, length, offset);
+
+    (unsafe { VecMap::zip(keys, values) }, offset)
+}
+
 unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
     let ptr = slice.as_ptr();
     let byte_length = std::mem::size_of::<T>() * slice.len();
@@ -169,11 +201,12 @@ fn round_to_multiple_of(value: usize, base: usize) -> usize {
 
 #[cfg(test)]
 mod test {
-    use roc_collections::MutMap;
+    use roc_collections::{MutMap, VecMap};
 
     use super::{
         deserialize_map, deserialize_slice, deserialize_slice_of_slices, deserialize_vec,
-        serialize_map, serialize_slice, serialize_slice_of_slices,
+        deserialize_vec_map, serialize_map, serialize_slice, serialize_slice_of_slices,
+        serialize_vec_map,
     };
 
     #[test]
@@ -278,6 +311,49 @@ mod test {
             0,
         );
         assert_eq!(out, input);
+        assert_eq!(size, buf.len());
+    }
+
+    #[test]
+    fn serde_empty_vec_map() {
+        let input: VecMap<u64, u64> = Default::default();
+
+        let mut buf = vec![];
+        serialize_vec_map(&input, serialize_slice, serialize_slice, &mut buf, 0).unwrap();
+        assert!(buf.is_empty());
+
+        let (out, size) =
+            deserialize_vec_map::<u64, u64>(&buf, deserialize_vec, deserialize_vec, 0, 0);
+        assert!(out.is_empty());
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn serde_vec_map() {
+        let mut input: VecMap<u64, Vec<u64>> = Default::default();
+        input.insert(51, vec![15, 23, 37]);
+        input.insert(39, vec![17, 91, 43]);
+        input.insert(82, vec![90, 35, 76]);
+
+        let mut buf = vec![];
+        serialize_vec_map(
+            &input,
+            serialize_slice,
+            serialize_slice_of_slices,
+            &mut buf,
+            0,
+        )
+        .unwrap();
+        assert!(!buf.is_empty());
+
+        let (out, size) = deserialize_vec_map::<u64, Vec<u64>>(
+            &buf,
+            deserialize_vec,
+            deserialize_slice_of_slices,
+            3,
+            0,
+        );
+        assert_eq!(out.unzip_slices(), input.unzip_slices());
         assert_eq!(size, buf.len());
     }
 }
