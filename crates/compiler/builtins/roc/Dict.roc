@@ -269,7 +269,7 @@ addU8 = \@LowLevelHasher { originalSeed, state }, u8 ->
         |> Num.bitwiseOr p0
     b = 0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 8 }
+    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 1 }
 
 addU16 = \@LowLevelHasher { originalSeed, state }, u16 ->
     seed = Num.bitwiseXor originalSeed wyp0
@@ -281,7 +281,7 @@ addU16 = \@LowLevelHasher { originalSeed, state }, u16 ->
         |> Num.bitwiseOr p1
     b = 0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 8 }
+    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 2 }
 
 addU32 = \@LowLevelHasher { originalSeed, state }, u32 ->
     seed = Num.bitwiseXor originalSeed wyp0
@@ -290,7 +290,7 @@ addU32 = \@LowLevelHasher { originalSeed, state }, u32 ->
     a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p1
     b = Num.shiftLeftBy p1 32 |> Num.bitwiseOr p0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 8 }
+    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 4 }
 
 addU64 = \@LowLevelHasher { originalSeed, state }, u64 ->
     seed = Num.bitwiseXor originalSeed wyp0
@@ -312,7 +312,7 @@ addU128 = \@LowLevelHasher { originalSeed, state }, u128 ->
     a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p2
     b = Num.shiftLeftBy p3 32 |> Num.bitwiseOr p1
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 8 }
+    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 16 }
 
 addBytes : LowLevelHasher, List U8 -> LowLevelHasher
 addBytes = \@LowLevelHasher { originalSeed, state }, list ->
