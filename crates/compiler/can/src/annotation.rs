@@ -931,31 +931,37 @@ fn canonicalize_has_clause(
     let var_name = Lowercase::from(var_name);
 
     let mut can_abilities = Vec::with_capacity(abilities.len());
-    for ability in *abilities {
-        let ability = match ability.value {
+    for &Loc {
+        region,
+        value: ability,
+    } in *abilities
+    {
+        let ability = match ability {
             TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
-                let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
+                let symbol = make_apply_symbol(env, region, scope, module_name, ident)?;
 
                 // Ability defined locally, whose members we are constructing right now...
                 if !pending_abilities_in_scope.contains_key(&symbol)
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
                 {
-                    let region = ability.region;
                     env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
                     return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
                 }
                 symbol
             }
             _ => {
-                let region = ability.region;
                 env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
                 return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
             }
         };
 
         references.insert(ability);
-        can_abilities.push(ability);
+        if can_abilities.contains(&ability) {
+            env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
+        } else {
+            can_abilities.push(ability);
+        }
     }
 
     if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
