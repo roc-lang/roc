@@ -719,10 +719,6 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
                 .strip_prefix(env::current_dir().unwrap())
                 .unwrap_or(path);
 
-            // No need to waste time freeing this memory,
-            // since the process is about to exit anyway.
-            std::mem::forget(arena);
-
             #[cfg(target_family = "unix")]
             {
                 use std::os::unix::ffi::OsStrExt;
