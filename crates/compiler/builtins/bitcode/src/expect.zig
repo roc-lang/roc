@@ -30,8 +30,13 @@ extern fn roc_getppid() c_int;
 
 pub fn readSharedBufferEnv() callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-        const shared_fd = roc_shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
+        // const name = "/roc_expect_buffer";
+
+        // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        var name: [100]u8 = undefined;
+        _ = std.fmt.bufPrint(name[0..100], "/roc_expect_buffer_{}\x00", .{roc_getppid()}) catch unreachable;
+
+        const shared_fd = roc_shm_open(@ptrCast(*const i8, &name), O_RDWR | O_CREAT, 0o666);
         const length = 4096;
 
         const shared_ptr = roc_mmap(

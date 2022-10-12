@@ -921,9 +921,9 @@ fn roc_dev_native(
 
     let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
 
-    // let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
-    let shm_name = "/roc_expect_buffer";
-    let memory = ExpectMemory::create_or_reuse_mmap(shm_name);
+    // let shm_name =
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
 
