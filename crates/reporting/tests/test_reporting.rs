@@ -11553,4 +11553,116 @@ All branches in an `if` must have the same type!
     Abilities only need to bound to a type variable once in a `has` clause!
     "###
     );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_multiple,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding & Hash
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Hash & Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the abilities `Hash` and
+    `Decoding`. Can you use `x` without those abilities? If not, consider
+    adding them to the `has` clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_with_indirection,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            f : x -> x | x has Hash
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Hash & Encoding
+            main = \x -> g (f x)
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    7│  main = \x -> g (f x)
+                        ^^^
+
+    This `f` call produces:
+
+        x | x has Hash & Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the abilities `Hash` and `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
 }

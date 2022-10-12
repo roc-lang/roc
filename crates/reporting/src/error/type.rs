@@ -3454,6 +3454,40 @@ mod report_text {
     }
 }
 
+fn list_abilities<'a>(alloc: &'a RocDocAllocator<'a>, abilities: &AbilitySet) -> RocDocBuilder<'a> {
+    let mut abilities = abilities.sorted_iter();
+    if abilities.len() == 1 {
+        alloc.concat([
+            alloc.reflow("ability "),
+            alloc.symbol_unqualified(*abilities.next().unwrap()),
+        ])
+    } else if abilities.len() == 2 {
+        alloc.concat([
+            alloc.reflow("abilities "),
+            alloc.symbol_unqualified(*abilities.next().unwrap()),
+            alloc.reflow(" and "),
+            alloc.symbol_unqualified(*abilities.next().unwrap()),
+        ])
+    } else {
+        let last_ability = abilities.len() - 1;
+
+        alloc.concat([
+            alloc.reflow("abilities "),
+            alloc.intersperse(
+                abilities.enumerate().map(|(i, &ab)| {
+                    if i == last_ability {
+                        alloc.concat([alloc.reflow(" and "), alloc.symbol_unqualified(ab)])
+                    } else {
+                        alloc.symbol_unqualified(ab)
+                    }
+                }),
+                alloc.reflow(", "),
+            ),
+            alloc.reflow(" abilities"),
+        ])
+    }
+}
+
 fn type_problem_to_pretty<'b>(
     alloc: &'b RocDocAllocator<'b>,
     problem: crate::error::r#type::Problem,
@@ -3555,39 +3589,128 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe, opt_ability), expectation) => {
+        (BadRigidVar(x, tipe, Some(abilities)), expectation) => {
+            use ErrorType::*;
+
+            let rigid_able_vs_concrete = |name: Lowercase, a_thing| {
+                alloc.stack([
+                    alloc
+                        .note("")
+                        .append(alloc.reflow("The type variable "))
+                        .append(alloc.type_variable(name.clone()))
+                        .append(alloc.reflow(" says it can take on any value that has the "))
+                        .append(list_abilities(alloc, &abilities))
+                        .append(alloc.reflow(".")),
+                    alloc.concat([
+                        alloc.reflow("But, I see that the type is only ever used as a "),
+                        a_thing,
+                        alloc.reflow(". Can you replace "),
+                        alloc.type_variable(name),
+                        alloc.reflow(" with a more specific type?"),
+                    ]),
+                ])
+            };
+
+            let rigid_able_vs_different_flex_able =
+                |name: Lowercase, abilities: AbilitySet, other_abilities: AbilitySet| {
+                    let extra_abilities = other_abilities
+                        .into_sorted_iter()
+                        .filter(|ability| !abilities.contains(&ability))
+                        .collect::<AbilitySet>();
+
+                    let type_var_doc = match expectation {
+                        ExpectationContext::Annotation { on } => alloc.concat([
+                            alloc.reflow("The type annotation "),
+                            on,
+                            alloc.reflow(" says that the type variable "),
+                            alloc.type_variable(name.clone()),
+                        ]),
+                        ExpectationContext::WhenCondition | ExpectationContext::Arbitrary => alloc
+                            .concat([
+                                alloc.reflow("The type variable "),
+                                alloc.type_variable(name.clone()),
+                                alloc.reflow(" says it"),
+                            ]),
+                    };
+
+                    let n_extra_abilities = extra_abilities.sorted_iter().len();
+
+                    alloc.stack([
+                        alloc
+                            .note("")
+                            .append(type_var_doc)
+                            .append(alloc.reflow(" can take on any value that has only the "))
+                            .append(list_abilities(alloc, &abilities))
+                            .append(alloc.reflow(".")),
+                        alloc.concat([
+                            alloc.reflow("But, I see that it's also used as if it has the "),
+                            list_abilities(alloc, &extra_abilities),
+                            alloc.reflow(". Can you use "),
+                            alloc.type_variable(name.clone()),
+                            alloc.reflow(" without "),
+                            if n_extra_abilities > 1 {
+                                alloc.reflow("those abilities")
+                            } else {
+                                alloc.reflow("that ability")
+                            },
+                            alloc.reflow("? If not, consider adding "),
+                            if n_extra_abilities > 1 {
+                                alloc.reflow("them")
+                            } else {
+                                alloc.reflow("it")
+                            },
+                            alloc.reflow(" to the "),
+                            alloc.keyword("has"),
+                            alloc.reflow(" clause of "),
+                            alloc.type_variable(name),
+                            alloc.reflow("."),
+                        ]),
+                    ])
+                };
+
+            let bad_double_rigid = |a: Lowercase, b: Lowercase| {
+                alloc
+                    .tip()
+                    .append(alloc.reflow("Your type annotation uses "))
+                    .append(alloc.type_variable(a))
+                    .append(alloc.reflow(" and "))
+                    .append(alloc.type_variable(b))
+                    .append(alloc.reflow(" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same in your type annotation? Maybe your code uses them in a weird way?"))
+            };
+
+            match tipe {
+                Infinite | Error | FlexVar(_) => alloc.nil(),
+                FlexAbleVar(_, other_abilities) => {
+                    rigid_able_vs_different_flex_able(x, abilities, other_abilities)
+                }
+                RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
+                Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
+                Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
+                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                    rigid_able_vs_concrete(x, alloc.reflow("a tag value"))
+                }
+                Alias(symbol, _, _, _) | Type(symbol, _) => rigid_able_vs_concrete(
+                    x,
+                    alloc.concat([
+                        alloc.reflow("a "),
+                        alloc.symbol_unqualified(symbol),
+                        alloc.reflow(" value"),
+                    ]),
+                ),
+                Range(..) => rigid_able_vs_concrete(x, alloc.reflow("a range")),
+            }
+        }
+
+        (BadRigidVar(x, tipe, None), expectation) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
-                let kind_of_value = match opt_ability {
-                    Some(abilities) => {
-                        let mut abilities = abilities.into_sorted_iter();
-                        if abilities.len() == 1 {
-                            alloc.concat([
-                                alloc.reflow("any value implementing the "),
-                                alloc.symbol_unqualified(abilities.next().unwrap()),
-                                alloc.reflow(" ability"),
-                            ])
-                        } else {
-                            alloc.concat([
-                                alloc.reflow("any value implementing the "),
-                                alloc.intersperse(
-                                    abilities.map(|ab| alloc.symbol_unqualified(ab)),
-                                    alloc.reflow(", "),
-                                ),
-                                alloc.reflow(" abilities"),
-                            ])
-                        }
-                    }
-                    None => alloc.reflow("any type of value"),
-                };
                 alloc
                     .tip()
                     .append(alloc.reflow("The type annotation uses the type variable "))
                     .append(alloc.type_variable(name))
-                    .append(alloc.reflow(" to say that this definition can produce ")
-                    .append(kind_of_value)
-                    .append(alloc.reflow(". But in the body I see that it will only produce ")))
+                    .append(alloc.reflow(" to say that this definition can produce any type of value.")
+                    .append(alloc.reflow(" But in the body I see that it will only produce ")))
                     .append(a_thing)
                     .append(alloc.reflow(" of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"))
             };
