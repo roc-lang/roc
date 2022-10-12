@@ -221,6 +221,33 @@ fn ability_used_as_type_still_compiles() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bounds_to_multiple_abilities() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Idempot has idempot : a -> a | a has Idempot
+            Consume has consume : a -> Str | a has Consume
+
+            Hello := Str has [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
+
+            idempotHello = \@Hello msg -> @Hello msg
+            consumeHello = \@Hello msg -> msg
+
+            lifecycle : a -> Str | a has Idempot & Consume
+            lifecycle = \x -> idempot x |> consume
+
+            main = lifecycle (@Hello "hello world")
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode() {
     assert_evals_to!(
         indoc!(
