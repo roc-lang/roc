@@ -9,8 +9,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType, OptAbleVar,
-    Problem, RecordField, Type, TypeExtension,
+    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType,
+    OptAbleVar, Problem, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]
@@ -105,7 +105,7 @@ impl OwnedNamedOrAble {
         }
     }
 
-    pub fn opt_abilities(&self) -> Option<&VecSet<Symbol>> {
+    pub fn opt_abilities(&self) -> Option<&AbilitySet> {
         match self {
             OwnedNamedOrAble::Named(_) => None,
             OwnedNamedOrAble::Able(av) => Some(&av.abilities),
@@ -127,9 +127,7 @@ pub struct NamedVariable {
 pub struct AbleVariable {
     pub variable: Variable,
     pub name: Lowercase,
-    /// Abilities bound to this type variable.
-    /// INVARIANT: sorted and de-duplicated.
-    pub abilities: VecSet<Symbol>,
+    pub abilities: AbilitySet,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
@@ -168,7 +166,7 @@ impl IntroducedVariables {
         self.named.insert(named_variable);
     }
 
-    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, abilities: VecSet<Symbol>) {
+    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, abilities: AbilitySet) {
         self.debug_assert_not_already_present(var.value);
 
         let able_variable = AbleVariable {
@@ -544,7 +542,7 @@ fn can_annotation_help(
                 introduced_variables.insert_able(
                     fresh_ty_var,
                     Loc::at(region, var),
-                    VecSet::singleton(symbol),
+                    AbilitySet::singleton(symbol),
                 );
                 return Type::Variable(var);
             }
@@ -936,7 +934,7 @@ fn canonicalize_has_clause(
     );
     let var_name = Lowercase::from(var_name);
 
-    let mut can_abilities = VecSet::with_capacity(abilities.len());
+    let mut can_abilities = AbilitySet::with_capacity(abilities.len());
     for &Loc {
         region,
         value: ability,
@@ -986,11 +984,6 @@ fn canonicalize_has_clause(
 
     let var = var_store.fresh();
 
-    let can_abilities = {
-        let mut vec = can_abilities.into_vec();
-        vec.sort();
-        VecSet::from_iter(vec)
-    };
     introduced_variables.insert_able(var_name, Loc::at(region, var), can_abilities);
 
     Ok(())

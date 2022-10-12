@@ -18,7 +18,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, AliasVar, Type};
+use roc_types::types::{AbilitySet, Alias, AliasKind, AliasVar, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -136,7 +136,7 @@ pub struct Module {
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
-    pub able: MutMap<Variable, (Lowercase, VecSet<Symbol>)>,
+    pub able: MutMap<Variable, (Lowercase, AbilitySet)>,
     pub wildcards: VecSet<Variable>,
 }
 

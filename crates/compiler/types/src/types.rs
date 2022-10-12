@@ -4,7 +4,6 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::VecSet;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -245,10 +244,57 @@ pub struct AliasCommon {
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
+/// Represents a collection of abilities bound to a type variable.
+///
+/// Enforces the invariants
+///   - There are no duplicate abilities (like a [VecSet][roc_collections::VecSet])
+///   - Inserted abilities are in sorted order; they can be extracted with
+///     [AbilitySet::into_sorted_iter]
+///
+/// This is useful for inserting into [Subs][crate::subs::Subs], so that the set need not be
+/// re-sorted.
+///
+/// In the future we might want to do some small-vec optimizations, though that may be trivialized
+/// away with a SoA representation of canonicalized types.
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
+pub struct AbilitySet(Vec<Symbol>);
+
+impl AbilitySet {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self(Vec::with_capacity(cap))
+    }
+
+    pub fn singleton(ability: Symbol) -> Self {
+        Self(vec![ability])
+    }
+
+    pub fn insert(&mut self, ability: Symbol) -> bool {
+        match self.0.binary_search(&ability) {
+            Ok(_) => true,
+            Err(insert_index) => {
+                self.0.insert(insert_index, ability);
+                false
+            }
+        }
+    }
+
+    pub fn contains(&self, ability: &Symbol) -> bool {
+        self.0.contains(ability)
+    }
+
+    pub fn sorted_iter(&self) -> impl Iterator<Item = &Symbol> {
+        self.0.iter()
+    }
+
+    pub fn into_sorted_iter(self) -> impl Iterator<Item = Symbol> {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OptAbleVar {
     pub var: Variable,
-    pub opt_abilities: Option<VecSet<Symbol>>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleVar {
@@ -263,7 +309,7 @@ impl OptAbleVar {
 #[derive(PartialEq, Eq, Debug)]
 pub struct OptAbleType {
     pub typ: Type,
-    pub opt_abilities: Option<VecSet<Symbol>>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleType {
@@ -2113,8 +2159,7 @@ pub struct AliasVar {
     pub name: Lowercase,
     pub var: Variable,
     /// `Some` if this variable is bound to abilities; `None` otherwise.
-    /// INVARIANT: if abilities are present, they are sorted and de-duplicated.
-    pub opt_bound_abilities: Option<VecSet<Symbol>>,
+    pub opt_bound_abilities: Option<AbilitySet>,
 }
 
 impl AliasVar {

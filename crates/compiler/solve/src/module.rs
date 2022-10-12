@@ -71,8 +71,7 @@ pub fn run_solve(
     }
 
     for (var, (name, abilities)) in rigid_variables.able {
-        // TODO(abilities)
-        subs.rigid_able_var(var, name, abilities[0]);
+        subs.rigid_able_var(var, name, abilities);
     }
 
     for var in rigid_variables.wildcards {

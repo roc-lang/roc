@@ -1345,7 +1345,7 @@ fn resolve_abilities<'a>(
                 .introduced_variables
                 .able
                 .iter()
-                .partition(|av| av.abilities.iter().any(|ab| *ab == ability));
+                .partition(|av| av.abilities.contains(&ability));
 
             let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
                 [one] => one.variable,

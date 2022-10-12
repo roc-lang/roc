@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError,
+    TypeExt, Uls,
 };
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
@@ -1807,10 +1808,9 @@ impl Subs {
         self.set(var, desc);
     }
 
-    pub fn rigid_able_var(&mut self, var: Variable, name: Lowercase, ability: Symbol) {
+    pub fn rigid_able_var(&mut self, var: Variable, name: Lowercase, abilities: AbilitySet) {
         let name_index = SubsIndex::push_new(&mut self.field_names, name);
-        // TODO(multi-abilities)
-        let abilities = SubsSlice::extend_new(&mut self.symbol_names, [ability]);
+        let abilities = SubsSlice::extend_new(&mut self.symbol_names, abilities.into_sorted_iter());
         let content = Content::RigidAbleVar(name_index, abilities);
         let desc = Descriptor::from(content);
 
