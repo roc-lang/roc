@@ -438,7 +438,7 @@ fn ability_chain<'a>(
             Loc<TypeAnnotation<'a>>,
             Vec<'a, Loc<TypeAnnotation<'a>>>
         )| {
-            other_abilities.push(first_ability);
+            other_abilities.insert(0, first_ability);
             other_abilities
         }
     )

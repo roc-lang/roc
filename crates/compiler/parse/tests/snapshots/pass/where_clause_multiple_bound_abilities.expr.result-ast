@@ -5,8 +5,8 @@ Defs(
             Index(2147483649),
         ],
         regions: [
-            @0-38,
-            @57-103,
+            @0-55,
+            @57-118,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -26,7 +26,7 @@ Defs(
                 @0-1 Identifier(
                     "f",
                 ),
-                @4-38 Where(
+                @4-55 Where(
                     @4-10 Function(
                         [
                             @4-5 BoundVariable(
@@ -38,24 +38,29 @@ Defs(
                         ),
                     ),
                     [
-                        @13-23 HasClause {
+                        @13-28 HasClause {
                             var: @13-14 "a",
                             abilities: [
-                                @26-28 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
                                 @19-23 Apply(
                                     "",
                                     "Hash",
                                     [],
                                 ),
+                                @26-28 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
                             ],
                         },
-                        @30-38 HasClause {
+                        @30-55 HasClause {
                             var: @30-31 "b",
                             abilities: [
+                                @36-38 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
                                 @41-45 Apply(
                                     "",
                                     "Hash",
@@ -64,11 +69,6 @@ Defs(
                                 @48-55 Apply(
                                     "",
                                     "Display",
-                                    [],
-                                ),
-                                @36-38 Apply(
-                                    "",
-                                    "Eq",
                                     [],
                                 ),
                             ],
@@ -80,7 +80,7 @@ Defs(
                 @57-58 Identifier(
                     "f",
                 ),
-                @61-103 Where(
+                @61-118 Where(
                     @61-67 SpaceBefore(
                         Function(
                             [
@@ -97,22 +97,22 @@ Defs(
                         ],
                     ),
                     [
-                        @72-82 HasClause {
+                        @72-87 HasClause {
                             var: @72-73 "a",
                             abilities: [
-                                @85-87 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
                                 @78-82 Apply(
                                     "",
                                     "Hash",
                                     [],
                                 ),
+                                @85-87 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
                             ],
                         },
-                        @93-103 HasClause {
+                        @93-118 HasClause {
                             var: @93-94 SpaceBefore(
                                 "b",
                                 [
@@ -120,6 +120,11 @@ Defs(
                                 ],
                             ),
                             abilities: [
+                                @99-103 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
                                 @106-113 Apply(
                                     "",
                                     "Display",
@@ -128,11 +133,6 @@ Defs(
                                 @116-118 Apply(
                                     "",
                                     "Eq",
-                                    [],
-                                ),
-                                @99-103 Apply(
-                                    "",
-                                    "Hash",
                                     [],
                                 ),
                             ],
