@@ -554,7 +554,7 @@ expect
 expect
     hash =
         createLowLevelHasher {}
-        |> addBytes (Str.toUtf8 "abcdefghijklmnopqrstuvwxyz")
+        |> Hash.hashStrBytes "abcdefghijklmnopqrstuvwxyz"
         |> complete
 
     hash == 0xBEE0_A8FD_E990_D285
@@ -562,7 +562,7 @@ expect
 expect
     hash =
         createLowLevelHasher {}
-        |> addBytes (Str.toUtf8 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        |> Hash.hashStrBytes "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         |> complete
 
     hash == 0xB3C5_8528_9D82_A6EF
@@ -570,7 +570,7 @@ expect
 expect
     hash =
         createLowLevelHasher {}
-        |> addBytes (Str.toUtf8 "1234567890123456789012345678901234567890123456789012345678901234567890")
+        |> Hash.hashStrBytes "1234567890123456789012345678901234567890123456789012345678901234567890"
         |> complete
 
     hash == 0xDB6B_7997_7A55_BA03
@@ -582,3 +582,39 @@ expect
         |> complete
 
     hash == 0x171F_EEE2_B764_8E5E
+
+# Note, had to specify u8 in the lists below to avoid ability type resolution error.
+# Apparently it won't pick the default integer.
+expect
+    hash =
+        createLowLevelHasher {}
+        |> Hash.hashUnordered [8u8, 82u8, 3u8, 8u8, 24u8] List.walk
+        |> complete
+
+    hash == 0x999F_B530_3529_F17D
+
+expect
+    hash1 =
+        createLowLevelHasher {}
+        |> Hash.hashUnordered ([0u8, 1u8, 2u8, 3u8, 4u8]) List.walk
+        |> complete
+
+    hash2 =
+        createLowLevelHasher {}
+        |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8] List.walk
+        |> complete
+
+    hash1 == hash2
+
+expect
+    hash1 =
+        createLowLevelHasher {}
+        |> Hash.hashUnordered [0u8, 1u8, 2u8, 3u8, 4u8] List.walk
+        |> complete
+
+    hash2 =
+        createLowLevelHasher {}
+        |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8, 0u8] List.walk
+        |> complete
+
+    hash1 != hash2
