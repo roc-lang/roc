@@ -162,7 +162,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     #[inline(always)]
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
         SubsSlice::extend_new(
-            &mut self.target.closure_names,
+            &mut self.target.symbol_names,
             self.source.get_subs_slice(lambda_names).iter().cloned(),
         )
     }

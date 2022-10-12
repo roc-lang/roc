@@ -2487,7 +2487,7 @@ fn type_to_variable<'a>(
                 }
 
                 let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name.clone()]);
-                let symbols = SubsSlice::extend_new(&mut subs.closure_names, [*symbol]);
+                let symbols = SubsSlice::extend_new(&mut subs.symbol_names, [*symbol]);
 
                 let content =
                     Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
@@ -3156,7 +3156,7 @@ fn create_union_lambda<'a>(
     let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, capture_types);
     let new_variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
-    let lambda_name_slice = SubsSlice::extend_new(&mut subs.closure_names, [closure]);
+    let lambda_name_slice = SubsSlice::extend_new(&mut subs.symbol_names, [closure]);
 
     UnionLambdas::from_slices(lambda_name_slice, new_variable_slices)
 }

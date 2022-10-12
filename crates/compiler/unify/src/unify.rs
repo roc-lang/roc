@@ -3224,7 +3224,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
 
     {
         let lambda_names = env.subs.get_subs_slice(tag_fn_lambdas).to_vec();
-        let new_lambda_names = SubsSlice::extend_new(&mut env.subs.closure_names, lambda_names);
+        let new_lambda_names = SubsSlice::extend_new(&mut env.subs.symbol_names, lambda_names);
         let empty_captures_slices = SubsSlice::extend_new(
             &mut env.subs.variable_slices,
             std::iter::repeat(Default::default()).take(new_lambda_names.len()),
@@ -3300,7 +3300,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
             .collect();
         all_lambdas.sort();
         all_lambdas.dedup();
-        SubsSlice::extend_new(&mut env.subs.closure_names, all_lambdas)
+        SubsSlice::extend_new(&mut env.subs.symbol_names, all_lambdas)
     };
 
     let mut outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);

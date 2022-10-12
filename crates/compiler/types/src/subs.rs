@@ -72,7 +72,7 @@ struct SubsHeader {
     utable: u64,
     variables: u64,
     tag_names: u64,
-    closure_names: u64,
+    symbol_names: u64,
     field_names: u64,
     record_fields: u64,
     variable_slices: u64,
@@ -91,7 +91,7 @@ impl SubsHeader {
             utable: subs.utable.len() as u64,
             variables: subs.variables.len() as u64,
             tag_names: subs.tag_names.len() as u64,
-            closure_names: subs.closure_names.len() as u64,
+            symbol_names: subs.symbol_names.len() as u64,
             field_names: subs.field_names.len() as u64,
             record_fields: subs.record_fields.len() as u64,
             variable_slices: subs.variable_slices.len() as u64,
@@ -133,7 +133,7 @@ impl Subs {
 
         written = bytes::serialize_slice(&self.variables, writer, written)?;
         written = Self::serialize_tag_names(&self.tag_names, writer, written)?;
-        written = bytes::serialize_slice(&self.closure_names, writer, written)?;
+        written = bytes::serialize_slice(&self.symbol_names, writer, written)?;
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = bytes::serialize_slice(&self.record_fields, writer, written)?;
         written = bytes::serialize_slice(&self.variable_slices, writer, written)?;
@@ -224,8 +224,8 @@ impl Subs {
             bytes::deserialize_slice(bytes, header.variables as usize, offset);
         let (tag_names, offset) =
             Self::deserialize_tag_names(bytes, header.tag_names as usize, offset);
-        let (closure_names, offset) =
-            bytes::deserialize_slice(bytes, header.closure_names as usize, offset);
+        let (symbol_names, offset) =
+            bytes::deserialize_slice(bytes, header.symbol_names as usize, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names as usize, offset);
         let (record_fields, offset) =
@@ -245,7 +245,7 @@ impl Subs {
                     utable,
                     variables: variables.to_vec(),
                     tag_names: tag_names.to_vec(),
-                    closure_names: closure_names.to_vec(),
+                    symbol_names: symbol_names.to_vec(),
                     field_names,
                     record_fields: record_fields.to_vec(),
                     variable_slices: variable_slices.to_vec(),
@@ -378,7 +378,7 @@ pub struct Subs {
     utable: UnificationTable,
     pub variables: Vec<Variable>,
     pub tag_names: Vec<TagName>,
-    pub closure_names: Vec<Symbol>,
+    pub symbol_names: Vec<Symbol>,
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
@@ -473,13 +473,13 @@ impl std::ops::Index<SubsIndex<Symbol>> for Subs {
     type Output = Symbol;
 
     fn index(&self, index: SubsIndex<Symbol>) -> &Self::Output {
-        &self.closure_names[index.index as usize]
+        &self.symbol_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Symbol>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Symbol>) -> &mut Self::Output {
-        &mut self.closure_names[index.index as usize]
+        &mut self.symbol_names[index.index as usize]
     }
 }
 
@@ -742,7 +742,7 @@ impl GetSubsSlice<TagName> for Subs {
 
 impl GetSubsSlice<Symbol> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<Symbol>) -> &[Symbol] {
-        subs_slice.get_slice(&self.closure_names)
+        subs_slice.get_slice(&self.symbol_names)
     }
 }
 
@@ -1696,7 +1696,7 @@ impl Subs {
             utable: UnificationTable::default(),
             variables: Vec::new(),
             tag_names,
-            closure_names: Vec::new(),
+            symbol_names: Vec::new(),
             field_names: Vec::new(),
             record_fields: Vec::new(),
             // store an empty slice at the first position
@@ -2570,15 +2570,15 @@ impl Label for Symbol {
         subs.get_subs_slice(slice)
     }
     fn push_new(subs: &mut Subs, name: Self) -> SubsIndex<Self> {
-        SubsIndex::push_new(&mut subs.closure_names, name)
+        SubsIndex::push_new(&mut subs.symbol_names, name)
     }
     fn extend_new(subs: &mut Subs, slice: impl IntoIterator<Item = Self>) -> SubsSlice<Self> {
-        SubsSlice::extend_new(&mut subs.closure_names, slice)
+        SubsSlice::extend_new(&mut subs.symbol_names, slice)
     }
     fn reserve(subs: &mut Subs, size_hint: usize) -> u32 {
-        let closure_names_start = subs.closure_names.len() as u32;
-        subs.closure_names.reserve(size_hint);
-        closure_names_start
+        let symbol_names_start = subs.symbol_names.len() as u32;
+        subs.symbol_names.reserve(size_hint);
+        symbol_names_start
     }
 }
 
@@ -4030,7 +4030,7 @@ struct StorageSubsOffsets {
     utable: u32,
     variables: u32,
     tag_names: u32,
-    closure_names: u32,
+    symbol_names: u32,
     field_names: u32,
     record_fields: u32,
     variable_slices: u32,
@@ -4114,7 +4114,7 @@ impl StorageSubs {
             utable: self.subs.utable.len() as u32,
             variables: self.subs.variables.len() as u32,
             tag_names: self.subs.tag_names.len() as u32,
-            closure_names: self.subs.closure_names.len() as u32,
+            symbol_names: self.subs.symbol_names.len() as u32,
             field_names: self.subs.field_names.len() as u32,
             record_fields: self.subs.record_fields.len() as u32,
             variable_slices: self.subs.variable_slices.len() as u32,
@@ -4126,7 +4126,7 @@ impl StorageSubs {
             utable: (target.utable.len() - Variable::NUM_RESERVED_VARS) as u32,
             variables: target.variables.len() as u32,
             tag_names: target.tag_names.len() as u32,
-            closure_names: target.closure_names.len() as u32,
+            symbol_names: target.symbol_names.len() as u32,
             field_names: target.field_names.len() as u32,
             record_fields: target.record_fields.len() as u32,
             variable_slices: target.variable_slices.len() as u32,
@@ -4174,7 +4174,7 @@ impl StorageSubs {
         );
 
         target.tag_names.extend(self.subs.tag_names);
-        target.closure_names.extend(self.subs.closure_names);
+        target.symbol_names.extend(self.subs.symbol_names);
         target.field_names.extend(self.subs.field_names);
         target.record_fields.extend(self.subs.record_fields);
         target
@@ -4193,8 +4193,8 @@ impl StorageSubs {
         );
 
         debug_assert_eq!(
-            target.closure_names.len(),
-            (self_offsets.closure_names + offsets.closure_names) as usize
+            target.symbol_names.len(),
+            (self_offsets.symbol_names + offsets.symbol_names) as usize
         );
 
         move |v| {
@@ -4297,7 +4297,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut union_lambdas: UnionLambdas,
     ) -> UnionLambdas {
-        union_lambdas.labels_start += offsets.closure_names;
+        union_lambdas.labels_start += offsets.symbol_names;
         union_lambdas.variables_start += offsets.variable_slices;
 
         union_lambdas
@@ -4568,7 +4568,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     );
 
                     let new_symbols = SubsSlice::extend_new(
-                        &mut env.target.closure_names,
+                        &mut env.target.symbol_names,
                         env.source.get_subs_slice(symbols).iter().cloned(),
                     );
 
@@ -5017,7 +5017,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     );
 
                     let new_symbols = SubsSlice::extend_new(
-                        &mut env.target.closure_names,
+                        &mut env.target.symbol_names,
                         env.source.get_subs_slice(symbols).iter().cloned(),
                     );
 
