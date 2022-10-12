@@ -127,7 +127,7 @@ pub struct NamedVariable {
 pub struct AbleVariable {
     pub variable: Variable,
     pub name: Lowercase,
-    pub abilities: Vec<Symbol>,
+    pub abilities: VecSet<Symbol>,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
@@ -166,7 +166,7 @@ impl IntroducedVariables {
         self.named.insert(named_variable);
     }
 
-    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, abilities: Vec<Symbol>) {
+    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, abilities: VecSet<Symbol>) {
         self.debug_assert_not_already_present(var.value);
 
         let able_variable = AbleVariable {
@@ -539,7 +539,11 @@ fn can_annotation_help(
 
                 // Generate an variable bound to the ability so we can keep compiling.
                 let var = var_store.fresh();
-                introduced_variables.insert_able(fresh_ty_var, Loc::at(region, var), vec![symbol]);
+                introduced_variables.insert_able(
+                    fresh_ty_var,
+                    Loc::at(region, var),
+                    VecSet::singleton(symbol),
+                );
                 return Type::Variable(var);
             }
 
@@ -930,7 +934,7 @@ fn canonicalize_has_clause(
     );
     let var_name = Lowercase::from(var_name);
 
-    let mut can_abilities = Vec::with_capacity(abilities.len());
+    let mut can_abilities = VecSet::with_capacity(abilities.len());
     for &Loc {
         region,
         value: ability,
@@ -957,10 +961,10 @@ fn canonicalize_has_clause(
         };
 
         references.insert(ability);
-        if can_abilities.contains(&ability) {
+        let already_seen = can_abilities.insert(ability);
+
+        if already_seen {
             env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
-        } else {
-            can_abilities.push(ability);
         }
     }
 

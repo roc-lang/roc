@@ -136,7 +136,7 @@ pub struct Module {
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
-    pub able: MutMap<Variable, (Lowercase, Vec<Symbol>)>,
+    pub able: MutMap<Variable, (Lowercase, VecSet<Symbol>)>,
     pub wildcards: VecSet<Variable>,
 }
 
