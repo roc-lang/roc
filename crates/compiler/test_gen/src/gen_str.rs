@@ -1982,3 +1982,46 @@ fn str_with_prefix() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn destructure_pattern_assigned_from_thunk_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            MyCustomType := Str
+            myMsg = @MyCustomType "Hello"
+
+            main =
+                @MyCustomType msg = myMsg
+
+                msg
+            "#
+        ),
+        RocStr::from("Hello"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn destructure_pattern_assigned_from_thunk_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            myMsg = A "hello " "world"
+
+            main =
+                A m1 m2 = myMsg
+
+                Str.concat m1 m2
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
