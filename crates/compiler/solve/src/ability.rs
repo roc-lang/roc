@@ -495,19 +495,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
-        // TODO(multi-abilities) flex-able can inherit other abilities
-        if abilities != [Self::ABILITY] {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
     fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
         if abilities != [Self::ABILITY] {
             Err(NotDerivable {
@@ -647,8 +634,14 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
-                FlexAbleVar(_, abilities) => {
-                    Self::visit_flex_able(var, subs.get_subs_slice(abilities))?
+                FlexAbleVar(opt_name, abilities) => {
+                    // This flex var inherits the ability.
+                    let merged_abilites = roc_unify::unify::merged_ability_slices(
+                        subs,
+                        abilities,
+                        Self::ABILITY_SLICE,
+                    );
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
                 }
                 RigidAbleVar(_, abilities) => {
                     Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?

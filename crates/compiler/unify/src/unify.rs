@@ -3008,14 +3008,14 @@ fn is_sorted_dedup<T: Ord>(l: &[T]) -> bool {
 }
 
 #[inline(always)]
-fn merged_ability_slices(
-    env: &mut Env,
+pub fn merged_ability_slices(
+    subs: &mut Subs,
     left_slice: SubsSlice<Symbol>,
     right_slice: SubsSlice<Symbol>,
 ) -> SubsSlice<Symbol> {
     // INVARIANT: abilities slices are inserted sorted into subs
-    let left = env.subs.get_subs_slice(left_slice);
-    let right = env.subs.get_subs_slice(right_slice);
+    let left = subs.get_subs_slice(left_slice);
+    let right = subs.get_subs_slice(right_slice);
 
     debug_assert!(is_sorted_dedup(left));
     debug_assert!(is_sorted_dedup(right));
@@ -3031,7 +3031,7 @@ fn merged_ability_slices(
     let merged = merge_sorted_keys(left.iter().copied(), right.iter().copied());
 
     // TODO: check if there's an existing run in subs rather than re-inserting
-    SubsSlice::extend_new(&mut env.subs.symbol_names, merged)
+    SubsSlice::extend_new(&mut subs.symbol_names, merged)
 }
 
 #[inline(always)]
@@ -3055,7 +3055,7 @@ fn unify_flex_able<M: MetaCollector>(
             let opt_name = (opt_other_name).or(*opt_name);
 
             let merged_abilities =
-                merged_ability_slices(env, abilities_slice, *other_abilities_slice);
+                merged_ability_slices(env.subs, abilities_slice, *other_abilities_slice);
 
             merge(env, ctx, FlexAbleVar(opt_name, merged_abilities))
         }
