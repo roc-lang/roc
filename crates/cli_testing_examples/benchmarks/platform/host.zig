@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const str = @import("str");
 const RocStr = str.RocStr;
 const testing = std.testing;
@@ -15,7 +16,6 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    const builtin = @import("builtin");
     if (builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
@@ -83,6 +83,34 @@ export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
+}
+
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
+
+fn roc_getppid() callconv(.C) c_int {
+    return getppid();
+}
+
+fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
+    return kill(pid, sig);
+}
+fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return shm_open(name, oflag, mode);
+}
+fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
+comptime {
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+        @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+    }
 }
 
 const Unit = extern struct {};

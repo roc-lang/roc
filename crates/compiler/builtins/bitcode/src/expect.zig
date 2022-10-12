@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const SIGUSR1: c_int = 10;
 
@@ -22,32 +23,36 @@ pub fn expectFailedStart() callconv(.C) [*]u8 {
     return SHARED_BUFFER.ptr;
 }
 
-extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
-extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
-extern fn kill(pid: c_int, sig: c_int) c_int;
-extern fn getppid() c_int;
+extern fn roc_send_signal(pid: c_int, sig: c_int) c_int;
+extern fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn roc_getppid() c_int;
 
 pub fn readSharedBufferEnv() callconv(.C) void {
-    const name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-    const shared_fd = shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
-    const length = 4096;
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        const name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        const shared_fd = roc_shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
+        const length = 4096;
 
-    const shared_ptr = mmap(
-        null,
-        length,
-        PROT_WRITE,
-        MAP_SHARED,
-        shared_fd,
-        0,
-    );
+        const shared_ptr = roc_mmap(
+            null,
+            length,
+            PROT_WRITE,
+            MAP_SHARED,
+            shared_fd,
+            0,
+        );
 
-    const ptr = @ptrCast([*]u8, shared_ptr);
+        const ptr = @ptrCast([*]u8, shared_ptr);
 
-    SHARED_BUFFER = ptr[0..length];
+        SHARED_BUFFER = ptr[0..length];
+    }
 }
 
 pub fn expectFailedFinalize() callconv(.C) void {
-    const parent_pid = getppid();
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        const parent_pid = roc_getppid();
 
-    _ = kill(parent_pid, SIGUSR1);
+        _ = roc_send_signal(parent_pid, SIGUSR1);
+    }
 }

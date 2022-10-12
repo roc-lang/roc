@@ -77,13 +77,23 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 
         let address = sym.address() as u64;
 
-        // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            vaddresses.insert("memcpy".to_string(), address);
-        } else if name == "roc_memset" {
-            vaddresses.insert("memset".to_string(), address);
-        } else if name == "roc_memmove" {
-            vaddresses.insert("memmove".to_string(), address);
+        // special exceptions for roc_ functions that map to libc symbols
+        let direct_mapping = match name {
+            "roc_memcpy" => Some("memcpy"),
+            "roc_memset" => Some("memset"),
+            "roc_memmove" => Some("memmove"),
+
+            // for expects
+            "roc_mmap" => Some("mmap"),
+            "roc_getppid" => Some("getppid"),
+            "roc_send_signal" => Some("kill"),
+            "roc_shm_open" => Some("shm_open"),
+
+            _ => None,
+        };
+
+        if let Some(libc_symbol) = direct_mapping {
+            vaddresses.insert(libc_symbol.to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
