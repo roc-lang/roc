@@ -2604,22 +2604,25 @@ fn from_can_let<'a>(
         );
     }
 
-    if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-    } else {
-        let outer_symbol = env.unique_symbol();
-        stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+    match def.loc_expr.value {
+        roc_can::expr::Expr::Var(outer_symbol) if !procs.is_module_thunk(outer_symbol) => {
+            store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+        }
+        _ => {
+            let outer_symbol = env.unique_symbol();
+            stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
-        // convert the def body, store in outer_symbol
-        with_hole(
-            env,
-            def.loc_expr.value,
-            def.expr_var,
-            procs,
-            layout_cache,
-            outer_symbol,
-            env.arena.alloc(stmt),
-        )
+            // convert the def body, store in outer_symbol
+            with_hole(
+                env,
+                def.loc_expr.value,
+                def.expr_var,
+                procs,
+                layout_cache,
+                outer_symbol,
+                env.arena.alloc(stmt),
+            )
+        }
     }
 }
 
