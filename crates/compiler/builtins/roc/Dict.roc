@@ -21,6 +21,7 @@ interface Dict
         Bool.{ Bool, Eq },
         Result.{ Result },
         List,
+        Str,
         Num.{ Nat, U64, U8 },
         Hash.{ Hasher },
     ]
@@ -443,18 +444,141 @@ wyr3 = \list, index, k ->
 
     Num.bitwiseOr a p3
 
+# TODO: would be great to have table driven expects for this.
+# Would also be great to have some sort of property based hasher
+# where we can compare `addU*` functions to the `addBytes` function.
 expect
     hash =
         createLowLevelHasher {}
-        |> addU64 0xFEDC_BA98_7654_3210
+        |> addBytes []
         |> complete
 
-    hash == 0xA133_4345_21E3_2C10
+    hash == 0x1C3F_F8BF_07F9_B0B3
 
 expect
     hash =
         createLowLevelHasher {}
-        |> addBytes [0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE]
+        |> addBytes [0x42]
         |> complete
 
-    hash == 0xA133_4345_21E3_2C10
+    hash == 0x8F9F_0A1E_E06F_0D52
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU8 0x42
+        |> complete
+
+    hash == 0x8F9F_0A1E_E06F_0D52
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes [0xFF, 0xFF]
+        |> complete
+
+    hash == 0x86CC_8B71_563F_F084
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU16 0xFFFF
+        |> complete
+
+    hash == 0x86CC_8B71_563F_F084
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes [0x36, 0xA7]
+        |> complete
+
+    hash == 0xD1A5_0F24_2536_84F8
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU16 0xA736
+        |> complete
+
+    hash == 0xD1A5_0F24_2536_84F8
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes [0x00, 0x00, 0x00, 0x00]
+        |> complete
+
+    hash == 0x3762_ACB1_7604_B541
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU32 0x0000_0000
+        |> complete
+
+    hash == 0x3762_ACB1_7604_B541
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes [0xA9, 0x2F, 0xEE, 0x21]
+        |> complete
+
+    hash == 0x20F3_3FD7_D32E_C7A9
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU32 0x21EE_2FA9
+        |> complete
+
+    hash == 0x20F3_3FD7_D32E_C7A9
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes [0x5D, 0x66, 0xB1, 0x8F, 0x68, 0x44, 0xC7, 0x03, 0xE1, 0xDD, 0x23, 0x34, 0xBB, 0x9A, 0x42, 0xA7]
+        |> complete
+
+    hash == 0xA16F_DDAA_C167_74C7
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addU128 0xA742_9ABB_3423_DDE1_03C7_4468_8FB1_665D
+        |> complete
+
+    hash == 0xA16F_DDAA_C167_74C7
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes (Str.toUtf8 "abcdefghijklmnopqrstuvwxyz")
+        |> complete
+
+    hash == 0xBEE0_A8FD_E990_D285
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes (Str.toUtf8 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        |> complete
+
+    hash == 0xB3C5_8528_9D82_A6EF
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes (Str.toUtf8 "1234567890123456789012345678901234567890123456789012345678901234567890")
+        |> complete
+
+    hash == 0xDB6B_7997_7A55_BA03
+
+expect
+    hash =
+        createLowLevelHasher {}
+        |> addBytes (List.repeat 0x77 100)
+        |> complete
+
+    hash == 0x171F_EEE2_B764_8E5E
