@@ -8133,4 +8133,22 @@ mod solve_expr {
             print_only_under_alias: true
         );
     }
+
+    #[test]
+    fn rigid_able_bounds_are_superset_of_flex_bounds_admitted() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                f : x -> x | x has Hash
+                g : x -> x | x has Decoding & Encoding
+
+                main : x -> x | x has Hash & Decoding & Encoding
+                main = \x -> x |> f |> g
+                "#
+            ),
+            "x -> x | x has Hash & Encoding & Decoding",
+        );
+    }
 }

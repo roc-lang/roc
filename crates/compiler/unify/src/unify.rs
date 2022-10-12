@@ -2901,6 +2901,11 @@ fn unify_rigid<M: MetaCollector>(
 }
 
 #[inline(always)]
+fn abilities_are_superset(superset: &[Symbol], subset: &[Symbol]) -> bool {
+    subset.iter().all(|ability| superset.contains(ability))
+}
+
+#[inline(always)]
 #[must_use]
 fn unify_rigid_able<M: MetaCollector>(
     env: &mut Env,
@@ -2920,9 +2925,8 @@ fn unify_rigid_able<M: MetaCollector>(
                 env.subs.get_subs_slice(*other_abilities_slice),
             );
 
-            // Invariant: abilities are inserted in sorted order.
-            if abilities == other_abilities {
-                // The ability bounds are the same, so rigid wins!
+            if abilities_are_superset(abilities, other_abilities) {
+                // The rigid has all the ability bounds of the flex, so rigid wins!
                 merge(env, ctx, RigidAbleVar(*name, abilities_slice))
             } else {
                 // Mismatch for now.
@@ -3066,8 +3070,8 @@ fn unify_flex_able<M: MetaCollector>(
                 env.subs.get_subs_slice(*other_abilities_slice),
             );
 
-            // Invariant: abilities are inserted in sorted order.
-            if abilities == other_abilities {
+            if abilities_are_superset(other_abilities, abilities) {
+                // Rigid has all the ability bounds of the flex, so rigid wins!
                 merge(env, ctx, *other)
             } else {
                 mismatch!(%not_able, ctx.second, abilities, "RigidAble {:?} vs {:?}", abilities, other_abilities)
