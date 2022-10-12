@@ -68,7 +68,7 @@ macro_rules! mismatch {
             ..Outcome::default()
         }
     }};
-    (%not_able, $var:expr, $ability:expr, $msg:expr, $($arg:tt)*) => {{
+    (%not_able, $var:expr, $abilities:expr, $msg:expr, $($arg:tt)*) => {{
         dbg_do!(ROC_PRINT_MISMATCHES, {
             eprintln!(
                 "Mismatch in {} Line {} Column {}",
@@ -80,8 +80,14 @@ macro_rules! mismatch {
             eprintln!("");
         });
 
+        let mut mismatches = Vec::with_capacity(1 + $abilities.len());
+        mismatches.push(Mismatch::TypeMismatch);
+        for ability in $abilities {
+            mismatches.push(Mismatch::DoesNotImplementAbiity($var, *ability));
+        }
+
         Outcome {
-            mismatches: vec![Mismatch::TypeMismatch, Mismatch::DoesNotImplementAbiity($var, $ability)],
+            mismatches,
             ..Outcome::default()
         }
     }}
@@ -509,8 +515,8 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
     #[allow(clippy::let_and_return)]
     let result = match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(env, &ctx, opt_name, &ctx.second_desc.content),
-        FlexAbleVar(opt_name, ability) => {
-            unify_flex_able(env, &ctx, opt_name, *ability, &ctx.second_desc.content)
+        FlexAbleVar(opt_name, abilities) => {
+            unify_flex_able(env, &ctx, opt_name, *abilities, &ctx.second_desc.content)
         }
         RecursionVar {
             opt_name,
@@ -524,8 +530,8 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
             &ctx.second_desc.content,
         ),
         RigidVar(name) => unify_rigid(env, &ctx, name, &ctx.second_desc.content),
-        RigidAbleVar(name, ability) => {
-            unify_rigid_able(env, &ctx, name, *ability, &ctx.second_desc.content)
+        RigidAbleVar(name, abilities) => {
+            unify_rigid_able(env, &ctx, name, *abilities, &ctx.second_desc.content)
         }
         Structure(flat_type) => {
             unify_structure(env, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -896,13 +902,13 @@ fn unify_opaque<M: MetaCollector>(
             // Alias wins
             merge(env, ctx, Alias(symbol, args, real_var, kind))
         }
-        FlexAbleVar(_, ability) => {
+        FlexAbleVar(_, abilities) => {
             // Opaque type wins
             merge_flex_able_with_concrete(
                 env,
                 ctx,
                 ctx.second,
-                *ability,
+                *abilities,
                 Alias(symbol, args, real_var, kind),
                 opaque_obligation(symbol, ctx.first),
             )
@@ -956,13 +962,13 @@ fn unify_structure<M: MetaCollector>(
             // If the other is flex, Structure wins!
             merge(env, ctx, Structure(*flat_type))
         }
-        FlexAbleVar(_, ability) => {
+        FlexAbleVar(_, abilities) => {
             // Structure wins
             merge_flex_able_with_concrete(
                 env,
                 ctx,
                 ctx.second,
-                *ability,
+                *abilities,
                 Structure(*flat_type),
                 Obligated::Adhoc(ctx.first),
             )
@@ -976,9 +982,9 @@ fn unify_structure<M: MetaCollector>(
                 _name
             )
         }
-        RigidAbleVar(_, _ability) => {
+        RigidAbleVar(_, _abilities) => {
             mismatch!(
-                %not_able, ctx.first, *_ability,
+                %not_able, ctx.first, env.subs.get_subs_slice(*_abilities),
                 "trying to unify {:?} with RigidAble {:?}",
                 &flat_type,
                 &other
@@ -2826,7 +2832,7 @@ fn unify_rigid<M: MetaCollector>(
             // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
             // bound as well, otherwise the user failed to correctly annotate the bound.
             mismatch!(
-                %not_able, ctx.first, *other_ability,
+                %not_able, ctx.first, env.subs.get_subs_slice(*other_ability),
                 "Rigid {:?} with FlexAble {:?}", ctx.first, other
             )
         }
@@ -2859,27 +2865,34 @@ fn unify_rigid_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
-    ability: Symbol,
+    abilities_slice: SubsSlice<Symbol>,
     other: &Content,
 ) -> Outcome<M> {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(env, ctx, RigidAbleVar(*name, ability))
+            // TODO(multi-abilities)
+            merge(env, ctx, RigidAbleVar(*name, abilities_slice))
         }
-        FlexAbleVar(_, other_ability) => {
-            if ability == *other_ability {
+        FlexAbleVar(_, other_abilities_slice) => {
+            let (abilities, other_abilities) = (
+                env.subs.get_subs_slice(abilities_slice),
+                env.subs.get_subs_slice(*other_abilities_slice),
+            );
+
+            // Invariant: abilities are inserted in sorted order.
+            if abilities == other_abilities {
                 // The ability bounds are the same, so rigid wins!
-                merge(env, ctx, RigidAbleVar(*name, ability))
+                merge(env, ctx, RigidAbleVar(*name, abilities_slice))
             } else {
                 // Mismatch for now.
                 // TODO check ability hierarchies.
                 mismatch!(
-                    %not_able, ctx.second, ability,
-                    "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
+                    %not_able, ctx.second, abilities,
+                    "RigidAble {:?} with abilities {:?} not compatible with abilities {:?}",
                     ctx.first,
-                    ability,
-                    other_ability
+                    abilities,
+                    other_abilities,
                 )
             }
         }
@@ -2946,40 +2959,52 @@ fn unify_flex_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
-    ability: Symbol,
+    abilities_slice: SubsSlice<Symbol>,
     other: &Content,
 ) -> Outcome<M> {
     match other {
         FlexVar(opt_other_name) => {
             // Prefer using right's name.
             let opt_name = (opt_other_name).or(*opt_name);
-            merge(env, ctx, FlexAbleVar(opt_name, ability))
+            merge(env, ctx, FlexAbleVar(opt_name, abilities_slice))
         }
 
-        FlexAbleVar(opt_other_name, other_ability) => {
+        FlexAbleVar(opt_other_name, other_abilities_slice) => {
             // Prefer the right's name when possible.
             let opt_name = (opt_other_name).or(*opt_name);
 
-            if ability == *other_ability {
-                merge(env, ctx, FlexAbleVar(opt_name, ability))
+            let (abilities, other_abilities) = (
+                env.subs.get_subs_slice(abilities_slice),
+                env.subs.get_subs_slice(*other_abilities_slice),
+            );
+
+            // TODO: flex vars can inherit abilities from other flex vars they see
+            if abilities == other_abilities {
+                merge(env, ctx, FlexAbleVar(opt_name, abilities_slice))
             } else {
                 // Ability names differ; mismatch for now.
                 // TODO check ability hierarchies.
                 mismatch!(
-                    %not_able, ctx.second, ability,
-                    "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
+                    %not_able, ctx.second, abilities,
+                    "FlexAble {:?} with abilities {:?} not compatible with abilities {:?}",
                     ctx.first,
-                    ability,
-                    other_ability
+                    abilities,
+                    other_abilities
                 )
             }
         }
 
-        RigidAbleVar(_, other_ability) => {
-            if ability == *other_ability {
+        RigidAbleVar(_, other_abilities_slice) => {
+            let (abilities, other_abilities) = (
+                env.subs.get_subs_slice(abilities_slice),
+                env.subs.get_subs_slice(*other_abilities_slice),
+            );
+
+            // Invariant: abilities are inserted in sorted order.
+            if abilities == other_abilities {
                 merge(env, ctx, *other)
             } else {
-                mismatch!(%not_able, ctx.second, ability, "RigidAble {:?} vs {:?}", ability, other_ability)
+                mismatch!(%not_able, ctx.second, abilities, "RigidAble {:?} vs {:?}", abilities, other_abilities)
             }
         }
 
@@ -2992,7 +3017,7 @@ fn unify_flex_able<M: MetaCollector>(
                 env,
                 ctx,
                 ctx.first,
-                ability,
+                abilities_slice,
                 *other,
                 opaque_obligation(*name, ctx.second),
             )
@@ -3007,7 +3032,7 @@ fn unify_flex_able<M: MetaCollector>(
                 env,
                 ctx,
                 ctx.first,
-                ability,
+                abilities_slice,
                 *other,
                 Obligated::Adhoc(ctx.second),
             )
@@ -3022,16 +3047,19 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     flex_able_var: Variable,
-    ability: Symbol,
+    abilities: SubsSlice<Symbol>,
     concrete_content: Content,
     concrete_obligation: Obligated,
 ) -> Outcome<M> {
     let mut outcome = merge(env, ctx, concrete_content);
-    let must_implement_ability = MustImplementAbility {
-        typ: concrete_obligation,
-        ability,
-    };
-    outcome.must_implement_ability.push(must_implement_ability);
+
+    for &ability in env.subs.get_subs_slice(abilities) {
+        let must_implement_ability = MustImplementAbility {
+            typ: concrete_obligation,
+            ability,
+        };
+        outcome.must_implement_ability.push(must_implement_ability);
+    }
 
     // Figure which, if any, lambda sets should be specialized thanks to the flex able var
     // being instantiated. Now as much as I would love to do that here, we don't, because we might

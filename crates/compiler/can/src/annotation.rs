@@ -105,7 +105,7 @@ impl OwnedNamedOrAble {
         }
     }
 
-    pub fn opt_abilities(&self) -> Option<&[Symbol]> {
+    pub fn opt_abilities(&self) -> Option<&VecSet<Symbol>> {
         match self {
             OwnedNamedOrAble::Named(_) => None,
             OwnedNamedOrAble::Able(av) => Some(&av.abilities),
@@ -127,6 +127,8 @@ pub struct NamedVariable {
 pub struct AbleVariable {
     pub variable: Variable,
     pub name: Lowercase,
+    /// Abilities bound to this type variable.
+    /// INVARIANT: sorted and de-duplicated.
     pub abilities: VecSet<Symbol>,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
@@ -984,6 +986,11 @@ fn canonicalize_has_clause(
 
     let var = var_store.fresh();
 
+    let can_abilities = {
+        let mut vec = can_abilities.into_vec();
+        vec.sort();
+        VecSet::from_iter(vec)
+    };
     introduced_variables.insert_able(var_name, Loc::at(region, var), can_abilities);
 
     Ok(())

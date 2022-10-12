@@ -19,7 +19,8 @@ use roc_types::{
     num::int_lit_width_to_variable,
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        RedundantMark, Subs, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable,
+        VariableSubsSlice,
     },
     types::RecordField,
 };
@@ -87,7 +88,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
     let rcd_sym = env.new_symbol("rcd");
 
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     let (body_var, body) = record_fields.iter_all().fold(
         (hasher_var, Expr::Var(hasher_sym, hasher_var)),
@@ -165,7 +166,7 @@ fn hash_tag_union(
     let union_sym = env.new_symbol("union");
 
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     let (discr_width, discr_precision_var, hash_discr_member) = if union_tags.len() > u64::MAX as _
     {
@@ -320,7 +321,7 @@ fn hash_newtype_tag_union(
     // hash_union = \hasher, A x1 .. xn ->
     //   Hash.hash (... (Hash.hash discrHasher x1) ...) xn
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     // A
     let tag_name = tag_name;

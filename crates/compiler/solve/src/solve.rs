@@ -2601,17 +2601,17 @@ fn type_to_variable<'a>(
                         let copy_var = match opt_abilities {
                             None => helper!(typ),
                             Some(abilities) => {
-                                // TODO(abilities)
-                                let ability = abilities[0];
-
                                 // If this type argument is marked as being bound to an ability, we must
                                 // now correctly instantiate it as so.
                                 match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
                                     RegisterVariable::Direct(var) => {
                                         use Content::*;
                                         match *subs.get_content_without_compacting(var) {
-                                            FlexVar(opt_name) => subs
-                                                .set_content(var, FlexAbleVar(opt_name, ability)),
+                                            FlexVar(opt_name) => {
+                                                // TODO(multi-abilities): check run cache
+                                                let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, abilities.iter().copied());
+                                                subs.set_content(var, FlexAbleVar(opt_name, abilities_slice))
+                                            },
                                             RigidVar(..) => internal_error!("Rigid var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
                                             RigidAbleVar(..) | FlexAbleVar(..) => internal_error!("Able var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
                                             _ => {

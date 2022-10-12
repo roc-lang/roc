@@ -621,16 +621,20 @@ fn write_content<'a>(
             let name = &subs.field_names[name_index.index as usize];
             buf.push_str(name.as_str())
         }
-        FlexAbleVar(opt_name_index, ability) => {
+        FlexAbleVar(opt_name_index, abilities) => {
             let name = opt_name_index
                 .map(|name_index| subs.field_names[name_index.index as usize].as_str())
                 .unwrap_or(WILDCARD);
-            ctx.able_variables.push((name, *ability));
+            // TODO(multi-abilities)
+            let abilities = subs.get_subs_slice(*abilities);
+            ctx.able_variables.push((name, abilities[0]));
             buf.push_str(name);
         }
-        RigidAbleVar(name_index, ability) => {
+        RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].as_str();
-            ctx.able_variables.push((name, *ability));
+            // TODO(multi-abilities)
+            let abilities = subs.get_subs_slice(*abilities);
+            ctx.able_variables.push((name, abilities[0]));
             buf.push_str(name);
         }
         RecursionVar {

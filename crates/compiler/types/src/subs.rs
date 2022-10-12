@@ -1676,6 +1676,15 @@ impl Subs {
     pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
     pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
 
+    #[rustfmt::skip]
+    pub const AB_ENCODING: SubsSlice<Symbol> = SubsSlice::new(0, 1);
+    #[rustfmt::skip]
+    pub const AB_DECODING: SubsSlice<Symbol> = SubsSlice::new(1, 1);
+    #[rustfmt::skip]
+    pub const AB_HASHER: SubsSlice<Symbol>   = SubsSlice::new(2, 1);
+    #[rustfmt::skip]
+    pub const AB_HASH: SubsSlice<Symbol>     = SubsSlice::new(3, 1);
+
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
@@ -1692,11 +1701,18 @@ impl Subs {
         tag_names.push(TagName("BadUtf8".into()));
         tag_names.push(TagName("OutOfBounds".into()));
 
+        let mut symbol_names = Vec::with_capacity(32);
+
+        symbol_names.push(Symbol::ENCODE_ENCODING);
+        symbol_names.push(Symbol::DECODE_DECODING);
+        symbol_names.push(Symbol::HASH_HASHER);
+        symbol_names.push(Symbol::HASH_HASH_ABILITY);
+
         let mut subs = Subs {
             utable: UnificationTable::default(),
             variables: Vec::new(),
             tag_names,
-            symbol_names: Vec::new(),
+            symbol_names,
             field_names: Vec::new(),
             record_fields: Vec::new(),
             // store an empty slice at the first position
@@ -1793,7 +1809,9 @@ impl Subs {
 
     pub fn rigid_able_var(&mut self, var: Variable, name: Lowercase, ability: Symbol) {
         let name_index = SubsIndex::push_new(&mut self.field_names, name);
-        let content = Content::RigidAbleVar(name_index, ability);
+        // TODO(multi-abilities)
+        let abilities = SubsSlice::extend_new(&mut self.symbol_names, [ability]);
+        let content = Content::RigidAbleVar(name_index, abilities);
         let desc = Descriptor::from(content);
 
         self.set(var, desc);
@@ -2261,12 +2279,12 @@ pub enum Content {
     FlexVar(Option<SubsIndex<Lowercase>>),
     /// name given in a user-written annotation
     RigidVar(SubsIndex<Lowercase>),
-    /// Like a [Self::FlexVar], but is also bound to an ability.
+    /// Like a [Self::FlexVar], but is also bound to 1+ abilities.
     /// This can only happen when unified with a [Self::RigidAbleVar].
-    FlexAbleVar(Option<SubsIndex<Lowercase>>, Symbol),
-    /// Like a [Self::RigidVar], but is also bound to an ability.
+    FlexAbleVar(Option<SubsIndex<Lowercase>>, SubsSlice<Symbol>),
+    /// Like a [Self::RigidVar], but is also bound to 1+ abilities.
     /// For example, "a has Hash".
-    RigidAbleVar(SubsIndex<Lowercase>, Symbol),
+    RigidAbleVar(SubsIndex<Lowercase>, SubsSlice<Symbol>),
     /// name given to a recursion variable
     RecursionVar {
         structure: Variable,
@@ -3706,7 +3724,7 @@ fn content_to_err_type(
             ErrorType::RigidVar(name)
         }
 
-        FlexAbleVar(opt_name, ability) => {
+        FlexAbleVar(opt_name, abilities) => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
@@ -3720,12 +3738,14 @@ fn content_to_err_type(
                 }
             };
 
-            ErrorType::FlexAbleVar(name, ability)
+            // TODO(multi-abilities)
+            ErrorType::FlexAbleVar(name, subs.get_subs_slice(abilities)[0])
         }
 
-        RigidAbleVar(name_index, ability) => {
+        RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].clone();
-            ErrorType::RigidAbleVar(name, ability)
+            // TODO(multi-abilities)
+            ErrorType::RigidAbleVar(name, subs.get_subs_slice(abilities)[0])
         }
 
         RecursionVar {

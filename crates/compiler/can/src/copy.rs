@@ -1044,8 +1044,8 @@ mod test {
     use roc_region::all::Loc;
     use roc_types::{
         subs::{
-            self, Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs,
-            SubsIndex, SubsSlice, Variable,
+            self, Content, Content::*, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
+            Subs, SubsIndex, SubsSlice, Variable,
         },
         types::Uls,
     };
@@ -1107,7 +1107,8 @@ mod test {
         let mut subs = Subs::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let var = new_var(&mut subs, FlexAbleVar(Some(field_name), Symbol::UNDERSCORE));
+        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let var = new_var(&mut subs, FlexAbleVar(Some(field_name), abilities));
 
         let mut copied = vec![];
 
@@ -1116,8 +1117,9 @@ mod test {
         assert_ne!(var, copy);
 
         match subs.get_content_without_compacting(var) {
-            FlexAbleVar(Some(name), Symbol::UNDERSCORE) => {
+            FlexAbleVar(Some(name), abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => unreachable!("{:?}", it),
         }
@@ -1128,7 +1130,8 @@ mod test {
         let mut subs = Subs::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let var = new_var(&mut subs, RigidAbleVar(field_name, Symbol::UNDERSCORE));
+        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let var = new_var(&mut subs, RigidAbleVar(field_name, abilities));
 
         let mut copied = vec![];
 
@@ -1136,8 +1139,9 @@ mod test {
 
         assert_ne!(var, copy);
         match subs.get_content_without_compacting(var) {
-            RigidAbleVar(name, Symbol::UNDERSCORE) => {
+            RigidAbleVar(name, abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => internal_error!("{:?}", it),
         }
