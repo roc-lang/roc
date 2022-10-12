@@ -82,22 +82,22 @@ hashList = \hasher, lst ->
     List.walk lst hasher \accumHasher, elem ->
         hash accumHasher elem
 
-hashUnordered = \hasher, container, walk ->
-    walk
-        container
-        0
-        (\accum, elem ->
-            x =
-                hasher
-                |> new
-                |> hash elem
-                |> complete
-            nextAccum = Num.addWrap accum x
+# hashUnordered = \hasher, container, walk ->
+#     walk
+#         container
+#         0
+#         (\accum, elem ->
+#             x =
+#                 hasher
+#                 |> new
+#                 |> hash elem
+#                 |> complete
+#             nextAccum = Num.addWrap accum x
 
-            if nextAccum < accum then
-                # we dont want to lose a bit of entropy on overflow, so add it back in.
-                Num.addWrap nextAccum 1
-            else
-                nextAccum
-        )
-    |> \accum -> addU64 hasher accum
+#             if nextAccum < accum then
+#                 # we dont want to lose a bit of entropy on overflow, so add it back in.
+#                 Num.addWrap nextAccum 1
+#             else
+#                 nextAccum
+#         )
+#     |> \accum -> addU64 hasher accum
