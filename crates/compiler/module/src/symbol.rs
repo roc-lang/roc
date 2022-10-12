@@ -1377,6 +1377,7 @@ define_builtins! {
         74 LIST_MAP_TRY: "mapTry"
         75 LIST_WALK_TRY: "walkTry"
         76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
+        77 LIST_COUNT_IF: "countIf"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

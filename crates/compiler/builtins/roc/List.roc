@@ -62,6 +62,7 @@ interface List
         sortDesc,
         reserve,
         walkBackwardsUntil,
+        countIf,
     ]
     imports [
         Bool.{ Bool },
@@ -527,6 +528,18 @@ keepIfHelp = \list, predicate, kept, index, length ->
 dropIf : List a, (a -> Bool) -> List a
 dropIf = \list, predicate ->
     List.keepIf list (\e -> Bool.not (predicate e))
+
+## Run the given function on each element of a list, and return the
+## number of elements for which the function returned `Bool.true`.
+countIf : List a, (a -> Bool) -> Nat
+countIf = \list, predicate ->
+    walkState = \state, elem ->
+        if predicate elem then
+            state + 1
+        else
+            state
+
+    List.walk list 0 walkState
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
