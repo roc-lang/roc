@@ -772,10 +772,7 @@ fn can_annotation_help(
             } else {
                 Type::Alias {
                     symbol,
-                    type_arguments: vars
-                        .into_iter()
-                        .map(|typ| OptAbleType::unbound(typ))
-                        .collect(),
+                    type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
                     kind: alias.kind,

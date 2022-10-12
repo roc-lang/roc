@@ -3021,8 +3021,11 @@ pub fn merged_ability_slices(
     let left = subs.get_subs_slice(left_slice);
     let right = subs.get_subs_slice(right_slice);
 
-    debug_assert!(is_sorted_dedup(left));
-    debug_assert!(is_sorted_dedup(right));
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(is_sorted_dedup(left));
+        debug_assert!(is_sorted_dedup(right));
+    }
 
     // In practice, ability lists should be very short, so check prefix runs foremost.
     if left.starts_with(right) {
