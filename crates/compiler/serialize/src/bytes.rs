@@ -11,7 +11,7 @@ pub fn serialize_slice<T: Copy>(
     written: usize,
 ) -> io::Result<usize> {
     let alignment = std::mem::align_of::<T>();
-    let padding_bytes = round_to_multiple_of(written, alignment) - written;
+    let padding_bytes = next_multiple_of(written, alignment) - written;
 
     for _ in 0..padding_bytes {
         writer.write_all(&[0])?;
@@ -27,7 +27,7 @@ pub fn deserialize_slice<T: Copy>(bytes: &[u8], length: usize, mut offset: usize
     let alignment = std::mem::align_of::<T>();
     let size = std::mem::size_of::<T>();
 
-    offset = round_to_multiple_of(offset, alignment);
+    offset = next_multiple_of(offset, alignment);
 
     let byte_length = length * size;
     let byte_slice = &bytes[offset..][..byte_length];
@@ -199,8 +199,12 @@ unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
     std::slice::from_raw_parts(ptr as *const u8, byte_length)
 }
 
-fn round_to_multiple_of(value: usize, base: usize) -> usize {
-    (value + (base - 1)) / base * base
+// TODO check on https://github.com/rust-lang/rust/issues/88581 some time in the future
+pub const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
+    match lhs % rhs {
+        0 => lhs,
+        r => lhs + (rhs - r),
+    }
 }
 
 #[cfg(test)]
