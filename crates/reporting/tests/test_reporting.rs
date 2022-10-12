@@ -8751,11 +8751,11 @@ All branches in an `if` must have the same type!
 
         a | a has MHash
 
-    Tip: The type annotation uses the type variable `a` to say that this
-    definition can produce any value implementing the `MHash` ability. But
-    in the body I see that it will only produce a `Id` value of a single
-    specific type. Maybe change the type annotation to be more specific?
-    Maybe change the code to be more general?
+    Note: The type variable `a` says it can take on any value that has the
+    ability `MHash`.
+
+    But, I see that the type is only ever used as a a `Id` value. Can you
+    replace `a` with a more specific type?
     "###
     );
 
