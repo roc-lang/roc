@@ -32,6 +32,7 @@ members = [
     "crates/compiler/test_gen",
     "crates/compiler/roc_target",
     "crates/compiler/debug_flags",
+    "crates/compiler/serialize",
     "crates/vendor/inkwell",
     "crates/vendor/pathfinding",
     "crates/vendor/pretty",

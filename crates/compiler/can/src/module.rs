@@ -1,4 +1,4 @@
-use crate::abilities::{ImplKey, PendingAbilitiesStore, ResolvedImpl};
+use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
@@ -17,7 +17,7 @@ use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExposedTypesStorageSubs, VarStore, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 
 /// The types of all exposed values/functions of a collection of modules
@@ -1177,5 +1177,55 @@ fn fix_values_captured_in_closure_expr(
             );
         }
         OpaqueWrapFunction(_) => {}
+    }
+}
+
+/// Type state for a single module.
+#[derive(Debug)]
+pub struct TypeState {
+    pub subs: Subs,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub abilities: AbilitiesStore,
+    pub solved_implementations: ResolvedImplementations,
+}
+
+impl TypeState {
+    pub fn serialize(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
+        let Self {
+            subs,
+            exposed_vars_by_symbol,
+            abilities,
+            solved_implementations,
+        } = self;
+
+        let written_subs = subs.serialize(exposed_vars_by_symbol, writer)?;
+        let written_ab = abilities.serialize(writer)?;
+        let written_solved_impls =
+            crate::abilities::serialize_solved_implementations(solved_implementations, writer)?;
+
+        Ok(written_subs + written_ab + written_solved_impls)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> (Self, usize) {
+        let ((subs, exposed_vars_by_symbol), len_subs) = Subs::deserialize(bytes);
+        let bytes = &bytes[len_subs..];
+
+        let (abilities, len_abilities) = AbilitiesStore::deserialize(bytes);
+        let bytes = &bytes[len_abilities..];
+
+        let (solved_implementations, len_solved_impls) =
+            crate::abilities::deserialize_solved_implementations(bytes);
+
+        let total_offset = len_subs + len_abilities + len_solved_impls;
+
+        (
+            Self {
+                subs,
+                exposed_vars_by_symbol: exposed_vars_by_symbol.to_vec(),
+                abilities,
+                solved_implementations,
+            },
+            total_offset,
+        )
     }
 }

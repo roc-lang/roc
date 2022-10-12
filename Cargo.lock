@@ -3380,6 +3380,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_serialize",
  "roc_types",
  "static_assertions",
 ]
@@ -4028,6 +4029,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_serialize"
+version = "0.0.1"
+dependencies = [
+ "roc_collections",
+]
+
+[[package]]
 name = "roc_solve"
 version = "0.0.1"
 dependencies = [
@@ -4117,6 +4125,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "roc_serialize",
  "static_assertions",
 ]
 
