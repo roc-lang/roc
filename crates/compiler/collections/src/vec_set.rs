@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, iter::FromIterator};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VecSet<T> {
     elements: Vec<T>,
 }
@@ -23,12 +23,6 @@ impl<T: PartialEq> VecSet<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             elements: Vec::with_capacity(capacity),
-        }
-    }
-
-    pub fn singleton(element: T) -> Self {
-        Self {
-            elements: vec![element],
         }
     }
 
@@ -149,13 +143,5 @@ impl<T> From<Vec<T>> for VecSet<T> {
         // Not totally safe, but good enough for our purposes - also, duplicates in the VecSet are
         // fine, just inefficient.
         Self { elements }
-    }
-}
-
-impl<T> std::ops::Deref for VecSet<T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        &self.elements
     }
 }
