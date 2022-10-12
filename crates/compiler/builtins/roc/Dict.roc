@@ -228,6 +228,7 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
              addI64,
              addI128,
              complete,
+             reset,
          },
      ]
 
@@ -243,6 +244,9 @@ combineState = \@LowLevelHasher { originalSeed, state }, { a, b, seed, length } 
     @LowLevelHasher { originalSeed, state: wymix state hash }
 
 complete = \@LowLevelHasher { state } -> state
+
+reset = \@LowLevelHasher { originalSeed } ->
+    @LowLevelHasher { originalSeed, state: originalSeed }
 
 addI8 = \hasher, i8 ->
     addU8 hasher (Num.toU8 i8)

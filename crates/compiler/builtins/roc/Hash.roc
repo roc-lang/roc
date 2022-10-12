@@ -15,8 +15,10 @@ interface Hash
         addI64,
         addI128,
         complete,
+        reset,
         hashStrBytes,
         hashList,
+        hashUnordered,
     ] imports [
         List,
         Str,
@@ -73,6 +75,10 @@ Hasher has
     ## accumulated hash state.
     complete : a -> U64 | a has Hasher
 
+    ## Resets the internal state of a hasher
+    ## The hasher should still have all the same parameters and seeds.
+    reset : a -> a | a has Hasher
+
 ## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
 hashStrBytes = \hasher, s ->
     addBytes hasher (Str.toUtf8 s)
@@ -82,22 +88,25 @@ hashList = \hasher, lst ->
     List.walk lst hasher \accumHasher, elem ->
         hash accumHasher elem
 
-# hashUnordered = \hasher, container, walk ->
-#     walk
-#         container
-#         0
-#         (\accum, elem ->
-#             x =
-#                 hasher
-#                 |> new
-#                 |> hash elem
-#                 |> complete
-#             nextAccum = Num.addWrap accum x
+## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
+## The container is iterated using the walk method passed in.
+## The order of the elements does not effect the final hash.
+hashUnordered = \hasher, container, walk ->
+    walk
+        container
+        0
+        (\accum, elem ->
+            x =
+                hasher
+                |> reset
+                |> hash elem
+                |> complete
+            nextAccum = Num.addWrap accum x
 
-#             if nextAccum < accum then
-#                 # we dont want to lose a bit of entropy on overflow, so add it back in.
-#                 Num.addWrap nextAccum 1
-#             else
-#                 nextAccum
-#         )
-#     |> \accum -> addU64 hasher accum
+            if nextAccum < accum then
+                # we dont want to lose a bit of entropy on overflow, so add it back in.
+                Num.addWrap nextAccum 1
+            else
+                nextAccum
+        )
+    |> \accum -> addU64 hasher accum
