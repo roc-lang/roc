@@ -1876,9 +1876,9 @@ fn llvm_wasm_str_layout() {
                 |> Str.reserve 42
             "#
         ),
-        [0, 5, 42],
+        [0, 5, 1],
         [u32; 3],
-        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+        |[_ptr, len, cap]: [u32; 3]| [0, len, if cap >= 42 { 1 } else { 0 }]
     )
 }
 
@@ -1928,5 +1928,57 @@ fn when_on_strings() {
         ),
         4,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10
+            "#
+        ),
+        RocStr::from(""),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity_concat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10 |> Str.concat "Forty-two"
+            "#
+        ),
+        RocStr::from("Forty-two"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn str_with_prefix() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withPrefix "world!" "Hello "
+            "#
+        ),
+        RocStr::from("Hello world!"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "two" |> Str.withPrefix "Forty "
+            "#
+        ),
+        RocStr::from("Forty two"),
+        RocStr
     );
 }

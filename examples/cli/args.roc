@@ -10,7 +10,7 @@ main = Program.withArgs \args ->
             Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
             |> Arg.withParser
                 (
-                    Arg.i64 {
+                    Arg.i64Option {
                         long: "dividend",
                         short: "n",
                         help: "the number to divide; corresponds to a numerator",
@@ -18,7 +18,7 @@ main = Program.withArgs \args ->
                 )
             |> Arg.withParser
                 (
-                    Arg.i64 {
+                    Arg.i64Option {
                         long: "divisor",
                         short: "d",
                         help: "the number to divide by; corresponds to a denominator",
@@ -30,7 +30,7 @@ main = Program.withArgs \args ->
             Arg.succeed (\base -> \num -> Log (Num.toF64 base) (Num.toF64 num))
             |> Arg.withParser
                 (
-                    Arg.i64 {
+                    Arg.i64Option {
                         long: "base",
                         short: "b",
                         help: "base of the logarithm",
@@ -38,7 +38,7 @@ main = Program.withArgs \args ->
                 )
             |> Arg.withParser
                 (
-                    Arg.i64 {
+                    Arg.i64Option {
                         long: "num",
                         help: "the number to take the logarithm of",
                     }

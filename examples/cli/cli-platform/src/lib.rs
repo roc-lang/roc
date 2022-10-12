@@ -12,6 +12,7 @@ use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::Borrow;
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
+use std::io::{self, Write};
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
@@ -63,11 +64,108 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         0 => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
             let string = slice.to_str().unwrap();
-            eprintln!("Roc hit a panic: {}", string);
+            eprintln!("Roc crashed with:\n\n\t{}\n", string);
+
+            print_backtrace();
             std::process::exit(1);
         }
         _ => todo!(),
     }
+}
+
+fn print_backtrace() {
+    eprintln!("Here is the call stack that led to the crash:\n");
+
+    let mut entries = Vec::new();
+
+    #[derive(Default)]
+    struct Entry {
+        pub fn_name: String,
+        pub filename: Option<String>,
+        pub line: Option<u32>,
+        pub col: Option<u32>,
+    }
+
+    backtrace::trace(|frame| {
+        backtrace::resolve_frame(frame, |symbol| {
+            if let Some(fn_name) = symbol.name() {
+                let fn_name = fn_name.to_string();
+
+                if should_show_in_backtrace(&fn_name) {
+                    let mut entry: Entry = Default::default();
+
+                    entry.fn_name = format_fn_name(&fn_name);
+
+                    if let Some(path) = symbol.filename() {
+                        entry.filename = Some(path.to_string_lossy().into_owned());
+                    };
+
+                    entry.line = symbol.lineno();
+                    entry.col = symbol.colno();
+
+                    entries.push(entry);
+                }
+            } else {
+                entries.push(Entry {
+                    fn_name: "???".to_string(),
+                    ..Default::default()
+                });
+            }
+        });
+
+        true // keep going to the next frame
+    });
+
+    for entry in entries {
+        eprintln!("\t{}", entry.fn_name);
+
+        if let Some(filename) = entry.filename {
+            eprintln!("\t\t{filename}");
+        }
+    }
+
+    eprintln!("\nOptimizations can make this list inaccurate! If it looks wrong, try running without `--optimize` and with `--linker=legacy`\n");
+}
+
+fn should_show_in_backtrace(fn_name: &str) -> bool {
+    let is_from_rust = fn_name.contains("::");
+    let is_host_fn = fn_name.starts_with("roc_panic")
+        || fn_name.starts_with("_Effect_effect")
+        || fn_name.starts_with("_roc__")
+        || fn_name.starts_with("rust_main")
+        || fn_name == "_main";
+
+    !is_from_rust && !is_host_fn
+}
+
+fn format_fn_name(fn_name: &str) -> String {
+    // e.g. convert "_Num_sub_a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"
+    // to ["Num", "sub", "a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"]
+    let mut pieces_iter = fn_name.split("_");
+
+    if let (_, Some(module_name), Some(name)) =
+        (pieces_iter.next(), pieces_iter.next(), pieces_iter.next())
+    {
+        display_roc_fn(module_name, name)
+    } else {
+        "???".to_string()
+    }
+}
+
+fn display_roc_fn(module_name: &str, fn_name: &str) -> String {
+    let module_name = if module_name == "#UserApp" {
+        "app"
+    } else {
+        module_name
+    };
+
+    let fn_name = if fn_name.parse::<u64>().is_ok() {
+        "(anonymous function)"
+    } else {
+        fn_name
+    };
+
+    format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
 }
 
 #[no_mangle]
@@ -180,9 +278,23 @@ pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
 }
 
 #[no_mangle]
+pub extern "C" fn roc_fx_stdoutWrite(text: &RocStr) {
+    let string = text.as_str();
+    print!("{}", string);
+    io::stdout().flush().unwrap();
+}
+
+#[no_mangle]
 pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
     let string = line.as_str();
     eprintln!("{}", string);
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_stderrWrite(text: &RocStr) {
+    let string = text.as_str();
+    eprint!("{}", string);
+    io::stderr().flush().unwrap();
 }
 
 // #[no_mangle]

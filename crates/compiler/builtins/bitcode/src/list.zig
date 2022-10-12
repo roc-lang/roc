@@ -1,6 +1,5 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
@@ -93,20 +92,6 @@ pub const RocList = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn allocate(
-        alignment: u32,
-        length: usize,
-        element_size: usize,
-    ) RocList {
-        const data_bytes = length * element_size;
-
-        return RocList{
-            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
-            .length = length,
-            .capacity = length,
-        };
-    }
-
     pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
@@ -140,6 +125,24 @@ pub const RocList = extern struct {
         return new_list;
     }
 
+    pub fn allocate(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const capacity = utils.calculateCapacity(0, length, element_width);
+        const data_bytes = capacity * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity = capacity,
+        };
+    }
+
     pub fn reallocate(
         self: RocList,
         alignment: u32,
@@ -151,13 +154,14 @@ pub const RocList = extern struct {
                 if (self.capacity >= new_length) {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
                 } else {
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
+                    const new_capacity = utils.calculateCapacity(self.capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_capacity, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
                 }
             }
+            return self.reallocateFresh(alignment, new_length, element_width);
         }
-
-        return self.reallocateFresh(alignment, new_length, element_width);
+        return RocList.allocate(alignment, new_length, element_width);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -170,23 +174,15 @@ pub const RocList = extern struct {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
-        const data_bytes = new_length * element_width;
-        const first_slot = utils.allocateWithRefcount(data_bytes, alignment);
+        const result = RocList.allocate(alignment, new_length, element_width);
 
         // transfer the memory
-
         if (self.bytes) |source_ptr| {
-            const dest_ptr = first_slot;
+            const dest_ptr = result.bytes orelse unreachable;
 
             @memcpy(dest_ptr, source_ptr, old_length * element_width);
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
-
-        const result = RocList{
-            .bytes = first_slot,
-            .length = new_length,
-            .capacity = new_length,
-        };
 
         utils.decref(self.bytes, old_length * element_width, alignment);
 

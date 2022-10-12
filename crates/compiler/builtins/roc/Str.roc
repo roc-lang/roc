@@ -43,6 +43,8 @@ interface Str
         appendScalar,
         walkScalars,
         walkScalarsUntil,
+        withCapacity,
+        withPrefix,
     ]
     imports [
         Bool.{ Bool },
@@ -143,6 +145,9 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 ## >>> Str.isEmpty ""
 isEmpty : Str -> Bool
 concat : Str, Str -> Str
+
+## Returns a string of the specified capacity without any content
+withCapacity : Nat -> Str
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
@@ -294,7 +299,7 @@ replaceEach = \haystack, needle, flower ->
         Ok { before, after } ->
             # We found at least one needle, so start the buffer off with
             # `before` followed by the first replacement flower.
-            Str.reserve "" (Str.countUtf8Bytes haystack)
+            Str.withCapacity (Str.countUtf8Bytes haystack)
             |> Str.concat before
             |> Str.concat flower
             |> replaceEachHelp after needle flower
@@ -499,7 +504,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
     else
         state
 
-## Make sure at least some number of bytes fit in this string without reallocating
+## Enlarge the Str for at least capacity additional bytes
 reserve : Str, Nat -> Str
 
 ## is UB when the scalar is invalid
@@ -561,3 +566,7 @@ strToNumHelp = \string ->
         Ok result.aresult
     else
         Err InvalidNumStr
+
+## Adds the specified prefix to the string, like a reversed Str.concat
+withPrefix : Str, Str -> Str
+withPrefix = \str, prefix -> Str.concat prefix str

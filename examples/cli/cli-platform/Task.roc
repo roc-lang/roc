@@ -1,5 +1,5 @@
 interface Task
-    exposes [Task, succeed, fail, await, map, mapFail, onFail, attempt, forever, loop]
+    exposes [Task, succeed, fail, await, map, mapFail, onFail, attempt, forever, loop, fromResult]
     imports [Effect, InternalTask]
 
 Task ok err fx : InternalTask.Task ok err fx
@@ -93,3 +93,10 @@ mapFail = \task, transform ->
                 Err err -> Task.fail (transform err) |> InternalTask.toEffect
 
     InternalTask.fromEffect effect
+
+## Use a Result among other Tasks by converting it into a Task.
+fromResult : Result ok err -> Task ok err *
+fromResult = \result ->
+    when result is
+        Ok ok -> succeed ok
+        Err err -> fail err

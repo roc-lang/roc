@@ -26,6 +26,9 @@ jobs:
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+        
+      - name: roc format check on builtins
+        run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
