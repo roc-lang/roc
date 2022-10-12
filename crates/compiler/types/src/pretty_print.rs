@@ -2,7 +2,7 @@ use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, UnsortedUnionLabels, Variable,
 };
-use crate::types::{name_type_var, name_type_var_with_hint, RecordField, Uls};
+use crate::types::{name_type_var, name_type_var_with_hint, AbilitySet, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -541,7 +541,7 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 
 #[derive(Default)]
 struct Context<'a> {
-    able_variables: Vec<(&'a str, Symbol)>,
+    able_variables: Vec<(&'a str, AbilitySet)>,
     recursion_structs_to_expand: Vec<Variable>,
 }
 
@@ -568,11 +568,17 @@ fn content_to_string(
 
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
-    for (i, (var, ability)) in ctx.able_variables.into_iter().enumerate() {
+    for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
         buf.push_str(if i == 0 { " | " } else { ", " });
         buf.push_str(var);
-        buf.push_str(" has ");
-        write_symbol(&env, ability, &mut buf);
+        buf.push_str(" has");
+        for (i, ability) in abilities.into_sorted_iter().enumerate() {
+            if i > 0 {
+                buf.push_str(" &");
+            }
+            buf.push(' ');
+            write_symbol(&env, ability, &mut buf);
+        }
     }
 
     buf
@@ -625,16 +631,14 @@ fn write_content<'a>(
             let name = opt_name_index
                 .map(|name_index| subs.field_names[name_index.index as usize].as_str())
                 .unwrap_or(WILDCARD);
-            // TODO(multi-abilities)
-            let abilities = subs.get_subs_slice(*abilities);
-            ctx.able_variables.push((name, abilities[0]));
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
+            ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
         RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].as_str();
-            // TODO(multi-abilities)
-            let abilities = subs.get_subs_slice(*abilities);
-            ctx.able_variables.push((name, abilities[0]));
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
+            ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
         RecursionVar {

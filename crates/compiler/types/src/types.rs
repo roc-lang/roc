@@ -291,6 +291,18 @@ impl AbilitySet {
     }
 }
 
+impl FromIterator<Symbol> for AbilitySet {
+    fn from_iter<T: IntoIterator<Item = Symbol>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (lo, hi) = iter.size_hint();
+        let mut this = Self::with_capacity(hi.unwrap_or(lo));
+        for item in iter {
+            this.insert(item);
+        }
+        this
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OptAbleVar {
     pub var: Variable,
