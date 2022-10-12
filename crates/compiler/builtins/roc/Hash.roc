@@ -75,8 +75,7 @@ Hasher has
 
 ## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
 hashStrBytes = \hasher, s ->
-    Str.walkUtf8WithIndex s hasher \accumHasher, byte, _ ->
-        addU8 accumHasher byte
+    addBytes hasher (Str.toUtf8 s)
 
 ## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
 hashList = \hasher, lst ->
