@@ -1969,6 +1969,47 @@ fn separate_record_fields(
     (separate(it1, it2), new_ext1, new_ext2)
 }
 
+// TODO: consider combining with `merge_sorted_help` with a `by_key` predicate.
+// But that might not get inlined!
+fn merge_sorted_keys<K, I1, I2>(input1: I1, input2: I2) -> Vec<K>
+where
+    K: Ord,
+    I1: ExactSizeIterator<Item = K>,
+    I2: ExactSizeIterator<Item = K>,
+{
+    use std::cmp::Ordering::{Equal, Greater, Less};
+
+    let mut merged = Vec::with_capacity(input1.len() + input2.len());
+
+    let mut input1 = input1.peekable();
+    let mut input2 = input2.peekable();
+
+    loop {
+        let choice = match (input1.peek(), input2.peek()) {
+            (Some(l), Some(r)) => l.cmp(r),
+            (Some(_), None) => Less,
+            (None, Some(_)) => Greater,
+            (None, None) => break,
+        };
+
+        match choice {
+            Less => {
+                merged.push(input1.next().unwrap());
+            }
+            Greater => {
+                merged.push(input2.next().unwrap());
+            }
+            Equal => {
+                let k = input1.next().unwrap();
+                let _ = input2.next().unwrap();
+                merged.push(k)
+            }
+        }
+    }
+
+    merged
+}
+
 #[derive(Debug)]
 struct Separate<K, V> {
     only_in_1: Vec<(K, V)>,
@@ -2871,7 +2912,6 @@ fn unify_rigid_able<M: MetaCollector>(
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            // TODO(multi-abilities)
             merge(env, ctx, RigidAbleVar(*name, abilities_slice))
         }
         FlexAbleVar(_, other_abilities_slice) => {
@@ -2953,6 +2993,47 @@ fn unify_flex<M: MetaCollector>(
     }
 }
 
+// TODO remove once https://github.com/rust-lang/rust/issues/53485 is stabilized
+#[cfg(debug_assertions)]
+fn is_sorted_dedup<T: Ord>(l: &[T]) -> bool {
+    let mut iter = l.iter().peekable();
+    while let Some(before) = iter.next() {
+        if let Some(after) = iter.peek() {
+            if before >= after {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+#[inline(always)]
+fn merged_ability_slices(
+    env: &mut Env,
+    left_slice: SubsSlice<Symbol>,
+    right_slice: SubsSlice<Symbol>,
+) -> SubsSlice<Symbol> {
+    // INVARIANT: abilities slices are inserted sorted into subs
+    let left = env.subs.get_subs_slice(left_slice);
+    let right = env.subs.get_subs_slice(right_slice);
+
+    debug_assert!(is_sorted_dedup(left));
+    debug_assert!(is_sorted_dedup(right));
+
+    // In practice, ability lists should be very short, so check prefix runs foremost.
+    if left.starts_with(right) {
+        return left_slice;
+    }
+    if right.starts_with(left) {
+        return right_slice;
+    }
+
+    let merged = merge_sorted_keys(left.iter().copied(), right.iter().copied());
+
+    // TODO: check if there's an existing run in subs rather than re-inserting
+    SubsSlice::extend_new(&mut env.subs.symbol_names, merged)
+}
+
 #[inline(always)]
 #[must_use]
 fn unify_flex_able<M: MetaCollector>(
@@ -2973,25 +3054,10 @@ fn unify_flex_able<M: MetaCollector>(
             // Prefer the right's name when possible.
             let opt_name = (opt_other_name).or(*opt_name);
 
-            let (abilities, other_abilities) = (
-                env.subs.get_subs_slice(abilities_slice),
-                env.subs.get_subs_slice(*other_abilities_slice),
-            );
+            let merged_abilities =
+                merged_ability_slices(env, abilities_slice, *other_abilities_slice);
 
-            // TODO: flex vars can inherit abilities from other flex vars they see
-            if abilities == other_abilities {
-                merge(env, ctx, FlexAbleVar(opt_name, abilities_slice))
-            } else {
-                // Ability names differ; mismatch for now.
-                // TODO check ability hierarchies.
-                mismatch!(
-                    %not_able, ctx.second, abilities,
-                    "FlexAble {:?} with abilities {:?} not compatible with abilities {:?}",
-                    ctx.first,
-                    abilities,
-                    other_abilities
-                )
-            }
+            merge(env, ctx, FlexAbleVar(opt_name, merged_abilities))
         }
 
         RigidAbleVar(_, other_abilities_slice) => {
