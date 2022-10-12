@@ -4655,24 +4655,33 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexAbleVar(opt_name_index, ability) => {
+        FlexAbleVar(opt_name_index, abilities) => {
             let new_name_index = opt_name_index.map(|name_index| {
                 let name = env.source.field_names[name_index.index as usize].clone();
                 SubsIndex::push_new(&mut env.target.field_names, name)
             });
+            let new_abilities_slice = SubsSlice::extend_new(
+                &mut env.target.symbol_names,
+                env.source.get_subs_slice(abilities).iter().copied(),
+            );
 
-            let content = FlexAbleVar(new_name_index, ability);
+            let content = FlexAbleVar(new_name_index, new_abilities_slice);
             env.target.set_content(copy, content);
 
             copy
         }
 
-        RigidAbleVar(name_index, ability) => {
+        RigidAbleVar(name_index, abilities) => {
             let name = env.source.field_names[name_index.index as usize].clone();
             let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            let new_abilities_slice = SubsSlice::extend_new(
+                &mut env.target.symbol_names,
+                env.source.get_subs_slice(abilities).iter().copied(),
+            );
+
             env.target.set(
                 copy,
-                make_descriptor(FlexAbleVar(Some(new_name_index), ability)),
+                make_descriptor(FlexAbleVar(Some(new_name_index), new_abilities_slice)),
             );
 
             copy
@@ -5078,14 +5087,22 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        FlexAbleVar(opt_name_index, ability) => {
-            if let Some(name_index) = opt_name_index {
+        FlexAbleVar(opt_name_index, abilities) => {
+            let new_opt_name_index = if let Some(name_index) = opt_name_index {
                 let name = env.source.field_names[name_index.index as usize].clone();
                 let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+                Some(new_name_index)
+            } else {
+                None
+            };
 
-                let content = FlexAbleVar(Some(new_name_index), ability);
-                env.target.set_content(copy, content);
-            }
+            let new_abilities = SubsSlice::extend_new(
+                &mut env.target.symbol_names,
+                env.source.get_subs_slice(abilities).iter().copied(),
+            );
+
+            let content = FlexAbleVar(new_opt_name_index, new_abilities);
+            env.target.set_content(copy, content);
 
             env.flex_able.push(copy);
 
@@ -5114,12 +5131,19 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        RigidAbleVar(name_index, ability) => {
+        RigidAbleVar(name_index, abilities) => {
             let name = env.source.field_names[name_index.index as usize].clone();
             let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
 
-            env.target
-                .set(copy, make_descriptor(RigidAbleVar(new_name_index, ability)));
+            let new_abilities = SubsSlice::extend_new(
+                &mut env.target.symbol_names,
+                env.source.get_subs_slice(abilities).iter().copied(),
+            );
+
+            env.target.set(
+                copy,
+                make_descriptor(RigidAbleVar(new_name_index, new_abilities)),
+            );
 
             env.rigid_able.push(copy);
 

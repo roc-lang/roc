@@ -821,11 +821,14 @@ fn deep_copy_type_vars<C: CopyEnv>(
         let new_content = match content {
             // The vars for which we want to do something interesting.
             FlexVar(opt_name) => FlexVar(opt_name.map(|n| env.clone_name(n))),
-            FlexAbleVar(opt_name, ability) => {
-                FlexAbleVar(opt_name.map(|n| env.clone_name(n)), ability)
-            }
+            FlexAbleVar(opt_name, abilities) => FlexAbleVar(
+                opt_name.map(|n| env.clone_name(n)),
+                env.clone_lambda_names(abilities),
+            ),
             RigidVar(name) => RigidVar(env.clone_name(name)),
-            RigidAbleVar(name, ability) => RigidAbleVar(env.clone_name(name), ability),
+            RigidAbleVar(name, abilities) => {
+                RigidAbleVar(env.clone_name(name), env.clone_lambda_names(abilities))
+            }
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
