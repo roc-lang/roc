@@ -256,7 +256,7 @@ pub struct AliasCommon {
 ///
 /// In the future we might want to do some small-vec optimizations, though that may be trivialized
 /// away with a SoA representation of canonicalized types.
-#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub struct AbilitySet(Vec<Symbol>);
 
 impl AbilitySet {
@@ -282,11 +282,11 @@ impl AbilitySet {
         self.0.contains(ability)
     }
 
-    pub fn sorted_iter(&self) -> impl Iterator<Item = &Symbol> {
+    pub fn sorted_iter(&self) -> impl ExactSizeIterator<Item = &Symbol> {
         self.0.iter()
     }
 
-    pub fn into_sorted_iter(self) -> impl Iterator<Item = Symbol> {
+    pub fn into_sorted_iter(self) -> impl ExactSizeIterator<Item = Symbol> {
         self.0.into_iter()
     }
 }
@@ -2266,8 +2266,8 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    FlexAbleVar(Lowercase, Symbol),
-    RigidAbleVar(Lowercase, Symbol),
+    FlexAbleVar(Lowercase, AbilitySet),
+    RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),

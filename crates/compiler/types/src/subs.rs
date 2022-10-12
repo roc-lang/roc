@@ -3738,14 +3738,14 @@ fn content_to_err_type(
                 }
             };
 
-            // TODO(multi-abilities)
-            ErrorType::FlexAbleVar(name, subs.get_subs_slice(abilities)[0])
+            let ability_set = AbilitySet::from_iter(subs.get_subs_slice(abilities).iter().copied());
+            ErrorType::FlexAbleVar(name, ability_set)
         }
 
         RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].clone();
-            // TODO(multi-abilities)
-            ErrorType::RigidAbleVar(name, subs.get_subs_slice(abilities)[0])
+            let ability_set = AbilitySet::from_iter(subs.get_subs_slice(abilities).iter().copied());
+            ErrorType::RigidAbleVar(name, ability_set)
         }
 
         RecursionVar {

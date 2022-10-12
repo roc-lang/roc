@@ -15,7 +15,7 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -2050,7 +2050,7 @@ pub enum Problem {
     FieldsMissing(Vec<Lowercase>),
     TagTypo(TagName, Vec<TagName>),
     TagsMissing(Vec<TagName>),
-    BadRigidVar(Lowercase, ErrorType, Option<Symbol>),
+    BadRigidVar(Lowercase, ErrorType, Option<AbilitySet>),
     OptionalRequiredMismatch(Lowercase),
     OpaqueComparedToNonOpaque,
     BoolVsBoolTag(TagName),
@@ -2208,7 +2208,7 @@ fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDoc
     }
 }
 
-type AbleVariables = Vec<(Lowercase, Symbol)>;
+type AbleVariables = Vec<(Lowercase, AbilitySet)>;
 
 #[derive(Default)]
 struct Context {
@@ -2249,7 +2249,6 @@ fn to_doc_help<'b>(
 
         FlexVar(lowercase) | RigidVar(lowercase) => alloc.type_variable(lowercase),
         FlexAbleVar(lowercase, ability) | RigidAbleVar(lowercase, ability) => {
-            // TODO we should be putting able variables on the toplevel of the type, not here
             ctx.able_variables.push((lowercase.clone(), ability));
             alloc.type_variable(lowercase)
         }
@@ -2424,13 +2423,20 @@ fn type_with_able_vars<'b>(
     let mut doc = Vec::with_capacity(1 + 6 * able.len());
     doc.push(typ);
 
-    for (i, (var, ability)) in able.into_iter().enumerate() {
+    for (i, (var, abilities)) in able.into_iter().enumerate() {
         doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
         doc.push(alloc.type_variable(var));
         doc.push(alloc.space());
         doc.push(alloc.keyword("has"));
-        doc.push(alloc.space());
-        doc.push(alloc.symbol_foreign_qualified(ability));
+
+        for (i, ability) in abilities.into_sorted_iter().enumerate() {
+            if i > 0 {
+                doc.push(alloc.space());
+                doc.push(alloc.text("&"));
+            }
+            doc.push(alloc.space());
+            doc.push(alloc.symbol_foreign_qualified(ability));
+        }
     }
 
     alloc.concat(doc)
@@ -2501,14 +2507,14 @@ fn to_diff<'b>(
             }
         }
 
-        (RigidAbleVar(x, ab), other) | (other, RigidAbleVar(x, ab)) => {
+        (RigidAbleVar(x, abs), other) | (other, RigidAbleVar(x, abs)) => {
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
             Diff {
                 left,
                 right,
-                status: Status::Different(vec![Problem::BadRigidVar(x, other, Some(ab))]),
+                status: Status::Different(vec![Problem::BadRigidVar(x, other, Some(abs))]),
                 left_able,
                 right_able,
             }
@@ -3554,11 +3560,25 @@ fn type_problem_to_pretty<'b>(
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
                 let kind_of_value = match opt_ability {
-                    Some(ability) => alloc.concat([
-                        alloc.reflow("any value implementing the "),
-                        alloc.symbol_unqualified(ability),
-                        alloc.reflow(" ability"),
-                    ]),
+                    Some(abilities) => {
+                        let mut abilities = abilities.into_sorted_iter();
+                        if abilities.len() == 1 {
+                            alloc.concat([
+                                alloc.reflow("any value implementing the "),
+                                alloc.symbol_unqualified(abilities.next().unwrap()),
+                                alloc.reflow(" ability"),
+                            ])
+                        } else {
+                            alloc.concat([
+                                alloc.reflow("any value implementing the "),
+                                alloc.intersperse(
+                                    abilities.map(|ab| alloc.symbol_unqualified(ab)),
+                                    alloc.reflow(", "),
+                                ),
+                                alloc.reflow(" abilities"),
+                            ])
+                        }
+                    }
                     None => alloc.reflow("any type of value"),
                 };
                 alloc
@@ -3609,13 +3629,25 @@ fn type_problem_to_pretty<'b>(
 
             match tipe {
                 Infinite | Error | FlexVar(_) => alloc.nil(),
-                FlexAbleVar(_, ability) => bad_rigid_var(
-                    x,
-                    alloc.concat([
-                        alloc.reflow("an instance of the ability "),
-                        alloc.symbol_unqualified(ability),
-                    ]),
-                ),
+                FlexAbleVar(_, abilities) => {
+                    let mut abilities = abilities.into_sorted_iter();
+                    let msg = if abilities.len() == 1 {
+                        alloc.concat([
+                            alloc.reflow("an instance of the ability "),
+                            alloc.symbol_unqualified(abilities.next().unwrap()),
+                        ])
+                    } else {
+                        alloc.concat([
+                            alloc.reflow("an instance of the "),
+                            alloc.intersperse(
+                                abilities.map(|ab| alloc.symbol_unqualified(ab)),
+                                alloc.reflow(", "),
+                            ),
+                            alloc.reflow(" abilities"),
+                        ])
+                    };
+                    bad_rigid_var(x, msg)
+                }
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
