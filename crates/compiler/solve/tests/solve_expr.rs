@@ -8115,4 +8115,22 @@ mod solve_expr {
             @"N#Bool.isEq(3) : N, N -[[#N_isEq(3)]]-> Bool"
         );
     }
+
+    #[test]
+    fn multiple_variables_bound_to_an_ability() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                F a : a | a has Hash
+
+                main : F a -> F a
+                #^^^^{-1}
+                "#
+            ),
+            @"main : a -[[main(0)]]-> a | a has Hash"
+            print_only_under_alias: true
+        );
+    }
 }
