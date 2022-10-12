@@ -1067,6 +1067,92 @@ fn list_keep_if_str_is_hello() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.countIf [] \_ -> Bool.true
+            "#
+        ),
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ ->
+                Bool.true
+
+            oneThroughEight : List I64
+            oneThroughEight =
+                [1,2,3,4,5,6,7,8]
+
+            List.countIf oneThroughEight alwaysTrue
+            "#
+        ),
+        8,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysFalse : I64 -> Bool
+            alwaysFalse = \_ ->
+                Bool.false
+
+            List.countIf [1,2,3,4,5,6,7,8] alwaysFalse
+            "#
+        ),
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_condition() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            intIsLessThanThree : I64 -> Bool
+            intIsLessThanThree = \i ->
+                i < 3
+
+            List.countIf [1,2,3,4,5,6,7,8] intIsLessThanThree
+            "#
+        ),
+        2,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_str() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.countIf ["x", "y", "x"] (\x -> x == "x")
+             "#
+        ),
+        2,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_on_empty_list_with_int_layout() {
     assert_evals_to!(
         indoc!(
