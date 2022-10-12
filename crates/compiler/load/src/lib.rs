@@ -182,11 +182,7 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
     if !cfg!(target_family = "wasm") && !cfg!(windows) && !SKIP_SUBS_CACHE {
-        // TODO: temporarily disable subs caching for the following modules until we have ability-store
-        // caching.
-        // output.insert(ModuleId::BOOL, deserialize_help(BOOL));
-        // output.insert(ModuleId::DICT, deserialize_help(DICT));
-        // output.insert(ModuleId::SET, deserialize_help(SET));
+        output.insert(ModuleId::BOOL, deserialize_help(BOOL));
 
         output.insert(ModuleId::RESULT, deserialize_help(RESULT));
         output.insert(ModuleId::NUM, deserialize_help(NUM));
@@ -194,6 +190,9 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
         output.insert(ModuleId::LIST, deserialize_help(LIST));
         output.insert(ModuleId::STR, deserialize_help(STR));
         output.insert(ModuleId::BOX, deserialize_help(BOX));
+
+        output.insert(ModuleId::DICT, deserialize_help(DICT));
+        output.insert(ModuleId::SET, deserialize_help(SET));
 
         output.insert(ModuleId::ENCODE, deserialize_help(ENCODE));
         output.insert(ModuleId::DECODE, deserialize_help(DECODE));
