@@ -1876,9 +1876,9 @@ fn llvm_wasm_str_layout() {
                 |> Str.reserve 42
             "#
         ),
-        [0, 5, 42],
+        [0, 5, 1],
         [u32; 3],
-        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+        |[_ptr, len, cap]: [u32; 3]| [0, len, if cap >= 42 { 1 } else { 0 }]
     )
 }
 
