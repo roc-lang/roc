@@ -3905,7 +3905,7 @@ fn specialize_naked_symbol<'a>(
             std::vec::Vec::new(),
             layout_cache,
             assigned,
-            env.arena.alloc(Stmt::Ret(assigned)),
+            hole,
         );
 
         return result;
