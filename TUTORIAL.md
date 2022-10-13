@@ -1397,6 +1397,14 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/cli/cli-platform/main.roc` package.
 
+If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+
+```coffee
+packages { pf: "examples/cli/cli-platform/main.roc" }
+imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
+provides main to pf
+```
+
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
