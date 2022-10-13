@@ -1530,10 +1530,9 @@ define_builtins! {
         12 HASH_ADD_I64: "addI64"
         13 HASH_ADD_I128: "addI128"
         14 HASH_COMPLETE: "complete"
-        15 HASH_RESET: "reset"
-        16 HASH_HASH_STR_BYTES: "hashStrBytes"
-        17 HASH_HASH_LIST: "hashList"
-        18 HASH_HASH_UNORDERED: "hashUnordered"
+        15 HASH_HASH_STR_BYTES: "hashStrBytes"
+        16 HASH_HASH_LIST: "hashList"
+        17 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

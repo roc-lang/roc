@@ -211,8 +211,6 @@ insertIfVacant = \dict, key, value ->
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
-# For now, it will just live within the Dict file.
-# If we add non-exposed roc standard library files, this should be moved to it's own file.
 # The current implementation is a form of [Wyhash final3](https://github.com/wangyi-fudan/wyhash/blob/a5995b98ebfa7bd38bfadc0919326d2e7aabb805/wyhash.h).
 # It is 64bit and little endian specific currently.
 LowLevelHasher := { originalSeed : U64, state : U64 } has [
@@ -229,7 +227,6 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
              addI64,
              addI128,
              complete,
-             reset,
          },
      ]
 
@@ -245,9 +242,6 @@ combineState = \@LowLevelHasher { originalSeed, state }, { a, b, seed, length } 
     @LowLevelHasher { originalSeed, state: wymix state hash }
 
 complete = \@LowLevelHasher { state } -> state
-
-reset = \@LowLevelHasher { originalSeed } ->
-    @LowLevelHasher { originalSeed, state: originalSeed }
 
 addI8 = \hasher, i8 ->
     addU8 hasher (Num.toU8 i8)
@@ -291,11 +285,9 @@ addU16 = \@LowLevelHasher { originalSeed, state }, u16 ->
 addU32 = \@LowLevelHasher { originalSeed, state }, u32 ->
     seed = Num.bitwiseXor originalSeed wyp0
     p0 = Num.toU64 u32
-    p1 = Num.toU64 u32
-    a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p1
-    b = Num.shiftLeftBy p1 32 |> Num.bitwiseOr p0
+    a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 4 }
+    combineState (@LowLevelHasher { originalSeed, state }) { a, b: a, seed, length: 4 }
 
 addU64 = \@LowLevelHasher { originalSeed, state }, u64 ->
     seed = Num.bitwiseXor originalSeed wyp0
