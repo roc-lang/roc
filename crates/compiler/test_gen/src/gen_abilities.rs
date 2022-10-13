@@ -1602,3 +1602,56 @@ mod hash {
         }
     }
 }
+
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+mod eq {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    use indoc::indoc;
+    use roc_std::RocStr;
+
+    #[test]
+    fn custom_eq_impl() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                LyingEq := U8 has [Eq {isEq}]
+
+                isEq = \@LyingEq m, @LyingEq n -> m != n
+
+                main =
+                    a = @LyingEq 10
+                    b = @LyingEq 5
+                    c = @LyingEq 5
+                    if Bool.isEq a b && !(Bool.isEq b c) then
+                        "okay"
+                    else
+                        "fail"
+                "#
+            ),
+            RocStr::from("okay"),
+            RocStr
+        )
+    }
+
+    #[test]
+    fn derive_structural_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Bool.isEq 10u8 10u8
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+}

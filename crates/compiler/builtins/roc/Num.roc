@@ -793,7 +793,7 @@ div : Frac a, Frac a -> Frac a
 
 divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
 divChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.div a b)
@@ -802,7 +802,7 @@ divCeil : Int a, Int a -> Int a
 
 divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 divCeilChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divCeil a b)
@@ -827,7 +827,7 @@ divTrunc : Int a, Int a -> Int a
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 divTruncChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divTrunc a b)
@@ -847,7 +847,7 @@ rem : Int a, Int a -> Int a
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 remChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.rem a b)

@@ -344,6 +344,9 @@ fn start_phase<'a>(
                                     )
                                 });
 
+                            // Add the declared abilities from the modules we import;
+                            // we may not know all their types yet since type-solving happens in
+                            // parallel, but we'll fill that in during type-checking our module.
                             abilities_store
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
@@ -4332,6 +4335,9 @@ pub fn add_imports(
         import_variables.push(list_len_type);
     }
 
+    // Fill in the implementation information of the abilities from the modules we import, which we
+    // now know because all imported modules should be solved by now.
+    //
     // TODO: see if we can reduce the amount of specializations we need to import.
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
@@ -4466,7 +4472,11 @@ fn run_solve_solve(
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
+            .filter(|(k, _)| {
+                exposed_symbols.contains(k)
+                    || is_specialization_symbol(*k)
+                    || k.is_exposed_for_builtin_derivers()
+            })
             .collect();
 
         (

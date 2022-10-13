@@ -51,6 +51,7 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
+    (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -96,6 +97,17 @@ impl Symbol {
 
     pub fn derivable_ability(self) -> Option<&'static (Symbol, &'static [Symbol])> {
         DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
+    }
+
+    /// A symbol that should never be exposed to userspace, but needs to be exposed
+    /// to compiled modules for deriving abilities for structural types.
+    pub fn is_exposed_for_builtin_derivers(&self) -> bool {
+        matches!(
+            self,
+            // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
+            // low-level implementation.
+            &Self::BOOL_STRUCTURAL_EQ
+        )
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -796,6 +808,7 @@ macro_rules! define_builtins {
                     $(exposed_type=$exposed_type:literal)?
                     $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
+                $(unexposed $u_ident_id:literal $u_ident_const:ident: $u_ident_name:literal)*
             }
         )+
         num_modules: $total:literal
@@ -942,6 +955,9 @@ macro_rules! define_builtins {
             $(
                 $(
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
+                )*
+                $(
+                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($u_ident_id));
                 )*
             )+
 
@@ -1239,8 +1255,12 @@ define_builtins! {
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
         6 BOOL_XOR: "xor"
-        7 BOOL_EQ: "isEq"
-        8 BOOL_NEQ: "isNotEq"
+        7 BOOL_NEQ: "isNotEq"
+        8 BOOL_EQ: "Eq" exposed_type=true
+        9 BOOL_IS_EQ: "isEq"
+        10 BOOL_IS_EQ_IMPL: "boolIsEq"
+        unexposed 11 BOOL_STRUCTURAL_EQ: "structuralEq"
+        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structuralNotEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias

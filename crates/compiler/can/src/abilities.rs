@@ -504,8 +504,12 @@ impl IAbilitiesStore<Pending> {
 
         let old_declared_impl = self.declared_implementations.insert(impl_key, member_impl);
         debug_assert!(
-            old_declared_impl.is_none(),
-            "Replacing existing declared impl!"
+            old_declared_impl.is_none() ||
+                // Can happen between we import declared implementations during canonicalization, but
+                // implementation information only after solving
+                old_declared_impl.unwrap() == member_impl,
+            "Replacing existing declared impl: {:?}",
+            (impl_key, old_declared_impl)
         );
     }
 

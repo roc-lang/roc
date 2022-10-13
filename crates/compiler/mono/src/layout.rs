@@ -2214,7 +2214,16 @@ impl<'a> Layout<'a> {
                 // completely, but for now we represent it with the empty tag union
                 cacheable(Ok(Layout::VOID))
             }
-            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
+                roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
+                    todo_abilities!("Able var is unbound!");
+                });
+
+                // If we encounter an unbound type var (e.g. `*` or `a`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty tag union
+                cacheable(Ok(Layout::VOID))
+            }
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)

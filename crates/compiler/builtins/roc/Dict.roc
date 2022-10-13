@@ -18,7 +18,7 @@ interface Dict
         removeAll,
     ]
     imports [
-        Bool.{ Bool },
+        Bool.{ Bool, Eq },
         Result.{ Result },
         List,
         Num.{ Nat },
@@ -72,7 +72,9 @@ interface Dict
 ## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
 ## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
 ## `fn dict1 == fn dict2` also being `Bool.true`, even if `fn` relies on the dictionary's ordering.
-Dict k v := List [Pair k v]
+Dict k v := List [Pair k v] has [Eq { isEq: dictEq }]
+
+dictEq = \@Dict l1, @Dict l2 -> l1 == l2
 
 ## An empty dictionary.
 empty : Dict k v
@@ -81,7 +83,7 @@ empty = @Dict []
 withCapacity : Nat -> Dict k v
 withCapacity = \n -> @Dict (List.withCapacity n)
 
-get : Dict k v, k -> Result v [KeyNotFound]*
+get : Dict k v, k -> Result v [KeyNotFound]* | k has Eq
 get = \@Dict list, needle ->
     when List.findFirst list (\Pair key _ -> key == needle) is
         Ok (Pair _ v) ->
@@ -94,7 +96,7 @@ walk : Dict k v, state, (state, k, v -> state) -> state
 walk = \@Dict list, initialState, transform ->
     List.walk list initialState (\state, Pair k v -> transform state k v)
 
-insert : Dict k v, k, v -> Dict k v
+insert : Dict k v, k, v -> Dict k v | k has Eq
 insert = \@Dict list, k, v ->
     when List.findFirstIndex list (\Pair key _ -> key == k) is
         Err NotFound ->
@@ -109,7 +111,7 @@ len : Dict k v -> Nat
 len = \@Dict list ->
     List.len list
 
-remove : Dict k v, k -> Dict k v
+remove : Dict k v, k -> Dict k v | k has Eq
 remove = \@Dict list, key ->
     when List.findFirstIndex list (\Pair k _ -> k == key) is
         Err NotFound ->
@@ -124,11 +126,7 @@ remove = \@Dict list, key ->
             |> @Dict
 
 ## Insert or remove a value in a Dict based on its presence
-update :
-    Dict k v,
-    k,
-    ([Present v, Missing] -> [Present v, Missing])
-    -> Dict k v
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
         get dict key
@@ -151,7 +149,7 @@ expect update empty "a" alterValue == single "a" Bool.false
 expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true
 expect update (single "a" Bool.true) "a" alterValue == empty
 
-contains : Dict k v, k -> Bool
+contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
     step = \_, Pair key _val ->
         if key == needle then
@@ -178,18 +176,18 @@ values = \@Dict list ->
     List.map list (\Pair _ v -> v)
 
 # union : Dict k v, Dict k v -> Dict k v
-insertAll : Dict k v, Dict k v -> Dict k v
+insertAll : Dict k v, Dict k v -> Dict k v | k has Eq
 insertAll = \xs, @Dict ys ->
     List.walk ys xs (\state, Pair k v -> Dict.insertIfVacant state k v)
 
 # intersection : Dict k v, Dict k v -> Dict k v
-keepShared : Dict k v, Dict k v -> Dict k v
+keepShared : Dict k v, Dict k v -> Dict k v | k has Eq
 keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
     |> @Dict
 
 # difference : Dict k v, Dict k v -> Dict k v
-removeAll : Dict k v, Dict k v -> Dict k v
+removeAll : Dict k v, Dict k v -> Dict k v | k has Eq
 removeAll = \xs, @Dict ys ->
     List.walk ys xs (\state, Pair k _ -> Dict.remove state k)
 
@@ -202,7 +200,7 @@ insertFresh = \@Dict list, k, v ->
     |> List.append (Pair k v)
     |> @Dict
 
-insertIfVacant : Dict k v, k, v -> Dict k v
+insertIfVacant : Dict k v, k, v -> Dict k v | k has Eq
 insertIfVacant = \dict, key, value ->
     if Dict.contains dict key then
         dict
