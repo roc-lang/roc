@@ -3615,7 +3615,7 @@ fn type_problem_to_pretty<'b>(
                 |name: Lowercase, abilities: AbilitySet, other_abilities: AbilitySet| {
                     let extra_abilities = other_abilities
                         .into_sorted_iter()
-                        .filter(|ability| !abilities.contains(&ability))
+                        .filter(|ability| !abilities.contains(ability))
                         .collect::<AbilitySet>();
 
                     let type_var_doc = match expectation {
