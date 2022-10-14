@@ -1685,6 +1685,8 @@ impl Subs {
     pub const AB_HASHER: SubsSlice<Symbol>   = SubsSlice::new(2, 1);
     #[rustfmt::skip]
     pub const AB_HASH: SubsSlice<Symbol>     = SubsSlice::new(3, 1);
+    #[rustfmt::skip]
+    pub const AB_EQ: SubsSlice<Symbol>       = SubsSlice::new(4, 1);
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1708,6 +1710,7 @@ impl Subs {
         symbol_names.push(Symbol::DECODE_DECODING);
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
+        symbol_names.push(Symbol::BOOL_EQ);
 
         let mut subs = Subs {
             utable: UnificationTable::default(),

@@ -1030,6 +1030,7 @@ impl DerivableVisitor for DeriveHash {
 struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
     const ABILITY: Symbol = Symbol::BOOL_EQ;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
