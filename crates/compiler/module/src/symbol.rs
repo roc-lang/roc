@@ -1433,6 +1433,8 @@ define_builtins! {
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
         17 DICT_UPDATE: "update"
+
+        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias

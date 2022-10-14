@@ -63,7 +63,6 @@ interface List
         reserve,
         walkBackwardsUntil,
         countIf,
-        getUnsafe,
     ]
     imports [
         Bool.{ Bool, Eq },

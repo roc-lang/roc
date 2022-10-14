@@ -233,6 +233,10 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
          },
      ]
 
+# unsafe primitive that does not perform a bounds check
+# TODO hide behind an InternalList.roc module
+listGetUnsafe : List a, Nat -> a
+
 createLowLevelHasher : { seed ?U64 } -> LowLevelHasher
 createLowLevelHasher = \{ seed ? 0x526F_6352_616E_643F } ->
     @LowLevelHasher { originalSeed: seed, state: seed }
@@ -400,14 +404,14 @@ wyr8 = \list, index ->
     # With seamless slices and Num.fromBytes, this should be possible to make faster and nicer.
     # It would also deal with the fact that on big endian systems we want to invert the order here.
     # Without seamless slices, we would need fromBytes to take an index.
-    p1 = List.getUnsafe list index |> Num.toU64
-    p2 = List.getUnsafe list (Num.addWrap index 1) |> Num.toU64
-    p3 = List.getUnsafe list (Num.addWrap index 2) |> Num.toU64
-    p4 = List.getUnsafe list (Num.addWrap index 3) |> Num.toU64
-    p5 = List.getUnsafe list (Num.addWrap index 4) |> Num.toU64
-    p6 = List.getUnsafe list (Num.addWrap index 5) |> Num.toU64
-    p7 = List.getUnsafe list (Num.addWrap index 6) |> Num.toU64
-    p8 = List.getUnsafe list (Num.addWrap index 7) |> Num.toU64
+    p1 = listGetUnsafe list index |> Num.toU64
+    p2 = listGetUnsafe list (Num.addWrap index 1) |> Num.toU64
+    p3 = listGetUnsafe list (Num.addWrap index 2) |> Num.toU64
+    p4 = listGetUnsafe list (Num.addWrap index 3) |> Num.toU64
+    p5 = listGetUnsafe list (Num.addWrap index 4) |> Num.toU64
+    p6 = listGetUnsafe list (Num.addWrap index 5) |> Num.toU64
+    p7 = listGetUnsafe list (Num.addWrap index 6) |> Num.toU64
+    p8 = listGetUnsafe list (Num.addWrap index 7) |> Num.toU64
     a = Num.bitwiseOr p1 (Num.shiftLeftBy p2 8)
     b = Num.bitwiseOr (Num.shiftLeftBy p3 16) (Num.shiftLeftBy p4 24)
     c = Num.bitwiseOr (Num.shiftLeftBy p5 32) (Num.shiftLeftBy p6 40)
@@ -418,10 +422,10 @@ wyr8 = \list, index ->
 # Get the next 4 bytes as a U64 with some shifting.
 wyr4 : List U8, Nat -> U64
 wyr4 = \list, index ->
-    p1 = List.getUnsafe list index |> Num.toU64
-    p2 = List.getUnsafe list (Num.addWrap index 1) |> Num.toU64
-    p3 = List.getUnsafe list (Num.addWrap index 2) |> Num.toU64
-    p4 = List.getUnsafe list (Num.addWrap index 3) |> Num.toU64
+    p1 = listGetUnsafe list index |> Num.toU64
+    p2 = listGetUnsafe list (Num.addWrap index 1) |> Num.toU64
+    p3 = listGetUnsafe list (Num.addWrap index 2) |> Num.toU64
+    p4 = listGetUnsafe list (Num.addWrap index 3) |> Num.toU64
     a = Num.bitwiseOr p1 (Num.shiftLeftBy p2 8)
     b = Num.bitwiseOr (Num.shiftLeftBy p3 16) (Num.shiftLeftBy p4 24)
 
@@ -432,9 +436,9 @@ wyr4 = \list, index ->
 wyr3 : List U8, Nat, Nat -> U64
 wyr3 = \list, index, k ->
     # ((uint64_t)p[0])<<16)|(((uint64_t)p[k>>1])<<8)|p[k-1]
-    p1 = List.getUnsafe list index |> Num.toU64
-    p2 = List.getUnsafe list (Num.shiftRightZfBy k 1 |> Num.addWrap index) |> Num.toU64
-    p3 = List.getUnsafe list (Num.subWrap k 1 |> Num.addWrap index) |> Num.toU64
+    p1 = listGetUnsafe list index |> Num.toU64
+    p2 = listGetUnsafe list (Num.shiftRightZfBy k 1 |> Num.addWrap index) |> Num.toU64
+    p3 = listGetUnsafe list (Num.subWrap k 1 |> Num.addWrap index) |> Num.toU64
     a = Num.bitwiseOr (Num.shiftLeftBy p1 16) (Num.shiftLeftBy p2 8)
 
     Num.bitwiseOr a p3
