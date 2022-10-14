@@ -3,7 +3,7 @@ use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
-use roc_region::all::Region;
+use roc_region::all::{Loc, Region};
 use roc_types::num::{NumericRange, SingleQuoteBound};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
@@ -198,7 +198,11 @@ pub fn num_literal(
 
 #[inline(always)]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
-    Type::Apply(symbol, args, Region::zero())
+    Type::Apply(
+        symbol,
+        args.into_iter().map(Loc::at_zero).collect(),
+        Region::zero(),
+    )
 }
 
 #[inline(always)]

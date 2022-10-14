@@ -11430,4 +11430,31 @@ All branches in an `if` must have the same type!
         Bool.false
     "###
     );
+
+    test_report!(
+        expand_ability_from_type_alias_mismatch,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            F a : a | a has Hash
+
+            f : F ({} -> {})
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  f : F ({} -> {})
+               ^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        {} -> {}
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
 }

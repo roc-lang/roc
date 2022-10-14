@@ -50,7 +50,14 @@ pub struct PendingDerivesTable(
 );
 
 impl PendingDerivesTable {
-    pub fn new(subs: &mut Subs, aliases: &mut Aliases, pending_derives: PendingDerives) -> Self {
+    pub fn new(
+        subs: &mut Subs,
+        aliases: &mut Aliases,
+        pending_derives: PendingDerives,
+        problems: &mut Vec<TypeError>,
+        abilities_store: &mut AbilitiesStore,
+        obligation_cache: &mut ObligationCache,
+    ) -> Self {
         let mut table = VecMap::with_capacity(pending_derives.len());
 
         for (opaque, (typ, derives)) in pending_derives.into_iter() {
@@ -66,8 +73,16 @@ impl PendingDerivesTable {
                 let derive_key = RequestedDeriveKey { opaque, ability };
 
                 // Neither rank nor pools should matter here.
-                let opaque_var =
-                    type_to_var(subs, Rank::toplevel(), &mut Pools::default(), aliases, &typ);
+                let opaque_var = type_to_var(
+                    subs,
+                    Rank::toplevel(),
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut Pools::default(),
+                    aliases,
+                    &typ,
+                );
                 let real_var = match subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,
                     _ => internal_error!("Non-opaque in derives table"),
