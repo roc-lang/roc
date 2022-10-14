@@ -213,6 +213,9 @@ insertIfVacant = \dict, key, value ->
 # This is to avoid external dependence and the need for versioning.
 # The current implementation is a form of [Wyhash final3](https://github.com/wangyi-fudan/wyhash/blob/a5995b98ebfa7bd38bfadc0919326d2e7aabb805/wyhash.h).
 # It is 64bit and little endian specific currently.
+# TODO: wyhash is slow for large keys, use something like cityhash if the keys are too long.
+# TODO: Add a builtin to distinguish big endian systems and change loading orders.
+# TODO: Switch out Wymum on systems with slow 128bit multiplication.
 LowLevelHasher := { originalSeed : U64, state : U64 } has [
          Hasher {
              addBytes,
