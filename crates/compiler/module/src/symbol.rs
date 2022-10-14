@@ -1433,6 +1433,8 @@ define_builtins! {
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
         17 DICT_UPDATE: "update"
+
+        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1532,6 +1534,7 @@ define_builtins! {
         14 HASH_COMPLETE: "complete"
         15 HASH_HASH_STR_BYTES: "hashStrBytes"
         16 HASH_HASH_LIST: "hashList"
+        17 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

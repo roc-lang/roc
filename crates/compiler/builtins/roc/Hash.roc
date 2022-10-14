@@ -17,6 +17,7 @@ interface Hash
         complete,
         hashStrBytes,
         hashList,
+        hashUnordered,
     ] imports [
         List,
         Str,
@@ -75,10 +76,33 @@ Hasher has
 
 ## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
 hashStrBytes = \hasher, s ->
-    Str.walkUtf8WithIndex s hasher \accumHasher, byte, _ ->
-        addU8 accumHasher byte
+    addBytes hasher (Str.toUtf8 s)
 
 ## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
 hashList = \hasher, lst ->
     List.walk lst hasher \accumHasher, elem ->
         hash accumHasher elem
+
+## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
+## The container is iterated using the walk method passed in.
+## The order of the elements does not affect the final hash.
+hashUnordered = \hasher, container, walk ->
+    walk
+        container
+        0
+        (\accum, elem ->
+            x =
+                # Note, we intentionally copy the hasher in every iteration.
+                # Having the same base state is required for unordered hashing.
+                hasher
+                |> hash elem
+                |> complete
+            nextAccum = Num.addWrap accum x
+
+            if nextAccum < accum then
+                # we don't want to lose a bit of entropy on overflow, so add it back in.
+                Num.addWrap nextAccum 1
+            else
+                nextAccum
+        )
+    |> \accum -> addU64 hasher accum
