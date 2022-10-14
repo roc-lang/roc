@@ -127,6 +127,7 @@ interface Str
 ## and you can use it as many times as you like inside a string. The name
 ## between the parentheses must refer to a `Str` value that is currently in
 ## scope, and it must be a name - it can't be an arbitrary expression like a function call.
+##
 Utf8ByteProblem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,
@@ -140,40 +141,41 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
 ## Returns `Bool.true` if the string is empty, and `Bool.false` otherwise.
 ##
-## >>> Str.isEmpty "hi!"
+## >>> expect Str.isEmpty "hi!" == Bool.false
+## >>> expect Str.isEmpty "" == Bool.true
 ##
-## >>> Str.isEmpty ""
 isEmpty : Str -> Bool
 concat : Str, Str -> Str
 
 ## Returns a string of the specified capacity without any content
+##
 withCapacity : Nat -> Str
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
 ##
-## >>> Str.joinWith ["one", "two", "three"] ", "
+## >>> expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
+## >>> expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
+##
 joinWith : List Str, Str -> Str
 
-## Split a string around a separator.
+## Split a string around a separator. Passing `""` for the separator is not 
+## useful; it returns the original string wrapped in a list. To split a string 
+## into its individual graphemes, use `Str.graphemes`
 ##
-## >>> Str.split "1,2,3" ","
+## >>> expect Str.split "1,2,3" "," == ["1","2","3"]
+## >>> expect Str.split "1,2,3" "" == ["1,2,3"]
 ##
-## Passing `""` for the separator is not useful; it returns the original string
-## wrapped in a list.
-##
-## >>> Str.split "1,2,3" ""
-##
-## To split a string into its individual graphemes, use `Str.graphemes`
 split : Str, Str -> List Str
 repeat : Str, Nat -> Str
 
 ## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
 ## in the string.
 ##
-##     Str.countGraphemes "Roc!"   # 4
-##     Str.countGraphemes "‰∏ÉÂ∑ßÊùø" # 3
-##     Str.countGraphemes "üïä"     # 1
+## >>> expect Str.countGraphemes "Roc!" == 4
+## >>> expect Str.countGraphemes "‰∏ÉÂ∑ßÊùø" == 9
+## >>> expect Str.countGraphemes "üïä" == 4
+##
 countGraphemes : Str -> Nat
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
@@ -190,28 +192,32 @@ countGraphemes : Str -> Nat
 ## `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error because 👩‍👩‍👦‍👦 takes up
 ## multiple code points and cannot be represented as a single [U32].
 ## You'd need to use `Str.startsWithScalar "🕊"` instead.
+##
 startsWithScalar : Str, U32 -> Bool
 
 ## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string.
+## in the given string. Note that strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).
 ##
-## (Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
-## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
+## >>> expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
+##
 toScalars : Str -> List U32
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
 ##
-## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
+## >>> expect Str.toUtf8 "鹏" == [233, 185, 143]
+## >>> expect Str.toUtf8 "🐦" == [240, 159, 144, 166]
 ##
-## >>> Str.toUtf8 "Roc"
-##
-## >>> Str.toUtf8 "鹏"
-##
-## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
+## Encode a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
+## into a [Str]
+##
+## >>> expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
+## >>> expect Str.fromUtf8 [0xb0] == Err (BadUtf8 InvalidStartByte 0)
+##
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
