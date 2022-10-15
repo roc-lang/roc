@@ -1733,7 +1733,6 @@ mod test {
 
     #[cfg(windows)]
     #[test]
-    #[ignore]
     fn app_internal_relocations_windows() {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
