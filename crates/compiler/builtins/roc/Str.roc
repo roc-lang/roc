@@ -197,7 +197,7 @@ countGraphemes : Str -> Nat
 startsWithScalar : Str, U32 -> Bool
 
 ## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string. Note that strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## in the given string. Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
 ## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).
 ##
 ##     expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
@@ -262,18 +262,18 @@ startsWith : Str, Str -> Bool
 ##     expect Str.endsWith "ABC" "X" == Bool.false
 endsWith : Str, Str -> Bool
 
-## Return the [Str] with any blank spaces removed from both the beginning
+## Return the [Str] with all whitespace removed from both the beginning
 ## as well as the end.
 ##
 ##     expect Str.trim "   Hello      \n\n" == "Hello"
 trim : Str -> Str
 
-## Return the [Str] with any blank spaces removed from both the beginning.
+## Return the [Str] with all whitespace removed from the beginning.
 ##
 ##     expect Str.trimLeft "   Hello      \n\n" == "Hello      \n\n"
 trimLeft : Str -> Str
 
-## Return the [Str] with any blank spaces removed from both the beginning.
+## Return the [Str] with all whitespace removed from the end.
 ##
 ##      expect Str.trimRight "   Hello      \n\n" == "   Hello"
 trimRight : Str -> Str
@@ -305,18 +305,18 @@ toF64 = \string -> strToNumHelp string
 toF32 : Str -> Result F32 [InvalidNumStr]*
 toF32 = \string -> strToNumHelp string
 
-## Convert an [Str] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
-## Since [Nat] has a different maximum number depending on the system you're building
-## for, this may give a different answer on different systems.
+## Convert a [Str] to a [Nat]. If the given number doesn't fit in [Nat], it will be [truncated](https://www.ualberta.ca/computing-science/media-library/teaching-resources/java/truncation-rounding.html).
+## [Nat] has a different maximum number depending on the system you're building
+## for, so this may give a different answer on different systems.
 ##
 ## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
 ## `Num.maxU32`. This means that calling `Str.toNat "9_000_000_000"` on a 32-bit
 ## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
+## larger than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
 ##
-## However, calling `Str.toNat "9_000_000_000"` on a 64-bit system will return
+## Calling `Str.toNat "9_000_000_000"` on a 64-bit system will return
 ## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
+## hold up to `Num.maxU64`, and 9_000_000_000 is smaller than `Num.maxU64`.
 ##
 ##     expect Str.toNat "9_000_000_000" == Ok 9000000000
 ##     expect Str.toNat "not a number" == Err InvalidNumStr
@@ -324,8 +324,8 @@ toNat : Str -> Result Nat [InvalidNumStr]*
 toNat = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
-## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` which is over 
-## 340 undecillion and can be specified with a u128 suffix.
+## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over 
+## 340 undecillion). It can be specified with a u128 suffix.
 ##
 ##     expect Str.toU128 "1500" == Ok 1500u128
 ##     expect Str.toU128 "0.1" == Err InvalidNumStr
@@ -336,7 +336,7 @@ toU128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
-## `170_141_183_460_469_231_731_687_303_715_884_105_727` and can be specified 
+## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified 
 ## with a i128 suffix.
 ##
 ##     expect Str.toI128 "1500" == Ok 1500i128
@@ -347,7 +347,7 @@ toI128 : Str -> Result I128 [InvalidNumStr]*
 toI128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
-## from `0` to `18_446_744_073_709_551_615` which is over 18 quintillion and 
+## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It 
 ## can be specified with a u64 suffix.
 ##
 ##     expect Str.toU64 "1500" == Ok 1500u64
@@ -358,7 +358,7 @@ toU64 : Str -> Result U64 [InvalidNumStr]*
 toU64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
-## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807` and can be 
+## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be 
 ## specified with a i64 suffix.
 ##
 ##     expect Str.toI64 "1500" == Ok 1500i64
@@ -369,7 +369,7 @@ toI64 : Str -> Result I64 [InvalidNumStr]*
 toI64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
-## from `0` to `4_294_967_295` which is over 4 billion and can be specified with
+## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
 ## a u32 suffix.
 ##
 ##     expect Str.toU32 "1500" == Ok 1500u32
@@ -380,7 +380,7 @@ toU32 : Str -> Result U32 [InvalidNumStr]*
 toU32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
-## from `-2_147_483_648` to `2_147_483_647` and can be 
+## from `-2_147_483_648` to `2_147_483_647`. It can be 
 ## specified with a i32 suffix.
 ##
 ##     expect Str.toI32 "1500" == Ok 1500i32
@@ -391,7 +391,7 @@ toI32 : Str -> Result I32 [InvalidNumStr]*
 toI32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
-## from `0` to `65_535` and can be specified with a u16 suffix.
+## from `0` to `65_535`. It can be specified with a u16 suffix.
 ##
 ##     expect Str.toU16 "1500" == Ok 1500u16
 ##     expect Str.toU16 "0.1" == Err InvalidNumStr
@@ -401,7 +401,7 @@ toU16 : Str -> Result U16 [InvalidNumStr]*
 toU16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
-## from `-32_768` to `32_767` and can be 
+## from `-32_768` to `32_767`. It can be 
 ## specified with a i16 suffix.
 ##
 ##     expect Str.toI16 "1500" == Ok 1500i16
@@ -412,7 +412,7 @@ toI16 : Str -> Result I16 [InvalidNumStr]*
 toI16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
-## from `0` to `255` and can be specified with a u8 suffix.
+## from `0` to `255`. It can be specified with a u8 suffix.
 ##
 ##     expect Str.toU8 "250" == Ok 250u8
 ##     expect Str.toU8 "-0.1" == Err InvalidNumStr
@@ -422,7 +422,7 @@ toU8 : Str -> Result U8 [InvalidNumStr]*
 toU8 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
-## from `-128` to `127` and can be 
+## from `-128` to `127`. It can be 
 ## specified with a i8 suffix.
 ##
 ##     expect Str.toI8 "-15" == Ok -15i8
@@ -443,7 +443,7 @@ countUtf8Bytes : Str -> Nat
 substringUnsafe : Str, Nat, Nat -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
-## If the substring is not found, returns [Err NotFound].
+## Returns [Err NotFound] if the substring is not found.
 ##
 ##     expect Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
 ##     expect Str.replaceEach "not here" "/" "_" == Err NotFound
@@ -475,7 +475,7 @@ replaceEachHelp = \buf, haystack, needle, flower ->
 expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
 
 ## Returns the given [Str] with the first occurrence of a substring replaced.
-## If the substring is not found, returns [Err NotFound].
+## Returns [Err NotFound] if the substring is not found.
 ##
 ##     expect Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
 ##     expect Str.replaceFirst "no slashes here" "/" "_" == Err NotFound
@@ -490,7 +490,7 @@ replaceFirst = \haystack, needle, flower ->
 expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
 
 ## Returns the given [Str] with the last occurrence of a substring replaced.
-## If the substring is not found, returns [Err NotFound].
+## Returns [Err NotFound] if the substring is not found.
 ##
 ##     expect Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
 ##     expect Str.replaceLast "no slashes here" "/" "_" == Err NotFound
@@ -504,9 +504,9 @@ replaceLast = \haystack, needle, flower ->
 
 expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
-## Returns the given [Str] before the first occurrence of a delimiter, as well 
-## as the rest of the string after that occurrence. If the delimiter is not 
-## found, returns `Not Found`.
+## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well 
+## as the rest of the string after that occurrence.
+## Returns [ Err NotFound] if the delimiter is not found.
 ##
 ##     expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ##     expect Str.splitFirst "no slashes here" "/" == Err NotFound
@@ -558,8 +558,8 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
         None
 
 ## Returns the given [Str] before the last occurrence of a delimiter, as well as
-## the rest of the string after that occurrence. If the delimiter is not found, 
-## returns `Not Found`.
+## the rest of the string after that occurrence. 
+## Returns [Err NotFound] if the delimiter is not found.
 ##
 ##     expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
 ##     expect Str.splitLast "no slashes here" "/" == Err NotFound
@@ -648,8 +648,8 @@ matchesAtHelp = \state ->
 
         doesThisMatch && doesRestMatch
 
-## Walks over the `UTF-8` bytes of the given [Str] and call a function to update 
-## state for each byte. The index for that byte in the string is also provided 
+## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update 
+## state for each byte. The index for that byte in the string is provided 
 ## to the update function.
 ## 
 ##     f : List U8, U8, Nat -> List U8
@@ -676,7 +676,7 @@ reserve : Str, Nat -> Str
 appendScalarUnsafe : Str, U32 -> Str
 
 ## Append a [U32] scalar to the given [Str]. If the given scalar is not a valid 
-## unicode value it will returns [Err InvalidScalar]. 
+## unicode value, it will return [Err InvalidScalar]. 
 ##
 ##     expect Str.appendScalar "H" 105 == Ok "Hi"
 ##     expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
@@ -693,7 +693,7 @@ isValidScalar = \scalar ->
 
 getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
 
-## Walks over the unicode [U32] values for the given [Str] and call a function 
+## Walks over the unicode [U32] values for the given [Str] and calls a function 
 ## to update state for each.
 ## 
 ##     f : List U32, U32 -> List U32
@@ -713,7 +713,7 @@ walkScalarsHelp = \string, state, step, index, length ->
     else
         state
 
-## Walks over the unicode [U32] values for the given [Str] and call a function 
+## Walks over the unicode [U32] values for the given [Str] and calls a function 
 ## to update state for each.
 ## 
 ##     f : List U32, U32 -> [Break (List U32), Continue (List U32)]
