@@ -146,7 +146,7 @@ isEmpty : Str -> Bool
 
 ## Concatenate two [Str] values together. 
 ##
-## >>> expect Str.concat "Hello" "World" == "HelloWorld"
+##     expect Str.concat "Hello" "World" == "HelloWorld"
 concat : Str, Str -> Str
 
 ## Returns a [Str] of the specified capacity [Num] without any content
@@ -169,7 +169,7 @@ split : Str, Str -> List Str
 
 ## Repeat a given [Str] value [Nat] times.
 ##
-## >>> expect Str.repeat ">" 3 == ">>>"
+##     expect Str.repeat ">" 3 == ">>>"
 repeat : Str, Nat -> Str
 
 ## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
@@ -252,14 +252,14 @@ fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
 ##
-## >>> expect Str.startsWith "ABC" "A" == Bool.true
-## >>> expect Str.startsWith "ABC" "X" == Bool.false
+##     expect Str.startsWith "ABC" "A" == Bool.true
+##     expect Str.startsWith "ABC" "X" == Bool.false
 startsWith : Str, Str -> Bool
 
 ## Check if the given [Str] ends with a value.
 ##
-## >>> expect Str.endsWith "ABC" "C" == Bool.true
-## >>> expect Str.endsWith "ABC" "X" == Bool.false
+##     expect Str.endsWith "ABC" "C" == Bool.true
+##     expect Str.endsWith "ABC" "X" == Bool.false
 endsWith : Str, Str -> Bool
 
 ## Return the [Str] with any blank spaces removed from both the beginning
