@@ -763,7 +763,7 @@ mod cli_run {
             flags: &[&str],
             expected_ending: &str,
         ) {
-            use super::{TARGET_FLAG, CMD_BUILD, run_roc, concatcp};
+            use super::{concatcp, run_roc, CMD_BUILD, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
@@ -775,13 +775,12 @@ mod cli_run {
                 &[],
                 &[],
             );
-            if !compile_out.stderr.is_empty() {
-                panic!("{}", compile_out.stderr);
-            }
 
             assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
-            let path = file.with_file_name(executable_filename);
+            let mut path = file.with_file_name(executable_filename);
+            path.set_extension("wasm");
+
             let stdout = crate::run_with_wasmer(&path, stdin);
 
             if !stdout.ends_with(expected_ending) {
