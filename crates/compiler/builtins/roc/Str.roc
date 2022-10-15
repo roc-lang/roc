@@ -144,7 +144,7 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 ##     expect Str.isEmpty "" == Bool.true
 isEmpty : Str -> Bool
 
-## Concatenate two [Str] values together. 
+## Concatenate two [Str] values together.
 ##
 ##     expect Str.concat "Hello" "World" == "HelloWorld"
 concat : Str, Str -> Str
@@ -159,8 +159,8 @@ withCapacity : Nat -> Str
 ##     expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
 joinWith : List Str, Str -> Str
 
-## Split a [Str] around a separator. Passing `""` for the separator is not 
-## useful; it returns the original string wrapped in a list. To split a string 
+## Split a [Str] around a separator. Passing `""` for the separator is not
+## useful; it returns the original string wrapped in a list. To split a string
 ## into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103), use `Str.graphemes`
 ##
 ##     expect Str.split "1,2,3" "," == ["1","2","3"]
@@ -278,7 +278,7 @@ trimLeft : Str -> Str
 ##      expect Str.trimRight "   Hello      \n\n" == "   Hello"
 trimRight : Str -> Str
 
-## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal 
+## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal
 ## [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic).
 ##
 ##     expect Str.toDec "10" == Ok 10dec
@@ -287,8 +287,8 @@ trimRight : Str -> Str
 toDec : Str -> Result Dec [InvalidNumStr]*
 toDec = \string -> strToNumHelp string
 
-## Encode a [Str] to a [F64]. A [F64] value is a 64-bit 
-## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be 
+## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
+## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f64` suffix.
 ##
 ##     expect Str.toF64 "0.10" == Ok 0.10f64
@@ -296,8 +296,8 @@ toDec = \string -> strToNumHelp string
 toF64 : Str -> Result F64 [InvalidNumStr]*
 toF64 = \string -> strToNumHelp string
 
-## Encode a [Str] to a [F32].A [F32] value is a 32-bit 
-## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be 
+## Encode a [Str] to a [F32].A [F32] value is a 32-bit
+## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f32` suffix.
 ##
 ##     expect Str.toF32 "0.10" == Ok 0.10f32
@@ -324,7 +324,7 @@ toNat : Str -> Result Nat [InvalidNumStr]*
 toNat = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
-## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over 
+## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
 ## 340 undecillion). It can be specified with a u128 suffix.
 ##
 ##     expect Str.toU128 "1500" == Ok 1500u128
@@ -336,7 +336,7 @@ toU128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
-## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified 
+## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified
 ## with a i128 suffix.
 ##
 ##     expect Str.toI128 "1500" == Ok 1500i128
@@ -347,7 +347,7 @@ toI128 : Str -> Result I128 [InvalidNumStr]*
 toI128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
-## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It 
+## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
 ## can be specified with a u64 suffix.
 ##
 ##     expect Str.toU64 "1500" == Ok 1500u64
@@ -358,7 +358,7 @@ toU64 : Str -> Result U64 [InvalidNumStr]*
 toU64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
-## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be 
+## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
 ## specified with a i64 suffix.
 ##
 ##     expect Str.toI64 "1500" == Ok 1500i64
@@ -380,7 +380,7 @@ toU32 : Str -> Result U32 [InvalidNumStr]*
 toU32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
-## from `-2_147_483_648` to `2_147_483_647`. It can be 
+## from `-2_147_483_648` to `2_147_483_647`. It can be
 ## specified with a i32 suffix.
 ##
 ##     expect Str.toI32 "1500" == Ok 1500i32
@@ -401,7 +401,7 @@ toU16 : Str -> Result U16 [InvalidNumStr]*
 toU16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
-## from `-32_768` to `32_767`. It can be 
+## from `-32_768` to `32_767`. It can be
 ## specified with a i16 suffix.
 ##
 ##     expect Str.toI16 "1500" == Ok 1500i16
@@ -422,7 +422,7 @@ toU8 : Str -> Result U8 [InvalidNumStr]*
 toU8 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
-## from `-128` to `127`. It can be 
+## from `-128` to `127`. It can be
 ## specified with a i8 suffix.
 ##
 ##     expect Str.toI8 "-15" == Ok -15i8
@@ -504,7 +504,7 @@ replaceLast = \haystack, needle, flower ->
 
 expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
-## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well 
+## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
 ## Returns [ Err NotFound] if the delimiter is not found.
 ##
@@ -558,7 +558,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
         None
 
 ## Returns the given [Str] before the last occurrence of a delimiter, as well as
-## the rest of the string after that occurrence. 
+## the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
 ##
 ##     expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
@@ -648,13 +648,13 @@ matchesAtHelp = \state ->
 
         doesThisMatch && doesRestMatch
 
-## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update 
-## state for each byte. The index for that byte in the string is provided 
+## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
+## state for each byte. The index for that byte in the string is provided
 ## to the update function.
-## 
+##
 ##     f : List U8, U8, Nat -> List U8
 ##     f = \state, byte, _ -> List.append state byte
-##     expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67] 
+##     expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67]
 walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
 walkUtf8WithIndex = \string, state, step ->
     walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
@@ -675,8 +675,8 @@ reserve : Str, Nat -> Str
 ## is UB when the scalar is invalid
 appendScalarUnsafe : Str, U32 -> Str
 
-## Append a [U32] scalar to the given [Str]. If the given scalar is not a valid 
-## unicode value, it will return [Err InvalidScalar]. 
+## Append a [U32] scalar to the given [Str]. If the given scalar is not a valid
+## unicode value, it will return [Err InvalidScalar].
 ##
 ##     expect Str.appendScalar "H" 105 == Ok "Hi"
 ##     expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
@@ -693,9 +693,9 @@ isValidScalar = \scalar ->
 
 getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
 
-## Walks over the unicode [U32] values for the given [Str] and calls a function 
+## Walks over the unicode [U32] values for the given [Str] and calls a function
 ## to update state for each.
-## 
+##
 ##     f : List U32, U32 -> List U32
 ##     f = \state, scalar -> List.append state scalar
 ##     expect Str.walkScalars "ABC" [] f == [65, 66, 67]
@@ -713,15 +713,15 @@ walkScalarsHelp = \string, state, step, index, length ->
     else
         state
 
-## Walks over the unicode [U32] values for the given [Str] and calls a function 
+## Walks over the unicode [U32] values for the given [Str] and calls a function
 ## to update state for each.
-## 
+##
 ##     f : List U32, U32 -> [Break (List U32), Continue (List U32)]
-##     f = \state, scalar -> 
+##     f = \state, scalar ->
 ##         check = 66
 ##         if scalar == check then
 ##             Break [check]
-##         else 
+##         else
 ##             Continue (List.append state scalar)
 ##     expect Str.walkScalarsUntil "ABC" [] f == [66]
 ##     expect Str.walkScalarsUntil "AxC" [] f == [65, 120, 67]
@@ -757,6 +757,6 @@ strToNumHelp = \string ->
 
 ## Adds a prefix to the given [Str].
 ##
-##     expect Str.withPrefix "Awesome" "Roc" == "RocAwesome" 
+##     expect Str.withPrefix "Awesome" "Roc" == "RocAwesome"
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
