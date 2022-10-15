@@ -18,6 +18,8 @@ mod editor_launch_test {
     #[test]
     fn launch() {
         let root_dir = root_dir();
+
+        // The editor expects to be run from the root of the repo, so it can find the cli-platform to init a new project folder.
         env::set_current_dir(&root_dir)
             .unwrap_or_else(|_| panic!("Failed to set current dir to {:?}", root_dir));
 
@@ -44,6 +46,7 @@ mod editor_launch_test {
             Ok(None) => {
                 // The editor is still running as desired, we check if logs are as expected:
                 assert_eq!("Loading file", std::str::from_utf8(&stdout_buffer).unwrap());
+                // Kill the editor, we don't want it to stay open forever.
                 roc_process.kill().unwrap();
             }
             Err(e) => panic!("Failed to wait launch editor cli command: {e}"),
