@@ -382,8 +382,6 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         .map(|s| (s.name, s.offset_in_section as u64))
         .collect();
 
-    dbg!(&symbols);
-
     redirect_dummy_dll_functions(
         executable,
         &symbols,
@@ -827,14 +825,9 @@ fn redirect_dummy_dll_functions(
 
                 // the array of addresses is null-terminated; make sure we haven't reached the end
                 let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
-                crate::dbg_hex!(current);
                 if current == 0 {
                     internal_error!("invalid state: fewer thunks than function addresses");
                 }
-
-                // - 0x140000000
-                let roc_app_target_va = roc_app_target_va;
-                crate::dbg_hex!(roc_app_target_va);
 
                 // update the address to a function VA
                 address_bytes.copy_from_slice(&roc_app_target_va.to_le_bytes());
