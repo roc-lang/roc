@@ -16,12 +16,16 @@ For convenience and consistency, there is only one way to format roc.
 "#;
 
 pub const HELLO_WORLD: &str = r#"
-app "test-app"
-    packages { pf: "platform/main.roc" }
-    imports []
+app "helloWorld"
+    packages { pf: "cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Program.{ Program }]
     provides [main] to pf
 
-main = "Hello, world!"
+main = Program.noArgs mainTask
+
+mainTask =
+    Stdout.line "Hello, World!"
+    |> Program.exit 0
 
 "#;
 
@@ -29,7 +33,7 @@ pub fn nr_hello_world_lines() -> usize {
     HELLO_WORLD.matches('\n').count() - 1
 }
 
-pub const PLATFORM_DIR_NAME: &str = "platform";
+pub const PLATFORM_DIR_NAME: &str = "cli-platform";
 pub const PLATFORM_FILE_NAME: &str = "main.roc";
 
 pub const PLATFORM_STR: &str = r#"

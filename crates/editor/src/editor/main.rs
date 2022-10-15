@@ -30,6 +30,7 @@ use roc_load::Threading;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
+use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -521,7 +522,7 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
-    let orig_platform_path = Path::new("./examples/cli").join(PLATFORM_DIR_NAME);
+    let orig_platform_path = Path::new("./examples/cli/").join(PLATFORM_DIR_NAME);
 
     let roc_file_path = Path::new("./new-roc-project/main.roc");
 
@@ -576,9 +577,11 @@ fn copy_roc_platform_if_not_exists(
 ) {
     if !orig_platform_path.exists() && !project_platform_path.exists() {
         panic!(
-            r#"No roc file path was passed to the editor, I wanted to create a new roc project but I could not find the platform at {:?}.
-            Are you at the root of the roc repository?"#,
-            orig_platform_path
+            r#"No roc file path was passed to the editor, so I wanted to create a new roc project but I could not find the platform at {:?}.
+            Are you at the root of the roc repository?
+            My current directory is: {:?}"#,
+            orig_platform_path,
+            env::current_dir()
         );
     } else if !project_platform_path.exists() {
         copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{
