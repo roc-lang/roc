@@ -1958,11 +1958,18 @@ mod test {
                     section_alignment,
                 );
 
-                // 0x3a08
-                let reloc_section_start = 0x4600;
-                let addr = 0x3a08 - 0x00002c00;
-                let new_block_va = 0x4000;
-                let relocations = &[(addr) as u16];
+                let reloc_section_header_start =
+                    section_header_start - std::mem::size_of::<ImageSectionHeader>();
+
+                let reloc_image_section = load_struct_inplace::<ImageSectionHeader>(
+                    executable,
+                    reloc_section_header_start,
+                );
+
+                let reloc_section_start = reloc_image_section.pointer_to_raw_data.get(LE) as usize;
+                let offset_in_section = md.thunks_start_offset_in_section;
+                let relocations = &[(offset_in_section) as u16];
+                let new_block_va = md.rdata_virtual_address - md.image_base as u32;
                 let added_reloc_bytes = write_image_base_relocation(
                     executable,
                     reloc_section_start,
