@@ -49,7 +49,13 @@ struct PeMetadata {
     dynamic_relocations: DynamicRelocationsPe,
 
     /// File offset for the thunks of our dummy .dll
-    thunks_start_offset: usize,
+    thunks_start_offset_in_file: usize,
+
+    /// Offset for the thunks of our dummy .dll within the .rdata section
+    thunks_start_offset_in_section: usize,
+
+    /// Virtual address of the .rdata section
+    rdata_virtual_address: u32,
 
     /// Constants from the host .exe header
     image_base: u64,
@@ -97,7 +103,18 @@ impl PeMetadata {
             .unwrap();
 
         let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
-        let thunks_start_offset = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+        let thunks_start_offset_in_file =
+            find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+
+        let rdata_section = dynhost_obj
+            .sections()
+            .find(|s| s.name() == Ok(".rdata"))
+            .unwrap();
+
+        let thunks_start_offset_in_section =
+            thunks_start_offset_in_file - rdata_section.file_range().unwrap().0 as usize;
+
+        let rdata_virtual_address = rdata_section.address() as u32;
 
         let optional_header = dynhost_obj.nt_headers().optional_header;
         let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
@@ -143,7 +160,9 @@ impl PeMetadata {
             imports,
             exports,
             dynamic_relocations,
-            thunks_start_offset,
+            thunks_start_offset_in_file,
+            thunks_start_offset_in_section,
+            rdata_virtual_address,
         }
     }
 }
@@ -375,7 +394,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
     dbg!(&symbols);
 
-    redirect_dummy_dll_functions(executable, &symbols, &md.imports, md.thunks_start_offset);
+    redirect_dummy_dll_functions(
+        executable,
+        &symbols,
+        &md.imports,
+        md.thunks_start_offset_in_file,
+    );
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2085,12 +2109,12 @@ mod test {
                     .map(|s| (s.name, s.offset_in_section as u64))
                     .collect();
 
-                crate::dbg_hex!(md.thunks_start_offset);
+                crate::dbg_hex!(md.thunks_start_offset_in_file);
                 redirect_dummy_dll_functions(
                     executable,
                     &symbols,
                     &md.imports,
-                    md.thunks_start_offset,
+                    md.thunks_start_offset_in_file,
                 );
             };
         };
