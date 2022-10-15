@@ -7991,4 +7991,22 @@ mod solve_expr {
             "Bool",
         );
     }
+
+    #[test]
+    fn expand_able_variables_in_type_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                F a : a | a has Hash
+
+                main : F a -> F a
+                #^^^^{-1}
+                "#
+            ),
+            @"main : a -[[main(0)]]-> a | a has Hash"
+            print_only_under_alias: true
+        );
+    }
 }

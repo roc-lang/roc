@@ -553,7 +553,7 @@ fn can_annotation_help(
                     references,
                 );
 
-                args.push(arg_ann);
+                args.push(Loc::at(arg.region, arg_ann));
             }
 
             match scope.lookup_alias(symbol) {
@@ -573,8 +573,14 @@ fn can_annotation_help(
 
                     let mut type_var_to_arg = Vec::new();
 
-                    for (_, arg_ann) in alias.type_variables.iter().zip(args) {
-                        type_var_to_arg.push(arg_ann);
+                    for (alias_arg, arg_ann) in alias.type_variables.iter().zip(args) {
+                        type_var_to_arg.push(Loc::at(
+                            arg_ann.region,
+                            OptAbleType {
+                                typ: arg_ann.value,
+                                opt_ability: alias_arg.value.opt_bound_ability,
+                            },
+                        ));
                     }
 
                     let mut lambda_set_variables =

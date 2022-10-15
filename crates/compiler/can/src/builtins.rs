@@ -70,6 +70,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
             // Below, we explicitly handle some exceptions to the pattern where a lowlevel maps
             // directly to a symbol. If you are unsure if your lowlevel is an exception, assume
             // that it isn't and just see if that works.
+            #[allow(unreachable_patterns)] // multiple symbols can map to one low-level
             match lowlevel {
                 $(
                 LowLevel::$lowlevel => Symbol::$symbol,
@@ -143,6 +144,8 @@ map_symbol_to_lowlevel_and_arity! {
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
+
+    ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 
     NumAdd; NUM_ADD; 2,
     NumAddWrap; NUM_ADD_WRAP; 2,
