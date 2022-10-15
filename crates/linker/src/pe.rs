@@ -813,9 +813,14 @@ fn redirect_dummy_dll_functions(
 
                 // the array of addresses is null-terminated; make sure we haven't reached the end
                 let current = u64::from_le_bytes(address_bytes.try_into().unwrap());
+                crate::dbg_hex!(current);
                 if current == 0 {
                     internal_error!("invalid state: fewer thunks than function addresses");
                 }
+
+                // - 0x140000000
+                let roc_app_target_va = roc_app_target_va;
+                crate::dbg_hex!(roc_app_target_va);
 
                 // update the address to a function VA
                 address_bytes.copy_from_slice(&roc_app_target_va.to_le_bytes());
@@ -1105,33 +1110,67 @@ fn write_image_base_relocation(
     new_block_va: u32,
     relocations: &[u16],
 ) -> usize {
+    crate::dbg_hex!(new_block_va, relocations);
+
     let mut next_block_start = reloc_section_start as u32;
 
-    let new_block_start = loop {
+    let mut blocks = vec![];
+
+    loop {
         let header =
             load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
 
         if header.virtual_address.get(LE) == 0 {
-            break next_block_start;
+            break;
         }
 
+        blocks.push((next_block_start, *header));
+
         next_block_start += header.size_of_block.get(LE);
-    };
+    }
 
-    let size_of_block = 8 + 2 * relocations.len();
+    // extra space that we'll use for the new relocations
+    let shift_amount = relocations.len() * 2;
 
-    let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, new_block_start as usize);
-    *header = ImageBaseRelocation {
-        virtual_address: object::U32::new(LE, new_block_va),
-        size_of_block: object::U32::new(LE, size_of_block as u32),
-    };
+    // now, in reverse, shift sections that need to be shifted
+    while let Some((block_start, header)) = blocks.pop() {
+        let header_va = header.virtual_address.get(LE);
+        let header_size = header.size_of_block.get(LE);
 
-    let destination =
-        load_structs_inplace_mut::<u16>(mmap, new_block_start as usize + 8, relocations.len());
+        let block_start = block_start as usize;
 
-    destination.copy_from_slice(relocations);
+        match header_va.cmp(&new_block_va) {
+            std::cmp::Ordering::Greater => {
+                // shift this block
+                mmap.copy_within(
+                    block_start..block_start + header_size as usize,
+                    block_start + shift_amount,
+                );
+            }
+            std::cmp::Ordering::Equal => {
+                // extend this block
+                let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
 
-    size_of_block
+                let new_size = header.size_of_block.get(LE) + 2;
+                header.size_of_block.set(LE, new_size);
+
+                let number_of_entries = (new_size as usize - 8) / 2;
+                let entries =
+                    load_structs_inplace_mut::<u16>(mmap, block_start + 8, number_of_entries);
+
+                entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
+
+                // sort by VA
+                entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+            }
+            std::cmp::Ordering::Less => {
+                // done
+                break;
+            }
+        }
+    }
+
+    shift_amount
 }
 
 #[cfg(test)]
@@ -1513,7 +1552,7 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        let dir = Path::new(r"C:\Users\folkert\Documents\GitHub\roc\linktest");
+        // let dir = Path::new(r"C:\Users\folkert\Documents\GitHub\roc\linktest");
 
         runner(dir);
 
@@ -1541,7 +1580,7 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        let dir = Path::new("/tmp/roc");
+        // let dir = Path::new("/tmp/roc");
 
         runner(dir);
 
@@ -1658,6 +1697,7 @@ mod test {
 
     #[cfg(windows)]
     #[test]
+    #[ignore]
     fn app_internal_relocations_windows() {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
@@ -1893,8 +1933,9 @@ mod test {
 
                 // 0x3a08
                 let reloc_section_start = 0x4600;
-                let new_block_va = 0x3000;
-                let relocations = &[0xa03];
+                let addr = 0x3a08 - 0x00002c00;
+                let new_block_va = 0x4000;
+                let relocations = &[(addr) as u16];
                 let added_reloc_bytes = write_image_base_relocation(
                     executable,
                     reloc_section_start,
@@ -2043,9 +2084,6 @@ mod test {
                     .into_iter()
                     .map(|s| (s.name, s.offset_in_section as u64))
                     .collect();
-
-                crate::dbg_hex!(&symbols);
-                symbols[0].1 = 0x140001000;
 
                 crate::dbg_hex!(md.thunks_start_offset);
                 redirect_dummy_dll_functions(
