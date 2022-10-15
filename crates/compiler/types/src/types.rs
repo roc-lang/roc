@@ -209,7 +209,7 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<Type>,
+    pub type_arguments: Vec<Loc<OptAbleType>>,
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
@@ -282,7 +282,7 @@ pub enum Type {
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
-    Apply(Symbol, Vec<Type>, Region),
+    Apply(Symbol, Vec<Loc<Type>>, Region),
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
@@ -793,7 +793,7 @@ impl Type {
                     ..
                 }) => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -833,7 +833,7 @@ impl Type {
                     stack.push(actual_type);
                 }
                 Apply(_, args, _) => {
-                    stack.extend(args);
+                    stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
@@ -915,7 +915,7 @@ impl Type {
                     ..
                 }) => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -954,7 +954,7 @@ impl Type {
                     stack.push(actual_type);
                 }
                 Apply(_, args, _) => {
-                    stack.extend(args);
+                    stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
@@ -1021,7 +1021,9 @@ impl Type {
                 ..
             }) => {
                 for ta in type_arguments {
-                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                    ta.value
+                        .typ
+                        .substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
                 Ok(())
@@ -1042,13 +1044,16 @@ impl Type {
             } => actual_type.substitute_alias(rep_symbol, rep_args, actual),
             Apply(symbol, args, region) if *symbol == rep_symbol => {
                 if args.len() == rep_args.len()
-                    && args.iter().zip(rep_args.iter()).all(|(t1, t2)| t1 == t2)
+                    && args
+                        .iter()
+                        .zip(rep_args.iter())
+                        .all(|(t1, t2)| &t1.value == t2)
                 {
                     *self = actual.clone();
 
                     if let Apply(_, args, _) = self {
                         for arg in args {
-                            arg.substitute_alias(rep_symbol, rep_args, actual)?;
+                            arg.value.substitute_alias(rep_symbol, rep_args, actual)?;
                         }
                     }
                     return Ok(());
@@ -1057,7 +1062,7 @@ impl Type {
             }
             Apply(_, args, _) => {
                 for arg in args {
-                    arg.substitute_alias(rep_symbol, rep_args, actual)?;
+                    arg.value.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 Ok(())
             }
@@ -1103,7 +1108,9 @@ impl Type {
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
+                    || type_arguments
+                        .iter()
+                        .any(|v| v.value.typ.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1117,7 +1124,7 @@ impl Type {
                 name == &rep_symbol || actual.contains_symbol(rep_symbol)
             }
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
-            Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
+            Apply(_, args, _) => args.iter().any(|arg| arg.value.contains_symbol(rep_symbol)),
             RangedNumber(_) => false,
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
@@ -1174,7 +1181,9 @@ impl Type {
                 ..
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
-            Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            Apply(_, args, _) => args
+                .iter()
+                .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
@@ -1259,7 +1268,12 @@ impl Type {
                     .iter()
                     .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
                 type_arguments.iter_mut().for_each(|t| {
-                    t.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables)
+                    t.value.typ.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                    )
                 });
             }
             HostExposedAlias {
@@ -1316,8 +1330,14 @@ impl Type {
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
-                            type_var_to_arg.push(arg_ann.clone());
+                        for (alias_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(Loc::at(
+                                arg_ann.region,
+                                OptAbleType {
+                                    typ: arg_ann.value.clone(),
+                                    opt_ability: alias_var.value.opt_bound_ability,
+                                },
+                            ));
                         }
 
                         let mut lambda_set_variables =
@@ -1370,17 +1390,17 @@ impl Type {
                         ) in alias.type_variables.iter().zip(args.iter())
                         {
                             let mut filler = filler.clone();
-                            filler.instantiate_aliases(
+                            filler.value.instantiate_aliases(
                                 region,
                                 aliases,
                                 var_store,
                                 new_lambda_set_variables,
                             );
                             named_args.push(OptAbleType {
-                                typ: filler.clone(),
+                                typ: filler.value.clone(),
                                 opt_ability: *opt_bound_ability,
                             });
-                            substitution.insert(*placeholder, filler);
+                            substitution.insert(*placeholder, filler.value);
                         }
 
                         // make sure hidden variables are freshly instantiated
@@ -1435,7 +1455,12 @@ impl Type {
                 } else {
                     // one of the special-cased Apply types.
                     for x in args {
-                        x.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                        x.value.instantiate_aliases(
+                            region,
+                            aliases,
+                            var_store,
+                            new_lambda_set_variables,
+                        );
                     }
                 }
             }
@@ -1552,7 +1577,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments);
+                stack.extend(type_arguments.iter().map(|ta| &ta.value.typ));
             }
             Alias {
                 symbol: alias_symbol,
@@ -1572,7 +1597,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             }
             Apply(symbol, args, _) => {
                 output.push(*symbol);
-                stack.extend(args);
+                stack.extend(args.iter().map(|t| &t.value));
             }
             Erroneous(Problem::CyclicAlias(alias, _, _)) => {
                 output.push(*alias);
@@ -1679,7 +1704,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             ..
         }) => {
             for arg in type_arguments {
-                variables_help(arg, accum);
+                variables_help(&arg.value.typ, accum);
             }
 
             for lambda_set in lambda_set_variables {
@@ -1709,7 +1734,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
-                variables_help(x, accum);
+                variables_help(&x.value, accum);
             }
         }
     }
@@ -1823,7 +1848,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             ..
         }) => {
             for arg in type_arguments {
-                variables_help_detailed(arg, accum);
+                variables_help_detailed(&arg.value.typ, accum);
             }
 
             for lambda_set in lambda_set_variables {
@@ -1857,7 +1882,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
-                variables_help_detailed(x, accum);
+                variables_help_detailed(&x.value, accum);
             }
         }
     }
@@ -2928,7 +2953,7 @@ fn instantiate_lambda_sets_as_unspecialized(
                     debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
                     lambda_set.0 = new_uls();
                 }
-                stack.extend(type_arguments.iter_mut().rev());
+                stack.extend(type_arguments.iter_mut().rev().map(|ta| &mut ta.value.typ));
             }
             Type::Alias {
                 symbol: _,
@@ -2959,7 +2984,7 @@ fn instantiate_lambda_sets_as_unspecialized(
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Apply(_sym, args, _region) => {
-                stack.extend(args.iter_mut().rev());
+                stack.extend(args.iter_mut().rev().map(|t| &mut t.value));
             }
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}

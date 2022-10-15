@@ -39,6 +39,7 @@ interface List
         max,
         map4,
         mapTry,
+        walkTry,
         dropFirst,
         joinMap,
         any,
@@ -60,9 +61,13 @@ interface List
         sortAsc,
         sortDesc,
         reserve,
+        walkBackwardsUntil,
+        countIf,
     ]
     imports [
-        Bool.{ Bool },
+        Bool.{ Bool, Eq },
+        Result.{ Result },
+        Num.{ Nat, Num, Int },
     ]
 
 ## Types
@@ -85,9 +90,8 @@ interface List
 ##
 ## ## Performance Details
 ##
-## Under the hood, a list is a record containing a `len : Nat` field as well
-## as a pointer to a reference count and a flat array of bytes. Unique lists
-## store a capacity #Nat instead of a reference count.
+## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
+## field, and a pointer to a reference count and a flat array of bytes.
 ##
 ## ## Shared Lists
 ##
@@ -109,9 +113,8 @@ interface List
 ## begins with a refcount of 1, because so far only `ratings` is referencing it.
 ##
 ## The second line alters this refcount. `{ foo: ratings` references
-## the `ratings` list, which will result in its refcount getting incremented
-## from 0 to 1. Similarly, `bar: ratings }` also references the `ratings` list,
-## which will result in its refcount getting incremented from 1 to 2.
+## the `ratings` list, and so does `bar: ratings }`. This will result in its
+## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
 ##
@@ -129,11 +132,11 @@ interface List
 ##
 ## Since `ratings` represented a way to reference the list, and that way is no
 ## longer accessible, the list's refcount gets decremented when `ratings` goes
-## out of scope. It will decrease from 2 back down to 1.
+## out of scope. It will decrease from 3 back down to 2.
 ##
 ## Putting these together, when we call `getRatings 5`, what we get back is
 ## a record with two fields, `foo`, and `bar`, each of which refers to the same
-## list, and that list has a refcount of 1.
+## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
 ##
@@ -351,7 +354,7 @@ join = \lists ->
 
     List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
 
-contains : List a, a -> Bool
+contains : List a, a -> Bool | a has Eq
 contains = \list, needle ->
     List.any list (\x -> x == needle)
 
@@ -430,6 +433,13 @@ walkBackwardsHelp = \list, state, f, indexPlusOne ->
 walkUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
 walkUntil = \list, initial, step ->
     when List.iterate list initial step is
+        Continue new -> new
+        Break new -> new
+
+## Same as [List.walkUntil], but does it from the end of the list instead.
+walkBackwardsUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
+walkBackwardsUntil = \list, initial, func ->
+    when List.iterateBackwards list initial func is
         Continue new -> new
         Break new -> new
 
@@ -518,6 +528,18 @@ keepIfHelp = \list, predicate, kept, index, length ->
 dropIf : List a, (a -> Bool) -> List a
 dropIf = \list, predicate ->
     List.keepIf list (\e -> Bool.not (predicate e))
+
+## Run the given function on each element of a list, and return the
+## number of elements for which the function returned `Bool.true`.
+countIf : List a, (a -> Bool) -> Nat
+countIf = \list, predicate ->
+    walkState = \state, elem ->
+        if predicate elem then
+            state + 1
+        else
+            state
+
+    List.walk list 0 walkState
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -881,7 +903,7 @@ intersperse = \list, sep ->
 ## is considered to "start with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-startsWith : List elem, List elem -> Bool
+startsWith : List elem, List elem -> Bool | elem has Eq
 startsWith = \list, prefix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -893,7 +915,7 @@ startsWith = \list, prefix ->
 ## is considered to "end with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-endsWith : List elem, List elem -> Bool
+endsWith : List elem, List elem -> Bool | elem has Eq
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -922,7 +944,7 @@ split = \elements, userSplitIndex ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
-splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -937,7 +959,7 @@ splitFirst = \list, delimiter ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
-splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -957,9 +979,8 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with Result instead of [Continue, Break].
+## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
 ## Using `Result` saves a conditional in `mapTry`.
-## It might be useful to expose this in userspace?
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)

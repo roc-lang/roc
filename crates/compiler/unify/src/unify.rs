@@ -340,6 +340,7 @@ pub fn unify(env: &mut Env, var1: Variable, var2: Variable, mode: Mode) -> Unifi
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_introduced_ability_specialization(
     env: &mut Env,
     ability_member_signature: Variable,
@@ -350,6 +351,7 @@ pub fn unify_introduced_ability_specialization(
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_with_collector<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
@@ -360,6 +362,7 @@ pub fn unify_with_collector<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_help<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
@@ -416,6 +419,7 @@ fn unify_help<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_pool<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -496,6 +500,7 @@ fn debug_print_unified_types<M: MetaCollector>(
     })
 }
 
+#[must_use]
 fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context) -> Outcome<M> {
     #[cfg(debug_assertions)]
     debug_print_unified_types::<M>(env, &ctx, None);
@@ -555,6 +560,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_ranged_number<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -714,6 +720,7 @@ fn wrap_range_var(
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_two_aliases<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -812,6 +819,7 @@ fn unify_two_aliases<M: MetaCollector>(
 
 // Unifies a structural alias
 #[inline(always)]
+#[must_use]
 fn unify_alias<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -870,6 +878,7 @@ fn opaque_obligation(opaque: Symbol, opaque_var: Variable) -> Obligated {
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_opaque<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -934,6 +943,7 @@ fn unify_opaque<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_structure<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1032,6 +1042,7 @@ fn unify_structure<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_lambda_set<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1358,6 +1369,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
     uls == sort_unspecialized_lambda_sets(subs, uls.to_vec())
 }
 
+#[must_use = "must use outcomes!"]
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1602,6 +1614,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     ))
 }
 
+#[must_use]
 fn unify_lambda_set_help<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1695,6 +1708,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
     whole_outcome
 }
 
+#[must_use]
 fn unify_record<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1801,6 +1815,7 @@ enum OtherFields {
 
 type SharedFields = Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>;
 
+#[must_use]
 fn unify_shared_fields<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2109,6 +2124,7 @@ fn should_extend_ext_with_uninhabited_type(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_tag_unions<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2409,6 +2425,7 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
     }
 }
 
+#[must_use]
 fn unify_shared_tags_new<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2539,6 +2556,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn unify_shared_tags_merge_new<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2558,6 +2576,7 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flat_type<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2657,13 +2676,13 @@ fn unify_flat_type<M: MetaCollector>(
 
             outcome
         }
-        (FunctionOrTagUnion(tag_name, tag_symbol, ext), Func(args, closure, ret)) => {
+        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
                 ctx,
-                tag_name,
-                *tag_symbol,
+                *tag_names,
+                *tag_symbols,
                 *ext,
                 *args,
                 *ret,
@@ -2671,13 +2690,13 @@ fn unify_flat_type<M: MetaCollector>(
                 true,
             )
         }
-        (Func(args, closure, ret), FunctionOrTagUnion(tag_name, tag_symbol, ext)) => {
+        (Func(args, closure, ret), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
                 ctx,
-                tag_name,
-                *tag_symbol,
+                *tag_names,
+                *tag_symbols,
                 *ext,
                 *args,
                 *ret,
@@ -2685,50 +2704,61 @@ fn unify_flat_type<M: MetaCollector>(
                 false,
             )
         }
-        (FunctionOrTagUnion(tag_name_1, _, ext1), FunctionOrTagUnion(tag_name_2, _, ext2)) => {
-            let tag_name_1_ref = &env.subs[*tag_name_1];
-            let tag_name_2_ref = &env.subs[*tag_name_2];
-
-            if tag_name_1_ref == tag_name_2_ref {
-                let outcome = unify_pool(env, pool, *ext1, *ext2, ctx.mode);
-                if outcome.mismatches.is_empty() {
-                    let content = *env.subs.get_content_without_compacting(ctx.second);
-                    merge(env, ctx, content)
-                } else {
-                    outcome
-                }
-            } else {
-                let tags1 = UnionTags::from_tag_name_index(*tag_name_1);
-                let tags2 = UnionTags::from_tag_name_index(*tag_name_2);
-
-                unify_tag_unions(env, pool, ctx, tags1, *ext1, tags2, *ext2, Rec::None)
-            }
-        }
-        (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
-            let tags2 = UnionTags::from_tag_name_index(*tag_name);
+        (
+            FunctionOrTagUnion(tag_names_1, tag_symbols_1, ext1),
+            FunctionOrTagUnion(tag_names_2, tag_symbols_2, ext2),
+        ) => unify_two_function_or_tag_unions(
+            env,
+            pool,
+            ctx,
+            *tag_names_1,
+            *tag_symbols_1,
+            *ext1,
+            *tag_names_2,
+            *tag_symbols_2,
+            *ext2,
+        ),
+        (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
         }
-        (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
-            let tags1 = UnionTags::from_tag_name_index(*tag_name);
+        (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
             unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
-        (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+        (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let tags2 = UnionTags::from_tag_name_index(*tag_name);
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
             let rec = Rec::Left(*recursion_var);
 
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
         }
 
-        (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+        (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let tags1 = UnionTags::from_tag_name_index(*tag_name);
+            let empty_tag_var_slices = SubsSlice::extend_new(
+                &mut env.subs.variable_slices,
+                std::iter::repeat(Default::default()).take(tag_names.len()),
+            );
+            let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
             let rec = Rec::Right(*recursion_var);
 
             unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
@@ -2746,6 +2776,7 @@ fn unify_flat_type<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn unify_zip_slices<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2767,6 +2798,7 @@ fn unify_zip_slices<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_rigid<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2810,6 +2842,7 @@ fn unify_rigid<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_rigid_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2820,7 +2853,7 @@ fn unify_rigid_able<M: MetaCollector>(
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(env, ctx, RigidVar(*name))
+            merge(env, ctx, RigidAbleVar(*name, ability))
         }
         FlexAbleVar(_, other_ability) => {
             if ability == *other_ability {
@@ -2859,6 +2892,7 @@ fn unify_rigid_able<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flex<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2895,6 +2929,7 @@ fn unify_flex<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flex_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2937,7 +2972,6 @@ fn unify_flex_able<M: MetaCollector>(
         }
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
-        RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
@@ -2952,7 +2986,10 @@ fn unify_flex_able<M: MetaCollector>(
             )
         }
 
-        Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
+        RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _, AliasKind::Structural)
+        | RangedNumber(..) => {
             // Structural type wins.
             merge_flex_able_with_concrete(
                 env,
@@ -2968,6 +3005,7 @@ fn unify_flex_able<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn merge_flex_able_with_concrete<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -3001,6 +3039,7 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_recursion<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -3035,9 +3074,21 @@ fn unify_recursion<M: MetaCollector>(
             mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other)
         }
 
-        FlexAbleVar(..) | RigidAbleVar(..) => {
+        RigidAbleVar(..) => {
             mismatch!("RecursionVar {:?} with able var {:?}", ctx.first, &other)
         }
+
+        FlexAbleVar(_, ability) => merge_flex_able_with_concrete(
+            env,
+            ctx,
+            ctx.second,
+            *ability,
+            RecursionVar {
+                structure,
+                opt_name: *opt_name,
+            },
+            Obligated::Adhoc(ctx.first),
+        ),
 
         FlexVar(_) => merge(
             env,
@@ -3075,6 +3126,7 @@ fn unify_recursion<M: MetaCollector>(
     }
 }
 
+#[must_use]
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
     let mut outcome: Outcome<M> = Outcome::default();
 
@@ -3129,21 +3181,25 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
-    tag_name_index: &SubsIndex<TagName>,
-    tag_symbol: Symbol,
+    tag_names_slice: SubsSlice<TagName>,
+    tag_fn_lambdas: SubsSlice<Symbol>,
     tag_ext: Variable,
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
 ) -> Outcome<M> {
-    let tag_name = env.subs[*tag_name_index].clone();
+    let tag_names = env.subs.get_subs_slice(tag_names_slice).to_vec();
 
-    let union_tags = UnionTags::insert_slices_into_subs(env.subs, [(tag_name, function_arguments)]);
+    let union_tags = UnionTags::insert_slices_into_subs(
+        env.subs,
+        tag_names.into_iter().map(|tag| (tag, function_arguments)),
+    );
     let content = Content::Structure(FlatType::TagUnion(union_tags, tag_ext));
 
     let new_tag_union_var = fresh(env, pool, ctx, content);
@@ -3155,7 +3211,14 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     };
 
     {
-        let union_tags = UnionLambdas::tag_without_arguments(env.subs, tag_symbol);
+        let lambda_names = env.subs.get_subs_slice(tag_fn_lambdas).to_vec();
+        let new_lambda_names = SubsSlice::extend_new(&mut env.subs.closure_names, lambda_names);
+        let empty_captures_slices = SubsSlice::extend_new(
+            &mut env.subs.variable_slices,
+            std::iter::repeat(Default::default()).take(new_lambda_names.len()),
+        );
+        let union_tags = UnionLambdas::from_slices(new_lambda_names, empty_captures_slices);
+
         let ambient_function_var = if left { ctx.first } else { ctx.second };
         let lambda_set_content = LambdaSet(self::LambdaSet {
             solved: union_tags,
@@ -3194,5 +3257,55 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
         outcome.union(merge(env, ctx, desc.content));
     }
 
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+fn unify_two_function_or_tag_unions<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    tag_names_1: SubsSlice<TagName>,
+    tag_symbols_1: SubsSlice<Symbol>,
+    ext1: Variable,
+    tag_names_2: SubsSlice<TagName>,
+    tag_symbols_2: SubsSlice<Symbol>,
+    ext2: Variable,
+) -> Outcome<M> {
+    let merged_tags = {
+        let mut all_tags: Vec<_> = (env.subs.get_subs_slice(tag_names_1).iter())
+            .chain(env.subs.get_subs_slice(tag_names_2))
+            .cloned()
+            .collect();
+        all_tags.sort();
+        all_tags.dedup();
+        SubsSlice::extend_new(&mut env.subs.tag_names, all_tags)
+    };
+    let merged_lambdas = {
+        let mut all_lambdas: Vec<_> = (env.subs.get_subs_slice(tag_symbols_1).iter())
+            .chain(env.subs.get_subs_slice(tag_symbols_2))
+            .cloned()
+            .collect();
+        all_lambdas.sort();
+        all_lambdas.dedup();
+        SubsSlice::extend_new(&mut env.subs.closure_names, all_lambdas)
+    };
+
+    let mut outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
+    if !outcome.mismatches.is_empty() {
+        return outcome;
+    }
+
+    let merge_outcome = merge(
+        env,
+        ctx,
+        Content::Structure(FlatType::FunctionOrTagUnion(
+            merged_tags,
+            merged_lambdas,
+            ext1,
+        )),
+    );
+
+    outcome.union(merge_outcome);
     outcome
 }

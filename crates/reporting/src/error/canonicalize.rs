@@ -3,7 +3,8 @@ use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
-    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
+    BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+    ShadowKind,
 };
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use roc_types::types::AliasKind;
@@ -1008,7 +1009,9 @@ pub fn can_problem<'b>(
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.intersperse(
-        [alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)],
+        DERIVABLE_ABILITIES
+            .iter()
+            .map(|(ab, _)| alloc.symbol_unqualified(*ab)),
         alloc.reflow(", "),
     )
 }
@@ -2025,12 +2028,22 @@ pub fn to_circular_def_doc<'b>(
     // TODO tip?
     match entries {
         [] => unreachable!(),
-        [first] => alloc
-            .reflow("The ")
-            .append(alloc.symbol_unqualified(first.symbol))
-            .append(alloc.reflow(
-                " value is defined directly in terms of itself, causing an infinite loop.",
-            )),
+        [CycleEntry { symbol, symbol_region, expr_region }] =>
+             alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(*symbol),
+                    alloc.reflow(" is defined directly in terms of itself:"),
+                ]),
+                alloc.region(lines.convert_region(Region::span_across(symbol_region, expr_region))),
+                alloc.concat([
+                    alloc.reflow("Since Roc evaluates values strict, running this program would create an infinite number of "),
+                    alloc.symbol_unqualified(*symbol),
+                    alloc.reflow(" values!"),
+                ]),
+                alloc.hint("").append(alloc.concat([
+                    alloc.reflow("Did you mean to define "),alloc.symbol_unqualified(*symbol),alloc.reflow(" as a function?"),
+                ])),
+            ]),
         [first, others @ ..] => {
             alloc.stack([
                 alloc

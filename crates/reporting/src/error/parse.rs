@@ -178,7 +178,7 @@ fn to_expr_report<'a>(
     match parse_problem {
         EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, context, if_, *pos),
         EExpr::When(when, pos) => to_when_report(alloc, lines, filename, context, when, *pos),
-        EExpr::Lambda(lambda, pos) => {
+        EExpr::Closure(lambda, pos) => {
             to_lambda_report(alloc, lines, filename, context, lambda, *pos)
         }
         EExpr::List(list, pos) => to_list_report(alloc, lines, filename, context, list, *pos),
@@ -508,7 +508,7 @@ fn to_expr_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([alloc.reflow("TODO provide more context.")]),
             ]);
@@ -557,13 +557,13 @@ fn to_lambda_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     _context: Context,
-    parse_problem: &roc_parse::parser::ELambda<'a>,
+    parse_problem: &roc_parse::parser::EClosure<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ELambda;
+    use roc_parse::parser::EClosure;
 
     match *parse_problem {
-        ELambda::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
+        EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
                 let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -610,7 +610,7 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Comma(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
+        EClosure::Comma(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
                 let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -657,7 +657,7 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Arg(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
+        EClosure::Arg(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Other(Some(',')) => {
                 let surroundings = Region::new(start, pos);
                 let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -702,17 +702,17 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Start(_pos) => unreachable!("another branch would have been taken"),
+        EClosure::Start(_pos) => unreachable!("another branch would have been taken"),
 
-        ELambda::Body(expr, pos) => {
+        EClosure::Body(expr, pos) => {
             to_expr_report(alloc, lines, filename, Context::InDef(start), expr, pos)
         }
-        ELambda::Pattern(ref pattern, pos) => {
+        EClosure::Pattern(ref pattern, pos) => {
             to_pattern_report(alloc, lines, filename, pattern, pos)
         }
-        ELambda::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+        EClosure::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        ELambda::IndentArrow(pos) => to_unfinished_lambda_report(
+        EClosure::IndentArrow(pos) => to_unfinished_lambda_report(
             alloc,
             lines,
             filename,
@@ -725,7 +725,7 @@ fn to_lambda_report<'a>(
             ]),
         ),
 
-        ELambda::IndentBody(pos) => to_unfinished_lambda_report(
+        EClosure::IndentBody(pos) => to_unfinished_lambda_report(
             alloc,
             lines,
             filename,
@@ -738,7 +738,7 @@ fn to_lambda_report<'a>(
             ]),
         ),
 
-        ELambda::IndentArg(pos) => to_unfinished_lambda_report(
+        EClosure::IndentArg(pos) => to_unfinished_lambda_report(
             alloc,
             lines,
             filename,
@@ -3089,6 +3089,33 @@ fn to_header_report<'a>(
                     alloc.reflow(" or "),
                     alloc.parser_suggestion("Main"),
                     alloc.reflow(". Module names must start with an uppercase letter."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD MODULE NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EHeader::InconsistentModuleName(region) => {
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"This module name does not correspond with the file path it is defined in:",
+                ),
+                alloc.region(lines.convert_region(*region)),
+                alloc.concat([
+                    alloc.reflow("Module names must correspond with the file paths they are defined in. For example, I expect to see "),
+                    alloc.parser_suggestion("BigNum"),
+                    alloc.reflow(" defined in "),
+                    alloc.parser_suggestion("BigNum.roc"),
+                    alloc.reflow(", or "),
+                    alloc.parser_suggestion("Math.Sin"),
+                    alloc.reflow(" defined in "),
+                    alloc.parser_suggestion("Math/Sin.roc"),
+                    alloc.reflow("."),
                 ]),
             ]);
 

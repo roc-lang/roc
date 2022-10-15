@@ -30,6 +30,7 @@ pub enum LowLevel {
     StrAppendScalar,
     StrGetScalarUnsafe,
     StrGetCapacity,
+    StrWithCapacity,
     ListLen,
     ListWithCapacity,
     ListReserve,
@@ -216,7 +217,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::StrFromInt => unimplemented!(),
                 LowLevel::StrFromFloat => unimplemented!(),
                 LowLevel::NumIsFinite => unimplemented!(),
-
             }
         }
     };
@@ -249,6 +249,7 @@ map_symbol_to_lowlevel! {
     StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE,
     StrToNum <= STR_TO_NUM,
     StrGetCapacity <= STR_CAPACITY,
+    StrWithCapacity <= STR_WITH_CAPACITY,
     ListLen <= LIST_LEN,
     ListGetCapacity <= LIST_CAPACITY,
     ListWithCapacity <= LIST_WITH_CAPACITY,
@@ -308,8 +309,8 @@ map_symbol_to_lowlevel! {
     NumShiftRightBy <= NUM_SHIFT_RIGHT,
     NumShiftRightZfBy <= NUM_SHIFT_RIGHT_ZERO_FILL,
     NumToStr <= NUM_TO_STR,
-    Eq <= BOOL_EQ,
-    NotEq <= BOOL_NEQ,
+    Eq <= BOOL_STRUCTURAL_EQ,
+    NotEq <= BOOL_STRUCTURAL_NOT_EQ,
     And <= BOOL_AND,
     Or <= BOOL_OR,
     Not <= BOOL_NOT,

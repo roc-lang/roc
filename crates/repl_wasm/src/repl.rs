@@ -203,7 +203,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         &interns,
         DebugPrint::NOTHING,
     );
-    let content = subs.get_content_without_compacting(main_fn_var);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
@@ -264,7 +263,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         &mut app,
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
-        content,
+        main_fn_var,
         &subs,
         &interns,
         layout_interner.into_global().fork(),

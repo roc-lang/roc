@@ -2098,7 +2098,7 @@ mod test_reporting {
         Ok
         U8
         Box
-        f
+        Eq
     "###
     );
 
@@ -2158,12 +2158,19 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `f` value is defined directly in terms of itself, causing an
-        infinite loop.
-        "#
+    `f` is defined directly in terms of itself:
+
+    4│      f = f
+            ^^^^^
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `f` values!
+
+    Hint: Did you mean to define `f` as a function?
+    "###
     );
 
     // invalid mutual recursion
@@ -3616,7 +3623,7 @@ mod test_reporting {
         Set
         List
         Dict
-        Result
+        Hash
 
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -6259,7 +6266,7 @@ All branches in an `if` must have the same type!
         inference_var_conflict_in_rigid_links,
         indoc!(
             r#"
-            f : a -> (_ -> b)
+            f : a -> (_ -> b) | a has Eq
             f = \x -> \y -> if x == y then x else y
             f
             "#
@@ -6270,19 +6277,19 @@ All branches in an `if` must have the same type!
 
     Something is off with the body of the `f` definition:
 
-    4│      f : a -> (_ -> b)
+    4│      f : a -> (_ -> b) | a has Eq
     5│      f = \x -> \y -> if x == y then x else y
                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The body is an anonymous function of type:
 
-        a -> a
+        a -> a | a has Eq, a has Eq
 
     But the type annotation on `f` says it should be:
 
-        a -> b
+        a -> b | a has Eq
 
-    Tip: Your type annotation uses `a` and `b` as separate type variables.
+    Tip: Your type annotation uses `b` and `a` as separate type variables.
     Your code seems to be saying they are the same though. Maybe they
     should be the same in your type annotation? Maybe your code uses them
     in a weird way?
@@ -7559,31 +7566,30 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "Blocked on https://github.com/roc-lang/roc/issues/3385"]
         unimported_modules_reported,
         indoc!(
             r#"
-            main : Task.Task {} []
-            main = "whatever man you don't even know my type"
-            main
+            alt : Task.Task {} []
+            alt = "whatever man you don't even know my type"
+            alt
             "#
         ),
-        @r#"
-        ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-        The `Task` module is not imported:
+    The `Task` module is not imported:
 
-        1│  main : Task.Task {} []
-                   ^^^^^^^^^^^^^^^
+    4│      alt : Task.Task {} []
+                  ^^^^^^^^^^^^^^^
 
-        Is there an import missing? Perhaps there is a typo. Did you mean one
-        of these?
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
 
-            Test
-            List
-            Num
-            Box
-        "#
+        Hash
+        List
+        Num
+        Box
+    "###
     );
 
     test_report!(
@@ -7974,8 +7980,8 @@ All branches in an `if` must have the same type!
         ability_first_demand_not_indented_enough,
         indoc!(
             r#"
-            Eq has
-            eq : a, a -> U64 | a has Eq
+            MEq has
+            eq : a, a -> U64 | a has MEq
 
             1
             "#
@@ -7986,8 +7992,8 @@ All branches in an `if` must have the same type!
     I was partway through parsing an ability definition, but I got stuck
     here:
 
-    4│      Eq has
-    5│      eq : a, a -> U64 | a has Eq
+    4│      MEq has
+    5│      eq : a, a -> U64 | a has MEq
             ^
 
     I suspect this line is not indented enough (by 1 spaces)
@@ -7998,9 +8004,9 @@ All branches in an `if` must have the same type!
         ability_demands_not_indented_with_first,
         indoc!(
             r#"
-            Eq has
-                eq : a, a -> U64 | a has Eq
-                    neq : a, a -> U64 | a has Eq
+            MEq has
+                eq : a, a -> U64 | a has MEq
+                    neq : a, a -> U64 | a has MEq
 
             1
             "#
@@ -8011,8 +8017,8 @@ All branches in an `if` must have the same type!
         I was partway through parsing an ability definition, but I got stuck
         here:
 
-        5│          eq : a, a -> U64 | a has Eq
-        6│              neq : a, a -> U64 | a has Eq
+        5│          eq : a, a -> U64 | a has MEq
+        6│              neq : a, a -> U64 | a has MEq
                         ^
 
         I suspect this line is indented too much (by 4 spaces)"#
@@ -8022,8 +8028,8 @@ All branches in an `if` must have the same type!
         ability_demand_value_has_args,
         indoc!(
             r#"
-                Eq has
-                    eq b c : a, a -> U64 | a has Eq
+                MEq has
+                    eq b c : a, a -> U64 | a has MEq
 
                 1
                 "#
@@ -8034,7 +8040,7 @@ All branches in an `if` must have the same type!
         I was partway through parsing an ability definition, but I got stuck
         here:
 
-        5│          eq b c : a, a -> U64 | a has Eq
+        5│          eq b c : a, a -> U64 | a has MEq
                        ^
 
         I was expecting to see a : annotating the signature of this value
@@ -8045,7 +8051,7 @@ All branches in an `if` must have the same type!
         ability_non_signature_expression,
         indoc!(
             r#"
-            Eq has
+            MEq has
                 123
 
             1
@@ -8057,7 +8063,7 @@ All branches in an `if` must have the same type!
     I was partway through parsing an ability definition, but I got stuck
     here:
 
-    4│      Eq has
+    4│      MEq has
     5│          123
                 ^
 
@@ -8183,31 +8189,31 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [] to "./platform"
 
-            Hash a b c has
-              hash : a -> U64 | a has Hash
+            MHash a b c has
+              hash : a -> U64 | a has MHash
             "#
         ),
-        @r#"
-        ── ABILITY HAS TYPE VARIABLES ──────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ABILITY HAS TYPE VARIABLES ──────────────────────────── /code/proj/Main.roc ─
 
-        The definition of the `Hash` ability includes type variables:
+    The definition of the `MHash` ability includes type variables:
 
-        3│  Hash a b c has
-                 ^^^^^
+    3│  MHash a b c has
+              ^^^^^
 
-        Abilities cannot depend on type variables, but their member values
-        can!
+    Abilities cannot depend on type variables, but their member values
+    can!
 
-        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        `Hash` is not used anywhere in your code.
+    `MHash` is not used anywhere in your code.
 
-        3│  Hash a b c has
-            ^^^^
+    3│  MHash a b c has
+        ^^^^^
 
-        If you didn't intend on using `Hash` then remove it so future readers of
-        your code don't wonder why it is there.
-        "#
+    If you didn't intend on using `MHash` then remove it so future readers
+    of your code don't wonder why it is there.
+    "###
     );
 
     test_report!(
@@ -8216,17 +8222,17 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+            MHash has hash : a, b -> Num.U64 | a has MHash, b has Bool.Bool
             "#
         ),
-        @r#"
-        ── HAS CLAUSE IS NOT AN ABILITY ────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── HAS CLAUSE IS NOT AN ABILITY ────────────────────────── /code/proj/Main.roc ─
 
-        The type referenced in this "has" clause is not an ability:
+    The type referenced in this "has" clause is not an ability:
 
-        3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
-                                                                ^^^^^^^^^
-        "#
+    3│  MHash has hash : a, b -> Num.U64 | a has MHash, b has Bool.Bool
+                                                              ^^^^^^^^^
+    "###
     );
 
     test_report!(
@@ -8328,23 +8334,23 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [] to "./platform"
 
-            Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
+            MEq has eq : a, b -> Bool.Bool | a has MEq, b has MEq
             "#
         ),
         @r#"
         ── ABILITY MEMBER BINDS MULTIPLE VARIABLES ─────────────── /code/proj/Main.roc ─
 
         The definition of the ability member `eq` includes multiple variables
-        bound to the `Eq`` ability:`
+        bound to the `MEq`` ability:`
 
-        3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
-                                            ^^^^^^^^^^^^^^^^^^
+        3│  MEq has eq : a, b -> Bool.Bool | a has MEq, b has MEq
+                                             ^^^^^^^^^^^^^^^^^^^^
 
         Ability members can only bind one type variable to their parent
         ability. Otherwise, I wouldn't know what type implements an ability by
         looking at specializations!
 
-        Hint: Did you mean to only bind `a` to `Eq`?
+        Hint: Did you mean to only bind `a` to `MEq`?
         "#
     );
 
@@ -8354,36 +8360,36 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [f] to "./platform"
 
-            Hash has hash : (a | a has Hash) -> Num.U64
+            MHash has hash : (a | a has MHash) -> Num.U64
 
-            f : a -> Num.U64 | a has Hash
+            f : a -> Num.U64 | a has MHash
             "#
         ),
-        @r#"
-        ── ILLEGAL HAS CLAUSE ──────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ILLEGAL HAS CLAUSE ──────────────────────────────────── /code/proj/Main.roc ─
 
-        A `has` clause is not allowed here:
+    A `has` clause is not allowed here:
 
-        3│  Hash has hash : (a | a has Hash) -> Num.U64
-                                 ^^^^^^^^^^
+    3│  MHash has hash : (a | a has MHash) -> Num.U64
+                              ^^^^^^^^^^^
 
-        `has` clauses can only be specified on the top-level type annotations.
+    `has` clauses can only be specified on the top-level type annotations.
 
-        ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────── /code/proj/Main.roc ─
+    ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────── /code/proj/Main.roc ─
 
-        The definition of the ability member `hash` does not include a `has`
-        clause binding a type variable to the ability `Hash`:
+    The definition of the ability member `hash` does not include a `has`
+    clause binding a type variable to the ability `MHash`:
 
-        3│  Hash has hash : (a | a has Hash) -> Num.U64
-                     ^^^^
+    3│  MHash has hash : (a | a has MHash) -> Num.U64
+                  ^^^^
 
-        Ability members must include a `has` clause binding a type variable to
-        an ability, like
+    Ability members must include a `has` clause binding a type variable to
+    an ability, like
 
-            a has Hash
+        a has MHash
 
-        Otherwise, the function does not need to be part of the ability!
-        "#
+    Otherwise, the function does not need to be part of the ability!
+    "###
     );
 
     test_report!(
@@ -8392,9 +8398,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
-            Id := U32 has [Hash {hash}]
+            Id := U32 has [MHash {hash}]
 
             hash = \@Id n -> n
             "#
@@ -8423,11 +8429,11 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [eq, le] to "./platform"
 
-            Eq has
-                eq : a, a -> Bool | a has Eq
-                le : a, a -> Bool | a has Eq
+            MEq has
+                eq : a, a -> Bool | a has MEq
+                le : a, a -> Bool | a has MEq
 
-            Id := U64 has [Eq {eq}]
+            Id := U64 has [MEq {eq}]
 
             eq = \@Id m, @Id n -> m == n
             "#
@@ -8435,10 +8441,10 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    7│  Id := U64 has [Eq {eq}]
-                       ^^^^^^^
+    7│  Id := U64 has [MEq {eq}]
+                       ^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -8452,8 +8458,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
             hash = \_ -> 0u64
             "#
@@ -8477,11 +8483,11 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, One, Two] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            One := {} has [Hash {hash}]
-            Two := {} has [Hash {hash}]
+            One := {} has [MHash {hash}]
+            Two := {} has [MHash {hash}]
 
             hash = \_ -> 0u64
             "#
@@ -8493,8 +8499,8 @@ All branches in an `if` must have the same type!
     This ability member specialization is already claimed to specialize
     another opaque type:
 
-    7│  Two := {} has [Hash {hash}]
-                             ^^^^
+    7│  Two := {} has [MHash {hash}]
+                              ^^^^
 
     Previously, we found it to specialize `hash` for `One`.
 
@@ -8514,7 +8520,7 @@ All branches in an `if` must have the same type!
 
     But the type annotation on `hash` says it must match:
 
-        a -> U64 | a has Hash
+        a -> U64 | a has MHash
 
     Note: The specialized type is too general, and does not provide a
     concrete type where a type variable is bound to an ability.
@@ -8531,11 +8537,11 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, One, Two] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            One := {} has [Hash {hash}]
-            Two := {} has [Hash {hash}]
+            One := {} has [MHash {hash}]
+            Two := {} has [MHash {hash}]
 
             hash = \@One _ -> 0u64
             "#
@@ -8546,8 +8552,8 @@ All branches in an `if` must have the same type!
     This ability member specialization is already claimed to specialize
     another opaque type:
 
-    7│  Two := {} has [Hash {hash}]
-                             ^^^^
+    7│  Two := {} has [MHash {hash}]
+                              ^^^^
 
     Previously, we found it to specialize `hash` for `One`.
 
@@ -8562,10 +8568,10 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [eq] to "./platform"
 
-            Eq has
-                eq : a, a -> Bool | a has Eq
+            MEq has
+                eq : a, a -> Bool | a has MEq
 
-            You := {} has [Eq {eq}]
+            You := {} has [MEq {eq}]
             AndI := {}
 
             eq = \@You {}, @AndI {} -> False
@@ -8587,10 +8593,7 @@ All branches in an `if` must have the same type!
 
         You, You -> Bool
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: Did you mean to use `Bool.false` rather than `False`?
     "###
     );
 
@@ -8600,10 +8603,10 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash : Id -> U32
             hash = \@Id n -> n
@@ -8649,10 +8652,10 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [noGoodVeryBadTerrible] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -8673,7 +8676,7 @@ All branches in an `if` must have the same type!
     15│          notYet: hash (A 1),
                                ^^^
 
-    Roc can't generate an implementation of the `#UserApp.Hash` ability for
+    I can't generate an implementation of the `MHash` ability for
 
         [A (Num a)]b
 
@@ -8686,7 +8689,7 @@ All branches in an `if` must have the same type!
     14│          nope: hash (@User {}),
                              ^^^^^^^^
 
-    The type `User` does not fully implement the ability `Hash`.
+    The type `User` does not fully implement the ability `MHash`.
     "###
     );
 
@@ -8697,8 +8700,8 @@ All branches in an `if` must have the same type!
             app "test" provides [main] to "./platform"
 
             main =
-                Hash has
-                    hash : a -> U64 | a has Hash
+                MHash has
+                    hash : a -> U64 | a has MHash
 
                 123
             "#
@@ -8708,8 +8711,8 @@ All branches in an `if` must have the same type!
 
         This ability definition is not on the top-level of a module:
 
-        4│>      Hash has
-        5│>          hash : a -> U64 | a has Hash
+        4│>      MHash has
+        5│>          hash : a -> U64 | a has MHash
 
         Abilities can only be defined on the top-level of a Roc module.
         "#
@@ -8721,39 +8724,39 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, hashable] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            Id := U64 has [Hash {hash}]
+            Id := U64 has [MHash {hash}]
             hash = \@Id n -> n
 
-            hashable : a | a has Hash
+            hashable : a | a has MHash
             hashable = @Id 15
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with the body of the `hashable` definition:
+    Something is off with the body of the `hashable` definition:
 
-         9│  hashable : a | a has Hash
-        10│  hashable = @Id 15
-                        ^^^^^^
+     9│  hashable : a | a has MHash
+    10│  hashable = @Id 15
+                    ^^^^^^
 
-        This Id opaque wrapping has the type:
+    This Id opaque wrapping has the type:
 
-            Id
+        Id
 
-        But the type annotation on `hashable` says it should be:
+    But the type annotation on `hashable` says it should be:
 
-            a | a has Hash
+        a | a has MHash
 
-        Tip: The type annotation uses the type variable `a` to say that this
-        definition can produce any value implementing the `Hash` ability. But in
-        the body I see that it will only produce a `Id` value of a single
-        specific type. Maybe change the type annotation to be more specific?
-        Maybe change the code to be more general?
-        "#
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any value implementing the `MHash` ability. But
+    in the body I see that it will only produce a `Id` value of a single
+    specific type. Maybe change the type annotation to be more specific?
+    Maybe change the code to be more general?
+    "###
     );
 
     test_report!(
@@ -8762,50 +8765,50 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [result] to "./platform"
 
-            Hash has
-                hash : a -> U64 | a has Hash
+            MHash has
+                hash : a -> U64 | a has MHash
 
-            mulHashes : Hash, Hash -> U64
-            mulHashes = \x, y -> hash x * hash y
+            mulMHashes : MHash, MHash -> U64
+            mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [Hash {hash: hashId}]
+            Id := U64 has [MHash {hash: hashId}]
             hashId = \@Id n -> n
 
-            Three := {} has [Hash {hash: hashThree}]
+            Three := {} has [MHash {hash: hashThree}]
             hashThree = \@Three _ -> 3
 
-            result = mulHashes (@Id 100) (@Three {})
+            result = mulMHashes (@Id 100) (@Three {})
             "#
         ),
-        @r#"
-        ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
-        You are attempting to use the ability `Hash` as a type directly:
+    You are attempting to use the ability `MHash` as a type directly:
 
-        6│  mulHashes : Hash, Hash -> U64
-                        ^^^^
+    6│  mulMHashes : MHash, MHash -> U64
+                     ^^^^^
 
-        Abilities can only be used in type annotations to constrain type
-        variables.
+    Abilities can only be used in type annotations to constrain type
+    variables.
 
-        Hint: Perhaps you meant to include a `has` annotation, like
+    Hint: Perhaps you meant to include a `has` annotation, like
 
-            a has Hash
+        a has MHash
 
-        ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
-        You are attempting to use the ability `Hash` as a type directly:
+    You are attempting to use the ability `MHash` as a type directly:
 
-        6│  mulHashes : Hash, Hash -> U64
-                              ^^^^
+    6│  mulMHashes : MHash, MHash -> U64
+                            ^^^^^
 
-        Abilities can only be used in type annotations to constrain type
-        variables.
+    Abilities can only be used in type annotations to constrain type
+    variables.
 
-        Hint: Perhaps you meant to include a `has` annotation, like
+    Hint: Perhaps you meant to include a `has` annotation, like
 
-            b has Hash
-        "#
+        b has MHash
+    "###
     );
 
     test_report!(
@@ -9095,21 +9098,20 @@ All branches in an `if` must have the same type!
             main = Encode.toEncoder \x -> x
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        3│  main = Encode.toEncoder \x -> x
-                                    ^^^^^^^
+    3│  main = Encode.toEncoder \x -> x
+                                ^^^^^^^
 
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
+    I can't generate an implementation of the `Encoding` ability for
 
-            a -> a
+        a -> a
 
-        Note: `Encoding` cannot be generated for functions.
-        "#
+    Note: `Encoding` cannot be generated for functions.
+    "###
     );
 
     test_report!(
@@ -9132,8 +9134,7 @@ All branches in an `if` must have the same type!
     4│  main = Encode.toEncoder { x: @A {} }
                                 ^^^^^^^^^^^^
 
-    Roc can't generate an implementation of the `Encode.Encoding` ability
-    for
+    I can't generate an implementation of the `Encoding` ability for
 
         { x : A }
 
@@ -9187,9 +9188,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [A] to "./platform"
 
-            Eq has eq : a, a -> U64 | a has Eq
+            MEq has eq : a, a -> U64 | a has MEq
 
-            A := U8 has [Eq {eq}]
+            A := U8 has [MEq {eq}]
             "#
         ),
         @r###"
@@ -9197,8 +9198,8 @@ All branches in an `if` must have the same type!
 
     An implementation of `eq` could not be found in this scope:
 
-    5│  A := U8 has [Eq {eq}]
-                         ^^
+    5│  A := U8 has [MEq {eq}]
+                          ^^
 
     Tip: consider adding a value of name `eq` in this scope, or using
     another variable that implements this ability member, like
@@ -9206,10 +9207,10 @@ All branches in an `if` must have the same type!
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [Eq {eq}]
-                     ^^^^^^^
+    5│  A := U8 has [MEq {eq}]
+                     ^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9221,36 +9222,36 @@ All branches in an `if` must have the same type!
         opaque_ability_impl_not_found,
         indoc!(
             r#"
-            app "test" provides [A, myEq] to "./platform"
+            app "test" provides [A, myMEq] to "./platform"
 
-            Eq has eq : a, a -> Bool | a has Eq
+            MEq has eq : a, a -> Bool | a has MEq
 
-            A := U8 has [ Eq {eq: aEq} ]
+            A := U8 has [ MEq {eq: aMEq} ]
 
-            myEq = \m, n -> m == n
+            myMEq = \m, n -> m == n
             "#
         ),
         @r###"
     ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-    Nothing is named `aEq` in this scope.
+    Nothing is named `aMEq` in this scope.
 
-    5│  A := U8 has [ Eq {eq: aEq} ]
-                              ^^^
+    5│  A := U8 has [ MEq {eq: aMEq} ]
+                               ^^^^
 
     Did you mean one of these?
 
+        MEq
         Eq
-        myEq
+        myMEq
         eq
-        U8
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ Eq {eq: aEq} ]
-                      ^^^^^^^^^^^^
+    5│  A := U8 has [ MEq {eq: aMEq} ]
+                      ^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9262,13 +9263,13 @@ All branches in an `if` must have the same type!
         opaque_ability_impl_optional,
         indoc!(
             r#"
-            app "test" provides [A, myEq] to "./platform"
+            app "test" provides [A, myMEq] to "./platform"
 
-            Eq has eq : a, a -> Bool | a has Eq
+            MEq has eq : a, a -> Bool | a has MEq
 
-            A := U8 has [ Eq {eq ? aEq} ]
+            A := U8 has [ MEq {eq ? aMEq} ]
 
-            myEq = \m, n -> m == n
+            myMEq = \m, n -> m == n
             "#
         ),
         @r###"
@@ -9276,8 +9277,8 @@ All branches in an `if` must have the same type!
 
     Ability implementations cannot be optional:
 
-    5│  A := U8 has [ Eq {eq ? aEq} ]
-                          ^^^^^^^^
+    5│  A := U8 has [ MEq {eq ? aMEq} ]
+                           ^^^^^^^^^
 
     Custom implementations must be supplied fully.
 
@@ -9285,10 +9286,10 @@ All branches in an `if` must have the same type!
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ Eq {eq ? aEq} ]
-                      ^^^^^^^^^^^^^
+    5│  A := U8 has [ MEq {eq ? aMEq} ]
+                      ^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9342,9 +9343,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [A] to "./platform"
 
-            Eq has eq : a, a -> Bool | a has Eq
+            MEq has eq : a, a -> Bool | a has MEq
 
-            A := U8 has [ Eq {eq : Bool.eq} ]
+            A := U8 has [ MEq {eq : Bool.eq} ]
             "#
         ),
         @r###"
@@ -9352,18 +9353,18 @@ All branches in an `if` must have the same type!
 
     This ability implementation is qualified:
 
-    5│  A := U8 has [ Eq {eq : Bool.eq} ]
-                               ^^^^^^^
+    5│  A := U8 has [ MEq {eq : Bool.eq} ]
+                                ^^^^^^^
 
     Custom implementations must be defined in the local scope, and
     unqualified.
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ Eq {eq : Bool.eq} ]
-                      ^^^^^^^^^^^^^^^^^
+    5│  A := U8 has [ MEq {eq : Bool.eq} ]
+                      ^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9377,9 +9378,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [A] to "./platform"
 
-            Eq has eq : a, a -> Bool | a has Eq
+            MEq has eq : a, a -> Bool | a has MEq
 
-            A := U8 has [ Eq {eq : \m, n -> m == n} ]
+            A := U8 has [ MEq {eq : \m, n -> m == n} ]
             "#
         ),
         @r###"
@@ -9387,8 +9388,8 @@ All branches in an `if` must have the same type!
 
     This ability implementation is not an identifier:
 
-    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
-                               ^^^^^^^^^^^^^^^
+    5│  A := U8 has [ MEq {eq : \m, n -> m == n} ]
+                                ^^^^^^^^^^^^^^^
 
     Custom ability implementations defined in this position can only be
     unqualified identifiers, not arbitrary expressions.
@@ -9397,10 +9398,10 @@ All branches in an `if` must have the same type!
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    This type does not fully implement the `Eq` ability:
+    This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+    5│  A := U8 has [ MEq {eq : \m, n -> m == n} ]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9414,9 +9415,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [A] to "./platform"
 
-            Eq has eq : a, a -> Bool | a has Eq
+            MEq has eq : a, a -> Bool | a has MEq
 
-            A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+            A := U8 has [ MEq {eq: eqA, eq: eqA} ]
 
             eqA = \@A m, @A n -> m == n
             "#
@@ -9426,13 +9427,13 @@ All branches in an `if` must have the same type!
 
     This ability member implementation is duplicate:
 
-    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
-                                   ^^^^^^^
+    5│  A := U8 has [ MEq {eq: eqA, eq: eqA} ]
+                                    ^^^^^^^
 
     The first implementation was defined here:
 
-    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
-                          ^^^^^^^
+    5│  A := U8 has [ MEq {eq: eqA, eq: eqA} ]
+                           ^^^^^^^
 
     Only one custom implementation can be defined for an ability member.
     "###
@@ -9472,18 +9473,18 @@ All branches in an `if` must have the same type!
             A := {} has [Ab]
             "#
         ),
-        @r#"
-        ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
 
-        This ability cannot be derived:
+    This ability cannot be derived:
 
-        5│  A := {} has [Ab]
-                         ^^
+    5│  A := {} has [Ab]
+                     ^^
 
-        Only builtin abilities can be derived.
+    Only builtin abilities can be derived.
 
-        Note: The builtin abilities are `Encode.Encoding`
-        "#
+    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`
+    "###
     );
 
     test_report!(
@@ -9495,18 +9496,18 @@ All branches in an `if` must have the same type!
             A a := a -> a has [Encode.Encoding]
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    I can't derive an implementation of the `Encoding` ability for `A`:
 
-        3│  A a := a -> a has [Encode.Encoding]
-                               ^^^^^^^^^^^^^^^
+    3│  A a := a -> a has [Encode.Encoding]
+                           ^^^^^^^^^^^^^^^
 
-        Note: `Encoding` cannot be generated for functions.
+    Note: `Encoding` cannot be generated for functions.
 
-        Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
-        "#
+    Tip: You can define a custom implementation of `Encoding` for `A`.
+    "###
     );
 
     test_report!(
@@ -9520,19 +9521,19 @@ All branches in an `if` must have the same type!
             B := {}
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+    I can't derive an implementation of the `Encoding` ability for `A`:
 
-        3│  A := B has [Encode.Encoding]
-                        ^^^^^^^^^^^^^^^
+    3│  A := B has [Encode.Encoding]
+                    ^^^^^^^^^^^^^^^
 
-        Tip: `B` does not implement `Encoding`. Consider adding a custom
-        implementation or `has Encode.Encoding` to the definition of `B`.
+    Tip: `B` does not implement `Encoding`. Consider adding a custom
+    implementation or `has Encode.Encoding` to the definition of `B`.
 
-        Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
-        "#
+    Tip: You can define a custom implementation of `Encoding` for `A`.
+    "###
     );
 
     test_report!(
@@ -9732,9 +9733,9 @@ All branches in an `if` must have the same type!
 
             F a b := b | a has Foo
 
-            Hash := {}
+            MHash := {}
 
-            x : F Hash {}
+            x : F MHash {}
             "#
         ),
         @r###"
@@ -10090,7 +10091,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, Id] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
             Id := {}
 
@@ -10116,9 +10117,9 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [hash, Id, Id2] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            MHash has hash : a -> U64 | a has MHash
 
-            Id := {} has [Hash {hash}]
+            Id := {} has [MHash {hash}]
             Id2 := {}
 
             hash = \@Id2 _ -> 0
@@ -10202,14 +10203,14 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+    I can't derive an implementation of the `Decoding` ability for `A`:
 
     3│  A a := a -> a has [Decode.Decoding]
                            ^^^^^^^^^^^^^^^
 
     Note: `Decoding` cannot be generated for functions.
 
-    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    Tip: You can define a custom implementation of `Decoding` for `A`.
     "###
     );
 
@@ -10227,7 +10228,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-    Roc can't derive an implementation of the `Decode.Decoding` for `A`:
+    I can't derive an implementation of the `Decoding` ability for `A`:
 
     3│  A := B has [Decode.Decoding]
                     ^^^^^^^^^^^^^^^
@@ -10235,7 +10236,7 @@ All branches in an `if` must have the same type!
     Tip: `B` does not implement `Decoding`. Consider adding a custom
     implementation or `has Decode.Decoding` to the definition of `B`.
 
-    Tip: You can define a custom implementation of `Decode.Decoding` for `A`.
+    Tip: You can define a custom implementation of `Decoding` for `A`.
     "###
     );
 
@@ -10286,8 +10287,7 @@ All branches in an `if` must have the same type!
     5│      myDecoder = decoder
                         ^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         a -> a
 
@@ -10318,8 +10318,7 @@ All branches in an `if` must have the same type!
     7│      myDecoder = decoder
                         ^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         { x : A }
 
@@ -10500,8 +10499,7 @@ All branches in an `if` must have the same type!
     6│          Ok rcd -> rcd.first rcd.second
                           ^^^^^^^^^
 
-    Roc can't generate an implementation of the `Decode.Decoding` ability
-    for
+    I can't generate an implementation of the `Decoding` ability for
 
         a -> b
 
@@ -10523,24 +10521,23 @@ All branches in an `if` must have the same type!
              "#
         ),
         @r###"
-     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-     This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-     5│      myDecoder = decoder
-                         ^^^^^^^
+    5│      myDecoder = decoder
+                        ^^^^^^^
 
-     Roc can't generate an implementation of the `Decode.Decoding` ability
-     for
+    I can't generate an implementation of the `Decoding` ability for
 
-         { x : Str, y ? Str }
+        { x : Str, y ? Str }
 
-     Note: I can't derive decoding for a record with an optional field,
-     which in this case is `.y`. Optional record fields are polymorphic over
-     records that may or may not contain them at compile time, but are not
-     a concept that extends to runtime!
-     Maybe you wanted to use a `Result`?
-     "###
+    Note: I can't derive decoding for a record with an optional field,
+    which in this case is `.y`. Optional record fields are polymorphic over
+    records that may or may not contain them at compile time, but are not
+    a concept that extends to runtime!
+    Maybe you wanted to use a `Result`?
+    "###
     );
 
     test_report!(
@@ -10766,6 +10763,698 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
+    "###
+    );
+
+    test_report!(
+        invalid_toplevel_cycle,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            main =
+                if Bool.true then \{} -> {} else main
+            "#
+        ),
+    @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+    `main` is defined directly in terms of itself:
+
+    3│>  main =
+    4│>      if Bool.true then \{} -> {} else main
+
+    Since Roc evaluates values strict, running this program would create
+    an infinite number of `main` values!
+
+    Hint: Did you mean to define `main` as a function?
+    "###
+    );
+
+    test_report!(
+        bool_vs_true_tag,
+        indoc!(
+            r#"
+            if True then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if True then "" else ""
+               ^^^^
+
+    This `True` tag has the type:
+
+        [True]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.true` rather than `True`?
+    "###
+    );
+
+    test_report!(
+        bool_vs_false_tag,
+        indoc!(
+            r#"
+            if False then "" else ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` condition needs to be a Bool:
+
+    4│      if False then "" else ""
+               ^^^^^
+
+    This `False` tag has the type:
+
+        [False]a
+
+    But I need every `if` condition to evaluate to a Bool—either `Bool.true`
+    or `Bool.false`.
+
+    Tip: Did you mean to use `Bool.false` rather than `False`?
+    "###
+    );
+
+    test_report!(
+        derive_hash_for_function,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A a := a -> a has [Hash]
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Hash` ability for `A`:
+
+    3│  A a := a -> a has [Hash]
+                           ^^^^
+
+    Note: `Hash` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Hash` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_hash_for_non_hash_opaque,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Hash]
+
+             B := {}
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Hash` ability for `A`:
+
+    3│  A := B has [Hash]
+                    ^^^^
+
+    Tip: `B` does not implement `Hash`. Consider adding a custom
+    implementation or `has Hash.Hash` to the definition of `B`.
+
+    Tip: You can define a custom implementation of `Hash` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_hash_for_other_has_hash,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Hash]
+
+             B := {} has [Hash]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_recursive_deriving,
+        indoc!(
+            r#"
+             app "test" provides [MyNat] to "./platform"
+
+             MyNat := [S MyNat, Z] has [Hash]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_record,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo {a: "", b: 1}
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_hash_for_tag,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             t : [A {}, B U8 U64, C Str]
+
+             main = foo t
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        cannot_derive_hash_for_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo (\x -> x)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (\x -> x)
+                    ^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        a -> a
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_derive_hash_for_structure_containing_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo (A (\x -> x) B)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (A (\x -> x) B)
+                    ^^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        [A (a -> a) [B]a]b
+
+    In particular, an implementation for
+
+        a -> a
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        shift_by_negative,
+        indoc!(
+            r#"
+            {
+                a: Num.shiftLeftBy 1 -1,
+                b: Num.shiftRightBy 1 -1,
+                c: Num.shiftRightZfBy 1 -1,
+            }
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftRightZfBy` has an unexpected type:
+
+    7│          c: Num.shiftRightZfBy 1 -1,
+                                        ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftRightZfBy` needs its 2nd argument to be:
+
+        U8
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftRightBy` has an unexpected type:
+
+    6│          b: Num.shiftRightBy 1 -1,
+                                      ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftRightBy` needs its 2nd argument to be:
+
+        U8
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `shiftLeftBy` has an unexpected type:
+
+    5│          a: Num.shiftLeftBy 1 -1,
+                                     ^^
+
+    The argument is a number of type:
+
+        I8, I16, F32, I32, F64, I64, I128, or Dec
+
+    But `shiftLeftBy` needs its 2nd argument to be:
+
+        U8
+    "###
+    );
+
+    test_report!(
+        big_char_does_not_fit_in_u8,
+        indoc!(
+            r#"
+            digits : List U8
+            digits = List.range '0' '9'
+
+            List.contains digits '☃'
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `contains` has an unexpected type:
+
+    7│      List.contains digits '☃'
+                                 ^^^^^
+
+    The argument is a Unicode scalar value of type:
+
+        U16, I32, U32, I64, Nat, U64, I128, or U128
+
+    But `contains` needs its 2nd argument to be:
+
+        Int Unsigned8
+    "###
+    );
+
+    test_report!(
+        derive_eq_for_function,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A a := a -> a has [Eq]
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `A`:
+
+    3│  A a := a -> a has [Eq]
+                           ^^
+
+    Note: `Eq` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Eq` for `A`.
+    "###
+    );
+
+    test_report!(
+        big_char_does_not_fit_in_u8_pattern,
+        indoc!(
+            r#"
+            x : U8
+            
+            when x is
+                '☃' -> ""
+                _ -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    6│>      when x is
+    7│           '☃' -> ""
+    8│           _ -> ""
+
+    This `x` value is a:
+
+        U8
+
+    But the branch patterns have type:
+
+        U16, I32, U32, I64, Nat, U64, I128, or U128
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        derive_eq_for_f32,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := F32 has [Eq]
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `A`:
+
+    3│  A := F32 has [Eq]
+                      ^^
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
+
+    Tip: You can define a custom implementation of `Eq` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_eq_for_f64,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := F64 has [Eq]
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `A`:
+
+    3│  A := F64 has [Eq]
+                      ^^
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
+
+    Tip: You can define a custom implementation of `Eq` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_eq_for_non_eq_opaque,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Eq]
+
+             B := {}
+             "#
+        ),
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `A`:
+
+    3│  A := B has [Eq]
+                    ^^
+
+    Tip: `B` does not implement `Eq`. Consider adding a custom implementation
+    or `has Bool.Eq` to the definition of `B`.
+
+    Tip: You can define a custom implementation of `Eq` for `A`.
+    "###
+    );
+
+    test_report!(
+        derive_eq_for_other_has_eq,
+        indoc!(
+            r#"
+             app "test" provides [A] to "./platform"
+
+             A := B has [Eq]
+
+             B := {} has [Eq]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_eq_for_recursive_deriving,
+        indoc!(
+            r#"
+             app "test" provides [MyNat] to "./platform"
+
+             MyNat := [S MyNat, Z] has [Eq]
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_eq_for_record,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo {a: "", b: 1}
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        derive_eq_for_tag,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             t : [A {}, B U8 U64, C Str]
+
+             main = foo t
+             "#
+        ),
+        @"" // no error
+    );
+
+    test_report!(
+        cannot_derive_eq_for_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo (\x -> x)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (\x -> x)
+                    ^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        a -> a
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_derive_eq_for_structure_containing_function,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo (A (\x -> x) B)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo (A (\x -> x) B)
+                    ^^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        [A (a -> a) [B]a]b
+
+    In particular, an implementation for
+
+        a -> a
+
+    cannot be generated.
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_eq_functions,
+        indoc!(
+            r#"
+            (\x -> x) == (\x -> x)
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│      (\x -> x) == (\x -> x)
+             ^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        a -> a
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_not_eq_functions,
+        indoc!(
+            r#"
+            (\x -> x) == (\x -> x)
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│      (\x -> x) == (\x -> x)
+             ^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        a -> a
+
+    Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        cannot_import_structural_eq_not_eq,
+        indoc!(
+            r#"
+            {
+                a: Bool.structuralEq,
+                b: Bool.structuralNotEq,
+            }
+            "#
+        ),
+        @r###"
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The Bool module does not expose `structuralEq`:
+
+    5│          a: Bool.structuralEq,
+                   ^^^^^^^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Bool.true
+        Bool.isNotEq
+        Bool.false
+        Bool.isEq
+
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The Bool module does not expose `structuralNotEq`:
+
+    6│          b: Bool.structuralNotEq,
+                   ^^^^^^^^^^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Bool.isNotEq
+        Bool.true
+        Bool.boolIsEq
+        Bool.false
+    "###
+    );
+
+    test_report!(
+        expand_ability_from_type_alias_mismatch,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            F a : a | a has Hash
+
+            f : F ({} -> {})
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  f : F ({} -> {})
+               ^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        {} -> {}
+
+    Note: `Hash` cannot be generated for functions.
     "###
     );
 }

@@ -55,6 +55,8 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
 
+                Symbol::NUM_IS_ZERO => Some(to_num_is_zero(Symbol::NUM_IS_ZERO, var_store)),
+
                 _ => None,
             }
         }
@@ -68,6 +70,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
             // Below, we explicitly handle some exceptions to the pattern where a lowlevel maps
             // directly to a symbol. If you are unsure if your lowlevel is an exception, assume
             // that it isn't and just see if that works.
+            #[allow(unreachable_patterns)] // multiple symbols can map to one low-level
             match lowlevel {
                 $(
                 LowLevel::$lowlevel => Symbol::$symbol,
@@ -121,6 +124,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
     StrGetCapacity; STR_CAPACITY; 1,
+    StrWithCapacity; STR_WITH_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
@@ -140,6 +144,8 @@ map_symbol_to_lowlevel_and_arity! {
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
+
+    ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 
     NumAdd; NUM_ADD; 2,
     NumAddWrap; NUM_ADD_WRAP; 2,
@@ -188,8 +194,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumShiftRightZfBy; NUM_SHIFT_RIGHT_ZERO_FILL; 2,
     NumToStr; NUM_TO_STR; 1,
 
-    Eq; BOOL_EQ; 2,
-    NotEq; BOOL_NEQ; 2,
+    Eq; BOOL_STRUCTURAL_EQ; 2,
+    NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
     And; BOOL_AND; 2,
     Or; BOOL_OR; 2,
     Not; BOOL_NOT; 1,
@@ -533,5 +539,35 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         var_store,
         body,
         ret_var,
+    )
+}
+
+fn to_num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+
+    let body = Expr::RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (num_var, Var(Symbol::ARG_1)),
+            (
+                num_var,
+                Num(
+                    var_store.fresh(),
+                    "0".to_string().into_boxed_str(),
+                    crate::expr::IntValue::I128(0i128.to_ne_bytes()),
+                    roc_types::num::NumBound::None,
+                ),
+            ),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        bool_var,
     )
 }

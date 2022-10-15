@@ -3,8 +3,8 @@ use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
-use roc_region::all::Region;
-use roc_types::num::NumericRange;
+use roc_region::all::{Loc, Region};
+use roc_types::num::{NumericRange, SingleQuoteBound};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
@@ -99,6 +99,42 @@ pub fn int_literal(
     constraints.exists([num_var], and_constraint)
 }
 
+pub fn single_quote_literal(
+    constraints: &mut Constraints,
+    num_var: Variable,
+    precision_var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+    bound: SingleQuoteBound,
+) -> Constraint {
+    let reason = Reason::IntLiteral;
+
+    // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
+    let mut constrs = ArrayVec::<_, 3>::new();
+    let num_type = add_numeric_bound_constr(
+        constraints,
+        &mut constrs,
+        num_var,
+        precision_var,
+        bound,
+        region,
+        Category::Character,
+    );
+
+    constrs.extend([
+        constraints.equal_types(
+            num_type.clone(),
+            ForReason(reason, num_int(Type::Variable(precision_var)), region),
+            Category::Character,
+            region,
+        ),
+        constraints.equal_types(num_type, expected, Category::Character, region),
+    ]);
+
+    let and_constraint = constraints.and_constraint(constrs);
+    constraints.exists([num_var], and_constraint)
+}
+
 #[inline(always)]
 pub fn float_literal(
     constraints: &mut Constraints,
@@ -162,7 +198,11 @@ pub fn num_literal(
 
 #[inline(always)]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
-    Type::Apply(symbol, args, Region::zero())
+    Type::Apply(
+        symbol,
+        args.into_iter().map(Loc::at_zero).collect(),
+        Region::zero(),
+    )
 }
 
 #[inline(always)]
@@ -328,6 +368,16 @@ impl TypedNumericBound for NumBound {
                 sign: SignDemand::Signed,
                 width,
             } => NumericBound::Range(NumericRange::NumAtLeastSigned(width)),
+        }
+    }
+}
+
+impl TypedNumericBound for SingleQuoteBound {
+    fn numeric_bound(&self) -> NumericBound {
+        match self {
+            &SingleQuoteBound::AtLeast { width } => {
+                NumericBound::Range(NumericRange::IntAtLeastEitherSign(width))
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, UnionTags,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
     UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
@@ -879,15 +879,8 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn tag_id_layout(&self) -> Layout<'a> {
-        // TODO is it beneficial to return a more specific layout?
-        // e.g. Layout::bool() and Layout::VOID
-        match self.discriminant() {
-            Discriminant::U0 => Layout::u8(),
-            Discriminant::U1 => Layout::u8(),
-            Discriminant::U8 => Layout::u8(),
-            Discriminant::U16 => Layout::u16(),
-        }
+    pub fn tag_id_layout(&self) -> Layout<'static> {
+        self.discriminant().layout()
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
@@ -1137,6 +1130,17 @@ impl Discriminant {
 
     pub const fn alignment_bytes(&self) -> u32 {
         self.stack_size()
+    }
+
+    pub const fn layout(&self) -> Layout<'static> {
+        // TODO is it beneficial to return a more specific layout?
+        // e.g. Layout::bool() and Layout::VOID
+        match self {
+            Discriminant::U0 => Layout::u8(),
+            Discriminant::U1 => Layout::u8(),
+            Discriminant::U8 => Layout::u8(),
+            Discriminant::U16 => Layout::u16(),
+        }
     }
 }
 
@@ -2210,7 +2214,16 @@ impl<'a> Layout<'a> {
                 // completely, but for now we represent it with the empty tag union
                 cacheable(Ok(Layout::VOID))
             }
-            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
+                roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
+                    todo_abilities!("Able var is unbound!");
+                });
+
+                // If we encounter an unbound type var (e.g. `*` or `a`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty tag union
+                cacheable(Ok(Layout::VOID))
+            }
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -2713,7 +2726,7 @@ impl<'a> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U8))
     }
 
-    pub fn u16() -> Layout<'a> {
+    pub const fn u16() -> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U16))
     }
 
@@ -3152,16 +3165,18 @@ fn layout_from_flat_type<'a>(
 
             layout_from_non_recursive_union(env, &tags).map(Ok)
         }
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
             debug_assert!(
                 ext_var_is_empty_tag_union(subs, ext_var),
                 "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
             );
 
-            let union_tags = UnionTags::from_tag_name_index(tag_name);
-            let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
+            let tag_names = subs.get_subs_slice(tag_names);
+            let unsorted_tags = UnsortedUnionLabels {
+                tags: tag_names.iter().map(|t| (t, &[] as &[Variable])).collect(),
+            };
 
-            layout_from_non_recursive_union(env, &tags).map(Ok)
+            layout_from_non_recursive_union(env, &unsorted_tags).map(Ok)
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);

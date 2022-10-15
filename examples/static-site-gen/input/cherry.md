@@ -9,7 +9,7 @@ criminis quidem petita *ferreus*.
 
 Achaidas traxit ad, iacuere iamdudum ab fecit: vestra evicere lacrimis labore:
 gavisus forti turba. A vixque incesto et tanti paries, columnae est signis
-munera? Grata Parcarum [Aetolius modo](http://moleorbataque.io/): meis quanto
+munera? Grata Parcarum [Aetolius modo](http://example.org): meis quanto
 amico oravit venit mihi vertit summam.
 
 ## Terras ab neque moveri mater oculos me
@@ -27,7 +27,7 @@ caespes** urbes.
 
 ## Fraude stimulis
 
-[Templis quotiens](http://occideratparem.io/vulnus) tectus tuo ignara orbi
+[Templis quotiens](http://example.org) tectus tuo ignara orbi
 Zanclen hunc comprenditur *momordi*. Armis nymphae. Vocant rupe omnia
 cognosceret fine; per sonant, deque magnum, suo.
 
@@ -39,7 +39,7 @@ cognosceret fine; per sonant, deque magnum, suo.
 - Auras Ceycis petit mundo ter sensi sacrum
 
 Nosti et spem; tum illa parentes doctas nuntia **laeva virusque**. Magistris
-[diversi](http://deum-longis.org/) lacerare at data margine abesset inscribit
+[diversi](http://example.org) lacerare at data margine abesset inscribit
 calidumque **copia vidit** attulerat altera incensaque crista versus. Fecit et
 posco series dextra. Lacrimis inducta imis non apertos saeva **ripas sumpserat**
 pariter quoque aequales.

@@ -5567,6 +5567,85 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn format_chars() {
+        expr_formats_same(indoc!(
+            r#"
+            ' '
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            '\n'
+            "#
+        ));
+    }
+
+    #[test]
+    fn format_nested_pipeline() {
+        expr_formats_same(indoc!(
+            r#"
+            (a |> b) |> c
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            a |> b |> c
+            "#
+        ));
+    }
+
+    #[test]
+    fn ability_member_doc_comments() {
+        module_formats_same(indoc!(
+            r#"
+            interface Foo exposes [] imports []
+
+            A has
+                ## This is member ab
+                ab : a -> a | a has A
+
+                ## This is member de
+                de : a -> a | a has A
+
+            f = g
+            "#
+        ));
+    }
+
+    #[test]
+    fn leading_comments_preserved() {
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            interface Foo
+                exposes []
+                imports []
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            app "test" packages {} imports [] provides [] to "./platform"
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            platform "hello-world"
+                requires {} { main : Str }
+                exposes []
+                packages {}
+                imports []
+                provides [mainForHost]
+            "#
+        ));
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

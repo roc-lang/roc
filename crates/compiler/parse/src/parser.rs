@@ -89,7 +89,7 @@ impl_space_problem! {
     EIf<'a>,
     EImports,
     EInParens<'a>,
-    ELambda<'a>,
+    EClosure<'a>,
     EList<'a>,
     EPackageEntry<'a>,
     EPackages<'a>,
@@ -126,6 +126,8 @@ pub enum EHeader<'a> {
     AppName(EString<'a>, Position),
     PlatformName(EPackageName<'a>, Position),
     IndentStart(Position),
+
+    InconsistentModuleName(Region),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,7 +354,7 @@ pub enum EExpr<'a> {
 
     Expect(EExpect<'a>, Position),
 
-    Lambda(ELambda<'a>, Position),
+    Closure(EClosure<'a>, Position),
     Underscore(Position),
 
     InParens(EInParens<'a>, Position),
@@ -426,7 +428,7 @@ pub enum EInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ELambda<'a> {
+pub enum EClosure<'a> {
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -1442,6 +1444,31 @@ where
     debug_assert_ne!(word, b'\n');
 
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().first() {
+        Some(x) if *x == word => {
+            let state = state.advance(1);
+            Ok((MadeProgress, (), state))
+        }
+        _ => Err((NoProgress, to_error(state.pos()), state)),
+    }
+}
+
+pub fn parse_word1<'a, ToError, E>(
+    state: State<'a>,
+    min_indent: u32,
+    word: u8,
+    to_error: ToError,
+) -> ParseResult<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word, b'\n');
+
+    if min_indent > state.column() {
+        return Err((NoProgress, to_error(state.pos()), state));
+    }
+
+    match state.bytes().first() {
         Some(x) if *x == word => {
             let state = state.advance(1);
             Ok((MadeProgress, (), state))

@@ -9,7 +9,8 @@ use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
+    Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -283,8 +284,8 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't generate an implementation of the "),
-                    alloc.symbol_qualified(ability),
+                    alloc.reflow("I can't generate an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
                     alloc.reflow(" ability for"),
                 ]),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
@@ -304,10 +305,10 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't derive an implementation of the "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" for "),
-                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow("I can't derive an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability for "),
+                    alloc.symbol_foreign_qualified(opaque),
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(derive_region)),
@@ -316,7 +317,7 @@ fn report_unfulfilled_ability<'a>(
             .chain(reason)
             .chain(std::iter::once(alloc.tip().append(alloc.concat([
                 alloc.reflow("You can define a custom implementation of "),
-                alloc.symbol_qualified(ability),
+                alloc.symbol_unqualified(ability),
                 alloc.reflow(" for "),
                 alloc.symbol_unqualified(opaque),
                 alloc.reflow("."),
@@ -430,6 +431,18 @@ fn underivable_hint<'b>(
                     alloc.reflow("Maybe you wanted to use a "),
                     alloc.symbol_unqualified(Symbol::RESULT_RESULT),
                     alloc.reflow("?"),
+                ])))
+            }
+        },
+        NotDerivableContext::Eq(reason) => match reason {
+            NotDerivableEq::FloatingPoint => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("I can't derive "),
+                    alloc.symbol_qualified(Symbol::BOOL_IS_EQ),
+                    alloc.reflow(" for floating-point types. That's because Roc's floating-point numbers cannot be compared for total equality - in Roc, `NaN` is never comparable to `NaN`."),
+                    alloc.reflow(" If a type doesn't support total equality, it cannot support the "),
+                    alloc.symbol_unqualified(Symbol::BOOL_EQ),
+                    alloc.reflow(" ability!"),
                 ])))
             }
         },
@@ -2036,6 +2049,7 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType, Option<Symbol>),
     OptionalRequiredMismatch(Lowercase),
     OpaqueComparedToNonOpaque,
+    BoolVsBoolTag(TagName),
 }
 
 fn problems_to_tip<'b>(
@@ -2576,6 +2590,23 @@ fn to_diff<'b>(
                 status: args_diff.status,
                 left_able: args_diff.left_able,
                 right_able: args_diff.right_able,
+            }
+        }
+
+        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _)) | (TagUnion(tags, _), Alias(Symbol::BOOL_BOOL, _, _, _))
+            if tags.len() == 1
+                && tags.keys().all(|t| t.0.as_str() == "True" || t.0.as_str() == "False") =>
+        {
+            let written_tag = tags.keys().next().unwrap().clone();
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Different(vec![Problem::BoolVsBoolTag(written_tag)]),
+                left_able,
+                right_able,
             }
         }
 
@@ -3706,6 +3737,18 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow(" I can create an instance of this opaque type by doing "),
             alloc.type_str("@Age 23"),
             alloc.reflow("."),
+        ])),
+
+        (BoolVsBoolTag(tag), _) => alloc.tip().append(alloc.concat([
+            alloc.reflow("Did you mean to use "),
+            alloc.symbol_qualified(if tag.0.as_str() == "True" {
+                Symbol::BOOL_TRUE
+            } else {
+                Symbol::BOOL_FALSE
+            }),
+            alloc.reflow(" rather than "),
+            alloc.tag_name(tag),
+            alloc.reflow("?"),
         ])),
     }
 }

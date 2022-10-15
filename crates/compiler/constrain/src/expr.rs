@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use crate::builtins::{
-    empty_list_type, float_literal, int_literal, list_type, num_literal, num_u32, str_type,
+    empty_list_type, float_literal, int_literal, list_type, num_literal, single_quote_literal,
+    str_type,
 };
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
@@ -292,7 +293,14 @@ pub fn constrain_expr(
             constraints.exists(vars, and_constraint)
         }
         Str(_) => constraints.equal_types(str_type(), expected, Category::Str, region),
-        SingleQuote(_) => constraints.equal_types(num_u32(), expected, Category::Character, region),
+        SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
+            constraints,
+            *num_var,
+            *precision_var,
+            expected,
+            region,
+            *bound,
+        ),
         List {
             elem_var,
             loc_elems,
@@ -1502,8 +1510,12 @@ fn constrain_function_def(
                 loc_symbol.value,
                 Loc {
                     region: loc_function_def.region,
-                    // todo can we use Type::Variable(expr_var) here?
-                    value: signature.clone(),
+                    // NOTE: we MUST use `expr_var` here so that the correct type variable is
+                    // associated with the function. We prefer this to the annotation type, because the
+                    // annotation type may be instantiated into a fresh type variable that is
+                    // disassociated fromt the rest of the program.
+                    // Below, we'll check that the function actually matches the annotation.
+                    value: Type::Variable(expr_var),
                 },
             );
 

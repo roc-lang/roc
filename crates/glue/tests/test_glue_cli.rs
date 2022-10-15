@@ -215,6 +215,7 @@ mod glue_cli_run {
                 .map(|arg| arg.to_string())
                 .chain([app_file.to_str().unwrap().to_string()]),
             &[],
+            &[],
         );
 
         let ignorable = "🔨 Rebuilding platform...\n";

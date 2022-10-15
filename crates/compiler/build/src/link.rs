@@ -61,7 +61,7 @@ pub fn link(
             operating_system: OperatingSystem::Windows,
             ..
         } => link_windows(target, output_path, input_paths, link_type),
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+        _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
@@ -89,7 +89,7 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`. Check the source code in find_zig_str_path() to show all the paths I tried.")
+    internal_error!("cannot find `str.zig`. Check the source code in find_zig_str_path() to show all the paths I tried.")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
@@ -99,7 +99,7 @@ fn find_wasi_libc_path() -> PathBuf {
         return wasi_libc_pathbuf;
     }
 
-    panic!("cannot find `wasi-libc.a`")
+    internal_error!("cannot find `wasi-libc.a`")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -258,15 +258,15 @@ pub fn build_zig_host_native(
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            panic!(
+            internal_error!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             );
         })
     } else {
         match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => panic!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => panic!(
+            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
+            Err(utf8_err) => internal_error!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             ),
@@ -277,11 +277,11 @@ pub fn build_zig_host_native(
         Ok(Value::Object(map)) => match map.get("std_dir") {
             Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
             _ => {
-                panic!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
+                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
             }
         },
         _ => {
-            panic!(
+            internal_error!(
                 "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
                 zig_env_json
             );
@@ -374,7 +374,7 @@ pub fn build_zig_host_wasm32(
         "c",
         "-target",
         zig_target,
-        // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+        // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
         "-fPIC",
         "--strip",
     ];
@@ -628,13 +628,14 @@ pub fn rebuild_host(
                     shared_lib_path,
                 )
             }
-            _ => panic!("Unsupported architecture {:?}", target.architecture),
+            _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
         validate_output("host.zig", &zig_executable(), output)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
+
         let cargo_out_dir = cargo_dir.join("target").join(
             if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
                 "release"
@@ -961,7 +962,7 @@ fn link_linux(
             }
         }
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
-        _ => panic!(
+        _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
@@ -1215,7 +1216,7 @@ fn link_wasm32(
             "-O",
             "ReleaseSmall",
             // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
         ])
         .spawn()?;
 
@@ -1369,13 +1370,17 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
+            Ok(stderr) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
-                file_name, cmd_name, stderr
+                file_name,
+                cmd_name,
+                stderr
             ),
-            Err(utf8_err) => panic!(
+            Err(utf8_err) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was invalid utf8 ({:?})",
-                file_name, cmd_name, utf8_err
+                file_name,
+                cmd_name,
+                utf8_err
             ),
         }
     }

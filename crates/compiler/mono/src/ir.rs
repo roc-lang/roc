@@ -2604,22 +2604,25 @@ fn from_can_let<'a>(
         );
     }
 
-    if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-    } else {
-        let outer_symbol = env.unique_symbol();
-        stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+    match def.loc_expr.value {
+        roc_can::expr::Expr::Var(outer_symbol) if !procs.is_module_thunk(outer_symbol) => {
+            store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+        }
+        _ => {
+            let outer_symbol = env.unique_symbol();
+            stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
-        // convert the def body, store in outer_symbol
-        with_hole(
-            env,
-            def.loc_expr.value,
-            def.expr_var,
-            procs,
-            layout_cache,
-            outer_symbol,
-            env.arena.alloc(stmt),
-        )
+            // convert the def body, store in outer_symbol
+            with_hole(
+                env,
+                def.loc_expr.value,
+                def.expr_var,
+                procs,
+                layout_cache,
+                outer_symbol,
+                env.arena.alloc(stmt),
+            )
+        }
     }
 }
 
@@ -3902,7 +3905,7 @@ fn specialize_naked_symbol<'a>(
             std::vec::Vec::new(),
             layout_cache,
             assigned,
-            env.arena.alloc(Stmt::Ret(assigned)),
+            hole,
         );
 
         return result;
@@ -4027,12 +4030,18 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        SingleQuote(character) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
-            Layout::int_width(IntWidth::I32),
-            hole,
-        ),
+        SingleQuote(_, _, character, _) => {
+            let layout = layout_cache
+                .from_var(env.arena, variable, env.subs)
+                .unwrap();
+
+            Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
+                layout,
+                hole,
+            )
+        }
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,
@@ -5524,8 +5533,9 @@ fn late_resolve_ability_specialization<'a>(
                 .expect("specialization var not derivable!");
 
                 match derive_key {
-                    roc_derive_key::Derived::Immediate(imm) => {
-                        // The immediate is an ability member itself, so it must be resolved!
+                    roc_derive_key::Derived::Immediate(imm)
+                    | roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {
+                        // The immediate may be an ability member itself, so it must be resolved!
                         late_resolve_ability_specialization(env, imm, None, specialization_var)
                     }
                     roc_derive_key::Derived::Key(derive_key) => {
@@ -8882,10 +8892,12 @@ fn from_can_pattern_help<'a>(
             IntOrFloatValue::Float(*float),
         )),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(c) => Ok(Pattern::IntLiteral(
-            (*c as i128).to_ne_bytes(),
-            IntWidth::I32,
-        )),
+        SingleQuote(var, _, c, _) => match layout_cache.from_var(env.arena, *var, env.subs) {
+            Ok(Layout::Builtin(Builtin::Int(width))) => {
+                Ok(Pattern::IntLiteral((*c as i128).to_ne_bytes(), width))
+            }
+            o => internal_error!("an integer width was expected, but we found {:?}", o),
+        },
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
