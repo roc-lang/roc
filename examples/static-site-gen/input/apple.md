@@ -16,7 +16,7 @@ Livor nulla Pallantias virtutis fluctus testantia inponis et tenuerunt clipeo
 non sacra date *partes* quoque fugae; cum. Audax contingere moresque dis
 requirere senserit spectare generosos formatum modo edidit abluere his infixum
 inductae dis concipe nisi redeuntia. Lutulenta [sublimibus pudori
-iussis](http://latonam.com/) volucrem recumbis foresque, tecum mater sidus est
+iussis](https://www.roc-lang.org/) volucrem recumbis foresque, tecum mater sidus est
 imagine.
 
 Et dea diebus me corpora nunc. Iam parte medium obscuraque **Acheloia** ad iubes
@@ -62,6 +62,6 @@ Herculei undae calcata inmeriti quercus ignes parabant iam.
 
 Foret inpendere, haec ipse ossa, dolentes das Caystro miscuit iunctoque
 spoliantis illae, ex! Bello istis nunc Aegides? Animo caelestia melior,
-furoribus optat maior invecta quid harenis [est](http://in.com/) sollemnia modo
+furoribus optat maior invecta quid harenis [est](https://www.roc-lang.org/) sollemnia modo
 Phineu. Suarum pectora. Relinquam in labore Medusae sororem Herculis [simillima
-corpora](http://ergohoc.com/dixiexcusat) plus regi ignibus, totum domus!
+corpora](https://www.roc-lang.org/) plus regi ignibus, totum domus!
