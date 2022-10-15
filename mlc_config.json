@@ -5,6 +5,15 @@
         },
         {
             "pattern": "http://localhost"
+        },
+        {
+            "pattern": "https://crates.io"
+        },
+        {
+            "pattern": "https://docs.github.com"
+        },
+        {
+            "pattern": "https://opensource.org"
         }
     ]
 }
