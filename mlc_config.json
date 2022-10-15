@@ -4,37 +4,7 @@
             "pattern": "http://127.0.0.1"
         },
         {
-            "pattern": "https://www.codegrepper.com"
-        },
-        {
-            "pattern": "https://crates.io"
-        },
-        {
-            "pattern": "http://deum-longis.org"
-        },
-        {
-            "pattern": "http://ergohoc.com"
-        },
-        {
-            "pattern": "http://www.in-ulla.io"
-        },
-        {
-            "pattern": "http://inplevere-virum.net"
-        },
-        {
-            "pattern": "http://latonam.com"
-        },
-        {
             "pattern": "http://localhost"
-        },
-        {
-            "pattern": "http://moleorbataque.io"
-        },
-        {
-            "pattern": "http://occideratparem.io"
-        },
-        {
-            "pattern": "http://pedesque-huius.org"
         }
     ]
 }
