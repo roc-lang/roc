@@ -241,8 +241,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
         + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
 
-    let reloc_section_header_start =
-        section_header_start - std::mem::size_of::<ImageSectionHeader>();
+    relocate_dummy_dll_entries(executable, &md);
 
     let mut code_bytes_added = 0;
     let mut data_bytes_added = 0;
@@ -256,16 +255,6 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         (app_code_section_va - image_base) as u32,
         section_alignment,
     );
-
-    let reloc_section_start = 0x4600;
-    let new_block_va = 0xb000;
-    let relocations = &[0];
-    let added_reloc_bytes =
-        write_image_base_relocation(executable, reloc_section_start, new_block_va, relocations);
-
-    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    ptr.virtual_size
-        .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
 
     for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
         let length: usize = app_obj_sections
@@ -1200,6 +1189,34 @@ fn write_image_base_relocation(
     shift_amount
 }
 
+fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
+    // find the location to write the section headers for our new sections
+    let section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
+        + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
+
+    let reloc_section_header_start =
+        section_header_start - std::mem::size_of::<ImageSectionHeader>();
+
+    let reloc_image_section =
+        load_struct_inplace::<ImageSectionHeader>(executable, reloc_section_header_start);
+
+    let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
+        .map(|i| (md.thunks_start_offset_in_section + 2 * i) as u16)
+        .collect();
+
+    let reloc_section_start = reloc_image_section.pointer_to_raw_data.get(LE) as usize;
+    let added_reloc_bytes = write_image_base_relocation(
+        executable,
+        reloc_section_start,
+        md.rdata_virtual_address - md.image_base as u32,
+        &relocations,
+    );
+
+    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
+    ptr.virtual_size
+        .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
+}
+
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
@@ -1945,6 +1962,8 @@ mod test {
                     as usize
                     + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
 
+                relocate_dummy_dll_entries(executable, &md);
+
                 let mut code_bytes_added = 0;
                 let mut data_bytes_added = 0;
                 let mut file_bytes_added = 0;
@@ -1957,35 +1976,6 @@ mod test {
                     (app_code_section_va - image_base) as u32,
                     section_alignment,
                 );
-
-                let reloc_section_header_start =
-                    section_header_start - std::mem::size_of::<ImageSectionHeader>();
-
-                let reloc_image_section = load_struct_inplace::<ImageSectionHeader>(
-                    executable,
-                    reloc_section_header_start,
-                );
-
-                let reloc_section_start = reloc_image_section.pointer_to_raw_data.get(LE) as usize;
-                let offset_in_section = md.thunks_start_offset_in_section;
-                let relocations = &[(offset_in_section) as u16];
-                let new_block_va = md.rdata_virtual_address - md.image_base as u32;
-                let added_reloc_bytes = write_image_base_relocation(
-                    executable,
-                    reloc_section_start,
-                    new_block_va,
-                    relocations,
-                );
-
-                let reloc_section_header_start =
-                    section_header_start - std::mem::size_of::<ImageSectionHeader>();
-
-                let ptr = load_struct_inplace_mut::<ImageSectionHeader>(
-                    executable,
-                    reloc_section_header_start,
-                );
-                ptr.virtual_size
-                    .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
 
                 for kind in [SectionKind::Text, SectionKind::ReadOnlyData] {
                     let length: usize = app_obj_sections
