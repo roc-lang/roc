@@ -1590,7 +1590,6 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        // let dir = Path::new(r"C:\Users\folkert\Documents\GitHub\roc\linktest");
 
         runner(dir);
 
@@ -1618,7 +1617,6 @@ mod test {
     {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
-        // let dir = Path::new("/tmp/roc");
 
         runner(dir);
 
