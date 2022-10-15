@@ -1134,10 +1134,7 @@ fn write_image_base_relocation(
     new_block_va: u32,
     relocations: &[u16],
 ) -> usize {
-    crate::dbg_hex!(new_block_va, relocations);
-
     let mut next_block_start = reloc_section_start as u32;
-
     let mut blocks = vec![];
 
     loop {
@@ -1155,6 +1152,9 @@ fn write_image_base_relocation(
 
     // extra space that we'll use for the new relocations
     let shift_amount = relocations.len() * 2;
+
+    // 8 in practice
+    const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
 
     // now, in reverse, shift sections that need to be shifted
     while let Some((block_start, header)) = blocks.pop() {
@@ -1175,16 +1175,19 @@ fn write_image_base_relocation(
                 // extend this block
                 let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
 
-                let new_size = header.size_of_block.get(LE) + 2;
+                let new_size = header.size_of_block.get(LE) + shift_amount as u32;
                 header.size_of_block.set(LE, new_size);
 
-                let number_of_entries = (new_size as usize - 8) / 2;
-                let entries =
-                    load_structs_inplace_mut::<u16>(mmap, block_start + 8, number_of_entries);
+                let number_of_entries = (new_size as usize - HEADER_WIDTH) / 2;
+                let entries = load_structs_inplace_mut::<u16>(
+                    mmap,
+                    block_start + HEADER_WIDTH,
+                    number_of_entries,
+                );
 
                 entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
 
-                // sort by VA
+                // sort by VA. Upper 4 bits store the relocation type
                 entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
             }
             std::cmp::Ordering::Less => {
