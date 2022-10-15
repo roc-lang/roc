@@ -1,4 +1,4 @@
-{ rev ? "a7855f2235a1876f97473a76151fec2afa02b287", # nixpkgs master. Keep up to date with flake.lock
+{ rev ? "a7855f2235a1876f97473a76151fec2afa02b287", # nixpkgs master. Keep up to date with "nixpkgs">"locked">"rev" in flake.lock
 nixpkgsSource ? builtins.fetchTarball {
   url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
   sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
