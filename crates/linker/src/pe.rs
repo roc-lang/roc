@@ -57,6 +57,11 @@ struct PeMetadata {
     /// Virtual address of the .rdata section
     rdata_virtual_address: u32,
 
+    /// The offset into the file of the .reloc section
+    reloc_offset_in_file: usize,
+
+    reloc_section_index: usize,
+
     /// Constants from the host .exe header
     image_base: u64,
     file_alignment: u32,
@@ -116,6 +121,14 @@ impl PeMetadata {
 
         let rdata_virtual_address = rdata_section.address() as u32;
 
+        let (reloc_section_index, reloc_section) = dynhost_obj
+            .sections()
+            .enumerate()
+            .find(|(_, s)| s.name() == Ok(".reloc"))
+            .unwrap();
+
+        let reloc_offset_in_file = reloc_section.file_range().unwrap().0 as usize;
+
         let optional_header = dynhost_obj.nt_headers().optional_header;
         let optional_header_offset = dynhost_obj.dos_header().nt_headers_offset() as usize
             + std::mem::size_of::<u32>()
@@ -163,6 +176,8 @@ impl PeMetadata {
             thunks_start_offset_in_file,
             thunks_start_offset_in_section,
             rdata_virtual_address,
+            reloc_offset_in_file,
+            reloc_section_index,
         }
     }
 }
@@ -1117,6 +1132,9 @@ fn write_image_base_relocation(
     new_block_va: u32,
     relocations: &[u16],
 ) -> usize {
+    // first, collect the blocks of relocations (each relocation block covers a 4K page)
+    // we will be moving stuff around, and have to work from the back to the front. However, the
+    // relocations are encoded in such a way that we can only decode them from front to back.
     let mut next_block_start = reloc_section_start as u32;
     let mut blocks = vec![];
 
@@ -1136,10 +1154,13 @@ fn write_image_base_relocation(
     // extra space that we'll use for the new relocations
     let shift_amount = relocations.len() * 2;
 
-    // 8 in practice
+    // this is 8 in practice
     const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
 
-    // now, in reverse, shift sections that need to be shifted
+    let mut found_block = false;
+
+    // now, starting from the back, shift sections that need to be shifted and add the
+    // new relocations to the right block
     while let Some((block_start, header)) = blocks.pop() {
         let header_va = header.virtual_address.get(LE);
         let header_size = header.size_of_block.get(LE);
@@ -1172,9 +1193,17 @@ fn write_image_base_relocation(
 
                 // sort by VA. Upper 4 bits store the relocation type
                 entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+
+                found_block = true;
             }
             std::cmp::Ordering::Less => {
-                // done
+                if !found_block {
+                    // we don't currently implement adding a new block if the block does not
+                    // already exist. Adding that logic is not hard, but let's see if we can get
+                    // away with not having it.
+                    internal_error!("the .rdata section with our dummy .dll info is not covered by a relocation block");
+                }
+
                 break;
             }
         }
@@ -1183,32 +1212,28 @@ fn write_image_base_relocation(
     shift_amount
 }
 
+/// the roc app functions are called from the host with an indirect call: the code will look
+/// in a table to find the actual address of the app function. This table must be relocated,
+/// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    // find the location to write the section headers for our new sections
-    let section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
-        + md.host_section_count * std::mem::size_of::<ImageSectionHeader>();
-
-    let reloc_section_header_start =
-        section_header_start - std::mem::size_of::<ImageSectionHeader>();
-
-    let reloc_image_section =
-        load_struct_inplace::<ImageSectionHeader>(executable, reloc_section_header_start);
-
     let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
         .map(|i| (md.thunks_start_offset_in_section + 2 * i) as u16)
         .collect();
 
-    let reloc_section_start = reloc_image_section.pointer_to_raw_data.get(LE) as usize;
     let added_reloc_bytes = write_image_base_relocation(
         executable,
-        reloc_section_start,
+        md.reloc_offset_in_file,
         md.rdata_virtual_address - md.image_base as u32,
         &relocations,
     );
 
+    // the reloc section got bigger, and we need to update the header with the new size
+    let reloc_section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
+        + md.reloc_section_index * std::mem::size_of::<ImageSectionHeader>();
+
     let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    ptr.virtual_size
-        .set(LE, ptr.virtual_size.get(LE) + added_reloc_bytes as u32);
+    let new_virtual_size = ptr.virtual_size.get(LE) + added_reloc_bytes as u32;
+    ptr.virtual_size.set(LE, new_virtual_size);
 }
 
 #[cfg(test)]
