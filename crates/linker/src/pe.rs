@@ -1151,11 +1151,13 @@ fn write_image_base_relocation(
         next_block_start += header.size_of_block.get(LE);
     }
 
-    // extra space that we'll use for the new relocations
-    let shift_amount = relocations.len() * 2;
-
     // this is 8 in practice
     const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
+
+    const ENTRY_WIDTH: usize = std::mem::size_of::<u16>();
+
+    // extra space that we'll use for the new relocations
+    let shift_amount = relocations.len() * ENTRY_WIDTH;
 
     let mut found_block = false;
 
@@ -1182,7 +1184,7 @@ fn write_image_base_relocation(
                 let new_size = header.size_of_block.get(LE) + shift_amount as u32;
                 header.size_of_block.set(LE, new_size);
 
-                let number_of_entries = (new_size as usize - HEADER_WIDTH) / 2;
+                let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
                 let entries = load_structs_inplace_mut::<u16>(
                     mmap,
                     block_start + HEADER_WIDTH,
@@ -1197,14 +1199,14 @@ fn write_image_base_relocation(
                 found_block = true;
             }
             std::cmp::Ordering::Less => {
-                if !found_block {
+                if found_block {
+                    break;
+                } else {
                     // we don't currently implement adding a new block if the block does not
                     // already exist. Adding that logic is not hard, but let's see if we can get
                     // away with not having it.
                     internal_error!("the .rdata section with our dummy .dll info is not covered by a relocation block");
                 }
-
-                break;
             }
         }
     }
