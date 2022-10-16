@@ -2080,7 +2080,7 @@ mod when {
     /// Parsing when with indentation.
     fn when_with_indent<'a>() -> impl Parser<'a, u32, EWhen<'a>> {
         move |arena, state: State<'a>| {
-            let min_indent = state.column();
+            let min_indent = state.line_indent() + 1;
             parser::keyword_e(keyword::WHEN, EWhen::When)
                 .parse(arena, state)
                 .map(|(progress, (), state)| (progress, min_indent, state))
