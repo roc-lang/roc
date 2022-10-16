@@ -1047,7 +1047,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
 /// Run on the native OS (not on wasm)
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
     _args: I,
     binary_bytes: &[u8],
@@ -1060,20 +1060,20 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
         // TODO forward the arguments
         // let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
-        let argv_cstrings = bumpalo::vec![ in &arena; CString::default()];
-        let envp_cstrings = bumpalo::vec![ in &arena; CString::default()];
+        let argv_cstrings = bumpalo::vec![ in arena; CString::default()];
+        let envp_cstrings = bumpalo::vec![ in arena; CString::default()];
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         match opt_level {
             OptLevel::Development => {
