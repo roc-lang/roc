@@ -829,7 +829,15 @@ fn canonicalize_opaque<'a>(
                 type_arguments: alias
                     .type_variables
                     .iter()
-                    .map(|_| Type::Variable(var_store.fresh()))
+                    .map(|alias_var| {
+                        Loc::at(
+                            alias_var.region,
+                            OptAbleType {
+                                typ: Type::Variable(var_store.fresh()),
+                                opt_ability: alias_var.value.opt_bound_ability,
+                            },
+                        )
+                    })
                     .collect(),
                 lambda_set_variables: alias
                     .lambda_set_variables

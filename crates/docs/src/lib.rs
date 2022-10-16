@@ -134,10 +134,8 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 }
 
 fn sidebar_link_url(module: &ModuleDocumentation) -> String {
-    let mut href_buf = base_url();
-    href_buf.push_str(module.name.as_str());
-
-    href_buf
+    let url = format!("{}{}/", base_url(), module.name.as_str());
+    url
 }
 
 // converts plain-text code to highlighted html

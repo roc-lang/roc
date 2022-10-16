@@ -1397,6 +1397,7 @@ balance = \color ->
     }
 
     #[test]
+    #[ignore = "Does not yet know about ability syntax"]
     fn test_astar() {
         let tokens = tokenize(&cli_testing_path("benchmarks/AStar.roc"));
 

@@ -11,7 +11,7 @@ use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations,
+    ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -344,6 +344,9 @@ fn start_phase<'a>(
                                     )
                                 });
 
+                            // Add the declared abilities from the modules we import;
+                            // we may not know all their types yet since type-solving happens in
+                            // parallel, but we'll fill that in during type-checking our module.
                             abilities_store
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
@@ -353,7 +356,7 @@ fn start_phase<'a>(
                 let skip_constraint_gen = {
                     // Give this its own scope to make sure that the Guard from the lock() is dropped
                     // immediately after contains_key returns
-                    state.cached_subs.lock().contains_key(&module_id)
+                    state.cached_types.lock().contains_key(&module_id)
                 };
 
                 BuildTask::CanonicalizeAndConstrain {
@@ -398,7 +401,7 @@ fn start_phase<'a>(
                     &state.exposed_types,
                     dep_idents,
                     declarations,
-                    state.cached_subs.clone(),
+                    state.cached_types.clone(),
                     derived_module,
                 )
             }
@@ -934,13 +937,13 @@ struct State<'a> {
 
     make_specializations_pass: MakeSpecializationsPass,
 
-    // cached subs (used for builtin modules, could include packages in the future too)
-    cached_subs: CachedSubs,
+    // cached types (used for builtin modules, could include packages in the future too)
+    cached_types: CachedTypeState,
 
     layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
 }
 
-type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
+type CachedTypeState = Arc<Mutex<MutMap<ModuleId, TypeState>>>;
 
 impl<'a> State<'a> {
     fn goal_phase(&self) -> Phase {
@@ -954,7 +957,7 @@ impl<'a> State<'a> {
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
-        cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+        cached_types: MutMap<ModuleId, TypeState>,
         render: RenderTarget,
         number_of_workers: usize,
         exec_mode: ExecutionMode,
@@ -985,7 +988,7 @@ impl<'a> State<'a> {
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
-            cached_subs: Arc::new(Mutex::new(cached_subs)),
+            cached_types: Arc::new(Mutex::new(cached_types)),
             render,
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
@@ -1098,7 +1101,7 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Declarations,
         dep_idents: IdentIdsByModule,
-        cached_subs: CachedSubs,
+        cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
     },
     BuildPendingSpecializations {
@@ -1463,7 +1466,7 @@ pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
@@ -1496,7 +1499,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
-            cached_subs,
+            cached_types,
             load_config.render,
             load_config.exec_mode,
         ),
@@ -1505,7 +1508,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
-            cached_subs,
+            cached_types,
             load_config.render,
             threads,
             load_config.exec_mode,
@@ -1520,7 +1523,7 @@ pub fn load_single_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -1546,7 +1549,7 @@ pub fn load_single_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
-        cached_subs,
+        cached_types,
         render,
         number_of_workers,
         exec_mode,
@@ -1768,7 +1771,7 @@ fn load_multi_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     available_threads: usize,
     exec_mode: ExecutionMode,
@@ -1810,7 +1813,7 @@ fn load_multi_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
-        cached_subs,
+        cached_types,
         render,
         num_workers,
         exec_mode,
@@ -4199,7 +4202,7 @@ impl<'a> BuildTask<'a> {
         exposed_types: &ExposedByModule,
         dep_idents: IdentIdsByModule,
         declarations: Declarations,
-        cached_subs: CachedSubs,
+        cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
@@ -4339,6 +4342,9 @@ pub fn add_imports(
         import_variables.push(list_len_type);
     }
 
+    // Fill in the implementation information of the abilities from the modules we import, which we
+    // now know because all imported modules should be solved by now.
+    //
     // TODO: see if we can reduce the amount of specializations we need to import.
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
@@ -4473,7 +4479,11 @@ fn run_solve_solve(
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
+            .filter(|(k, _)| {
+                exposed_symbols.contains(k)
+                    || is_specialization_symbol(*k)
+                    || k.is_exposed_for_builtin_derivers()
+            })
             .collect();
 
         (
@@ -4506,7 +4516,7 @@ fn run_solve<'a>(
     var_store: VarStore,
     decls: Declarations,
     dep_idents: IdentIdsByModule,
-    cached_subs: CachedSubs,
+    cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let solve_start = Instant::now();
@@ -4522,7 +4532,7 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
-            match cached_subs.lock().remove(&module_id) {
+            match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
                     exposed_for_module,
                     constraints,
@@ -4532,17 +4542,18 @@ fn run_solve<'a>(
                     module,
                     derived_module,
                 ),
-                Some((subs, exposed_vars_by_symbol)) => {
-                    (
-                        Solved(subs),
-                        // TODO(abilities) cache abilities for builtins
-                        VecMap::default(),
-                        exposed_vars_by_symbol.to_vec(),
-                        vec![],
-                        // TODO(abilities) cache abilities for builtins
-                        AbilitiesStore::default(),
-                    )
-                }
+                Some(TypeState {
+                    subs,
+                    exposed_vars_by_symbol,
+                    abilities,
+                    solved_implementations,
+                }) => (
+                    Solved(subs),
+                    solved_implementations,
+                    exposed_vars_by_symbol,
+                    vec![],
+                    abilities,
+                ),
             }
         } else {
             run_solve_solve(

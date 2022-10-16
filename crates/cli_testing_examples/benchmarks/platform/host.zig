@@ -218,14 +218,14 @@ fn roc_fx_getInt_64bit() callconv(.C) GetInt {
 
 fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
     if (roc_fx_getInt_help()) |value| {
-        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
+        const get_int = GetInt{ .is_error = false, .value = value };
         output.* = get_int;
     } else |err| switch (err) {
         error.InvalidCharacter => {
-            output.* = GetInt{ .is_error = true, .value = 0, .error_code = false };
+            output.* = GetInt{ .is_error = true, .value = 0 };
         },
         else => {
-            output.* = GetInt{ .is_error = true, .value = 0, .error_code = true };
+            output.* = GetInt{ .is_error = true, .value = 0 };
         },
     }
 

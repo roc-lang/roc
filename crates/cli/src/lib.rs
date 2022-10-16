@@ -1192,7 +1192,7 @@ impl Target {
             Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
                 vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Unknown,
+                operating_system: OperatingSystem::Wasi,
                 environment: Environment::Unknown,
                 binary_format: BinaryFormat::Wasm,
             },

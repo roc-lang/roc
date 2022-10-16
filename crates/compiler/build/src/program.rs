@@ -1,4 +1,5 @@
 use inkwell::memory_buffer::MemoryBuffer;
+use roc_error_macros::internal_error;
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -335,7 +336,7 @@ fn gen_from_mono_module_llvm<'a>(
         // write the ll code to a file, so we can modify it
         env.module.print_to_file(&app_ll_file).unwrap();
 
-        panic!(
+        internal_error!(
             "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
             app_ll_file,
             errors.to_string(),
@@ -373,10 +374,10 @@ fn gen_from_mono_module_llvm<'a>(
             Err(error) => {
                 use std::io::ErrorKind;
                 match error.kind() {
-                    ErrorKind::NotFound => panic!(
+                    ErrorKind::NotFound => internal_error!(
                         r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
                     ),
-                    _ => panic!("{:?}", error),
+                    _ => internal_error!("{:?}", error),
                 }
             }
         }
@@ -437,7 +438,7 @@ fn gen_from_mono_module_llvm<'a>(
                 // module.print_to_file(app_ll_file);
                 module.write_bitcode_to_memory()
             }
-            _ => panic!(
+            _ => internal_error!(
                 "TODO gracefully handle unsupported architecture: {:?}",
                 target.architecture
             ),
@@ -531,14 +532,14 @@ fn gen_from_mono_module_dev_wasm32<'a>(
     };
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
-        panic!(
+        internal_error!(
             "Failed to read host object file {}! Try setting --prebuilt-platform=false",
             preprocessed_host_path.display()
         )
     });
 
     let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
-        panic!(
+        internal_error!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
             preprocessed_host_path.display(),
             e.offset,

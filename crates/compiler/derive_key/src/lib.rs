@@ -76,6 +76,7 @@ pub enum DeriveBuiltin {
     ToEncoder,
     Decoder,
     Hash,
+    IsEq,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -86,6 +87,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
+            Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
             _ => Err(value),
         }
     }
@@ -112,6 +114,13 @@ impl Derived {
                 }
                 FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
             },
+            DeriveBuiltin::IsEq => {
+                // If obligation checking passes, we always lower derived implementations of `isEq`
+                // to the `Eq` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::BOOL_STRUCTURAL_EQ,
+                ))
+            }
         }
     }
 }

@@ -1239,6 +1239,77 @@ each bit. `0b0000_1000` evaluates to decimal `8`
 The integer type can be specified as a suffix to the binary literal,
 so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
 
+## Tests and expectations
+
+You can write automated tests for your Roc code like so:
+
+```swift
+pluralize = \singular, plural, count ->
+    countStr = Num.toStr count
+
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        "\(countStr) \(plural)"
+
+expect pluralize "cactus" "cacti" 1 == "1 cactus"
+
+expect pluralize "cactus" "cacti" 2 == "2 cacti"
+```
+
+If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect`
+expressions (that is, the two `pluralize` calls) and report any that returned `false`.
+
+### Inline `expect`s
+
+For example:
+
+```swift
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        expect count > 0
+
+        "\(countStr) \(plural)"
+```
+
+This `expect` will fail if you call `pluralize` passing a count of 0, and it will fail
+regardless of whether the inline `expect` is reached when running your program via `roc dev`
+or in the course of running a test (with `roc test`).
+
+So for example, if we added this top-level `expect`...
+
+```swift
+expect pluralize "cactus" "cacti" 0 == "0 cacti"
+```
+
+...it would hit the inline `expect count > 0`, which would then fail the test.
+
+Note that inline `expect`s do not halt the program! They are designed to inform, not to affect
+control flow. In fact, if you do `roc build`, they are not even included in the final binary.
+
+If you try this code out, you may note that when an `expect` fails (either a top-level or inline
+one), the failure message includes the values of any named variables - such as `count` here.
+This leads to a useful technique, which we will see next.
+
+### Quick debugging with inline `expect`s
+
+An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
+`expect` to do this. Here's an example:
+
+```elm
+\arg ->
+    x = arg - 1
+
+    # Reports the value of `x` without stopping the program
+    expect x != x
+
+    Num.abs x
+```
+
+The failure output will include both the value of `x` as well as the comment immediately above it,
+which lets you use that comment for extra context in your output.
+
 ## Interface modules
 
 [This part of the tutorial has not been written yet. Coming soon!]
@@ -1325,6 +1396,14 @@ package (when we wrote `packages { pf: "examples/cli/cli-platform/main.roc" }`),
 this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/cli/cli-platform/main.roc` package.
+
+If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+
+```coffee
+packages { pf: "examples/cli/cli-platform/main.roc" }
+imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
+provides main to pf
+```
 
 ## Tasks
 

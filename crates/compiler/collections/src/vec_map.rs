@@ -25,6 +25,14 @@ impl<K, V> VecMap<K, V> {
 
         (k, v)
     }
+
+    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
+        (self.keys, self.values)
+    }
+
+    pub fn unzip_slices(&self) -> (&[K], &[V]) {
+        (&self.keys, &self.values)
+    }
 }
 
 impl<K: PartialEq, V> VecMap<K, V> {
@@ -112,14 +120,6 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub fn truncate(&mut self, len: usize) {
         self.keys.truncate(len);
         self.values.truncate(len);
-    }
-
-    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
-        (self.keys, self.values)
-    }
-
-    pub fn unzip_slices(&self) -> (&[K], &[V]) {
-        (&self.keys, &self.values)
     }
 
     /// # Safety
@@ -247,6 +247,31 @@ where
             }
         }
         None
+    }
+}
+
+impl<K, V> PartialEq for VecMap<K, V>
+where
+    K: PartialEq,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        for (k, v) in self.iter() {
+            match other.get(k) {
+                Some(v1) => {
+                    if v != v1 {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
     }
 }
 

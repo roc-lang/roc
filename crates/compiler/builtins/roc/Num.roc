@@ -793,7 +793,7 @@ div : Frac a, Frac a -> Frac a
 
 divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
 divChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.div a b)
@@ -802,7 +802,7 @@ divCeil : Int a, Int a -> Int a
 
 divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 divCeilChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divCeil a b)
@@ -827,7 +827,7 @@ divTrunc : Int a, Int a -> Int a
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 divTruncChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divTrunc a b)
@@ -847,7 +847,7 @@ rem : Int a, Int a -> Int a
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 remChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.rem a b)
@@ -1223,19 +1223,19 @@ toU64 : Int * -> U64
 toU128 : Int * -> U128
 
 ## Convert an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
-## Since #Nat has a different maximum number depending on the system you're building
+## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit system, #Num.maxNat will return the same answer as
-## [Num.maxU32]. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return [Num.maxU32] instead of 9 billion, because 9 billion is
-## higher than [Num.maxU32] and will not fit in a [Nat] on a 32-bit system.
+## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
+## `Num.maxU32`. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
+## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
 ##
 ## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the #Nat value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to [Num.maxU64], and 9_000_000_000 is lower than [Num.maxU64].
+## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
+## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
 ##
-## To convert a [Frac] to a [Nat], first call either #Num.round, #Num.ceil, or [Num.floor]
+## To convert a [Frac] to a [Nat], first call either `Num.round`, `Num.ceil`, or `Num.floor`
 ## on it, then call this on the resulting [Int].
 toNat : Int * -> Nat
 

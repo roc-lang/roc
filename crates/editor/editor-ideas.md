@@ -238,7 +238,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 - [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 - [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
-- [NextJournal](https://nextjournal.com/joe-loco/command-bar?token=DpU6ewNQnLhYtVkwhs9GeX) Discoverable commands and shortcuts.
+- [NextJournal](https://nextjournal.com/blog/command-bar) Discoverable commands and shortcuts.
 - [Code Ribbon](https://web.eecs.utk.edu/~azh/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
 - [Automatic data transformation based on examples](https://youtu.be/Ej91F1fpmEw). Feature suggestion: use in combination with voice commands: e.g. "only keep time from list of datetimes".
 - [Codesee](https://www.codesee.io/) code base visualization.
@@ -318,7 +318,7 @@ If we make an integrated terminal, we can automatically add executed commands to
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
-- [processing](processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
+- [processing](https://processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
 - [flowistry](https://github.com/willcrichton/flowistry) easily track all named values in a certain expression throughout your program.
 
 ## High performance

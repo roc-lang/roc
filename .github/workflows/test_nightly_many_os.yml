@@ -6,10 +6,10 @@ name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
 jobs:
   test-nightly:
-    name: test nightly macos, ubu 20.04, ubu 22.04
+    name: test nightly macos 11, macos 12, ubu 20.04, ubu 22.04
     strategy:
       matrix:
-        os: [ macos-12, ubuntu-20.04, ubuntu-22.04 ]
+        os: [ macos-11, macos-12, ubuntu-20.04, ubuntu-22.04 ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -23,13 +23,17 @@ jobs:
           --header 'content-type: application/json' \
           --output roc_releases.json
 
-      - name: get the url of today`s release for linux x86_64
+      - name: get the url of today`s release for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
         run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
 
-      - name: get the url of today`s release for macos x86_64
-        if: startsWith(matrix.os, 'macos')
-        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_x86_64)" >> $GITHUB_ENV
+      - name: get the url of today`s release for macos 11 (x86_64)
+        if: startsWith(matrix.os, 'macos-11')
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_11_x86_64)" >> $GITHUB_ENV
+        
+      - name: get the url of today`s release for macos 12 (x86_64)
+        if: startsWith(matrix.os, 'macos-12')
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_12_x86_64)" >> $GITHUB_ENV
 
       - name: get the archive from the url
         run: curl -OL ${{ env.RELEASE_URL }}
