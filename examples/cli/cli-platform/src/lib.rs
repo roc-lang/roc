@@ -99,7 +99,7 @@ pub unsafe extern "C" fn roc_shm_open(
     oflag: libc::c_int,
     mode: libc::mode_t,
 ) -> libc::c_int {
-    libc::shm_open(name, oflag, mode)
+    libc::shm_open(name, oflag, mode as _)
 }
 
 #[cfg(unix)]
@@ -298,7 +298,7 @@ pub extern "C" fn roc_fx_exePath(roc_str: &RocStr) -> RocResult<RocList<u8>, ()>
 
 #[no_mangle]
 pub extern "C" fn roc_fx_stdinLine() -> RocStr {
-    use std::io::{self, BufRead};
+    use std::io::BufRead;
 
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();

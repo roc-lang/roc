@@ -80,7 +80,7 @@ pub unsafe extern "C" fn roc_shm_open(
     oflag: libc::c_int,
     mode: libc::mode_t,
 ) -> libc::c_int {
-    libc::shm_open(name, oflag, mode)
+    libc::shm_open(name, oflag, mode as _)
 }
 
 #[cfg(unix)]
