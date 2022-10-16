@@ -10,7 +10,6 @@ use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::fs;
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
@@ -1030,6 +1029,7 @@ pub(crate) fn surgery_elf(
     // Make sure the final executable has permision to execute.
     #[cfg(target_family = "unix")]
     {
+        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let mut perms = fs::metadata(executable_path)
