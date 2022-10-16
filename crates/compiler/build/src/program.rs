@@ -211,7 +211,10 @@ pub fn gen_from_mono_module<'a>(
         CodeGenBackend::Llvm => {
             gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
         }
-        CodeGenBackend::Wasm => unreachable!(),
+        CodeGenBackend::Wasm => {
+            // emit wasm via the llvm backend
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
     }
 }
 
