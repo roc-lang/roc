@@ -1051,8 +1051,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     _args: I,
     binary_bytes: &[u8],
-    _expectations: VecMap<ModuleId, Expectations>,
-    _interns: Interns,
+    _expect_metadata: ExpectMetadata,
 ) -> io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
@@ -1079,7 +1078,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         match opt_level {
             OptLevel::Development => {
                 // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-                todo!()
+                internal_error!("running `expect`s does not currently work on windows")
             }
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
