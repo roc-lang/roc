@@ -51,8 +51,8 @@ fn main() {
         eprintln!(
             r#"I can't find bench-folder-main and bench-folder-branch from the current directory.
         I should be executed from the repo root.
-        Use `./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder` to generate bench-folder-main.
-        Use `./ci/safe-earthly.sh +prep-bench-folder` to generate bench-folder-branch."#
+        Use `./ci/benchmarks/prep_folder.sh main` to generate bench-folder-main.
+        Use `./ci/benchmarks/prep_folder.sh branch` to generate bench-folder-branch."#
         );
 
         process::exit(1)

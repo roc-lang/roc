@@ -105,6 +105,7 @@
           debugir
           rust
           rust-bindgen
+          cargo-criterion
         ]);
       in {
 
