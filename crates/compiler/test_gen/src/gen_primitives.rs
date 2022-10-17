@@ -4085,3 +4085,21 @@ fn pattern_match_char() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4348() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            str = "z"
+            (\_ ->
+                when str is
+                    "z" -> "okay"
+                    _ -> "") "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
