@@ -1,4 +1,7 @@
-on: [pull_request]
+on:
+  pull_request:
+  schedule:
+    - cron: '0 9 * * *' # 9=9am utc+0
 
 name: Check Markdown links
 
@@ -16,3 +19,12 @@ jobs:
         use-quiet-mode: 'yes'
         use-verbose-mode: 'yes'
         base-branch: 'main'
+        check-modified-files-only: 'yes'
+      if: ${{ github.event_name == 'pull_request' }}
+    - uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'
+        use-verbose-mode: 'yes'
+        base-branch: 'main'
+        check-modified-files-only: 'no'
+      if: ${{ github.event_name == 'schedule' }}
