@@ -57,14 +57,9 @@ impl<'a> ExpectMemory<'a> {
                 internal_error!("failed to shm_open fd");
             }
 
-            let mut stat: libc::stat = std::mem::zeroed();
-            if libc::fstat(shared_fd, &mut stat) == -1 {
-                internal_error!("failed to stat shared file, does it exist?");
-            }
-            if stat.st_size < Self::SHM_SIZE as _ {
-                if libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1 {
-                    internal_error!("failed to truncate shared file, are the permissions wrong?");
-                }
+            // NOTE: we can only call `ftruncate` once on this file descriptor on mac
+            if libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1 {
+                internal_error!("failed to truncate shared file, are the permissions wrong?");
             }
 
             let ptr = libc::mmap(
@@ -75,10 +70,15 @@ impl<'a> ExpectMemory<'a> {
                 shared_fd,
                 0,
             );
+
             if ptr as usize == usize::MAX {
                 // ptr = -1
                 roc_error_macros::internal_error!("failed to mmap shared pointer")
             }
+
+            // fill the buffer with a fill pattern
+            libc::memset(ptr, 0xAA, Self::SHM_SIZE);
+
             ptr
         };
 
