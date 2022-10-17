@@ -87,7 +87,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym) | AbilityMember(sym, _, _) => f.text(format!(
+        Var(sym, _) | AbilityMember(sym, _, _) => f.text(format!(
             "{}.{}",
             sym.module_string(c.interns),
             sym.as_str(c.interns),
