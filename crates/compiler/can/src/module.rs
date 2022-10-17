@@ -3,7 +3,7 @@ use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
+use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -130,7 +130,7 @@ pub struct Module {
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 #[derive(Debug, Default)]
@@ -152,7 +152,7 @@ pub struct ModuleOutput {
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 fn validate_generate_with<'a>(

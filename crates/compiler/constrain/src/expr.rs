@@ -13,8 +13,8 @@ use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
-    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, Field,
-    FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef,
+    ExpectLookup, Field, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -519,7 +519,12 @@ pub fn constrain_expr(
 
             let mut vars = Vec::with_capacity(lookups_in_cond.len());
 
-            for (symbol, var) in lookups_in_cond.iter() {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info: _,
+            } in lookups_in_cond.iter()
+            {
                 vars.push(*var);
 
                 all_constraints.push(constraints.lookup(
@@ -566,7 +571,12 @@ pub fn constrain_expr(
 
             let mut vars = Vec::with_capacity(lookups_in_cond.len());
 
-            for (symbol, var) in lookups_in_cond.iter() {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info: _,
+            } in lookups_in_cond.iter()
+            {
                 vars.push(*var);
 
                 all_constraints.push(constraints.lookup(

@@ -3959,6 +3959,7 @@ dependencies = [
  "pretty_assertions",
  "roc_build",
  "roc_builtins",
+ "roc_can",
  "roc_collections",
  "roc_gen_llvm",
  "roc_intern",
