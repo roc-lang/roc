@@ -24,6 +24,7 @@ roc_types = {path = "../compiler/types"}
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 roc_region = { path = "../compiler/region" }
 roc_build = { path = "../compiler/build" }
+roc_error_macros = { path = "../error_macros" }
 
 libloading = "0.7.1"
 inkwell = { path = "../vendor/inkwell" }

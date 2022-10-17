@@ -3961,6 +3961,7 @@ dependencies = [
  "roc_build",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_gen_llvm",
  "roc_intern",
  "roc_load",

@@ -5,6 +5,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::{MutSet, VecMap};
+use roc_error_macros::internal_error;
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
     run_roc::RocCallResult,
@@ -52,18 +53,33 @@ impl<'a> ExpectMemory<'a> {
     fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
         let ptr = unsafe {
             let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
+            if shared_fd == -1 {
+                internal_error!("failed to shm_open fd");
+            }
 
-            libc::ftruncate(shared_fd, 0);
-            libc::ftruncate(shared_fd, Self::SHM_SIZE as _);
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(shared_fd, &mut stat) == -1 {
+                internal_error!("failed to stat shared file, does it exist?");
+            }
+            if stat.st_size < Self::SHM_SIZE as _ {
+                if libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1 {
+                    internal_error!("failed to truncate shared file, are the permissions wrong?");
+                }
+            }
 
-            libc::mmap(
+            let ptr = libc::mmap(
                 std::ptr::null_mut(),
                 Self::SHM_SIZE,
                 libc::PROT_WRITE | libc::PROT_READ,
                 libc::MAP_SHARED,
                 shared_fd,
                 0,
-            )
+            );
+            if ptr as usize == usize::MAX {
+                // ptr = -1
+                roc_error_macros::internal_error!("failed to mmap shared pointer")
+            }
+            ptr
         };
 
         // puts in the initial header
