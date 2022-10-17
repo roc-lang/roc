@@ -2725,14 +2725,12 @@ fn type_to_variable<'a>(
                     SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
                 subs.set_content(var, Content::RigidAbleVar(a, abilities_slice));
             }
-            // TODO(multi-abilities)
             Content::RigidAbleVar(_, abs)
                 if (subs.get_subs_slice(abs).iter()).eq(abilities.sorted_iter()) =>
             {
                 // pass, already bound
             }
             _ => {
-                // TODO(multi-abilities)
                 let abilities_slice =
                     SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
                 let flex_ability = subs.fresh(Descriptor {
