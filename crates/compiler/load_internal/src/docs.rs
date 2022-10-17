@@ -86,7 +86,7 @@ pub enum RecordField {
 pub struct AbilityMember {
     pub name: String,
     pub type_annotation: TypeAnnotation,
-    pub able_variables: Vec<(String, TypeAnnotation)>,
+    pub able_variables: Vec<(String, Vec<TypeAnnotation>)>,
     pub docs: Option<String>,
 }
 
@@ -387,7 +387,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
 fn ability_member_type_to_docs(
     type_annotation: ast::TypeAnnotation,
-) -> (TypeAnnotation, Vec<(String, TypeAnnotation)>) {
+) -> (TypeAnnotation, Vec<(String, Vec<TypeAnnotation>)>) {
     match type_annotation {
         ast::TypeAnnotation::Where(ta, has_clauses) => {
             let ta = type_to_docs(false, ta.value);
@@ -397,8 +397,10 @@ fn ability_member_type_to_docs(
                     let ast::HasClause { var, abilities } = hc.value;
                     (
                         var.value.extract_spaces().item.to_string(),
-                        // TODO(abilities)
-                        type_to_docs(false, abilities[0].value),
+                        abilities
+                            .iter()
+                            .map(|ability| type_to_docs(false, ability.value))
+                            .collect(),
                     )
                 })
                 .collect();
