@@ -2598,44 +2598,14 @@ fn type_to_variable<'a>(
                     for (target_index, OptAbleType { typ, opt_abilities }) in
                         (new_variables.indices()).zip(type_arguments)
                     {
-                        let copy_var = match opt_abilities {
-                            None => helper!(typ),
-                            Some(abilities) => {
-                                // If this type argument is marked as being bound to an ability, we must
-                                // now correctly instantiate it as so.
-                                match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
-                                    RegisterVariable::Direct(var) => {
-                                        use Content::*;
-                                        match *subs.get_content_without_compacting(var) {
-                                            FlexVar(opt_name) => {
-                                                // TODO(multi-abilities): check run cache
-                                                let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
-                                                subs.set_content(var, FlexAbleVar(opt_name, abilities_slice))
-                                            },
-                                            RigidVar(..) => internal_error!("Rigid var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
-                                            RigidAbleVar(..) | FlexAbleVar(..) => internal_error!("Able var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
-                                            _ => {
-                                                // TODO associate the type to the bound ability, and check
-                                                // that it correctly implements the ability.
-                                            }
-                                        }
-                                        var
-                                    }
-                                    RegisterVariable::Deferred => {
-                                        // TODO associate the type to the bound ability, and check
-                                        // that it correctly implements the ability.
-                                        let var = subs.fresh_unnamed_flex_var();
-                                        stack.push(TypeToVar::Defer {
-                                            typ,
-                                            destination: var,
-                                            ambient_function: AmbientFunctionPolicy::NoFunction,
-                                        });
-                                        var
-                                    }
-                                }
-                            }
-                        };
+                        let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
+                        if let Some(abilities) = opt_abilities.as_ref() {
+                            bind_to_abilities.push((
+                                Loc::at(roc_region::all::Region::zero(), copy_var),
+                                abilities,
+                            ));
+                        }
                     }
 
                     let it = (new_variables.indices().skip(type_arguments.len()))
