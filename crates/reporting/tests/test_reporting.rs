@@ -2166,8 +2166,8 @@ mod test_reporting {
     4│      f = f
             ^^^^^
 
-    Since Roc evaluates values strict, running this program would create
-    an infinite number of `f` values!
+    Roc evaluates values strictly, so running this program would enter an
+    infinite loop!
 
     Hint: Did you mean to define `f` as a function?
     "###
@@ -10784,8 +10784,8 @@ All branches in an `if` must have the same type!
     3│>  main =
     4│>      if Bool.true then {} else main
 
-    Since Roc evaluates values strict, running this program would create
-    an infinite number of `main` values!
+    Roc evaluates values strictly, so running this program would enter an
+    infinite loop!
 
     Hint: Did you mean to define `main` as a function?
     "###
