@@ -2376,7 +2376,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original) | AbilityMember(original, _, _) => {
+            Var(original, _) | AbilityMember(original, _, _) => {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
@@ -2605,7 +2605,7 @@ fn from_can_let<'a>(
     }
 
     match def.loc_expr.value {
-        roc_can::expr::Expr::Var(outer_symbol) if !procs.is_module_thunk(outer_symbol) => {
+        roc_can::expr::Expr::Var(outer_symbol, _) if !procs.is_module_thunk(outer_symbol) => {
             store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
         }
         _ => {
@@ -2747,7 +2747,7 @@ fn pattern_to_when<'a>(
                 cond_var: pattern_var,
                 expr_var: body_var,
                 region: Region::zero(),
-                loc_cond: Box::new(Loc::at_zero(Var(symbol))),
+                loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
                 branches: vec![WhenBranch {
                     patterns: vec![WhenBranchPattern {
                         pattern,
@@ -4074,11 +4074,14 @@ pub fn with_hole<'a>(
                 hole,
             )
         }
-        Var(mut symbol) => {
+        Var(mut symbol, _) => {
             // If this symbol is a raw value, find the real name we gave to its specialized usage.
-            if let ReuseSymbol::Value(_symbol) =
-                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol), variable)
-            {
+            if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(
+                env,
+                procs,
+                &roc_can::expr::Expr::Var(symbol, variable),
+                variable,
+            ) {
                 let real_symbol =
                     procs
                         .symbol_specializations
@@ -5046,7 +5049,7 @@ pub fn with_hole<'a>(
             };
 
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
+                roc_can::expr::Expr::Var(proc_name, _) if is_known(proc_name) => {
                     // a call by a known name
                     call_by_name(
                         env,
@@ -6010,7 +6013,7 @@ fn tag_union_to_function<'a>(
 
         let loc_pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
 
-        let loc_expr = Loc::at_zero(roc_can::expr::Expr::Var(arg_symbol));
+        let loc_expr = Loc::at_zero(roc_can::expr::Expr::Var(arg_symbol, arg_var));
 
         loc_pattern_args.push((arg_var, AnnotatedMark::known_exhaustive(), loc_pattern));
         loc_expr_args.push((arg_var, loc_expr));
@@ -7513,7 +7516,7 @@ fn can_reuse_symbol<'a>(
         AbilityMember(member, specialization_id, _) => {
             late_resolve_ability_specialization(env, *member, *specialization_id, expr_var)
         }
-        Var(symbol) => *symbol,
+        Var(symbol, _) => *symbol,
         _ => return NotASymbol,
     };
 

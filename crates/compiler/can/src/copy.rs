@@ -255,9 +255,9 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             elem_var: sub!(*elem_var),
             loc_elems: loc_elems.iter().map(|le| le.map(|e| go_help!(e))).collect(),
         },
-        Var(sym) => Var(*sym),
+        Var(sym, var) => Var(*sym, sub!(*var)),
         &AbilityMember(sym, specialization, specialization_var) => {
-            AbilityMember(sym, specialization, specialization_var)
+            AbilityMember(sym, specialization, sub!(specialization_var))
         }
         When {
             loc_cond,
