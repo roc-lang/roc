@@ -847,10 +847,37 @@ struct SpecializationMark<'a> {
     function_mark: Option<RawFunctionLayout<'a>>,
 }
 
-/// The deepest closure a symbol specialization was used in.
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-struct DeepestUse(Symbol);
+/// The deepest closure in the current stack of procedures under specialization a symbol specialization
+/// was used in.
+///
+/// This is necessary to understand what symbol specializations are used in what capture sets. For
+/// example, consider
+///
+/// main =
+///   x = 1
+///
+///   y = \{} -> 1u8 + x
+///   z = \{} -> 1u16 + x
+///
+/// Here, we have a two specializations of `x` to U8 and U16 with deepest uses of
+/// (2, y) and (2, z), respectively. This tells us that both of those specializations must be
+/// preserved by `main` (which is at depth 1), but that `y` and `z` respectively only need to
+/// capture one particular specialization of `x` each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UseDepth {
+    depth: usize,
+    symbol: Symbol,
+}
+
+impl UseDepth {
+    fn is_nested_use_in(&self, outer: &Self) -> bool {
+        if self.symbol == outer.symbol {
+            debug_assert!(self.depth == outer.depth);
+            return true;
+        }
+        self.depth > outer.depth
+    }
+}
 
 /// When walking a function body, we may encounter specialized usages of polymorphic symbols. For
 /// example
@@ -870,7 +897,7 @@ struct SymbolSpecializations<'a>(
     //  2. the number of specializations of a symbol in a def is even smaller (almost always only one)
     // So, a linear VecMap is preferrable. Use a two-layered one to make (1) extraction of defs easy
     // and (2) reads of a certain symbol be determined by its first occurrence, not its last.
-    VecMap<Symbol, VecMap<SpecializationMark<'a>, (Variable, Symbol, DeepestUse)>>,
+    VecMap<Symbol, VecMap<SpecializationMark<'a>, (Variable, Symbol, UseDepth)>>,
 );
 
 impl<'a> SymbolSpecializations<'a> {
@@ -881,8 +908,8 @@ impl<'a> SymbolSpecializations<'a> {
         mark: SpecializationMark<'a>,
         specialization_var: Variable,
         specialization_symbol: Symbol,
-        deepest_use: DeepestUse,
-    ) -> Option<(Variable, Symbol, DeepestUse)> {
+        deepest_use: UseDepth,
+    ) -> Option<(Variable, Symbol, UseDepth)> {
         self.0.get_or_insert(symbol, Default::default).insert(
             mark,
             (specialization_var, specialization_symbol, deepest_use),
@@ -893,8 +920,7 @@ impl<'a> SymbolSpecializations<'a> {
     pub fn remove(
         &mut self,
         symbol: Symbol,
-    ) -> impl ExactSizeIterator<Item = (SpecializationMark<'a>, (Variable, Symbol, DeepestUse))>
-    {
+    ) -> impl ExactSizeIterator<Item = (SpecializationMark<'a>, (Variable, Symbol, UseDepth))> {
         self.0
             .remove(&symbol)
             .map(|(_, specializations)| specializations)
@@ -938,21 +964,11 @@ pub struct ProcsBase<'a> {
 struct SpecializationStack<'a>(Vec<'a, Symbol>);
 
 impl<'a> SpecializationStack<'a> {
-    fn current_deepest_lambda(&self) -> DeepestUse {
-        DeepestUse(*self.0.last().unwrap())
-    }
-
-    fn is_nested_closure(&self, inner: Symbol, outer: Symbol) -> Option<bool> {
-        let mut seen_outer = false;
-        for &fun in self.0.iter() {
-            if fun == outer {
-                seen_outer = true;
-            }
-            if fun == inner {
-                return Some(seen_outer);
-            }
+    fn current_use_depth(&self) -> UseDepth {
+        UseDepth {
+            depth: self.0.len(),
+            symbol: *self.0.last().unwrap(),
         }
-        return None;
     }
 }
 
@@ -1396,37 +1412,31 @@ impl<'a> Procs<'a> {
             }
         };
 
-        let current_use = self.specialization_stack.current_deepest_lambda();
+        let current_use = self.specialization_stack.current_use_depth();
         let (_var, specialized_symbol, deepest_use) = symbol_specializations
             .get_or_insert(specialization_mark, || {
                 (specialization_var, make_specialized_symbol(), current_use)
             });
 
-        if matches!(
-            self.specialization_stack
-                .is_nested_closure(current_use.0, deepest_use.0),
-            Some(true) | None
-        ) {
+        if deepest_use.is_nested_use_in(&current_use) {
             *deepest_use = current_use;
         }
 
         *specialized_symbol
     }
 
-    pub fn get_symbol_specializations_used_in(
+    /// Get the symbol specializations used in the active specialization's body.
+    pub fn get_symbol_specializations_used_in_body(
         &self,
-        lambda: LambdaName<'_>,
         symbol: Symbol,
     ) -> Option<impl Iterator<Item = (Variable, Symbol)> + '_> {
-        let lambda_name = lambda.name();
+        let this_use = self.specialization_stack.current_use_depth();
         self.symbol_specializations.0.get(&symbol).map(move |l| {
             l.iter().filter_map(move |(_, (var, sym, deepest_use))| {
-                match self
-                    .specialization_stack
-                    .is_nested_closure(deepest_use.0, lambda_name)
-                {
-                    None | Some(true) => Some((*var, *sym)),
-                    Some(false) => None,
+                if deepest_use.is_nested_use_in(&this_use) {
+                    Some((*var, *sym))
+                } else {
+                    None
                 }
             })
         })
@@ -3453,7 +3463,7 @@ fn specialize_proc_help<'a>(
                     // specialized name rather than the original captured name!
                     let get_specialized_name = |symbol| {
                         let specs_used_in_body =
-                            procs.get_symbol_specializations_used_in(lambda_name, symbol);
+                            procs.get_symbol_specializations_used_in_body(symbol);
 
                         match specs_used_in_body {
                             Some(mut specs) => {
@@ -7744,7 +7754,7 @@ where
                 [Some((
                     variable,
                     left,
-                    procs.specialization_stack.current_deepest_lambda(),
+                    procs.specialization_stack.current_use_depth(),
                 ))]
             } else {
                 [None]
