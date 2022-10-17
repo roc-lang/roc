@@ -5653,9 +5653,11 @@ All branches in an `if` must have the same type!
     4│      main = 5 -> 3
                      ^^
 
-    Did you mean to define a function? Condider defining this as
+    Looks like you are trying to define a function. 
 
-    id = \x -> x
+    In roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
     "###
     );
 
