@@ -230,14 +230,14 @@ pub enum Expr {
     Expect {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     // not parsed, but is generated when lowering toplevel effectful expects
     ExpectFx {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     /// Rendered as empty box in editor
@@ -245,6 +245,13 @@ pub enum Expr {
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExpectLookup {
+    pub symbol: Symbol,
+    pub var: Variable,
+    pub ability_info: Option<SpecializationId>,
 }
 
 impl Expr {
@@ -2541,7 +2548,7 @@ impl Declarations {
             })
     }
 
-    pub fn expects(&self) -> VecMap<Region, Vec<(Symbol, Variable)>> {
+    pub fn expects(&self) -> VecMap<Region, Vec<ExpectLookup>> {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
         };
@@ -2625,9 +2632,9 @@ pub struct DestructureDef {
     pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
-fn get_lookup_symbols(expr: &Expr) -> Vec<(Symbol, Variable)> {
+fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     let mut stack: Vec<&Expr> = vec![expr];
-    let mut symbols = Vec::new();
+    let mut lookups: Vec<ExpectLookup> = Vec::new();
 
     while let Some(expr) = stack.pop() {
         match expr {
@@ -2636,11 +2643,23 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<(Symbol, Variable)> {
                 symbol,
                 record_var: var,
                 ..
-            }
-            | Expr::AbilityMember(symbol, _, var) => {
+            } => {
                 // Don't introduce duplicates, or make unused variables
-                if !symbols.iter().any(|(sym, _)| sym == symbol) {
-                    symbols.push((*symbol, *var));
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: None,
+                    });
+                }
+            }
+            Expr::AbilityMember(symbol, spec_id, var) => {
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: *spec_id,
+                    });
                 }
             }
             Expr::List { loc_elems, .. } => {
@@ -2737,7 +2756,7 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<(Symbol, Variable)> {
         }
     }
 
-    symbols
+    lookups
 }
 
 /// Here we transform
@@ -2784,14 +2803,22 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     loop {
         match loc_expr.value {
             Expr::LetNonRec(boxed_def, remainder) => {
-                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                    symbol: *a,
+                    var: *b,
+                    ability_info: None,
+                }));
 
                 stack.push(StoredDef::NonRecursive(loc_expr.region, boxed_def));
                 loc_expr = *remainder;
             }
             Expr::LetRec(defs, remainder, mark) => {
                 for def in &defs {
-                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                        symbol: *a,
+                        var: *b,
+                        ability_info: None,
+                    }));
                 }
 
                 stack.push(StoredDef::Recursive(loc_expr.region, defs, mark));
@@ -2834,7 +2861,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 }
 
 struct ExpectCollector {
-    expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {

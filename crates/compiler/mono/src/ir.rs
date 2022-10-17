@@ -9,7 +9,7 @@ use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
+use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, IntValue};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -6350,11 +6350,25 @@ pub fn from_can<'a>(
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
 
-            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
-
+            let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
             let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
-            for (_, var) in lookups_in_cond {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info,
+            } in lookups_in_cond
+            {
+                let symbol = match ability_info {
+                    Some(specialization_id) => late_resolve_ability_specialization(
+                        env,
+                        symbol,
+                        Some(specialization_id),
+                        var,
+                    ),
+                    None => symbol,
+                };
+                lookups.push(symbol);
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
                 let layout = return_on_layout_error!(env, res_layout, "Expect");
                 layouts.push(layout);
@@ -6389,11 +6403,25 @@ pub fn from_can<'a>(
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
 
-            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
-
+            let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
             let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
-            for (_, var) in lookups_in_cond {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info,
+            } in lookups_in_cond
+            {
+                let symbol = match ability_info {
+                    Some(specialization_id) => late_resolve_ability_specialization(
+                        env,
+                        symbol,
+                        Some(specialization_id),
+                        var,
+                    ),
+                    None => symbol,
+                };
+                lookups.push(symbol);
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
                 let layout = return_on_layout_error!(env, res_layout, "Expect");
                 layouts.push(layout);

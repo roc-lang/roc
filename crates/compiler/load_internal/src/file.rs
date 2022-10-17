@@ -7,8 +7,8 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
-use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
+use roc_can::expr::{Declarations, ExpectLookup};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ResolvedImplementations, TypeState,
@@ -726,7 +726,7 @@ pub enum EntryPoint<'a> {
 pub struct Expectations {
     pub subs: roc_types::subs::Subs,
     pub path: PathBuf,
-    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub expectations: VecMap<Region, Vec<ExpectLookup>>,
     pub ident_ids: IdentIds,
 }
 
@@ -770,7 +770,7 @@ struct ParsedModule<'a> {
     header_for: HeaderFor<'a>,
 }
 
-type LocExpects = VecMap<Region, Vec<(Symbol, Variable)>>;
+type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
 
 /// A message sent out _from_ a worker thread,
 /// representing a result of work done, or a request for further work

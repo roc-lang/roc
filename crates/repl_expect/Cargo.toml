@@ -10,6 +10,7 @@ bumpalo = {version = "3.11.0", features = ["collections"]}
 target-lexicon = "0.12.2"
 
 roc_builtins = {path = "../compiler/builtins"}
+roc_can = {path = "../compiler/can"}
 roc_collections = {path = "../compiler/collections"}
 roc_intern = {path = "../compiler/intern"}
 roc_load = {path = "../compiler/load"}
