@@ -546,8 +546,8 @@ impl<'a> Formattable for Tag<'a> {
 
 impl<'a> Formattable for HasClause<'a> {
     fn is_multiline(&self) -> bool {
-        // TODO(abilities)
-        self.abilities[0].is_multiline()
+        // No, always put abilities in a "has" clause on one line
+        false
     }
 
     fn format_with_options<'buf>(
@@ -561,8 +561,15 @@ impl<'a> Formattable for HasClause<'a> {
         buf.spaces(1);
         buf.push_str("has");
         buf.spaces(1);
-        // TODO(abilities)
-        self.abilities[0].format_with_options(buf, parens, newlines, indent);
+
+        for (i, ab) in self.abilities.iter().enumerate() {
+            if i > 0 {
+                buf.spaces(1);
+                buf.push('&');
+                buf.spaces(1);
+            }
+            ab.format_with_options(buf, parens, newlines, indent);
+        }
     }
 }
 
