@@ -1164,8 +1164,6 @@ fn write_image_base_relocation(
     // extra space that we'll use for the new relocations
     let shift_amount = relocations.len() * ENTRY_WIDTH;
 
-    crate::dbg_hex!(new_block_va, relocations);
-
     if block_has_relocation {
         // now, starting from the back, shift sections that need to be shifted and add the
         // new relocations to the right block
@@ -1231,8 +1229,6 @@ fn write_image_base_relocation(
         // sort by VA. Upper 4 bits store the relocation type
         entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
 
-        crate::dbg_hex!((next_block_start as usize + size_of_block) - reloc_section_start);
-
         size_of_block
     }
 }
@@ -1253,11 +1249,6 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
-
-    crate::dbg_hex!(
-        thunks_relocation_block_va,
-        md.rdata_virtual_address - md.image_base as u32,
-    );
 
     let added_reloc_bytes = write_image_base_relocation(
         executable,
