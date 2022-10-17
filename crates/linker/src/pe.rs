@@ -1137,6 +1137,7 @@ fn write_image_base_relocation(
     // relocations are encoded in such a way that we can only decode them from front to back.
     let mut next_block_start = reloc_section_start as u32;
     let mut blocks = vec![];
+    let mut block_has_relocation = false;
 
     loop {
         let header =
@@ -1144,6 +1145,10 @@ fn write_image_base_relocation(
 
         if header.virtual_address.get(LE) == 0 {
             break;
+        }
+
+        if new_block_va == header.virtual_address.get(LE) {
+            block_has_relocation = true;
         }
 
         blocks.push((next_block_start, *header));
@@ -1159,73 +1164,105 @@ fn write_image_base_relocation(
     // extra space that we'll use for the new relocations
     let shift_amount = relocations.len() * ENTRY_WIDTH;
 
-    let mut found_block = false;
+    crate::dbg_hex!(new_block_va, relocations);
 
-    // now, starting from the back, shift sections that need to be shifted and add the
-    // new relocations to the right block
-    while let Some((block_start, header)) = blocks.pop() {
-        let header_va = header.virtual_address.get(LE);
-        let header_size = header.size_of_block.get(LE);
+    if block_has_relocation {
+        // now, starting from the back, shift sections that need to be shifted and add the
+        // new relocations to the right block
+        while let Some((block_start, header)) = blocks.pop() {
+            let header_va = header.virtual_address.get(LE);
+            let header_size = header.size_of_block.get(LE);
 
-        let block_start = block_start as usize;
+            let block_start = block_start as usize;
 
-        match header_va.cmp(&new_block_va) {
-            std::cmp::Ordering::Greater => {
-                // shift this block
-                mmap.copy_within(
-                    block_start..block_start + header_size as usize,
-                    block_start + shift_amount,
-                );
-            }
-            std::cmp::Ordering::Equal => {
-                // extend this block
-                let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
+            match header_va.cmp(&new_block_va) {
+                std::cmp::Ordering::Greater => {
+                    // shift this block
+                    mmap.copy_within(
+                        block_start..block_start + header_size as usize,
+                        block_start + shift_amount,
+                    );
+                }
+                std::cmp::Ordering::Equal => {
+                    // extend this block
+                    let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
 
-                let new_size = header.size_of_block.get(LE) + shift_amount as u32;
-                header.size_of_block.set(LE, new_size);
+                    let new_size = header.size_of_block.get(LE) + shift_amount as u32;
+                    header.size_of_block.set(LE, new_size);
 
-                let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
-                let entries = load_structs_inplace_mut::<u16>(
-                    mmap,
-                    block_start + HEADER_WIDTH,
-                    number_of_entries,
-                );
+                    let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
+                    let entries = load_structs_inplace_mut::<u16>(
+                        mmap,
+                        block_start + HEADER_WIDTH,
+                        number_of_entries,
+                    );
 
-                entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
+                    entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
 
-                // sort by VA. Upper 4 bits store the relocation type
-                entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
-
-                found_block = true;
-            }
-            std::cmp::Ordering::Less => {
-                if found_block {
+                    // sort by VA. Upper 4 bits store the relocation type
+                    entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+                }
+                std::cmp::Ordering::Less => {
+                    // done
                     break;
-                } else {
-                    // we don't currently implement adding a new block if the block does not
-                    // already exist. Adding that logic is not hard, but let's see if we can get
-                    // away with not having it.
-                    internal_error!("the .rdata section with our dummy .dll info is not covered by a relocation block");
                 }
             }
         }
-    }
 
-    shift_amount
+        shift_amount
+    } else {
+        let header =
+            load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
+
+        let size_of_block = HEADER_WIDTH + relocations.len() * ENTRY_WIDTH;
+
+        header.virtual_address.set(LE, new_block_va);
+        header.size_of_block.set(LE, size_of_block as u32);
+
+        let number_of_entries = relocations.len();
+        let entries = load_structs_inplace_mut::<u16>(
+            mmap,
+            next_block_start as usize + HEADER_WIDTH,
+            number_of_entries,
+        );
+
+        entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
+
+        // sort by VA. Upper 4 bits store the relocation type
+        entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+
+        crate::dbg_hex!((next_block_start as usize + size_of_block) - reloc_section_start);
+
+        size_of_block
+    }
 }
 
 /// the roc app functions are called from the host with an indirect call: the code will look
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
+    let thunks_start_va = (md.rdata_virtual_address - md.image_base as u32)
+        + md.thunks_start_offset_in_section as u32;
+
+    // relocations are defined per 4kb page
+    const BLOCK_SIZE: u32 = 4096;
+
+    let thunks_offset_in_block = thunks_start_va % BLOCK_SIZE;
+    let thunks_relocation_block_va = thunks_start_va - thunks_offset_in_block;
+
     let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
-        .map(|i| (md.thunks_start_offset_in_section + 2 * i) as u16)
+        .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
+
+    crate::dbg_hex!(
+        thunks_relocation_block_va,
+        md.rdata_virtual_address - md.image_base as u32,
+    );
 
     let added_reloc_bytes = write_image_base_relocation(
         executable,
         md.reloc_offset_in_file,
-        md.rdata_virtual_address - md.image_base as u32,
+        thunks_relocation_block_va,
         &relocations,
     );
 
@@ -1236,6 +1273,10 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
     let new_virtual_size = ptr.virtual_size.get(LE) + added_reloc_bytes as u32;
     ptr.virtual_size.set(LE, new_virtual_size);
+
+    // TODO this is rounded up, so there is extra space and it does not need to change in our current examples
+    // let new_size_of_raw_data = ptr.size_of_raw_data.get(LE) + added_reloc_bytes as u32;
+    // ptr.size_of_raw_data.set(LE, new_size_of_raw_data);
 }
 
 #[cfg(test)]
