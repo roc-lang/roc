@@ -23,8 +23,6 @@ jobs:
           ref: "main"
           clean: "true"
 
-      - run: alias nix=/home/big-ci-user/.nix-profile/bin/nix
-
       - name: on main; prepare a self-contained benchmark folder
         run: nix develop -c ./ci/benchmarks/prep_folder.sh main
 
