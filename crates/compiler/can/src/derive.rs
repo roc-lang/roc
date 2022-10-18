@@ -146,7 +146,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     )
 }
 
-pub(crate) const DERIVED_REGION: Region = Region::zero();
+pub const DERIVED_REGION: Region = Region::zero();
 
 pub(crate) fn synthesize_member_impl<'a>(
     env: &mut Env<'a>,

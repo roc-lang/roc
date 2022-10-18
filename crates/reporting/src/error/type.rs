@@ -141,6 +141,10 @@ pub fn type_problem<'b>(
             report(title, doc, filename)
         }
         BadExprMissingAbility(region, _category, _found, incomplete) => {
+            if region == roc_can::DERIVED_REGION {
+                return None;
+            }
+
             let incomplete = incomplete
                 .into_iter()
                 .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
