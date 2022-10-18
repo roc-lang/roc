@@ -129,5 +129,8 @@
         };
 
         formatter = pkgs.nixpkgs-fmt;
+
+        # You can build this package (the roc CLI) with the `nix build` command.
+        packages.default = import ./. { inherit pkgs; };
       });
 }

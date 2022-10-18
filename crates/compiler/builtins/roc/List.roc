@@ -29,6 +29,8 @@ interface List
         map3,
         product,
         walkUntil,
+        walkFrom,
+        walkFromUntil,
         range,
         sortWith,
         drop,
@@ -440,6 +442,22 @@ walkUntil = \list, initial, step ->
 walkBackwardsUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
 walkBackwardsUntil = \list, initial, func ->
     when List.iterateBackwards list initial func is
+        Continue new -> new
+        Break new -> new
+
+## Walks to the end of the list from a specified starting index
+walkFrom : List elem, Nat, state, (state, elem -> state) -> state
+walkFrom = \list, index, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
+    walkHelp = \currentState, element -> Continue (func currentState element)
+
+    when List.iterHelp list state walkHelp index (List.len list) is
+        Continue new -> new
+
+## A combination of [List.walkFrom] and [List.walkUntil]
+walkFromUntil : List elem, Nat, state, (state, elem -> [Continue state, Break state]) -> state
+walkFromUntil = \list, index, state, func ->
+    when List.iterHelp list state func index (List.len list) is
         Continue new -> new
         Break new -> new
 

@@ -21,3 +21,6 @@ jobs:
 
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
+
+      - name: test wasm32 cli_run
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"

@@ -958,6 +958,12 @@ fn list_walk_until_even_prefix_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_sum() {
+    assert_evals_to!(r#"List.walkFrom [1, 2, 3] 1 0 Num.add"#, 5, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_keep_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -3484,16 +3490,6 @@ fn list_let_generalization() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_walk_backwards_until_sum() {
-    assert_evals_to!(
-        r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
-        3,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_backwards_implements_position() {
     assert_evals_to!(
         r#"
@@ -3522,6 +3518,16 @@ fn list_walk_backwards_implements_position() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_until_sum() {
+    assert_evals_to!(
+        r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_backwards_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -3534,6 +3540,34 @@ fn list_walk_backwards_until_even_prefix_sum() {
 
         List.walkBackwardsUntil [9, 8, 4, 2] 0 helper"#,
         2 + 4 + 8,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_until_sum() {
+    assert_evals_to!(
+        r#"List.walkFromUntil [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)"#,
+        7,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_even_prefix_sum() {
+    assert_evals_to!(
+        r#"
+        helper = \a, b ->
+            if Num.isEven b then
+                Continue (a + b)
+
+            else
+                Break a
+
+        List.walkFromUntil [2, 4, 8, 9] 1 0 helper"#,
+        4 + 8,
         i64
     );
 }
