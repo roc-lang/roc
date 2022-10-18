@@ -823,7 +823,7 @@ fn canonicalize_opaque<'a>(
                 let mut impls = Vec::with_capacity(num_members);
                 for &member in members.iter() {
                     let (derived_impl, impl_pat, impl_body) =
-                        derive::synthesize_member_impl(env, scope, name.value, name_str, member);
+                        derive::synthesize_member_impl(env, scope, name_str, member);
 
                     let derived_def = Loc::at(
                         derive::DERIVED_REGION,

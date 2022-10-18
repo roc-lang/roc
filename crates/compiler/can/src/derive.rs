@@ -151,7 +151,6 @@ pub(crate) const DERIVED_REGION: Region = Region::zero();
 pub(crate) fn synthesize_member_impl<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    opaque: Symbol,
     opaque_name: &'a str,
     ability_member: Symbol,
 ) -> (Symbol, Loc<Pattern>, &'a Loc<ast::Expr<'a>>) {
