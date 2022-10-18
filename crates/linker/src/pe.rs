@@ -1894,7 +1894,7 @@ mod test {
 
         test_basics(dir);
 
-        // let bytes = std::fs::read(dir.join("app.exe")).unwrap();
+        let bytes = std::fs::read(dir.join("app.exe")).unwrap();
         // let bytes = std::fs::read("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/windowsLegacy.exe").unwrap();
 
         // find_pe_section(&bytes, 0x14001079);
