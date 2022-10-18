@@ -327,7 +327,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
             let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
-            for (name, app_relocation) in section.relocations.iter() {
+            let it = section
+                .relocations
+                .iter()
+                .flat_map(|(name, rs)| rs.iter().map(move |r| (name, r)));
+
+            for (name, app_relocation) in it {
                 let AppRelocation {
                     offset_in_section,
                     relocation,
@@ -873,7 +878,7 @@ struct Section {
     /// File range of the section (in the app object)
     file_range: Range<usize>,
     kind: SectionKind,
-    relocations: MutMap<String, AppRelocation>,
+    relocations: MutMap<String, Vec<AppRelocation>>,
     app_section_index: SectionIndex,
 }
 
@@ -949,7 +954,7 @@ impl AppSections {
                 _ => continue,
             };
 
-            let mut relocations = MutMap::default();
+            let mut relocations: MutMap<String, Vec<AppRelocation>> = MutMap::default();
 
             for (offset_in_section, relocation) in section.relocations() {
                 match relocation.target() {
@@ -961,14 +966,14 @@ impl AppSections {
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
                         let name = symbol.and_then(|s| s.name()).unwrap_or_default();
 
-                        relocations.insert(
-                            name.to_string(),
-                            AppRelocation {
+                        relocations
+                            .entry(name.to_string())
+                            .or_default()
+                            .push(AppRelocation {
                                 offset_in_section,
                                 address,
                                 relocation,
-                            },
-                        );
+                            });
                     }
                     _ => todo!(),
                 }
