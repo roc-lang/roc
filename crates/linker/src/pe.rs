@@ -1766,17 +1766,16 @@ mod test {
                 r#"
                 const std = @import("std");
 
-                extern fn roc_magic1() callconv(.C) u64;
+                extern fn roc_magic1() callconv(.C) u8;
 
-                pub fn main() !void {
-                    const stdout = std.io.getStdOut().writer();
-                    try stdout.print("Hello, {}!\n", .{roc_magic1()});
+                pub fn main() u8 {
+                    return roc_magic1();
                 }
                 "#
             ),
             indoc!(
                 r#"
-                export fn roc_magic1() u64 {
+                export fn roc_magic1() u8 {
                     return 32;
                 }
                 "#
