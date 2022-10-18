@@ -770,7 +770,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         // This first call must use mem.copy because the slices might overlap.
         const byte_count_a = list_a.len() * element_width;
         const byte_count_b = list_b.len() * element_width;
-        mem.copy(u8, source_b[byte_count_a..byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        mem.copy(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
