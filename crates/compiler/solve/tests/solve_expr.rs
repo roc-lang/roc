@@ -384,7 +384,7 @@ mod solve_expr {
                     );
                     Some((impl_key, specialization.clone()))
                 }
-                MemberImpl::Derived | MemberImpl::Error => None,
+                MemberImpl::Error => None,
             },
         );
 

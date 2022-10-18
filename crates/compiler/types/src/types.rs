@@ -2139,8 +2139,6 @@ pub enum MemberImpl {
     /// The implementation is claimed to be at the given symbol.
     /// During solving we validate that the impl is really there.
     Impl(Symbol),
-    /// The implementation should be derived.
-    Derived,
     /// The implementation is not present or does not match the expected member type.
     Error,
 }

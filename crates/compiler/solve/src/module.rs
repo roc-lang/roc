@@ -147,9 +147,6 @@ pub fn exposed_types_storage_subs(
                     stored_specialization_lambda_set_vars.insert(lset_var, imported_lset_var);
                 }
             }
-            ResolvedImpl::Derived => {
-                // nothing to do
-            }
             ResolvedImpl::Error => {
                 // nothing to do
             }
@@ -202,7 +199,6 @@ pub fn extract_module_owned_implementations(
                     );
                     ResolvedImpl::Impl(specialization.clone())
                 }
-                MemberImpl::Derived => ResolvedImpl::Derived,
                 MemberImpl::Error => ResolvedImpl::Error,
             };
 
