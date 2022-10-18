@@ -745,37 +745,54 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
-        if (list_a.bytes) |source| {
-            const new_source = if (list_a.capacity >= total_length)
-                source
-            else
-                utils.unsafeReallocate(
-                    source,
-                    alignment,
-                    list_a.len(),
-                    total_length,
-                    element_width,
-                );
+        const resized_list_a = list_a.reallocate(alignment, total_length, element_width);
 
-            if (list_b.bytes) |source_b| {
-                @memcpy(new_source + list_a.len() * element_width, source_b, list_b.len() * element_width);
-            }
+        // These must exist, otherwise, the lists would have been empty.
+        const source_a = resized_list_a.bytes orelse unreachable;
+        const source_b = list_b.bytes orelse unreachable;
+        @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
-            return RocList{ .bytes = new_source, .length = total_length, .capacity = total_length };
-        }
+        // decrement list b.
+        utils.decref(source_b, list_b.len(), alignment);
+
+        return resized_list_a;
+    } else if (list_b.isUnique()) {
+        const total_length: usize = list_a.len() + list_b.len();
+
+        const resized_list_b = list_b.reallocate(alignment, total_length, element_width);
+
+        // These must exist, otherwise, the lists would have been empty.
+        const source_a = list_a.bytes orelse unreachable;
+        const source_b = resized_list_b.bytes orelse unreachable;
+
+        // This is a bit special, we need to first copy the elements of list_b to the end,
+        // then copy the elements of list_a to the beginning.
+        // This first call must use mem.copy because the slices might overlap.
+        const byte_count_a = list_a.len() * element_width;
+        const byte_count_b = list_b.len() * element_width;
+        mem.copy(u8, source_b[byte_count_a..byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        @memcpy(source_b, source_a, byte_count_a);
+
+        // decrement list a.
+        utils.decref(source_a, list_a.len(), alignment);
+
+        return resized_list_b;
     }
     const total_length: usize = list_a.len() + list_b.len();
 
     const output = RocList.allocate(alignment, total_length, element_width);
 
-    if (output.bytes) |target| {
-        if (list_a.bytes) |source| {
-            @memcpy(target, source, list_a.len() * element_width);
-        }
-        if (list_b.bytes) |source| {
-            @memcpy(target + list_a.len() * element_width, source, list_b.len() * element_width);
-        }
-    }
+    // These must exist, otherwise, the lists would have been empty.
+    const target = output.bytes orelse unreachable;
+    const source_a = list_a.bytes orelse unreachable;
+    const source_b = list_b.bytes orelse unreachable;
+
+    @memcpy(target, source_a, list_a.len() * element_width);
+    @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
+
+    // decrement list a and b.
+    utils.decref(source_a, list_a.len(), alignment);
+    utils.decref(source_b, list_b.len(), alignment);
 
     return output;
 }
