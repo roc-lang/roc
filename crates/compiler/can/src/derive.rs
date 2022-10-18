@@ -17,7 +17,7 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     let alloc_pat = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
     let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
 
-    let payload = env.arena.alloc_str("#payload");
+    let payload = "#payload";
 
     // \@Opaq payload
     let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
@@ -52,9 +52,9 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     let alloc_pat = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
     let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
-    let hasher = env.arena.alloc_str("#hasher");
+    let hasher = "#hasher";
 
-    let payload = env.arena.alloc_str("#payload");
+    let payload = "#payload";
 
     // \@Opaq payload
     let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
@@ -98,8 +98,8 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     let alloc_pat = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
     let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
 
-    let payload1 = env.arena.alloc_str("#payload1");
-    let payload2 = env.arena.alloc_str("#payload2");
+    let payload1 = "#payload1";
+    let payload2 = "#payload2";
 
     let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
     // \@Opaq payload1
