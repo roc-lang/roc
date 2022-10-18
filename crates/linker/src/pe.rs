@@ -221,6 +221,16 @@ pub(crate) fn preprocess_windows(
         }
     }
 
+    {
+        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+        let start = 0x24e0 + W * md.dynamic_relocations.dummy_import_index as usize;
+
+        for b in preprocessed[start..][..W].iter_mut() {
+            *b = 0;
+        }
+    }
+
     md.write_to_file(metadata_filename);
 
     Ok(())
