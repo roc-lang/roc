@@ -701,8 +701,8 @@ fn synthesize_derived_hash<'a>(
     // Hash.hash hasher payload
     let call_member = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
-            module_name: env.arena.alloc_str("Hash"),
-            ident: env.arena.alloc_str("hash"),
+            module_name: "Hash",
+            ident: "hash",
         }),
         &*env.arena.alloc([
             &*alloc_expr(ast::Expr::Var {
@@ -757,8 +757,8 @@ fn synthesize_derived_is_eq<'a>(
     // Bool.isEq payload1 payload2
     let call_member = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
-            module_name: env.arena.alloc_str("Bool"),
-            ident: env.arena.alloc_str("isEq"),
+            module_name: "Bool",
+            ident: "isEq",
         }),
         &*env.arena.alloc([
             &*alloc_expr(ast::Expr::Var {
