@@ -342,7 +342,10 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     address,
                 } = app_relocation;
 
+                crate::dbg_hex!(relocation);
+
                 if let Some(destination) = md.exports.get(name) {
+                    crate::dbg_hex!(destination);
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
@@ -358,6 +361,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         _ => todo!(),
                     }
                 } else if let Some(destination) = inter_app_relocations.get(name) {
+                    crate::dbg_hex!(destination);
                     // we implicitly only do 32-bit relocations
                     debug_assert_eq!(relocation.size(), 32);
 
@@ -1844,6 +1848,38 @@ mod test {
         );
     }
 
+    fn find_pe_section(data: &[u8], rva: u32) {
+        use object::read::pe::ImageNtHeaders;
+
+        let dos_header = pe::ImageDosHeader::parse(data).unwrap();
+        debug_assert_eq!(dos_header.e_magic.get(LE), IMAGE_DOS_SIGNATURE);
+
+        let mut offset = dos_header.nt_headers_offset().into();
+        let _data_directories_offset_in_file =
+            offset as u32 + std::mem::size_of::<ImageNtHeaders64>() as u32;
+
+        let (nt_headers, _data_directories) = ImageNtHeaders64::parse(data, &mut offset).unwrap();
+        debug_assert_eq!(nt_headers.signature(), IMAGE_NT_SIGNATURE);
+
+        debug_assert_eq!(
+            nt_headers.optional_header.magic(),
+            IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        );
+
+        let sections = nt_headers.sections(data, offset).unwrap();
+        for s in sections.iter() {
+            let start = s.virtual_address.get(LE);
+            let end = start + s.virtual_size.get(LE);
+            crate::dbg_hex!(start, end);
+
+            if rva >= start && rva < end {
+                return;
+            }
+        }
+
+        panic!("rva is not contained in any section");
+    }
+
     #[cfg(windows)]
     #[test]
     fn app_internal_relocations_windows() {
@@ -1856,10 +1892,12 @@ mod test {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        test_internal_relocations(dir);
+        test_basics(dir);
 
-        let bytes = std::fs::read(dir.join("app.exe")).unwrap();
+        // let bytes = std::fs::read(dir.join("app.exe")).unwrap();
+        // let bytes = std::fs::read("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/windowsLegacy.exe").unwrap();
 
+        // find_pe_section(&bytes, 0x14001079);
         unsafe { memexec::memexec_exe(&bytes).unwrap() };
     }
 
