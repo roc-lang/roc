@@ -1850,6 +1850,19 @@ mod test {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn app_internal_relocations_windows_xxx() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+
+        test_internal_relocations(dir);
+
+        let bytes = std::fs::read(dir.join("app.exe")).unwrap();
+
+        memexec::memexec_exe(&bytes).unwrap();
+    }
+
     #[ignore]
     #[test]
     fn app_internal_relocations_wine() {

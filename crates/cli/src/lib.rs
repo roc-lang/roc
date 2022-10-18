@@ -876,11 +876,9 @@ impl ExecutableFile {
             ExecutableFile::OnDisk(_, path) => {
                 let _ = argv;
                 let _ = envp;
-                // use memexec::memexec_exe;
-                // let bytes = std::fs::read(path).unwrap();
-                // memexec_exe(&bytes).unwrap();
-                let output = std::process::Command::new(path).output();
-                dbg!(output);
+                use memexec::memexec_exe;
+                let bytes = std::fs::read(path).unwrap();
+                memexec_exe(&bytes).unwrap();
                 std::process::exit(0);
             }
         }
