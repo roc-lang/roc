@@ -1860,7 +1860,7 @@ mod test {
 
         let bytes = std::fs::read(dir.join("app.exe")).unwrap();
 
-        memexec::memexec_exe(&bytes).unwrap();
+        unsafe { memexec::memexec_exe(&bytes).unwrap() };
     }
 
     #[ignore]
