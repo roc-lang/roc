@@ -792,6 +792,32 @@ fn decode_use_stdlib() {
 }
 
 #[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_derive_decoder_for_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Json]
+                provides [main] to "./platform"
+
+            HelloWorld := { a: Str } has [Decoding]
+
+            main =
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok (@HelloWorld {a}) -> a
+                    _ -> "FAIL"
+            "#
+        ),
+        RocStr::from(r#"Hello, World!"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib_json_list() {
     assert_evals_to!(

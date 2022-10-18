@@ -7,7 +7,7 @@
 //!     implementation to the value they wrap.
 
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::{called_via::CalledVia, symbol::Symbol};
 use roc_parse::ast;
 use roc_region::all::{Loc, Region};
 
@@ -47,6 +47,73 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             .alloc([Loc::at(DERIVED_REGION, opaque_apply_pattern)]),
         call_member,
     )
+}
+
+fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
+    let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
+
+    let call_custom = {
+        let bytes = "#bytes";
+        let fmt = "#fmt";
+
+        // Decode.decodeWith bytes Decode.decoder fmt
+        let call_decode_with = ast::Expr::Apply(
+            alloc_expr(ast::Expr::Var {
+                module_name: "Decode",
+                ident: "decodeWith",
+            }),
+            env.arena.alloc([
+                &*alloc_expr(ast::Expr::Var {
+                    module_name: "",
+                    ident: bytes,
+                }),
+                alloc_expr(ast::Expr::Var {
+                    module_name: "Decode",
+                    ident: "decoder",
+                }),
+                alloc_expr(ast::Expr::Var {
+                    module_name: "",
+                    ident: fmt,
+                }),
+            ]),
+            CalledVia::Space,
+        );
+
+        // Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
+        let call_map_result = ast::Expr::Apply(
+            alloc_expr(ast::Expr::Var {
+                module_name: "Decode",
+                ident: "mapResult",
+            }),
+            env.arena.alloc([
+                &*alloc_expr(call_decode_with),
+                alloc_expr(ast::Expr::OpaqueRef(at_opaque)),
+            ]),
+            CalledVia::Space,
+        );
+
+        // \bytes, fmt ->
+        //     Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
+        let custom_closure = ast::Expr::Closure(
+            env.arena.alloc([
+                Loc::at(DERIVED_REGION, ast::Pattern::Identifier(bytes)),
+                Loc::at(DERIVED_REGION, ast::Pattern::Identifier(fmt)),
+            ]),
+            alloc_expr(call_map_result),
+        );
+
+        // Decode.custom \bytes, fmt -> ...
+        ast::Expr::Apply(
+            alloc_expr(ast::Expr::Var {
+                module_name: "Decode",
+                ident: "custom",
+            }),
+            env.arena.alloc([&*alloc_expr(custom_closure)]),
+            CalledVia::Space,
+        )
+    };
+
+    call_custom
 }
 
 fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
@@ -162,7 +229,7 @@ pub(crate) fn synthesize_member_impl<'a>(
             format!("#{}_toEncoder", opaque_name),
             to_encoder(env, at_opaque),
         ),
-        Symbol::DECODE_DECODER => (format!("#{}_decoder", opaque_name), todo!()),
+        Symbol::DECODE_DECODER => (format!("#{}_decoder", opaque_name), decoder(env, at_opaque)),
         Symbol::HASH_HASH => (format!("#{}_hash", opaque_name), hash(env, at_opaque)),
         Symbol::BOOL_IS_EQ => (format!("#{}_isEq", opaque_name), is_eq(env, at_opaque)),
         other => internal_error!("{:?} is not a derivable ability member!", other),

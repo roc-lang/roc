@@ -8063,6 +8063,26 @@ mod solve_expr {
     }
 
     #[test]
+    fn derive_decoder_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Decoding]
+
+                main : Decoder N _
+                main = Decode.custom \bytes, fmt ->
+                    Decode.decodeWith bytes Decode.decoder fmt
+                #                           ^^^^^^^^^^^^^^
+                "#
+            ),
+            @"N#Decode.decoder(3) : List U8, fmt -[[7(7)]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
     fn derive_hash_for_opaque() {
         infer_queries!(
             indoc!(
