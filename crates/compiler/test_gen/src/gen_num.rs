@@ -875,7 +875,7 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
@@ -948,7 +948,7 @@ fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
             r#"
-                    wrappedNotEq : a, a -> Bool
+                    wrappedNotEq : a, a -> Bool | a has Eq
                     wrappedNotEq = \num1, num2 ->
                         num1 != num2
 

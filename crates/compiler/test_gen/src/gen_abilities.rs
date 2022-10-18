@@ -1332,7 +1332,7 @@ mod hash {
     }
 
     mod derived {
-        use super::{assert_evals_to, build_test};
+        use super::{assert_evals_to, build_test, indoc, TEST_HASHER};
         use roc_std::RocList;
 
         #[test]
@@ -1372,5 +1372,286 @@ mod hash {
                 RocList<u8>
             )
         }
+
+        #[test]
+        fn hash_singleton_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A]
+                        a = A
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    // hash nothing because this is a newtype of a unit layout.
+                ] as &[u8]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_bool_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A, B]
+                        a = A
+
+                        b : [A, B]
+                        b = B
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> Hash.hash b
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, // A
+                    1, // B
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_byte_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        l : List [A, B, C, D, E, F, G, H]
+                        l = [A, B, C, D, E, F, G, H]
+
+                        main =
+                            @THasher []
+                            |> Hash.hash l
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, // A
+                    1, // B
+                    2, // C
+                    3, // D
+                    4, // E
+                    5, // F
+                    6, // G
+                    7, // H
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_newtype_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A U8 U8 U8]
+                        a = A 15 23 47
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    // discriminant is skipped because it's a newtype
+                    15, 23, 47
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_newtype_by_void_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : Result [A U8 U8 U8] []
+                        a = Ok (A 15 23 47)
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    1, // Ok
+                    // A is skipped because it is a newtype
+                    15, 23, 47
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_heterogenous_tags() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        a : [A U8 U8, B {{ a: U8 }}, C Str]
+                        a = A 15 23
+
+                        b : [A U8 U8, B {{ a: U8 }}, C Str]
+                        b = B {{ a: 37 }}
+
+                        c : [A U8 U8, B {{ a: U8 }}, C Str]
+                        c = C "abc"
+
+                        main =
+                            @THasher []
+                            |> Hash.hash a
+                            |> Hash.hash b
+                            |> Hash.hash c
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, // dicsr A
+                    15, 23, // payloads A
+                    1,  // discr B
+                    37, // payloads B
+                    2,  // discr C
+                    97, 98, 99 // payloads C
+                ]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn hash_recursive_tag_union() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        ConsList : [Cons U8 ConsList, Nil]
+
+                        c : ConsList
+                        c = Cons 1 (Cons 2 Nil)
+
+                        main =
+                            @THasher []
+                            |> Hash.hash c
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[
+                    0, 1, // Cons 1
+                    0, 2, // Cons 2
+                    1, // Nil
+                ]),
+                RocList<u8>
+            )
+        }
+    }
+}
+
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+mod eq {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    use indoc::indoc;
+    use roc_std::RocStr;
+
+    #[test]
+    fn custom_eq_impl() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                LyingEq := U8 has [Eq {isEq}]
+
+                isEq = \@LyingEq m, @LyingEq n -> m != n
+
+                main =
+                    a = @LyingEq 10
+                    b = @LyingEq 5
+                    c = @LyingEq 5
+                    if Bool.isEq a b && !(Bool.isEq b c) then
+                        "okay"
+                    else
+                        "fail"
+                "#
+            ),
+            RocStr::from("okay"),
+            RocStr
+        )
+    }
+
+    #[test]
+    fn derive_structural_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Bool.isEq 10u8 10u8
+                "#
+            ),
+            true,
+            bool
+        )
     }
 }

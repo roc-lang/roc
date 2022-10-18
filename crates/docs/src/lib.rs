@@ -9,7 +9,7 @@ use roc_code_markup::slow_pool::SlowPool;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
-use roc_load::docs::{ModuleDocumentation, RecordField};
+use roc_load::docs::{Documentation, ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
@@ -28,7 +28,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     let loaded_modules = load_modules_for_files(filenames);
 
     // TODO: get info from a package module; this is all hardcoded for now.
-    let mut package = roc_load::docs::Documentation {
+    let package = Documentation {
         name: "documentation".to_string(),
         version: "".to_string(),
         docs: "Package introduction or README.".to_string(),
@@ -104,7 +104,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
         );
 
     // Write each package's module docs html file
-    for loaded_module in package.modules.iter_mut() {
+    for loaded_module in package.modules.iter() {
         for (module_id, module_docs) in loaded_module.documentation.iter() {
             if *module_id == loaded_module.module_id {
                 let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
@@ -113,6 +113,10 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
                     .expect("TODO gracefully handle not being able to create the module dir");
 
                 let rendered_module = template_html
+                    .replace(
+                        "<!-- Page title -->",
+                        page_title(&package, module_docs).as_str(),
+                    )
                     .replace(
                         "<!-- Package Name and Version -->",
                         render_name_and_version(package.name.as_str(), package.version.as_str())
@@ -134,10 +138,15 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 }
 
 fn sidebar_link_url(module: &ModuleDocumentation) -> String {
-    let mut href_buf = base_url();
-    href_buf.push_str(module.name.as_str());
+    let url = format!("{}{}/", base_url(), module.name.as_str());
+    url
+}
 
-    href_buf
+fn page_title(package: &Documentation, module: &ModuleDocumentation) -> String {
+    let package_name = &package.name;
+    let module_name = &module.name;
+    let title = format!("<title>{module_name} - {package_name}</title>");
+    title
 }
 
 // converts plain-text code to highlighted html

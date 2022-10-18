@@ -51,6 +51,7 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
+    (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -96,6 +97,17 @@ impl Symbol {
 
     pub fn derivable_ability(self) -> Option<&'static (Symbol, &'static [Symbol])> {
         DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
+    }
+
+    /// A symbol that should never be exposed to userspace, but needs to be exposed
+    /// to compiled modules for deriving abilities for structural types.
+    pub fn is_exposed_for_builtin_derivers(&self) -> bool {
+        matches!(
+            self,
+            // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
+            // low-level implementation.
+            &Self::BOOL_STRUCTURAL_EQ
+        )
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -796,6 +808,7 @@ macro_rules! define_builtins {
                     $(exposed_type=$exposed_type:literal)?
                     $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
+                $(unexposed $u_ident_id:literal $u_ident_const:ident: $u_ident_name:literal)*
             }
         )+
         num_modules: $total:literal
@@ -942,6 +955,9 @@ macro_rules! define_builtins {
             $(
                 $(
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
+                )*
+                $(
+                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($u_ident_id));
                 )*
             )+
 
@@ -1239,8 +1255,12 @@ define_builtins! {
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
         6 BOOL_XOR: "xor"
-        7 BOOL_EQ: "isEq"
-        8 BOOL_NEQ: "isNotEq"
+        7 BOOL_NEQ: "isNotEq"
+        8 BOOL_EQ: "Eq" exposed_type=true
+        9 BOOL_IS_EQ: "isEq"
+        10 BOOL_IS_EQ_IMPL: "boolIsEq"
+        unexposed 11 BOOL_STRUCTURAL_EQ: "structuralEq"
+        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structuralNotEq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
@@ -1377,6 +1397,9 @@ define_builtins! {
         74 LIST_MAP_TRY: "mapTry"
         75 LIST_WALK_TRY: "walkTry"
         76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
+        77 LIST_COUNT_IF: "countIf"
+        78 LIST_WALK_FROM: "walkFrom"
+        79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1412,6 +1435,8 @@ define_builtins! {
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
         17 DICT_UPDATE: "update"
+
+        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1511,6 +1536,7 @@ define_builtins! {
         14 HASH_COMPLETE: "complete"
         15 HASH_HASH_STR_BYTES: "hashStrBytes"
         16 HASH_HASH_LIST: "hashList"
+        17 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

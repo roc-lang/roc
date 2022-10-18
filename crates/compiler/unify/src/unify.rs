@@ -340,6 +340,7 @@ pub fn unify(env: &mut Env, var1: Variable, var2: Variable, mode: Mode) -> Unifi
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_introduced_ability_specialization(
     env: &mut Env,
     ability_member_signature: Variable,
@@ -350,6 +351,7 @@ pub fn unify_introduced_ability_specialization(
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_with_collector<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
@@ -360,6 +362,7 @@ pub fn unify_with_collector<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_help<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
@@ -416,6 +419,7 @@ fn unify_help<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 pub fn unify_pool<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -496,6 +500,7 @@ fn debug_print_unified_types<M: MetaCollector>(
     })
 }
 
+#[must_use]
 fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context) -> Outcome<M> {
     #[cfg(debug_assertions)]
     debug_print_unified_types::<M>(env, &ctx, None);
@@ -555,6 +560,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_ranged_number<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -714,6 +720,7 @@ fn wrap_range_var(
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_two_aliases<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -812,6 +819,7 @@ fn unify_two_aliases<M: MetaCollector>(
 
 // Unifies a structural alias
 #[inline(always)]
+#[must_use]
 fn unify_alias<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -870,6 +878,7 @@ fn opaque_obligation(opaque: Symbol, opaque_var: Variable) -> Obligated {
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_opaque<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -934,6 +943,7 @@ fn unify_opaque<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_structure<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1032,6 +1042,7 @@ fn unify_structure<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_lambda_set<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1358,6 +1369,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
     uls == sort_unspecialized_lambda_sets(subs, uls.to_vec())
 }
 
+#[must_use = "must use outcomes!"]
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1602,6 +1614,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     ))
 }
 
+#[must_use]
 fn unify_lambda_set_help<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1695,6 +1708,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
     whole_outcome
 }
 
+#[must_use]
 fn unify_record<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1801,6 +1815,7 @@ enum OtherFields {
 
 type SharedFields = Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>;
 
+#[must_use]
 fn unify_shared_fields<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2109,6 +2124,7 @@ fn should_extend_ext_with_uninhabited_type(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_tag_unions<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2409,6 +2425,7 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
     }
 }
 
+#[must_use]
 fn unify_shared_tags_new<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2539,6 +2556,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn unify_shared_tags_merge_new<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2558,6 +2576,7 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flat_type<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2757,6 +2776,7 @@ fn unify_flat_type<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn unify_zip_slices<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -2778,6 +2798,7 @@ fn unify_zip_slices<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_rigid<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2821,6 +2842,7 @@ fn unify_rigid<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_rigid_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2870,6 +2892,7 @@ fn unify_rigid_able<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flex<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2906,6 +2929,7 @@ fn unify_flex<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_flex_able<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -2948,7 +2972,6 @@ fn unify_flex_able<M: MetaCollector>(
         }
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
-        RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
@@ -2963,7 +2986,10 @@ fn unify_flex_able<M: MetaCollector>(
             )
         }
 
-        Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
+        RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _, AliasKind::Structural)
+        | RangedNumber(..) => {
             // Structural type wins.
             merge_flex_able_with_concrete(
                 env,
@@ -2979,6 +3005,7 @@ fn unify_flex_able<M: MetaCollector>(
     }
 }
 
+#[must_use]
 fn merge_flex_able_with_concrete<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
@@ -3012,6 +3039,7 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
 }
 
 #[inline(always)]
+#[must_use]
 fn unify_recursion<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -3046,9 +3074,21 @@ fn unify_recursion<M: MetaCollector>(
             mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other)
         }
 
-        FlexAbleVar(..) | RigidAbleVar(..) => {
+        RigidAbleVar(..) => {
             mismatch!("RecursionVar {:?} with able var {:?}", ctx.first, &other)
         }
+
+        FlexAbleVar(_, ability) => merge_flex_able_with_concrete(
+            env,
+            ctx,
+            ctx.second,
+            *ability,
+            RecursionVar {
+                structure,
+                opt_name: *opt_name,
+            },
+            Obligated::Adhoc(ctx.first),
+        ),
 
         FlexVar(_) => merge(
             env,
@@ -3086,6 +3126,7 @@ fn unify_recursion<M: MetaCollector>(
     }
 }
 
+#[must_use]
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
     let mut outcome: Outcome<M> = Outcome::default();
 
@@ -3140,6 +3181,7 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,

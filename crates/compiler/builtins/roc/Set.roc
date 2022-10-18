@@ -14,9 +14,11 @@ interface Set
         intersection,
         difference,
     ]
-    imports [List, Bool.{ Bool }, Dict.{ Dict }, Num.{ Nat }]
+    imports [List, Bool.{ Bool, Eq }, Dict.{ Dict }, Num.{ Nat }]
 
-Set k := Dict.Dict k {}
+Set k := Dict.Dict k {} has [Eq { isEq: setEq }]
+
+setEq = \@Set d1, @Set d2 -> d1 == d2
 
 fromDict : Dict k {} -> Set k
 fromDict = \dict -> @Set dict
@@ -35,7 +37,7 @@ single = \key ->
 ## Make sure never to insert a *NaN* to a [Set]! Because *NaN* is defined to be
 ## unequal to *NaN*, adding a *NaN* results in an entry that can never be
 ## retrieved or removed from the [Set].
-insert : Set k, k -> Set k
+insert : Set k, k -> Set k | k has Eq
 insert = \@Set dict, key ->
     dict
     |> Dict.insert key {}
@@ -75,11 +77,11 @@ expect
     actual == 3
 
 ## Drops the given element from the set.
-remove : Set k, k -> Set k
+remove : Set k, k -> Set k | k has Eq
 remove = \@Set dict, key ->
     @Set (Dict.remove dict key)
 
-contains : Set k, k -> Bool
+contains : Set k, k -> Bool | k has Eq
 contains = \set, key ->
     set
     |> Set.toDict
@@ -89,21 +91,21 @@ toList : Set k -> List k
 toList = \@Set dict ->
     Dict.keys dict
 
-fromList : List k -> Set k
+fromList : List k -> Set k | k has Eq
 fromList = \list ->
     initial = @Set (Dict.withCapacity (List.len list))
 
     List.walk list initial \set, key -> Set.insert set key
 
-union : Set k, Set k -> Set k
+union : Set k, Set k -> Set k | k has Eq
 union = \@Set dict1, @Set dict2 ->
     @Set (Dict.insertAll dict1 dict2)
 
-intersection : Set k, Set k -> Set k
+intersection : Set k, Set k -> Set k | k has Eq
 intersection = \@Set dict1, @Set dict2 ->
     @Set (Dict.keepShared dict1 dict2)
 
-difference : Set k, Set k -> Set k
+difference : Set k, Set k -> Set k | k has Eq
 difference = \@Set dict1, @Set dict2 ->
     @Set (Dict.removeAll dict1 dict2)
 

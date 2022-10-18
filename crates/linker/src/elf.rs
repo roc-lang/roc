@@ -10,7 +10,6 @@ use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::fs;
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
@@ -985,6 +984,20 @@ pub(crate) fn surgery_elf(
         }
     };
 
+    if app_obj
+        .sections()
+        .filter(|sec| {
+            let name = sec.name().unwrap_or_default();
+            !name.starts_with(".debug") && !name.starts_with(".eh")
+        })
+        .flat_map(|sec| sec.relocations())
+        .any(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
+    {
+        eprintln!("The surgical linker currently has issue #3609 and would fail linking your app.");
+        eprintln!("Please use `--linker=legacy` to avoid the issue for now.");
+        std::process::exit(1);
+    }
+
     let total_start = Instant::now();
 
     let loading_metadata_start = total_start;
@@ -1016,6 +1029,7 @@ pub(crate) fn surgery_elf(
     // Make sure the final executable has permision to execute.
     #[cfg(target_family = "unix")]
     {
+        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let mut perms = fs::metadata(executable_path)

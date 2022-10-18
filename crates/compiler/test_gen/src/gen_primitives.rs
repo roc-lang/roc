@@ -2595,7 +2595,7 @@ fn pass_through_unresolved_type_variable() {
 
                 main : Str
                 main =
-                    (accept Bool.isEq) "B"
+                    (accept \x -> x) "B"
 
 
                 accept : * -> (b -> b)
@@ -2878,10 +2878,10 @@ fn unresolved_tvar_when_capture_is_unused() {
 
                 main : I64
                 main =
-                    r : Bool
-                    r = Bool.false
+                    r : U8
+                    r = 1
 
-                    p1 = (\_ -> r == (1 == 1))
+                    p1 = (\_ -> r == 1)
                     oneOfResult = List.map [p1] (\p -> p Green)
 
                     when oneOfResult is

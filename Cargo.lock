@@ -96,6 +96,9 @@ dependencies = [
 [[package]]
 name = "arena-pool"
 version = "0.0.1"
+dependencies = [
+ "roc_error_macros",
+]
 
 [[package]]
 name = "arrayvec"
@@ -1958,9 +1961,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.133"
+version = "0.2.135"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0f80d65747a3e43d1596c7c5492d95d5edddaabd45a7fcdb02b95f644164966"
+checksum = "68783febc7782c6c5cb401fbda4de5a9898be1762314da0bb2c10ced61f18b0c"
 
 [[package]]
 name = "libloading"
@@ -2558,9 +2561,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f7254b99e31cad77da24b08ebf628882739a608578bb1bcdfc1f9c21260d7c0"
+checksum = "e82dad04139b71a90c080c8463fe0dc7902db5192d939bd0950f074d014339e1"
 
 [[package]]
 name = "oorandom"
@@ -3286,6 +3289,7 @@ dependencies = [
  "morphic_lib",
  "roc_collections",
  "roc_debug_flags",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
 ]
@@ -3381,6 +3385,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_serialize",
  "roc_types",
  "static_assertions",
 ]
@@ -4031,6 +4036,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_serialize"
+version = "0.0.1"
+dependencies = [
+ "roc_collections",
+]
+
+[[package]]
 name = "roc_solve"
 version = "0.0.1"
 dependencies = [
@@ -4120,6 +4132,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "roc_serialize",
  "static_assertions",
 ]
 
@@ -5115,7 +5128,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "rand",
  "static_assertions",
 ]

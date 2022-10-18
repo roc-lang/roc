@@ -33,7 +33,7 @@ interface Json
             F64,
             Dec,
         },
-        Bool.{ Bool },
+        Bool.{ Bool, Eq },
         Result,
     ]
 

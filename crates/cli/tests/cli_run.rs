@@ -401,7 +401,7 @@ mod cli_run {
     // uses C platform
     fn platform_switching_main() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "main.roc",
             "rocLovesPlatforms",
             "Which platform am I running on now?\n",
@@ -416,7 +416,7 @@ mod cli_run {
     #[test]
     fn platform_switching_rust() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesRust.roc",
             "rocLovesRust",
             "Roc <3 Rust!\n",
@@ -427,7 +427,7 @@ mod cli_run {
     #[test]
     fn platform_switching_zig() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesZig.roc",
             "rocLovesZig",
             "Roc <3 Zig!\n",
@@ -438,7 +438,7 @@ mod cli_run {
     #[test]
     fn platform_switching_wasm() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesWebAssembly.roc",
             "rocLovesWebAssembly",
             "Roc <3 Web Assembly!\n",
@@ -449,7 +449,7 @@ mod cli_run {
     #[test]
     fn platform_switching_swift() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesSwift.roc",
             "rocLovesSwift",
             "Roc <3 Swift!\n",
@@ -763,6 +763,8 @@ mod cli_run {
             flags: &[&str],
             expected_ending: &str,
         ) {
+            use super::{concatcp, run_roc, CMD_BUILD, TARGET_FLAG};
+
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
@@ -771,14 +773,14 @@ mod cli_run {
                     .iter()
                     .chain(flags.as_slice()),
                 &[],
+                &[],
             );
-            if !compile_out.stderr.is_empty() {
-                panic!("{}", compile_out.stderr);
-            }
 
             assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
-            let path = file.with_file_name(executable_filename);
+            let mut path = file.with_file_name(executable_filename);
+            path.set_extension("wasm");
+
             let stdout = crate::run_with_wasmer(&path, stdin);
 
             if !stdout.ends_with(expected_ending) {

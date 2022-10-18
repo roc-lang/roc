@@ -9,7 +9,8 @@ use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
+    Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -283,8 +284,8 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't generate an implementation of the "),
-                    alloc.symbol_qualified(ability),
+                    alloc.reflow("I can't generate an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
                     alloc.reflow(" ability for"),
                 ]),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
@@ -304,10 +305,10 @@ fn report_unfulfilled_ability<'a>(
             let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
-                    alloc.reflow("Roc can't derive an implementation of the "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" for "),
-                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow("I can't derive an implementation of the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability for "),
+                    alloc.symbol_foreign_qualified(opaque),
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(derive_region)),
@@ -316,7 +317,7 @@ fn report_unfulfilled_ability<'a>(
             .chain(reason)
             .chain(std::iter::once(alloc.tip().append(alloc.concat([
                 alloc.reflow("You can define a custom implementation of "),
-                alloc.symbol_qualified(ability),
+                alloc.symbol_unqualified(ability),
                 alloc.reflow(" for "),
                 alloc.symbol_unqualified(opaque),
                 alloc.reflow("."),
@@ -430,6 +431,18 @@ fn underivable_hint<'b>(
                     alloc.reflow("Maybe you wanted to use a "),
                     alloc.symbol_unqualified(Symbol::RESULT_RESULT),
                     alloc.reflow("?"),
+                ])))
+            }
+        },
+        NotDerivableContext::Eq(reason) => match reason {
+            NotDerivableEq::FloatingPoint => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("I can't derive "),
+                    alloc.symbol_qualified(Symbol::BOOL_IS_EQ),
+                    alloc.reflow(" for floating-point types. That's because Roc's floating-point numbers cannot be compared for total equality - in Roc, `NaN` is never comparable to `NaN`."),
+                    alloc.reflow(" If a type doesn't support total equality, it cannot support the "),
+                    alloc.symbol_unqualified(Symbol::BOOL_EQ),
+                    alloc.reflow(" ability!"),
                 ])))
             }
         },

@@ -6,7 +6,7 @@ Unlike most editors, we use projectional or structural editing to edit the [Abst
 
 ## Getting started
 
-- Install the compiler, see [here](../BUILDING_FROM_SOURCE.md).
+- Install the compiler, see [here](../../BUILDING_FROM_SOURCE.md).
 - Run the following from the roc folder:
 
 ```sh
@@ -75,4 +75,4 @@ Important folders/files outside the editor folder:
 ## Contributing
 
 We welcome new contributors :heart: and are happy to help you get started.
-Check [CONTRIBUTING.md](../CONTRIBUTING.md) for more info.
+Check [CONTRIBUTING.md](../../CONTRIBUTING.md) for more info.

@@ -126,7 +126,7 @@ mod test_roc_std {
 
         roc_str.reserve(42);
 
-        assert_eq!(roc_str.capacity(), 42);
+        assert_gte!(roc_str.capacity(), 42);
     }
 
     #[test]
@@ -135,7 +135,7 @@ mod test_roc_std {
 
         roc_str.reserve(5000);
 
-        assert_eq!(roc_str.capacity(), 5000);
+        assert_gte!(roc_str.capacity(), 5000);
     }
 
     #[test]

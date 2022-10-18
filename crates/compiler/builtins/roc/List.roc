@@ -29,6 +29,8 @@ interface List
         map3,
         product,
         walkUntil,
+        walkFrom,
+        walkFromUntil,
         range,
         sortWith,
         drop,
@@ -62,9 +64,10 @@ interface List
         sortDesc,
         reserve,
         walkBackwardsUntil,
+        countIf,
     ]
     imports [
-        Bool.{ Bool },
+        Bool.{ Bool, Eq },
         Result.{ Result },
         Num.{ Nat, Num, Int },
     ]
@@ -353,7 +356,7 @@ join = \lists ->
 
     List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
 
-contains : List a, a -> Bool
+contains : List a, a -> Bool | a has Eq
 contains = \list, needle ->
     List.any list (\x -> x == needle)
 
@@ -442,6 +445,22 @@ walkBackwardsUntil = \list, initial, func ->
         Continue new -> new
         Break new -> new
 
+## Walks to the end of the list from a specified starting index
+walkFrom : List elem, Nat, state, (state, elem -> state) -> state
+walkFrom = \list, index, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
+    walkHelp = \currentState, element -> Continue (func currentState element)
+
+    when List.iterHelp list state walkHelp index (List.len list) is
+        Continue new -> new
+
+## A combination of [List.walkFrom] and [List.walkUntil]
+walkFromUntil : List elem, Nat, state, (state, elem -> [Continue state, Break state]) -> state
+walkFromUntil = \list, index, state, func ->
+    when List.iterHelp list state func index (List.len list) is
+        Continue new -> new
+        Break new -> new
+
 sum : List (Num a) -> Num a
 sum = \list ->
     List.walk list 0 Num.add
@@ -527,6 +546,18 @@ keepIfHelp = \list, predicate, kept, index, length ->
 dropIf : List a, (a -> Bool) -> List a
 dropIf = \list, predicate ->
     List.keepIf list (\e -> Bool.not (predicate e))
+
+## Run the given function on each element of a list, and return the
+## number of elements for which the function returned `Bool.true`.
+countIf : List a, (a -> Bool) -> Nat
+countIf = \list, predicate ->
+    walkState = \state, elem ->
+        if predicate elem then
+            state + 1
+        else
+            state
+
+    List.walk list 0 walkState
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -890,7 +921,7 @@ intersperse = \list, sep ->
 ## is considered to "start with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-startsWith : List elem, List elem -> Bool
+startsWith : List elem, List elem -> Bool | elem has Eq
 startsWith = \list, prefix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -902,7 +933,7 @@ startsWith = \list, prefix ->
 ## is considered to "end with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-endsWith : List elem, List elem -> Bool
+endsWith : List elem, List elem -> Bool | elem has Eq
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -931,7 +962,7 @@ split = \elements, userSplitIndex ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
-splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -946,7 +977,7 @@ splitFirst = \list, delimiter ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
-splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->

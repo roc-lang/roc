@@ -508,7 +508,7 @@ fn to_expr_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([alloc.reflow("TODO provide more context.")]),
             ]);
