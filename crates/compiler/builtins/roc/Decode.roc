@@ -27,6 +27,7 @@ interface Decode
         decodeWith,
         fromBytesPartial,
         fromBytes,
+        mapResult,
     ]
     imports [
         List,
@@ -96,3 +97,6 @@ fromBytes = \bytes, fmt ->
                     Err TooShort -> Err TooShort
             else
                 Err (Leftover rest)
+
+mapResult : DecodeResult a, (a -> b) -> DecodeResult b
+mapResult = \{result, rest}, mapper -> {result: Result.map result mapper, rest}
