@@ -7,6 +7,7 @@ use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
+use crate::derive;
 use crate::env::Env;
 use crate::expr::AccessorData;
 use crate::expr::AnnotatedMark;
@@ -639,189 +640,6 @@ fn separate_implemented_and_required_members(
     }
 }
 
-fn synthesize_derived_to_encoder<'a>(
-    env: &mut Env<'a>,
-    at_opaque: &'a str,
-    region: Region,
-) -> ast::Expr<'a> {
-    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
-    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
-
-    let payload = env.arena.alloc_str("#payload");
-
-    // \@Opaq payload
-    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
-    let opaque_apply_pattern = ast::Pattern::Apply(
-        opaque_ref,
-        &*env
-            .arena
-            .alloc([Loc::at(region, ast::Pattern::Identifier(payload))]),
-    );
-
-    // Encode.toEncoder payload
-    let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Encode",
-            ident: "toEncoder",
-        }),
-        &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
-            module_name: "",
-            ident: payload,
-        })]),
-        roc_module::called_via::CalledVia::Space,
-    ));
-
-    // \@Opaq payload -> Encode.toEncoder payload
-    ast::Expr::Closure(
-        env.arena.alloc([Loc::at(region, opaque_apply_pattern)]),
-        call_member,
-    )
-}
-
-fn synthesize_derived_hash<'a>(
-    env: &mut Env<'a>,
-    at_opaque: &'a str,
-    region: Region,
-) -> ast::Expr<'a> {
-    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
-    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
-    let hasher = env.arena.alloc_str("#hasher");
-
-    let payload = env.arena.alloc_str("#payload");
-
-    // \@Opaq payload
-    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
-    let opaque_apply_pattern = ast::Pattern::Apply(
-        opaque_ref,
-        &*env
-            .arena
-            .alloc([Loc::at(region, ast::Pattern::Identifier(payload))]),
-    );
-
-    // Hash.hash hasher payload
-    let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Hash",
-            ident: "hash",
-        }),
-        &*env.arena.alloc([
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: hasher,
-            }),
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload,
-            }),
-        ]),
-        roc_module::called_via::CalledVia::Space,
-    ));
-
-    // \hasher, @Opaq payload -> Hash.hash hasher payload
-    ast::Expr::Closure(
-        env.arena.alloc([
-            Loc::at(region, ast::Pattern::Identifier(hasher)),
-            Loc::at(region, opaque_apply_pattern),
-        ]),
-        call_member,
-    )
-}
-
-fn synthesize_derived_is_eq<'a>(
-    env: &mut Env<'a>,
-    at_opaque: &'a str,
-    region: Region,
-) -> ast::Expr<'a> {
-    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
-    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
-
-    let payload1 = env.arena.alloc_str("#payload1");
-    let payload2 = env.arena.alloc_str("#payload2");
-
-    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
-    // \@Opaq payload1
-    let opaque1 = ast::Pattern::Apply(
-        opaque_ref,
-        &*env
-            .arena
-            .alloc([Loc::at(region, ast::Pattern::Identifier(payload1))]),
-    );
-    // \@Opaq payload2
-    let opaque2 = ast::Pattern::Apply(
-        opaque_ref,
-        &*env
-            .arena
-            .alloc([Loc::at(region, ast::Pattern::Identifier(payload2))]),
-    );
-
-    // Bool.isEq payload1 payload2
-    let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Bool",
-            ident: "isEq",
-        }),
-        &*env.arena.alloc([
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload1,
-            }),
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload2,
-            }),
-        ]),
-        roc_module::called_via::CalledVia::Space,
-    ));
-
-    // \@Opaq payload1, @Opaq payload2 -> Bool.isEq payload1 payload2
-    ast::Expr::Closure(
-        env.arena
-            .alloc([Loc::at(region, opaque1), Loc::at(region, opaque2)]),
-        call_member,
-    )
-}
-
-fn synthesize_derived_member_impl<'a>(
-    env: &mut Env<'a>,
-    scope: &mut Scope,
-    opaque: Symbol,
-    opaque_name: &'a str,
-    ability_member: Symbol,
-) -> (Symbol, DerivedDef<'a>) {
-    // @Opaq
-    let at_opaque = env.arena.alloc_str(&format!("@{}", opaque_name));
-    let region = Region::zero();
-
-    let (impl_name, def_body): (String, ast::Expr<'a>) = match ability_member {
-        Symbol::ENCODE_TO_ENCODER => (
-            format!("#{}_toEncoder", opaque_name),
-            synthesize_derived_to_encoder(env, at_opaque, region),
-        ),
-        Symbol::DECODE_DECODER => (format!("#{}_decoder", opaque_name), todo!()),
-        Symbol::HASH_HASH => (
-            format!("#{}_hash", opaque_name),
-            synthesize_derived_hash(env, at_opaque, region),
-        ),
-        Symbol::BOOL_IS_EQ => (
-            format!("#{}_isEq", opaque_name),
-            synthesize_derived_is_eq(env, at_opaque, region),
-        ),
-        other => internal_error!("{:?} is not a derivable ability member!", other),
-    };
-
-    let impl_symbol = scope
-        .introduce_str(&impl_name, region)
-        .expect("this name is not unique");
-
-    let def_pattern = Pattern::Identifier(impl_symbol);
-
-    let def = PendingValue::Def(PendingValueDef::Body(
-        Loc::at(region, def_pattern),
-        env.arena.alloc(Loc::at(region, def_body)),
-    ));
-    (impl_symbol, Loc::at(region, def))
-}
-
 type DerivedDef<'a> = Loc<PendingValue<'a>>;
 
 struct CanonicalizedOpaque<'a> {
@@ -1004,8 +822,13 @@ fn canonicalize_opaque<'a>(
 
                 let mut impls = Vec::with_capacity(num_members);
                 for &member in members.iter() {
-                    let (derived_impl, derived_def) =
-                        synthesize_derived_member_impl(env, scope, name.value, name_str, member);
+                    let (derived_impl, impl_pat, impl_body) =
+                        derive::synthesize_member_impl(env, scope, name.value, name_str, member);
+
+                    let derived_def = Loc::at(
+                        derive::DERIVED_REGION,
+                        PendingValue::Def(PendingValueDef::Body(impl_pat, impl_body)),
+                    );
 
                     impls.push((member, MemberImpl::Impl(derived_impl)));
                     derived_defs.push(derived_def);

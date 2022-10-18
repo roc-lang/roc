@@ -7,6 +7,7 @@ pub mod builtins;
 pub mod constraint;
 pub mod copy;
 pub mod def;
+mod derive;
 pub mod effect_module;
 pub mod env;
 pub mod exhaustive;
