@@ -99,4 +99,4 @@ fromBytes = \bytes, fmt ->
                 Err (Leftover rest)
 
 mapResult : DecodeResult a, (a -> b) -> DecodeResult b
-mapResult = \{result, rest}, mapper -> {result: Result.map result mapper, rest}
+mapResult = \{ result, rest }, mapper -> { result: Result.map result mapper, rest }
