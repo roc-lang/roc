@@ -1671,4 +1671,21 @@ mod eq {
             bool
         )
     }
+
+    #[test]
+    fn derive_structural_eq_for_opaque() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := U8 has [Eq]
+
+                main = (@Q 15) == (@Q 15)
+                "#
+            ),
+            true,
+            bool
+        )
+    }
 }

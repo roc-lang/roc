@@ -688,6 +688,60 @@ fn synthesize_derived_hash<'a>(
     )
 }
 
+fn synthesize_derived_is_eq<'a>(
+    env: &mut Env<'a>,
+    at_opaque: &'a str,
+    region: Region,
+) -> ast::Expr<'a> {
+    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
+    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
+
+    let payload1 = env.arena.alloc_str("#payload1");
+    let payload2 = env.arena.alloc_str("#payload2");
+
+    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
+    // \@Opaq payload1
+    let opaque1 = ast::Pattern::Apply(
+        opaque_ref,
+        &*env
+            .arena
+            .alloc([Loc::at(region, ast::Pattern::Identifier(payload1))]),
+    );
+    // \@Opaq payload2
+    let opaque2 = ast::Pattern::Apply(
+        opaque_ref,
+        &*env
+            .arena
+            .alloc([Loc::at(region, ast::Pattern::Identifier(payload2))]),
+    );
+
+    // Bool.isEq payload1 payload2
+    let call_member = alloc_expr(ast::Expr::Apply(
+        alloc_expr(ast::Expr::Var {
+            module_name: env.arena.alloc_str("Bool"),
+            ident: env.arena.alloc_str("isEq"),
+        }),
+        &*env.arena.alloc([
+            &*alloc_expr(ast::Expr::Var {
+                module_name: "",
+                ident: payload1,
+            }),
+            &*alloc_expr(ast::Expr::Var {
+                module_name: "",
+                ident: payload2,
+            }),
+        ]),
+        roc_module::called_via::CalledVia::Space,
+    ));
+
+    // \@Opaq payload1, @Opaq payload2 -> Bool.isEq payload1 payload2
+    ast::Expr::Closure(
+        env.arena
+            .alloc([Loc::at(region, opaque1), Loc::at(region, opaque2)]),
+        call_member,
+    )
+}
+
 fn synthesize_derived_member_impl<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
@@ -716,8 +770,7 @@ fn synthesize_derived_member_impl<'a>(
         ),
         Symbol::BOOL_IS_EQ => (
             format!("#{}_isEq", opaque_name),
-            todo!(),
-            // synthesize_derived_is_eq(env, scope, at_opaque, region),
+            synthesize_derived_is_eq(env, at_opaque, region),
         ),
         other => internal_error!("{:?} is not a derivable ability member!", other),
     };

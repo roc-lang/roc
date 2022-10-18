@@ -8061,4 +8061,21 @@ mod solve_expr {
             @"N#Hash.hash(3) : a, N -[[#N_hash(3)]]-> a | a has Hasher"
         );
     }
+
+    #[test]
+    fn derive_eq_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Eq]
+
+                main = Bool.isEq (@N 15) (@N 23)
+                #      ^^^^^^^^^
+                "#
+            ),
+            @"N#Bool.isEq(3) : N, N -[[#N_isEq(3)]]-> Bool"
+        );
+    }
 }
