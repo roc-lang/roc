@@ -74,9 +74,7 @@ interface Dict
 ## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
 ## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
 ## `fn dict1 == fn dict2` also being `Bool.true`, even if `fn` relies on the dictionary's ordering.
-Dict k v := List [Pair k v] has [Eq { isEq: dictEq }]
-
-dictEq = \@Dict l1, @Dict l2 -> l1 == l2
+Dict k v := List [Pair k v] has [Eq]
 
 ## An empty dictionary.
 empty : Dict k v
