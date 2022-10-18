@@ -100,7 +100,7 @@ pub enum Expr {
     },
 
     // Lookups
-    Var(Symbol),
+    Var(Symbol, Variable),
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -230,14 +230,14 @@ pub enum Expr {
     Expect {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     // not parsed, but is generated when lowering toplevel effectful expects
     ExpectFx {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     /// Rendered as empty box in editor
@@ -245,6 +245,13 @@ pub enum Expr {
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExpectLookup {
+    pub symbol: Symbol,
+    pub var: Variable,
+    pub ability_info: Option<SpecializationId>,
 }
 
 impl Expr {
@@ -256,7 +263,7 @@ impl Expr {
             Self::Str(..) => Category::Str,
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
-            &Self::Var(sym) => Category::Lookup(sym),
+            &Self::Var(sym, _) => Category::Lookup(sym),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -372,7 +379,7 @@ impl AccessorData {
             record_var,
             ext_var,
             field_var,
-            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol))),
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
             field,
         };
 
@@ -440,7 +447,10 @@ impl OpaqueWrapFunctionData {
         let body = Expr::OpaqueRef {
             opaque_var,
             name: opaque_name,
-            argument: Box::new((argument_var, Loc::at_zero(Expr::Var(argument_symbol)))),
+            argument: Box::new((
+                argument_var,
+                Loc::at_zero(Expr::Var(argument_symbol, argument_var)),
+            )),
             specialized_def_type: Box::new(specialized_def_type),
             type_arguments,
             lambda_set_variables,
@@ -592,7 +602,7 @@ pub fn canonicalize_expr<'a>(
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
-            if let Var(symbol) = &can_update.value {
+            if let Var(symbol, _) = &can_update.value {
                 match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(&update_out.references);
@@ -765,7 +775,7 @@ pub fn canonicalize_expr<'a>(
                 output.tail_call = None;
 
                 let expr = match fn_expr.value {
-                    Var(symbol) => {
+                    Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
@@ -994,7 +1004,7 @@ pub fn canonicalize_expr<'a>(
 
             // Get all the lookups that were referenced in the condition,
             // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value, var_store);
+            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1600,7 +1610,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol)
+                    Var(symbol, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1623,7 +1633,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol)
+                    Var(symbol, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1657,7 +1667,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ EmptyRecord
         | other @ Accessor { .. }
         | other @ Update { .. }
-        | other @ Var(_)
+        | other @ Var(..)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
@@ -1960,67 +1970,71 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
-                Var(symbol) if symbol.is_builtin() => match builtin_defs_map(symbol, var_store) {
-                    Some(Def {
-                        loc_expr:
-                            Loc {
-                                value:
-                                    Closure(ClosureData {
-                                        recursive,
-                                        arguments: params,
-                                        loc_body: boxed_body,
-                                        ..
-                                    }),
-                                ..
-                            },
-                        ..
-                    }) => {
-                        debug_assert_eq!(recursive, Recursive::NotRecursive);
+                Var(symbol, _) if symbol.is_builtin() => {
+                    match builtin_defs_map(symbol, var_store) {
+                        Some(Def {
+                            loc_expr:
+                                Loc {
+                                    value:
+                                        Closure(ClosureData {
+                                            recursive,
+                                            arguments: params,
+                                            loc_body: boxed_body,
+                                            ..
+                                        }),
+                                    ..
+                                },
+                            ..
+                        }) => {
+                            debug_assert_eq!(recursive, Recursive::NotRecursive);
 
-                        // Since this is a canonicalized Expr, we should have
-                        // already detected any arity mismatches and replaced this
-                        // with a RuntimeError if there was a mismatch.
-                        debug_assert_eq!(params.len(), args.len());
+                            // Since this is a canonicalized Expr, we should have
+                            // already detected any arity mismatches and replaced this
+                            // with a RuntimeError if there was a mismatch.
+                            debug_assert_eq!(params.len(), args.len());
 
-                        // Start with the function's body as the answer.
-                        let mut loc_answer = *boxed_body;
+                            // Start with the function's body as the answer.
+                            let mut loc_answer = *boxed_body;
 
-                        // Wrap the body in one LetNonRec for each argument,
-                        // such that at the end we have all the arguments in
-                        // scope with the values the caller provided.
-                        for ((_param_var, _exhaustive_mark, loc_pattern), (expr_var, loc_expr)) in
-                            params.iter().cloned().zip(args.into_iter()).rev()
-                        {
-                            // TODO get the correct vars into here.
-                            // Not sure if param_var should be involved.
-                            let pattern_vars = SendMap::default();
+                            // Wrap the body in one LetNonRec for each argument,
+                            // such that at the end we have all the arguments in
+                            // scope with the values the caller provided.
+                            for (
+                                (_param_var, _exhaustive_mark, loc_pattern),
+                                (expr_var, loc_expr),
+                            ) in params.iter().cloned().zip(args.into_iter()).rev()
+                            {
+                                // TODO get the correct vars into here.
+                                // Not sure if param_var should be involved.
+                                let pattern_vars = SendMap::default();
 
-                            let def = Def {
-                                loc_pattern,
-                                loc_expr,
-                                expr_var,
-                                pattern_vars,
-                                annotation: None,
-                            };
+                                let def = Def {
+                                    loc_pattern,
+                                    loc_expr,
+                                    expr_var,
+                                    pattern_vars,
+                                    annotation: None,
+                                };
 
-                            loc_answer = Loc {
-                                region: Region::zero(),
-                                value: LetNonRec(Box::new(def), Box::new(loc_answer)),
-                            };
+                                loc_answer = Loc {
+                                    region: Region::zero(),
+                                    value: LetNonRec(Box::new(def), Box::new(loc_answer)),
+                                };
+                            }
+
+                            loc_answer.value
                         }
-
-                        loc_answer.value
+                        Some(_) => {
+                            unreachable!("Tried to inline a non-function");
+                        }
+                        None => {
+                            unreachable!(
+                                "Tried to inline a builtin that wasn't registered: {:?}",
+                                symbol
+                            );
+                        }
                     }
-                    Some(_) => {
-                        unreachable!("Tried to inline a non-function");
-                    }
-                    None => {
-                        unreachable!(
-                            "Tried to inline a builtin that wasn't registered: {:?}",
-                            symbol
-                        );
-                    }
-                },
+                }
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
@@ -2172,7 +2186,10 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
-        let fn_expr = Loc::at(Region::zero(), Expr::Var(Symbol::STR_CONCAT));
+        let fn_expr = Loc::at(
+            Region::zero(),
+            Expr::Var(Symbol::STR_CONCAT, var_store.fresh()),
+        );
         let expr = Expr::Call(
             Box::new((
                 var_store.fresh(),
@@ -2531,7 +2548,7 @@ impl Declarations {
             })
     }
 
-    pub fn expects(&self) -> VecMap<Region, Vec<(Symbol, Variable)>> {
+    pub fn expects(&self) -> VecMap<Region, Vec<ExpectLookup>> {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
         };
@@ -2615,16 +2632,34 @@ pub struct DestructureDef {
     pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
-fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Variable)> {
+fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     let mut stack: Vec<&Expr> = vec![expr];
-    let mut symbols = Vec::new();
+    let mut lookups: Vec<ExpectLookup> = Vec::new();
 
     while let Some(expr) = stack.pop() {
         match expr {
-            Expr::Var(symbol) | Expr::Update { symbol, .. } | Expr::AbilityMember(symbol, _, _) => {
+            Expr::Var(symbol, var)
+            | Expr::Update {
+                symbol,
+                record_var: var,
+                ..
+            } => {
                 // Don't introduce duplicates, or make unused variables
-                if !symbols.iter().any(|(sym, _)| sym == symbol) {
-                    symbols.push((*symbol, var_store.fresh()));
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: None,
+                    });
+                }
+            }
+            Expr::AbilityMember(symbol, spec_id, var) => {
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: *spec_id,
+                    });
                 }
             }
             Expr::List { loc_elems, .. } => {
@@ -2665,7 +2700,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
                 stack.reserve(1 + args.len());
 
                 match &boxed_expr.1.value {
-                    Expr::Var(_) => {
+                    Expr::Var(_, _) => {
                         // do nothing
                     }
                     function_expr => {
@@ -2721,7 +2756,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
         }
     }
 
-    symbols
+    lookups
 }
 
 /// Here we transform
@@ -2768,14 +2803,22 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     loop {
         match loc_expr.value {
             Expr::LetNonRec(boxed_def, remainder) => {
-                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                    symbol: *a,
+                    var: *b,
+                    ability_info: None,
+                }));
 
                 stack.push(StoredDef::NonRecursive(loc_expr.region, boxed_def));
                 loc_expr = *remainder;
             }
             Expr::LetRec(defs, remainder, mark) => {
                 for def in &defs {
-                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                        symbol: *a,
+                        var: *b,
+                        ability_info: None,
+                    }));
                 }
 
                 stack.push(StoredDef::Recursive(loc_expr.region, defs, mark));
@@ -2818,7 +2861,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 }
 
 struct ExpectCollector {
-    expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {

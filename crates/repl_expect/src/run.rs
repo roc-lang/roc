@@ -4,6 +4,7 @@ use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
+use roc_can::expr::ExpectLookup;
 use roc_collections::{MutSet, VecMap};
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
@@ -389,7 +390,16 @@ fn render_expect_failure<'a>(
     };
     let subs = arena.alloc(&mut data.subs);
 
-    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
+    let (symbols, variables): (Vec<_>, Vec<_>) = current
+        .iter()
+        .map(
+            |ExpectLookup {
+                 symbol,
+                 var,
+                 ability_info: _,
+             }| (*symbol, *var),
+        )
+        .unzip();
 
     let (offset, expressions) = crate::get_values(
         target_info,

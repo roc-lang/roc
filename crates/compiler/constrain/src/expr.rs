@@ -13,8 +13,8 @@ use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
-    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, Field,
-    FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef,
+    ExpectLookup, Field, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -351,7 +351,7 @@ pub fn constrain_expr(
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _, _) = loc_fn.value {
+            let opt_symbol = if let Var(symbol, _) | AbilityMember(symbol, _, _) = loc_fn.value {
                 Some(symbol)
             } else {
                 None
@@ -425,9 +425,13 @@ pub fn constrain_expr(
             let and_constraint = constraints.and_constraint(and_cons);
             constraints.exists(vars, and_constraint)
         }
-        Var(symbol) => {
-            // make lookup constraint to lookup this symbol's type in the environment
-            constraints.lookup(*symbol, expected, region)
+        Var(symbol, variable) => {
+            // Save the expectation in the variable, then lookup the symbol's type in the environment
+            let store_expected =
+                constraints.store(expected.get_type_ref().clone(), *variable, file!(), line!());
+            let lookup_constr =
+                constraints.lookup(*symbol, expected.replace(Type::Variable(*variable)), region);
+            constraints.and_constraint([store_expected, lookup_constr])
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
@@ -515,7 +519,12 @@ pub fn constrain_expr(
 
             let mut vars = Vec::with_capacity(lookups_in_cond.len());
 
-            for (symbol, var) in lookups_in_cond.iter() {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info: _,
+            } in lookups_in_cond.iter()
+            {
                 vars.push(*var);
 
                 all_constraints.push(constraints.lookup(
@@ -562,7 +571,12 @@ pub fn constrain_expr(
 
             let mut vars = Vec::with_capacity(lookups_in_cond.len());
 
-            for (symbol, var) in lookups_in_cond.iter() {
+            for ExpectLookup {
+                symbol,
+                var,
+                ability_info: _,
+            } in lookups_in_cond.iter()
+            {
                 vars.push(*var);
 
                 all_constraints.push(constraints.lookup(
