@@ -201,7 +201,7 @@ pub fn build_zig_host_native(
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             "build-exe",
-            "-fPIE",
+            // "-fPIE", PIE seems to fail on windows
             shared_lib_path.to_str().unwrap(),
             &bitcode::get_builtins_windows_obj_path(),
         ]);
