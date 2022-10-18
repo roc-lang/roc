@@ -807,7 +807,9 @@ impl Layout {
                         RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             // do nothing
                         }
-                        RecordField::Required(_) | RecordField::Demanded(_) => {
+                        RecordField::Required(_)
+                        | RecordField::Demanded(_)
+                        | RecordField::RigidRequired(_) => {
                             let var = subs.variables[var_index.index as usize];
                             let layout = Layout::from_var_help(layouts, subs, var)?;
 

@@ -920,6 +920,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                     RecordField::RigidOptional(_) => "r?",
                     RecordField::Required(_) => ":",
                     RecordField::Demanded(_) => ":",
+                    RecordField::RigidRequired(_) => "r:",
                 };
                 write!(
                     f,
@@ -3831,6 +3832,7 @@ fn flat_type_to_err_type(
                     Required(_) => Required(error_type),
                     Demanded(_) => Demanded(error_type),
                     RigidOptional(_) => RigidOptional(error_type),
+                    RigidRequired(_) => RigidRequired(error_type),
                 };
 
                 err_fields.insert(label, err_record_field);

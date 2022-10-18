@@ -2317,6 +2317,9 @@ fn to_doc_help<'b>(
                                     Parens::Unnecessary,
                                     v,
                                 )),
+                                RecordField::RigidRequired(v) => RecordField::RigidRequired(
+                                    to_doc_help(ctx, alloc, Parens::Unnecessary, v),
+                                ),
                                 RecordField::Demanded(v) => RecordField::Demanded(to_doc_help(
                                     ctx,
                                     alloc,
@@ -2794,22 +2797,12 @@ fn diff_record<'b>(
             left: (
                 field.clone(),
                 alloc.string(field.as_str().to_string()),
-                match t1 {
-                    RecordField::Optional(_) => RecordField::Optional(diff.left),
-                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.left),
-                    RecordField::Required(_) => RecordField::Required(diff.left),
-                    RecordField::Demanded(_) => RecordField::Demanded(diff.left),
-                },
+                t1.replace(diff.left),
             ),
             right: (
                 field.clone(),
                 alloc.string(field.as_str().to_string()),
-                match t2 {
-                    RecordField::Optional(_) => RecordField::Optional(diff.right),
-                    RecordField::RigidOptional(_) => RecordField::RigidOptional(diff.right),
-                    RecordField::Required(_) => RecordField::Required(diff.right),
-                    RecordField::Demanded(_) => RecordField::Demanded(diff.right),
-                },
+                t2.replace(diff.right),
             ),
             status: {
                 match (&t1, &t2) {
@@ -3252,10 +3245,9 @@ mod report_text {
             let entry_to_doc =
                 |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
                     match field_type {
-                        RecordField::Demanded(field) => {
-                            field_name.append(alloc.text(" : ")).append(field)
-                        }
-                        RecordField::Required(field) => {
+                        RecordField::Demanded(field)
+                        | RecordField::Required(field)
+                        | RecordField::RigidRequired(field) => {
                             field_name.append(alloc.text(" : ")).append(field)
                         }
                         RecordField::Optional(field) | RecordField::RigidOptional(field) => {

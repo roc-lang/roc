@@ -27,10 +27,12 @@ const GREEK_LETTERS: &[char] = &[
 ///
 /// - Demanded: only introduced by pattern matches, e.g. { x } ->
 ///     Cannot unify with an Optional field, but can unify with a Required field
-/// - Required: introduced by record literals and type annotations.
+/// - Required: introduced by record literals
 ///     Can unify with Optional and Demanded
 /// - Optional: introduced by pattern matches, e.g. { x ? "" } ->
 ///     Can unify with Required, but not with Demanded
+/// - RigidRequired: introduced by annotations, e.g. { x : Str}
+///     Can only unify with Required and Demanded, to prevent an optional field being typed as Required
 /// - RigidOptional: introduced by annotations, e.g. { x ? Str}
 ///     Can only unify with Optional, to prevent a required field being typed as Optional
 #[derive(PartialEq, Eq, Clone, Hash)]
@@ -38,6 +40,7 @@ pub enum RecordField<T> {
     Demanded(T),
     Required(T),
     Optional(T),
+    RigidRequired(T),
     RigidOptional(T),
 }
 
@@ -51,6 +54,7 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
             Optional(typ) => write!(f, "Optional({:?})", typ),
             Required(typ) => write!(f, "Required({:?})", typ),
             Demanded(typ) => write!(f, "Demanded({:?})", typ),
+            RigidRequired(typ) => write!(f, "RigidRequired({:?})", typ),
             RigidOptional(typ) => write!(f, "RigidOptional({:?})", typ),
         }
     }
@@ -64,6 +68,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
@@ -75,6 +80,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
@@ -86,20 +92,40 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
 
-    pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
+    pub fn map<F, U>(&self, f: F) -> RecordField<U>
     where
-        F: FnMut(&T) -> U,
+        F: FnOnce(&T) -> U,
+    {
+        self.replace(f(self.as_inner()))
+    }
+
+    pub fn map_owned<F, U>(self, f: F) -> RecordField<U>
+    where
+        F: FnOnce(T) -> U,
     {
         use RecordField::*;
         match self {
             Optional(t) => Optional(f(t)),
             Required(t) => Required(f(t)),
             Demanded(t) => Demanded(f(t)),
+            RigidRequired(t) => RigidRequired(f(t)),
             RigidOptional(t) => RigidOptional(f(t)),
+        }
+    }
+
+    pub fn replace<U>(&self, u: U) -> RecordField<U> {
+        use RecordField::*;
+        match self {
+            Optional(_) => Optional(u),
+            Required(_) => Required(u),
+            Demanded(_) => Demanded(u),
+            RigidRequired(_) => RigidRequired(u),
+            RigidOptional(_) => RigidOptional(u),
         }
     }
 
@@ -119,6 +145,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute(substitutions),
             Required(typ) => typ.substitute(substitutions),
             Demanded(typ) => typ.substitute(substitutions),
+            RigidRequired(typ) => typ.substitute(substitutions),
             RigidOptional(typ) => typ.substitute(substitutions),
         }
     }
@@ -135,6 +162,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Required(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Demanded(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            RigidRequired(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             RigidOptional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
         }
     }
@@ -154,6 +182,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             Required(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             Demanded(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
+            RigidRequired(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             RigidOptional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
         }
     }
@@ -165,6 +194,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_symbol(rep_symbol),
             Required(typ) => typ.contains_symbol(rep_symbol),
             Demanded(typ) => typ.contains_symbol(rep_symbol),
+            RigidRequired(typ) => typ.contains_symbol(rep_symbol),
             RigidOptional(typ) => typ.contains_symbol(rep_symbol),
         }
     }
@@ -175,6 +205,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_variable(rep_variable),
             Required(typ) => typ.contains_variable(rep_variable),
             Demanded(typ) => typ.contains_variable(rep_variable),
+            RigidRequired(typ) => typ.contains_variable(rep_variable),
             RigidOptional(typ) => typ.contains_variable(rep_variable),
         }
     }
@@ -581,11 +612,13 @@ impl fmt::Debug for Type {
 
                 for (label, field_type) in fields {
                     match field_type {
-                        RecordField::Optional(_) => write!(f, "{:?} ? {:?}", label, field_type)?,
-                        RecordField::Required(_) => write!(f, "{:?} : {:?}", label, field_type)?,
-                        RecordField::Demanded(_) => write!(f, "{:?} : {:?}", label, field_type)?,
-                        RecordField::RigidOptional(_) => {
+                        RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             write!(f, "{:?} ? {:?}", label, field_type)?
+                        }
+                        RecordField::Required(_)
+                        | RecordField::Demanded(_)
+                        | RecordField::RigidRequired(_) => {
+                            write!(f, "{:?} : {:?}", label, field_type)?
                         }
                     }
 
@@ -1636,15 +1669,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             variables_help(ret, accum);
         }
         Record(fields, ext) => {
-            use RecordField::*;
-
             for (_, field) in fields {
-                match field {
-                    Optional(x) => variables_help(x, accum),
-                    Required(x) => variables_help(x, accum),
-                    Demanded(x) => variables_help(x, accum),
-                    RigidOptional(x) => variables_help(x, accum),
-                };
+                variables_help(field.as_inner(), accum);
             }
 
             if let TypeExtension::Open(ext) = ext {
@@ -1778,15 +1804,8 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             variables_help_detailed(ret, accum);
         }
         Record(fields, ext) => {
-            use RecordField::*;
-
             for (_, field) in fields {
-                match field {
-                    Optional(x) => variables_help_detailed(x, accum),
-                    Required(x) => variables_help_detailed(x, accum),
-                    Demanded(x) => variables_help_detailed(x, accum),
-                    RigidOptional(x) => variables_help_detailed(x, accum),
-                };
+                variables_help_detailed(field.as_inner(), accum);
             }
 
             if let TypeExtension::Open(ext) = ext {
@@ -2366,11 +2385,7 @@ fn write_error_type_help(
                         buf.push_str(" ? ");
                         content
                     }
-                    Required(content) => {
-                        buf.push_str(" : ");
-                        content
-                    }
-                    Demanded(content) => {
+                    Required(content) | Demanded(content) | RigidRequired(content) => {
                         buf.push_str(" : ");
                         content
                     }
@@ -2520,11 +2535,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                         buf.push_str(" ? ");
                         content
                     }
-                    Required(content) => {
-                        buf.push_str(" : ");
-                        content
-                    }
-                    Demanded(content) => {
+                    Required(content) | Demanded(content) | RigidRequired(content) => {
                         buf.push_str(" : ");
                         content
                     }

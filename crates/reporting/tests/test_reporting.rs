@@ -11457,4 +11457,31 @@ All branches in an `if` must have the same type!
     Note: `Hash` cannot be generated for functions.
     "###
     );
+
+    test_report!(
+        demanded_vs_optional_record_field,
+        indoc!(
+            r#"
+            foo : { a : Str } -> Str
+            foo = \{ a ? "" } -> a
+            foo
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `foo` is weird:
+
+    5│      foo = \{ a ? "" } -> a
+                   ^^^^^^^^^^
+
+    The argument is a pattern that matches record values of type:
+
+        { a ? Str }
+
+    But the annotation on `foo` says the 1st argument should be:
+
+        { a : Str }
+    "###
+    );
 }
