@@ -326,6 +326,8 @@ fn gen_from_mono_module_llvm(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    module.print_to_stderr();
+
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
     let memory_buffer = if emit_debug_info {

@@ -229,6 +229,8 @@ pub(crate) fn preprocess_windows(
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
+    std::fs::write("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/zig-platform/app.obj",roc_app_bytes);
+
     let app_obj_sections = AppSections::from_data(roc_app_bytes);
     let mut symbols = app_obj_sections.roc_symbols;
 
@@ -483,6 +485,7 @@ impl DynamicRelocationsPe {
 
             let offset_in_file = self.section_offset_in_file + thunk_start_offset + thunk_offset;
             let virtual_address = roc_dll_descriptor.original_first_thunk.get(LE) + thunk_offset;
+            crate::dbg_hex!(virtual_address);
 
             self.name_by_virtual_address
                 .insert(virtual_address, name.clone());
@@ -513,6 +516,13 @@ impl DynamicRelocationsPe {
             IMAGE_NT_OPTIONAL_HDR64_MAGIC
         );
 
+        let sections = nt_headers.sections(data, offset)?;
+        for s in sections.iter() {
+            crate::dbg_hex!(
+                s.virtual_address.get(LE),
+                s.virtual_address.get(LE) + s.virtual_size.get(LE)
+            );
+        }
         let sections = nt_headers.sections(data, offset)?;
         let section_headers_offset_in_file = offset;
 
