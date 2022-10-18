@@ -9,9 +9,10 @@ use memmap2::MmapMut;
 use object::{
     pe::{
         self, ImageBaseRelocation, ImageFileHeader, ImageImportDescriptor, ImageNtHeaders64,
-        ImageSectionHeader, ImageThunkData64,
+        ImageSectionHeader, ImageThunkData64, IMAGE_DOS_SIGNATURE, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+        IMAGE_NT_SIGNATURE,
     },
-    read::pe::ImportTable,
+    read::pe::{ImageOptionalHeader, ImportTable},
     LittleEndian as LE, Object, RelocationTarget, SectionIndex,
 };
 use serde::{Deserialize, Serialize};
@@ -498,11 +499,20 @@ impl DynamicRelocationsPe {
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(data)?;
+        debug_assert_eq!(dos_header.e_magic.get(LE), IMAGE_DOS_SIGNATURE);
+
         let mut offset = dos_header.nt_headers_offset().into();
         let data_directories_offset_in_file =
             offset as u32 + std::mem::size_of::<ImageNtHeaders64>() as u32;
 
         let (nt_headers, data_directories) = ImageNtHeaders64::parse(data, &mut offset)?;
+        debug_assert_eq!(nt_headers.signature(), IMAGE_NT_SIGNATURE);
+
+        debug_assert_eq!(
+            nt_headers.optional_header.magic(),
+            IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        );
+
         let sections = nt_headers.sections(data, offset)?;
         let section_headers_offset_in_file = offset;
 
