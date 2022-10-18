@@ -8044,4 +8044,21 @@ mod solve_expr {
             "{} -> {}",
         );
     }
+
+    #[test]
+    fn derive_hash_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Hash]
+
+                main = \hasher, @N n -> Hash.hash hasher (@N n)
+                #                       ^^^^^^^^^
+                "#
+            ),
+            @"N#Hash.hash(3) : a, N -[[#N_hash(3)]]-> a | a has Hasher"
+        );
+    }
 }

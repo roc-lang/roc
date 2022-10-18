@@ -1590,6 +1590,33 @@ mod hash {
                 RocList<u8>
             )
         }
+
+        #[test]
+        fn derived_hash_for_opaque_record() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        Q := {{ a: U8, b: U8, c: U8 }} has [Hash]
+
+                        q = @Q {{ a: 15, b: 27, c: 31 }}
+
+                        main =
+                            @THasher []
+                            |> Hash.hash q
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[15, 27, 31]),
+                RocList<u8>
+            )
+        }
     }
 }
 

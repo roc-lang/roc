@@ -127,11 +127,7 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
-    Body(
-        &'a Loc<ast::Pattern<'a>>,
-        Loc<Pattern>,
-        &'a Loc<ast::Expr<'a>>,
-    ),
+    Body(Loc<Pattern>, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
     TypedBody(
         &'a Loc<ast::Pattern<'a>>,
@@ -145,7 +141,7 @@ impl PendingValueDef<'_> {
     fn loc_pattern(&self) -> &Loc<Pattern> {
         match self {
             PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
-            PendingValueDef::Body(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
         }
     }
@@ -168,6 +164,7 @@ enum PendingTypeDef<'a> {
 
     /// An opaque type alias, e.g. `Age := U32`.
     Opaque {
+        name_str: &'a str,
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -212,6 +209,7 @@ impl PendingTypeDef<'_> {
                 Some((name.value, region))
             }
             PendingTypeDef::Opaque {
+                name_str: _,
                 name,
                 vars: _,
                 ann,
@@ -641,6 +639,109 @@ fn separate_implemented_and_required_members(
     }
 }
 
+fn synthesize_derived_hash<'a>(
+    env: &mut Env<'a>,
+    at_opaque: &'a str,
+    region: Region,
+) -> ast::Expr<'a> {
+    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
+    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
+    let hasher = env.arena.alloc_str("#hasher");
+
+    let payload = env.arena.alloc_str("#payload");
+
+    // \@Opaq payload
+    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
+    let opaque_apply_pattern = ast::Pattern::Apply(
+        opaque_ref,
+        &*env
+            .arena
+            .alloc([Loc::at(region, ast::Pattern::Identifier(payload))]),
+    );
+
+    // Hash.hash hasher payload
+    let call_member = alloc_expr(ast::Expr::Apply(
+        alloc_expr(ast::Expr::Var {
+            module_name: env.arena.alloc_str("Hash"),
+            ident: env.arena.alloc_str("hash"),
+        }),
+        &*env.arena.alloc([
+            &*alloc_expr(ast::Expr::Var {
+                module_name: "",
+                ident: hasher,
+            }),
+            &*alloc_expr(ast::Expr::Var {
+                module_name: "",
+                ident: payload,
+            }),
+        ]),
+        roc_module::called_via::CalledVia::Space,
+    ));
+
+    // \hasher, @Opaq payload -> Hash.hash hasher payload
+    ast::Expr::Closure(
+        env.arena.alloc([
+            Loc::at(region, ast::Pattern::Identifier(hasher)),
+            Loc::at(region, opaque_apply_pattern),
+        ]),
+        call_member,
+    )
+}
+
+fn synthesize_derived_member_impl<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    opaque: Symbol,
+    opaque_name: &'a str,
+    ability_member: Symbol,
+) -> (Symbol, DerivedDef<'a>) {
+    // @Opaq
+    let at_opaque = env.arena.alloc_str(&format!("@{}", opaque_name));
+    let region = Region::zero();
+
+    let (impl_name, def_body): (String, ast::Expr<'a>) = match ability_member {
+        Symbol::ENCODE_TO_ENCODER => (
+            format!("#{}_toEncoder", opaque_name),
+            todo!(),
+            //synthesize_derived_to_encoder(env, scope, at_opaque, region),
+        ),
+        Symbol::DECODE_DECODER => (
+            format!("#{}_decoder", opaque_name),
+            todo!(),
+            //synthesize_derived_decoder(env, scope, at_opaque, region),
+        ),
+        Symbol::HASH_HASH => (
+            format!("#{}_hash", opaque_name),
+            synthesize_derived_hash(env, at_opaque, region),
+        ),
+        Symbol::BOOL_IS_EQ => (
+            format!("#{}_isEq", opaque_name),
+            todo!(),
+            // synthesize_derived_is_eq(env, scope, at_opaque, region),
+        ),
+        other => internal_error!("{:?} is not a derivable ability member!", other),
+    };
+
+    let impl_symbol = scope
+        .introduce_str(&impl_name, region)
+        .expect("this name is not unique");
+
+    let def_pattern = Pattern::Identifier(impl_symbol);
+
+    let def = PendingValue::Def(PendingValueDef::Body(
+        Loc::at(region, def_pattern),
+        env.arena.alloc(Loc::at(region, def_body)),
+    ));
+    (impl_symbol, Loc::at(region, def))
+}
+
+type DerivedDef<'a> = Loc<PendingValue<'a>>;
+
+struct CanonicalizedOpaque<'a> {
+    opaque_def: Alias,
+    derived_defs: Vec<DerivedDef<'a>>,
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
@@ -651,10 +752,11 @@ fn canonicalize_opaque<'a>(
     pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
+    name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
-) -> Result<Alias, ()> {
+) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
         output,
@@ -667,6 +769,7 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
+    let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
         let has_abilities = has_abilities.value.collection();
 
@@ -808,7 +911,19 @@ fn canonicalize_opaque<'a>(
                     .abilities_store
                     .register_declared_implementations(name.value, impls);
             } else if let Some((_, members)) = ability.derivable_ability() {
-                let impls = members.iter().map(|member| (*member, MemberImpl::Derived));
+                let num_members = members.len();
+
+                derived_defs.reserve(num_members);
+
+                let mut impls = Vec::with_capacity(num_members);
+                for &member in members.iter() {
+                    let (derived_impl, derived_def) =
+                        synthesize_derived_member_impl(env, scope, name.value, name_str, member);
+
+                    impls.push((member, MemberImpl::Impl(derived_impl)));
+                    derived_defs.push(derived_def);
+                }
+
                 scope
                     .abilities_store
                     .register_declared_implementations(name.value, impls);
@@ -854,7 +969,10 @@ fn canonicalize_opaque<'a>(
         }
     }
 
-    Ok(alias)
+    Ok(CanonicalizedOpaque {
+        opaque_def: alias,
+        derived_defs,
+    })
 }
 
 #[inline(always)]
@@ -929,7 +1047,11 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
-    let (aliases, symbols_introduced) = canonicalize_type_defs(
+    let CanonicalizedTypeDefs {
+        aliases,
+        symbols_introduced,
+        derived_defs,
+    } = canonicalize_type_defs(
         env,
         &mut output,
         var_store,
@@ -937,6 +1059,11 @@ pub(crate) fn canonicalize_defs<'a>(
         &pending_abilities_in_scope,
         pending_type_defs,
     );
+
+    // Add the derived ASTs, so that we create proper canonicalized defs for them.
+    // They can go at the end, and derived defs should never reference anything other than builtin
+    // ability members.
+    pending_value_defs.extend(derived_defs);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -1086,6 +1213,12 @@ fn canonicalize_value_defs<'a>(
     (can_defs, output, symbols_introduced)
 }
 
+struct CanonicalizedTypeDefs<'a> {
+    aliases: VecMap<Symbol, Alias>,
+    symbols_introduced: MutMap<Symbol, Region>,
+    derived_defs: Vec<DerivedDef<'a>>,
+}
+
 fn canonicalize_type_defs<'a>(
     env: &mut Env<'a>,
     output: &mut Output,
@@ -1093,7 +1226,7 @@ fn canonicalize_type_defs<'a>(
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     pending_type_defs: Vec<PendingTypeDef<'a>>,
-) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
+) -> CanonicalizedTypeDefs<'a> {
     enum TypeDef<'a> {
         Alias(
             Loc<Symbol>,
@@ -1101,6 +1234,7 @@ fn canonicalize_type_defs<'a>(
             &'a Loc<ast::TypeAnnotation<'a>>,
         ),
         Opaque(
+            &'a str,
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
@@ -1129,6 +1263,7 @@ fn canonicalize_type_defs<'a>(
                 type_defs.insert(name.value, TypeDef::Alias(name, vars, ann));
             }
             PendingTypeDef::Opaque {
+                name_str,
                 name,
                 vars,
                 ann,
@@ -1141,7 +1276,10 @@ fn canonicalize_type_defs<'a>(
                 // builtin abilities, and hence do not affect the type def sorting. We'll insert
                 // references of usages when canonicalizing the derives.
 
-                type_defs.insert(name.value, TypeDef::Opaque(name, vars, ann, derived));
+                type_defs.insert(
+                    name.value,
+                    TypeDef::Opaque(name_str, name, vars, ann, derived),
+                );
             }
             PendingTypeDef::Ability { name, members } => {
                 let mut referenced_symbols = Vec::with_capacity(2);
@@ -1167,6 +1305,7 @@ fn canonicalize_type_defs<'a>(
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
     let mut aliases = VecMap::default();
     let mut abilities = MutMap::default();
+    let mut all_derived_defs = Vec::new();
 
     for type_name in sorted {
         match type_defs.remove(&type_name).unwrap() {
@@ -1188,7 +1327,7 @@ fn canonicalize_type_defs<'a>(
                 }
             }
 
-            TypeDef::Opaque(name, vars, ann, derived) => {
+            TypeDef::Opaque(name_str, name, vars, ann, derived) => {
                 let alias_and_derives = canonicalize_opaque(
                     env,
                     output,
@@ -1196,13 +1335,19 @@ fn canonicalize_type_defs<'a>(
                     scope,
                     pending_abilities_in_scope,
                     name,
+                    name_str,
                     ann,
                     &vars,
                     derived,
                 );
 
-                if let Ok(alias) = alias_and_derives {
-                    aliases.insert(name.value, alias);
+                if let Ok(CanonicalizedOpaque {
+                    opaque_def,
+                    derived_defs,
+                }) = alias_and_derives
+                {
+                    aliases.insert(name.value, opaque_def);
+                    all_derived_defs.extend(derived_defs);
                 }
             }
 
@@ -1238,7 +1383,11 @@ fn canonicalize_type_defs<'a>(
         pending_abilities_in_scope,
     );
 
-    (aliases, symbols_introduced)
+    CanonicalizedTypeDefs {
+        aliases,
+        symbols_introduced,
+        derived_defs: all_derived_defs,
+    }
 }
 
 /// Resolve all pending abilities, to add them to scope.
@@ -2055,7 +2204,7 @@ fn canonicalize_pending_value_def<'a>(
                 Some(Loc::at(loc_ann.region, type_annotation)),
             )
         }
-        Body(_loc_pattern, loc_can_pattern, loc_expr) => {
+        Body(loc_can_pattern, loc_expr) => {
             //
             canonicalize_pending_body(
                 env,
@@ -2328,6 +2477,7 @@ fn to_pending_alias_or_opaque<'a>(
                 }
             }
 
+            let name_str = name.value;
             let name = Loc {
                 region: name.region,
                 value: symbol,
@@ -2340,6 +2490,7 @@ fn to_pending_alias_or_opaque<'a>(
                     ann,
                 },
                 AliasKind::Opaque => PendingTypeDef::Opaque {
+                    name_str,
                     name,
                     vars: can_rigids,
                     ann,
@@ -2531,11 +2682,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingValue::Def(PendingValueDef::Body(
-                loc_pattern,
-                loc_can_pattern,
-                loc_expr,
-            ))
+            PendingValue::Def(PendingValueDef::Body(loc_can_pattern, loc_expr))
         }
 
         AnnotatedBody {
