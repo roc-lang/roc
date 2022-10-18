@@ -1766,39 +1766,17 @@ mod test {
                 r#"
                 const std = @import("std");
 
-                extern const roc_one: u64;
-                extern const roc_three: u64;
-
                 extern fn roc_magic1() callconv(.C) u64;
-                extern fn roc_magic2() callconv(.C) u8;
-
-                pub export fn roc_alloc() u64 {
-                    return 123456;
-                }
-
-                pub export fn roc_realloc() u64 {
-                    return 111111;
-                }
 
                 pub fn main() !void {
                     const stdout = std.io.getStdOut().writer();
-                    try stdout.print("Hello, {} {} {} {}!\n", .{roc_magic1(), roc_magic2(), roc_one, roc_three});
+                    try stdout.print("Hello, {}!\n", .{roc_magic1()});
                 }
                 "#
             ),
             indoc!(
                 r#"
-                export const roc_one: u64 = 1;
-                export const roc_three: u64 = 3;
-
-                extern fn roc_alloc() u64;
-                extern fn roc_realloc() u64;
-
                 export fn roc_magic1() u64 {
-                    return roc_alloc() + roc_realloc();
-                }
-
-                export fn roc_magic2() u8 {
                     return 32;
                 }
                 "#
