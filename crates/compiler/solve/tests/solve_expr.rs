@@ -8046,6 +8046,23 @@ mod solve_expr {
     }
 
     #[test]
+    fn derive_to_encoder_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Encoding]
+
+                main = Encode.toEncoder (@N 15)
+                #      ^^^^^^^^^^^^^^^^
+                "#
+            ),
+            @"N#Encode.toEncoder(3) : N -[[#N_toEncoder(3)]]-> Encoder fmt | fmt has EncoderFormatting"
+        );
+    }
+
+    #[test]
     fn derive_hash_for_opaque() {
         infer_queries!(
             indoc!(

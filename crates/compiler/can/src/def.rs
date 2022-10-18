@@ -639,6 +639,45 @@ fn separate_implemented_and_required_members(
     }
 }
 
+fn synthesize_derived_to_encoder<'a>(
+    env: &mut Env<'a>,
+    at_opaque: &'a str,
+    region: Region,
+) -> ast::Expr<'a> {
+    let alloc_pat = |it| env.arena.alloc(Loc::at(region, it));
+    let alloc_expr = |it| env.arena.alloc(Loc::at(region, it));
+
+    let payload = env.arena.alloc_str("#payload");
+
+    // \@Opaq payload
+    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
+    let opaque_apply_pattern = ast::Pattern::Apply(
+        opaque_ref,
+        &*env
+            .arena
+            .alloc([Loc::at(region, ast::Pattern::Identifier(payload))]),
+    );
+
+    // Encode.toEncoder payload
+    let call_member = alloc_expr(ast::Expr::Apply(
+        alloc_expr(ast::Expr::Var {
+            module_name: "Encode",
+            ident: "toEncoder",
+        }),
+        &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
+            module_name: "",
+            ident: payload,
+        })]),
+        roc_module::called_via::CalledVia::Space,
+    ));
+
+    // \@Opaq payload -> Encode.toEncoder payload
+    ast::Expr::Closure(
+        env.arena.alloc([Loc::at(region, opaque_apply_pattern)]),
+        call_member,
+    )
+}
+
 fn synthesize_derived_hash<'a>(
     env: &mut Env<'a>,
     at_opaque: &'a str,
@@ -756,14 +795,9 @@ fn synthesize_derived_member_impl<'a>(
     let (impl_name, def_body): (String, ast::Expr<'a>) = match ability_member {
         Symbol::ENCODE_TO_ENCODER => (
             format!("#{}_toEncoder", opaque_name),
-            todo!(),
-            //synthesize_derived_to_encoder(env, scope, at_opaque, region),
+            synthesize_derived_to_encoder(env, at_opaque, region),
         ),
-        Symbol::DECODE_DECODER => (
-            format!("#{}_decoder", opaque_name),
-            todo!(),
-            //synthesize_derived_decoder(env, scope, at_opaque, region),
-        ),
+        Symbol::DECODE_DECODER => (format!("#{}_decoder", opaque_name), todo!()),
         Symbol::HASH_HASH => (
             format!("#{}_hash", opaque_name),
             synthesize_derived_hash(env, at_opaque, region),
