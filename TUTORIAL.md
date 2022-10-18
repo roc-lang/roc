@@ -1407,7 +1407,7 @@ provides main to pf
 
 ## Comments
 
-Comments in `.roc` files begin with `##` and will be included in generated documentation with ```roc docs```. Comments require a single space after the `##`, and can include code blocks by adding five spaces after `##`. 
+Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`. 
 
 ```coffee
 ## This is a comment for documentation, and includes a code block.
@@ -1416,7 +1416,7 @@ Comments in `.roc` files begin with `##` and will be included in generated docum
 ##     expect x == 2
 ```
 
-Like [Python](https://www.python.org), [Ruby](https://www.ruby-lang.org), [Perl](https://www.perl.org), and [Elixir](https://elixir-lang.org/), Roc also supports inline comments. They begin with `#` instead of `--`, and can also used to add information that won't be included in documentation.
+Like [Python](https://www.python.org), [Ruby](https://www.ruby-lang.org), [Perl](https://www.perl.org), and [Elixir](https://elixir-lang.org/), Roc also supports inline comments. They begin with `#`, and can be used to add information that won't be included in documentation.
 
 ```coffee
 # This is a line comment that won't appear in documentation.
