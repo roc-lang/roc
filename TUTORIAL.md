@@ -1416,7 +1416,7 @@ Comments that begin with `##` will be included in generated documentation (```ro
 ##     expect x == 2
 ```
 
-Like [Python](https://www.python.org), [Ruby](https://www.ruby-lang.org), [Perl](https://www.perl.org), and [Elixir](https://elixir-lang.org/), Roc also supports inline comments. They begin with `#`, and can be used to add information that won't be included in documentation.
+Roc also supports inline comments and line comments with `#`. They can be used to add information that won't be included in documentation.
 
 ```coffee
 # This is a line comment that won't appear in documentation.
