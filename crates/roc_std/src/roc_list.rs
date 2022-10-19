@@ -121,9 +121,20 @@ impl<T> RocList<T> {
         }
     }
 
-    // Marks a list as readonly. This means that it will be leaked.
-    // For constants passed in from platform to application, this may be reasonable.
-    // Marked unsafe because it should not be used lightly.
+    /// Marks a list as readonly. This means that it will be leaked.
+    /// For constants passed in from platform to application, this may be reasonable.
+    ///
+    /// # Safety
+    ///
+    /// A value can be read-only in Roc for 3 reasons:
+    ///   1. The value is stored in read-only memory like a constant in the app.
+    ///   2. Our refcounting maxes out. When that happens, we saturate to read-only.
+    ///   3. This function is called
+    ///
+    /// Any value that is set to read-only will be leaked.
+    /// There is no way to tell how many references it has and if it is safe to free.
+    /// As such, only values that should have a static lifetime for the entire application run
+    /// should be considered for marking read-only.
     pub unsafe fn set_readonly(&self) {
         if let Some((_, storage)) = self.elements_and_storage() {
             storage.set(Storage::Readonly);
