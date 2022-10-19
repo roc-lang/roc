@@ -334,6 +334,9 @@ impl MetaCollector for ChangedVariableCollector {
     }
 
     #[inline(always)]
+    fn record_flex_able_variable(&mut self, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, other: Self) {
         self.changed.extend(other.changed)
     }

@@ -16,6 +16,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
+use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -685,6 +686,7 @@ fn solve(
         constraint,
     };
 
+    let mut def_introduced_flex_able_vars = VecSet::<Variable>::with_capacity(32);
     let mut stack = vec![initial];
 
     while let Some(work_item) = stack.pop() {
@@ -748,6 +750,32 @@ fn solve(
                     );
 
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                }
+
+                if let Some(problems) = find_unconstrained_able_vars_in_def(
+                    subs,
+                    &(constraints.variables[let_con.flex_vars.indices()]
+                        .iter()
+                        .copied())
+                    .chain(
+                        constraints.variables[let_con.rigid_vars.indices()]
+                            .iter()
+                            .copied(),
+                    )
+                    .chain(local_def_vars.iter().map(|(_, v)| v.value))
+                    .collect::<Vec<_>>(),
+                    &mut def_introduced_flex_able_vars,
+                ) {
+                    for var in problems {
+                        dbg!((
+                            &local_def_vars,
+                            subs.get_root_key_without_compacting(var),
+                            roc_types::subs::SubsFmtContent(
+                                subs.get_content_without_compacting(var),
+                                subs
+                            )
+                        ));
+                    }
                 }
 
                 stack.push(Work::Constraint {
@@ -863,6 +891,36 @@ fn solve(
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
+                let set = local_def_vars
+                    .iter()
+                    .map(|(_, v)| v.value)
+                    .collect::<Vec<_>>();
+                if let Some(problems) = find_unconstrained_able_vars_in_def(
+                    subs,
+                    &set,
+                    &mut def_introduced_flex_able_vars,
+                ) {
+                    for var in problems {
+                        dbg!((
+                            &local_def_vars,
+                            set.iter()
+                                .map(|v| (
+                                    subs.get_root_key_without_compacting(*v),
+                                    roc_types::subs::SubsFmtContent(
+                                        subs.get_content_without_compacting(*v),
+                                        subs
+                                    )
+                                ))
+                                .collect::<Vec<_>>(),
+                            subs.get_root_key_without_compacting(var),
+                            roc_types::subs::SubsFmtContent(
+                                subs.get_content_without_compacting(var),
+                                subs
+                            )
+                        ));
+                    }
+                }
+
                 // Note that this vars_by_symbol is the one returned by the
                 // previous call to solve()
                 let state_for_ret_con = State {
@@ -927,9 +985,10 @@ fn solve(
                         vars,
                         must_implement_ability,
                         lambda_sets_to_specialize,
-                        extra_metadata: _,
+                        extra_metadata,
                     } => {
                         introduce(subs, rank, pools, &vars);
+                        def_introduced_flex_able_vars.extend(extra_metadata.able_variables);
 
                         if !must_implement_ability.is_empty() {
                             let new_problems = obligation_cache.check_obligations(
@@ -1686,6 +1745,114 @@ fn solve(
     }
 
     state
+}
+
+fn find_flex_able_variables(subs: &Subs, vars: &[Variable]) -> VecSet<Variable> {
+    let mut found = VecSet::default();
+    let mut stack = Vec::new();
+    stack.extend(vars);
+
+    let mut seen_recursion = VecSet::default();
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::FlexAbleVar(_, _) => {
+                found.insert(subs.get_root_key_without_compacting(var));
+            }
+            Content::FlexVar(_) | Content::RigidVar(_) | Content::RigidAbleVar(_, _) => {
+                /* irrelevant */
+            }
+            Content::RecursionVar {
+                structure,
+                opt_name: _,
+            } => {
+                let var = subs.get_root_key_without_compacting(var);
+                if !seen_recursion.contains(&var) {
+                    seen_recursion.insert(var);
+                    stack.push(*structure);
+                }
+            }
+            Content::LambdaSet(..) => { /* irrelevant */ }
+            Content::Structure(structure) => match structure {
+                FlatType::Apply(_, slice) => {
+                    stack.extend(subs.get_subs_slice(*slice));
+                }
+                FlatType::Func(args, _, ret) => {
+                    stack.push(*ret);
+                    stack.extend(subs.get_subs_slice(*args));
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(fields.iter_variables().map(|v| subs[v]));
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(*ext);
+                }
+                FlatType::TagUnion(tags, ext) => {
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|s| subs.get_subs_slice(*s)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                    stack.push(*rec);
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|s| subs.get_subs_slice(*s)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {
+                    /* irrelevant */
+                }
+            },
+            Content::Alias(_, _, real, _) => {
+                stack.push(*real);
+            }
+            Content::RangedNumber(..) => { /* irrelevant */ }
+            Content::Error => todo!(),
+        }
+    }
+
+    found
+}
+
+fn find_unconstrained_able_vars_in_def(
+    subs: &Subs,
+    def_bound_variables: &[Variable],
+    def_introduced_flex_able_vars: &mut VecSet<Variable>,
+) -> Option<Vec<Variable>> {
+    let mut problems = Vec::new();
+    let mut bound_able_flex_vars = None;
+    for &fv in def_introduced_flex_able_vars.iter() {
+        if let Content::FlexAbleVar(..) = subs.get_content_without_compacting(fv) {
+            if !(problems.iter()).any(|pv| subs.equivalent_without_compacting(fv, *pv)) {
+                let bound = match bound_able_flex_vars {
+                    None => find_flex_able_variables(subs, def_bound_variables),
+                    Some(vars) => vars,
+                };
+
+                let fv = subs.get_root_key_without_compacting(fv);
+                if !bound.contains(&fv) {
+                    problems.push(fv);
+                }
+
+                bound_able_flex_vars = Some(bound);
+            }
+        }
+    }
+
+    // Clear
+    def_introduced_flex_able_vars.clear();
+
+    if problems.is_empty() {
+        None
+    } else {
+        Some(problems)
+    }
 }
 
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
@@ -3214,7 +3381,7 @@ fn generalize(
     visit_mark: Mark,
     young_rank: Rank,
     pools: &mut Pools,
-) {
+) -> Vec<Variable> {
     let young_vars = std::mem::take(pools.get_mut(young_rank));
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
@@ -3242,6 +3409,7 @@ fn generalize(
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
+    let mut generalized = Vec::new();
     for var in last_pool.drain(..) {
         if !subs.redundant(var) {
             let desc_rank = subs.get_rank(var);
@@ -3250,12 +3418,14 @@ fn generalize(
                 pools.get_mut(desc_rank).push(var);
             } else {
                 subs.set_rank(var, Rank::NONE);
+                generalized.push(var);
             }
         }
     }
 
-    // re-use the last_vector (which likely has a good capacity for future runs
+    // re-use the last_vector (which likely has a good capacity for future runs)
     *pools.get_mut(young_rank) = last_pool;
+    generalized
 }
 
 /// Sort the variables into buckets by rank.

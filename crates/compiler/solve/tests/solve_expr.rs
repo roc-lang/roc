@@ -8009,4 +8009,37 @@ mod solve_expr {
             print_only_under_alias: true
         );
     }
+
+    #[test]
+    fn type_annotations_needed() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = \hasher, container, walk ->
+                    walk
+                        container
+                        0
+                        (\accum, elem ->
+                            x =
+                                # Note, we intentionally copy the hasher in every iteration.
+                                # Having the same base state is required for unordered hashing.
+                                hasher
+                                |> Hash.hash elem
+                                |> Hash.complete
+                            nextAccum = Num.addWrap accum x
+                
+                            if nextAccum < accum then
+                                # we don't want to lose a bit of entropy on overflow, so add it back in.
+                                Num.addWrap nextAccum 1
+                            else
+                                nextAccum
+                        )
+                    |> \accum -> Hash.addU64 hasher accum
+                "#
+            ),
+            "",
+        );
+    }
 }

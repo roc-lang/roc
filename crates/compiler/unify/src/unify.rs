@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
@@ -162,12 +162,19 @@ pub trait MetaCollector: Default + std::fmt::Debug {
 
     fn record_changed_variable(&mut self, subs: &Subs, var: Variable);
 
+    fn record_flex_able_variable(&mut self, var: Variable);
+
     fn union(&mut self, other: Self);
 }
 
+/// The standard metadata collector for type inference.
+/// Only needs to collect additional information about
+///   - variables bound to abilities, to determine evil usages
 #[derive(Default, Debug)]
-pub struct NoCollector;
-impl MetaCollector for NoCollector {
+pub struct InferenceCollector {
+    pub able_variables: VecSet<Variable>,
+}
+impl MetaCollector for InferenceCollector {
     const UNIFYING_SPECIALIZATION: bool = false;
     const IS_LATE: bool = false;
 
@@ -178,9 +185,15 @@ impl MetaCollector for NoCollector {
     fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
 
     #[inline(always)]
+    fn record_flex_able_variable(&mut self, var: Variable) {
+        self.able_variables.insert(var);
+    }
+
+    #[inline(always)]
     fn union(&mut self, _other: Self) {}
 }
 
+/// A collector of metadata necessary to associated specialization lamdba sets.
 #[derive(Default, Debug)]
 pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
 
@@ -197,6 +210,9 @@ impl MetaCollector for SpecializationLsetCollector {
     fn record_changed_variable(&mut self, _subs: &Subs, _var: Variable) {}
 
     #[inline(always)]
+    fn record_flex_able_variable(&mut self, _var: Variable) {}
+
+    #[inline(always)]
     fn union(&mut self, other: Self) {
         for (k, v) in other.0.into_iter() {
             let _old = self.0.insert(k, v);
@@ -206,7 +222,7 @@ impl MetaCollector for SpecializationLsetCollector {
 }
 
 #[derive(Debug)]
-pub enum Unified<M: MetaCollector = NoCollector> {
+pub enum Unified<M: MetaCollector = InferenceCollector> {
     Success {
         vars: Pool,
         must_implement_ability: MustImplementConstraints,
@@ -1281,7 +1297,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                             // different (since they have different capture sets), and so we don't
                             // want to merge the variables.
                             let variables_are_unifiable = env.with_outcome_only(|env| {
-                                unify_pool::<NoCollector>(env, pool, var1, var2, mode)
+                                unify_pool::<InferenceCollector>(env, pool, var1, var2, mode)
                                     .mismatches
                                     .is_empty()
                             });
@@ -2909,7 +2925,9 @@ fn unify_flex<M: MetaCollector>(
         FlexAbleVar(opt_other_name, ability) => {
             // Prefer using right's name.
             let opt_name = (opt_other_name).or(*opt_name);
-            merge(env, ctx, FlexAbleVar(opt_name, *ability))
+            let mut outcome = merge::<M>(env, ctx, FlexAbleVar(opt_name, *ability));
+            outcome.extra_metadata.record_flex_able_variable(ctx.first);
+            outcome
         }
 
         RigidVar(_)
@@ -2941,15 +2959,18 @@ fn unify_flex_able<M: MetaCollector>(
         FlexVar(opt_other_name) => {
             // Prefer using right's name.
             let opt_name = (opt_other_name).or(*opt_name);
-            merge(env, ctx, FlexAbleVar(opt_name, ability))
+
+            let mut outcome = merge::<M>(env, ctx, FlexAbleVar(opt_name, ability));
+            outcome.extra_metadata.record_flex_able_variable(ctx.first);
+            outcome
         }
 
         FlexAbleVar(opt_other_name, other_ability) => {
             // Prefer the right's name when possible.
             let opt_name = (opt_other_name).or(*opt_name);
 
-            if ability == *other_ability {
-                merge(env, ctx, FlexAbleVar(opt_name, ability))
+            let mut outcome = if ability == *other_ability {
+                merge::<M>(env, ctx, FlexAbleVar(opt_name, ability))
             } else {
                 // Ability names differ; mismatch for now.
                 // TODO check ability hierarchies.
@@ -2960,7 +2981,9 @@ fn unify_flex_able<M: MetaCollector>(
                     ability,
                     other_ability
                 )
-            }
+            };
+            outcome.extra_metadata.record_flex_able_variable(ctx.first);
+            outcome
         }
 
         RigidAbleVar(_, other_ability) => {
