@@ -1,3 +1,5 @@
+//! Provides the core CLI functionality for the `roc` binary
+
 #[macro_use]
 extern crate const_format;
 
