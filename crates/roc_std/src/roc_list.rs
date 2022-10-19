@@ -619,6 +619,20 @@ pub struct SendSafeRocList<T>(RocList<T>);
 
 unsafe impl<T> Send for SendSafeRocList<T> where T: Send {}
 
+impl<T> Clone for SendSafeRocList<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        if self.0.is_readonly() {
+            SendSafeRocList(self.0.clone())
+        } else {
+            // To keep self send safe, this must copy.
+            SendSafeRocList(RocList::from_slice(&self.0))
+        }
+    }
+}
+
 impl<T> From<RocList<T>> for SendSafeRocList<T>
 where
     T: Clone,

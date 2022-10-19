@@ -657,6 +657,17 @@ pub struct SendSafeRocStr(RocStr);
 
 unsafe impl Send for SendSafeRocStr {}
 
+impl Clone for SendSafeRocStr {
+    fn clone(&self) -> Self {
+        if self.0.is_readonly() {
+            SendSafeRocStr(self.0.clone())
+        } else {
+            // To keep self send safe, this must copy.
+            SendSafeRocStr(RocStr::from(self.0.as_str()))
+        }
+    }
+}
+
 impl From<RocStr> for SendSafeRocStr {
     fn from(s: RocStr) -> Self {
         if s.is_unique() || s.is_readonly() {
