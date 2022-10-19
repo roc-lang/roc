@@ -123,6 +123,16 @@ impl RocStr {
         }
     }
 
+    // Marks a str as readonly. This means that it will be leaked.
+    // For constants passed in from platform to application, this may be reasonable.
+    // Marked unsafe because it should not be used lightly.
+    pub unsafe fn set_readonly(&self) {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => unsafe { roc_list.set_readonly() },
+            RocStrInnerRef::SmallString(_) => {}
+        }
+    }
+
     /// Note that there is no way to convert directly to a String.
     ///
     /// This is because RocStr values are not allocated using the system allocator, so

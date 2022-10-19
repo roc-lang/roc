@@ -121,6 +121,15 @@ impl<T> RocList<T> {
         }
     }
 
+    // Marks a list as readonly. This means that it will be leaked.
+    // For constants passed in from platform to application, this may be reasonable.
+    // Marked unsafe because it should not be used lightly.
+    pub unsafe fn set_readonly(&self) {
+        if let Some((_, storage)) = self.elements_and_storage() {
+            storage.set(Storage::Readonly);
+        }
+    }
+
     /// Note that there is no way to convert directly to a Vec.
     ///
     /// This is because RocList values are not allocated using the system allocator, so
