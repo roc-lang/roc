@@ -11457,4 +11457,17 @@ All branches in an `if` must have the same type!
     Note: `Hash` cannot be generated for functions.
     "###
     );
+
+    test_report!(
+        suggest_add_has_clause_to_variable,
+        indoc!(
+            r#"
+            app "test" provides [refl] to "./platform"
+
+            refl : List a -> Bool
+            refl = \x -> x == x
+            "#,
+        ),
+    @""
+    );
 }
