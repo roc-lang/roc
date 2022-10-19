@@ -1405,6 +1405,27 @@ imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
 provides main to pf
 ```
 
+## Comments
+
+Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`. 
+
+```coffee
+## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2
+```
+
+Roc also supports inline comments and line comments with `#`. They can be used to add information that won't be included in documentation.
+
+```coffee
+# This is a line comment that won't appear in documentation.
+myFunction : U8 -> U8
+myFunction = \bit -> bit % 2 # this is an inline comment
+```
+
+Roc does not have multiline comment syntax.
+
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
