@@ -103,6 +103,24 @@ impl<T> RocList<T> {
         self.len() == 0
     }
 
+    pub fn is_unique(&self) -> bool {
+        if let Some(storage) = self.storage() {
+            storage.is_unique()
+        } else {
+            // If there is no storage, this list is empty.
+            // An empty list is always unique.
+            true
+        }
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        if let Some(storage) = self.storage() {
+            storage.is_readonly()
+        } else {
+            false
+        }
+    }
+
     /// Note that there is no way to convert directly to a Vec.
     ///
     /// This is because RocList values are not allocated using the system allocator, so
@@ -583,6 +601,34 @@ where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_seq(RocListVisitor::new())
+    }
+}
+
+// This is a RocList that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
+#[repr(transparent)]
+pub struct SendSafeRocList<T>(RocList<T>);
+
+unsafe impl<T> Send for SendSafeRocList<T> where T: Send {}
+
+impl<T> From<RocList<T>> for SendSafeRocList<T>
+where
+    T: Clone,
+{
+    fn from(l: RocList<T>) -> Self {
+        if l.is_unique() || l.is_readonly() {
+            SendSafeRocList(l)
+        } else {
+            // This is not unique, do a deep copy.
+            // TODO: look into proper into_iter that takes ownership.
+            // Then this won't need clone and will skip and refcount inc and dec for each element.
+            SendSafeRocList(RocList::from_slice(&l))
+        }
+    }
+}
+
+impl<T> From<SendSafeRocList<T>> for RocList<T> {
+    fn from(l: SendSafeRocList<T>) -> Self {
+        l.0
     }
 }
 

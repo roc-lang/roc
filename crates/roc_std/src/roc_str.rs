@@ -109,6 +109,20 @@ impl RocStr {
         self.len() == 0
     }
 
+    pub fn is_unique(&self) -> bool {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.is_unique(),
+            RocStrInnerRef::SmallString(_) => true,
+        }
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.is_readonly(),
+            RocStrInnerRef::SmallString(_) => false,
+        }
+    }
+
     /// Note that there is no way to convert directly to a String.
     ///
     /// This is because RocStr values are not allocated using the system allocator, so
@@ -624,6 +638,29 @@ impl Drop for RocStr {
                 ManuallyDrop::drop(&mut self.0.heap_allocated);
             }
         }
+    }
+}
+
+// This is a RocStr that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
+#[repr(transparent)]
+pub struct SendSafeRocStr(RocStr);
+
+unsafe impl Send for SendSafeRocStr {}
+
+impl From<RocStr> for SendSafeRocStr {
+    fn from(s: RocStr) -> Self {
+        if s.is_unique() || s.is_readonly() {
+            SendSafeRocStr(s)
+        } else {
+            // This is not unique, do a deep copy.
+            SendSafeRocStr(RocStr::from(s.as_str()))
+        }
+    }
+}
+
+impl From<SendSafeRocStr> for RocStr {
+    fn from(s: SendSafeRocStr) -> Self {
+        s.0
     }
 }
 
