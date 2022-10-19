@@ -1267,12 +1267,26 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         + md.reloc_section_index * std::mem::size_of::<ImageSectionHeader>();
 
     let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    let new_virtual_size = ptr.virtual_size.get(LE) + added_reloc_bytes as u32;
+    let old_section_size = ptr.virtual_size.get(LE);
+    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
     ptr.virtual_size.set(LE, new_virtual_size);
 
     // TODO this is rounded up, so there is extra space and it does not need to change in our current examples
     // let new_size_of_raw_data = ptr.size_of_raw_data.get(LE) + added_reloc_bytes as u32;
     // ptr.size_of_raw_data.set(LE, new_size_of_raw_data);
+    assert!(new_virtual_size <= 0x200);
+
+    // in the data directories, update the length of the base relocations
+    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+        executable,
+        md.dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
+                * std::mem::size_of::<pe::ImageDataDirectory>(),
+    );
+
+    let old_dir_size = dir.size.get(LE);
+    debug_assert_eq!(old_section_size, old_dir_size);
+    dir.size.set(LE, new_virtual_size);
 }
 
 #[cfg(test)]
