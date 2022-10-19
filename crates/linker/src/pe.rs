@@ -653,6 +653,11 @@ impl Preprocessor {
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_section_names: &[[u8; 8]]) {
         const W: usize = std::mem::size_of::<ImageSectionHeader>();
 
+        // only correct for the first section, but that is OK because it's overwritten later
+        // anyway. But, this value may be used to check whether a previous section overruns into
+        // the app sections.
+        let pointer_to_raw_data = result.len() - self.additional_length;
+
         let previous_section_header =
             load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
 
@@ -678,7 +683,7 @@ impl Preprocessor {
                 // NOTE: this must be a valid virtual address, using 0 is invalid!
                 virtual_address: object::U32::new(LE, next_virtual_address as u32),
                 size_of_raw_data: Default::default(),
-                pointer_to_raw_data: Default::default(),
+                pointer_to_raw_data: object::U32::new(LE, pointer_to_raw_data as u32),
                 pointer_to_relocations: Default::default(),
                 pointer_to_linenumbers: Default::default(),
                 number_of_relocations: Default::default(),
@@ -1266,15 +1271,26 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let reloc_section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
         + md.reloc_section_index * std::mem::size_of::<ImageSectionHeader>();
 
-    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    let old_section_size = ptr.virtual_size.get(LE);
-    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
-    ptr.virtual_size.set(LE, new_virtual_size);
+    let next_section = load_struct_inplace::<ImageSectionHeader>(
+        executable,
+        reloc_section_header_start + std::mem::size_of::<ImageSectionHeader>(),
+    );
 
-    // TODO this is rounded up, so there is extra space and it does not need to change in our current examples
-    // let new_size_of_raw_data = ptr.size_of_raw_data.get(LE) + added_reloc_bytes as u32;
-    // ptr.size_of_raw_data.set(LE, new_size_of_raw_data);
-    assert!(new_virtual_size <= 0x200);
+    let next_section_pointer_to_raw_data = next_section.pointer_to_raw_data.get(LE);
+
+    let reloc_section =
+        load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
+    let old_section_size = reloc_section.virtual_size.get(LE);
+    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
+    reloc_section.virtual_size.set(LE, new_virtual_size);
+
+    assert!(
+        reloc_section.pointer_to_raw_data.get(LE)
+            + reloc_section.virtual_size.get(LE)
+            + (added_reloc_bytes as u32)
+            < next_section_pointer_to_raw_data,
+        "new .reloc section is too big, and runs into the next section!",
+    );
 
     // in the data directories, update the length of the base relocations
     let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
