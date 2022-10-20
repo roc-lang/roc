@@ -224,11 +224,6 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
              addU32,
              addU64,
              addU128,
-             addI8,
-             addI16,
-             addI32,
-             addI64,
-             addI128,
              complete,
          },
      ]
@@ -249,17 +244,6 @@ combineState = \@LowLevelHasher { originalSeed, state }, { a, b, seed, length } 
     @LowLevelHasher { originalSeed, state: wymix state hash }
 
 complete = \@LowLevelHasher { state } -> state
-
-addI8 = \hasher, i8 ->
-    addU8 hasher (Num.toU8 i8)
-addI16 = \hasher, i16 ->
-    addU16 hasher (Num.toU16 i16)
-addI32 = \hasher, i32 ->
-    addU32 hasher (Num.toU32 i32)
-addI64 = \hasher, i64 ->
-    addU64 hasher (Num.toU64 i64)
-addI128 = \hasher, i128 ->
-    addU128 hasher (Num.toU128 i128)
 
 # These implementations hash each value individually with the seed and then mix
 # the resulting hash with the state. There are other options that may be faster
