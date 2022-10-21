@@ -522,13 +522,13 @@ impl DynamicRelocationsPe {
             IMAGE_NT_OPTIONAL_HDR64_MAGIC
         );
 
-        let sections = nt_headers.sections(data, offset)?;
-        for s in sections.iter() {
-            crate::dbg_hex!(
-                s.virtual_address.get(LE),
-                s.virtual_address.get(LE) + s.virtual_size.get(LE)
-            );
-        }
+        //        let sections = nt_headers.sections(data, offset)?;
+        //        for s in sections.iter() {
+        //            crate::dbg_hex!(
+        //                s.virtual_address.get(LE),
+        //                s.virtual_address.get(LE) + s.virtual_size.get(LE)
+        //            );
+        //        }
         let sections = nt_headers.sections(data, offset)?;
         let section_headers_offset_in_file = offset;
 
