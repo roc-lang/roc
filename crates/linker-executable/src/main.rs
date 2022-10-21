@@ -108,6 +108,7 @@ fn zig_host_app(dir: &Path, host_zig: &str, app_zig: &str) {
     pe::surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &*roc_app);
 }
 
+#[no_mangle]
 fn test_basics(dir: &Path) {
     zig_host_app(
         dir,
