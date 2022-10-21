@@ -6,7 +6,6 @@ interface Html
         renderWithoutDocType,
         tagId,
         text,
-        attribute,
         html,
         base,
         head,
@@ -130,9 +129,6 @@ Node : [
 
 Attribute : Html.Attributes.Attribute
 
-attribute : Str -> (Str -> Attribute)
-attribute = Html.Attributes.attribute
-
 text : Str -> Node
 text = Text
 
@@ -142,8 +138,11 @@ element = \tag ->
     \attrs, children ->
         # While building the node tree, calculate the size of Str it will render to
         withTag = 2 * (3 + Str.countUtf8Bytes (tagName tag))
-        withAttrs = List.walk attrs withTag \acc, Attribute name val ->
-            acc + Str.countUtf8Bytes name + Str.countUtf8Bytes val + 4
+        withAttrs = List.walk attrs withTag \acc, { type, value } ->
+            acc
+            + Str.countUtf8Bytes (Html.Attributes.attrTypeName type)
+            + Str.countUtf8Bytes value
+            + 4
         totalSize = List.walk children withAttrs \acc, child ->
             acc + nodeSize child
 
@@ -200,8 +199,10 @@ renderHelp = \buffer, node ->
 
 # internal helper
 renderAttr : Str, Attribute -> Str
-renderAttr = \buffer, Attribute key val ->
-    "\(buffer) \(key)=\"\(val)\""
+renderAttr = \buffer, { type, value } ->
+    key = Html.Attributes.attrTypeName type
+
+    "\(buffer) \(key)=\"\(value)\""
 
 Tag : [
     Html,
