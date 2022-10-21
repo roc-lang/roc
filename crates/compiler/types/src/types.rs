@@ -4,6 +4,8 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::soa::{Index, Slice};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -355,6 +357,489 @@ impl std::ops::Neg for Polarity {
         match self {
             Polarity::Neg => todo!(),
             Polarity::Pos => todo!(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+struct AliasShared {
+    symbol: Symbol,
+    type_argument_abilities: Slice<Option<AbilitySet>>,
+    type_argument_regions: Slice<Region>,
+    lambda_set_variables: Slice<TypeTag>,
+    infer_ext_in_output_variables: Slice<TypeTag>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum TypeTag {
+    EmptyRecord,
+    EmptyTagUnion,
+    Function(Index<TypeTag>, Index<TypeTag>),
+    ClosureTag {
+        name: Symbol,
+        ambient_function: Variable,
+    },
+    // type extension is implicit
+    // tag name is in the `single_tag_union_tag_names` map
+    FunctionOrTagUnion(Symbol),
+    UnspecializedLambdaSet {
+        unspecialized: Uls,
+    },
+    DelayedAlias {
+        shared: Index<AliasShared>,
+    },
+    StructuralAlias {
+        shared: Index<AliasShared>,
+        actual: Index<TypeTag>,
+    },
+    OpaqueAlias {
+        shared: Index<AliasShared>,
+        actual: Index<TypeTag>,
+    },
+    HostExposedAlias {
+        shared: Index<AliasShared>,
+        actual_type: Index<TypeTag>,
+        actual_variable: Variable,
+    },
+
+    Apply {
+        symbol: Symbol,
+        // type_argument_types: Slice<TypeTag>, implicit
+        type_argument_regions: Slice<Region>,
+        region: Region, // IDEA: make implicit, final element of `type_argument_regions`
+    },
+    Variable(Variable),
+    RangedNumber(NumericRange),
+    /// A type error, which will code gen to a runtime error
+    Erroneous,
+
+    // TypeExtension is implicit in the type slice
+    // it is length zero for closed, length 1 for open
+    TagUnion(UnionTags),
+    RecursiveTagUnion(Variable, UnionTags),
+    Record(RecordFields),
+}
+
+#[allow(dead_code)]
+struct Types {
+    // main storage. Each type is represented by a tag, which is identified by its index.
+    // `tags_slices` is a parallel array (so these two vectors always have the same size), that
+    // allows storing a slice of types. This is used for storing the function argument types, or
+    // the extension parameter of tag unions/records.
+    tags: Vec<TypeTag>,
+    tags_slices: Vec<Slice<TypeTag>>,
+
+    // region info where appropriate (retained for generating error messages)
+    regions: Vec<Region>,
+
+    // tag unions
+    tag_names: Vec<TagName>,
+
+    // records
+    field_types: Vec<RecordField<()>>,
+    field_names: Vec<Lowercase>,
+
+    // aliases
+    type_arg_abilities: Vec<Option<AbilitySet>>, // TODO: structural sharing for `AbilitySet`s themselves
+    aliases: Vec<AliasShared>,
+
+    // these tag types are relatively rare, and so we store them in a way that reduces space, at
+    // the cost of slightly higher lookup time
+    problems: VecMap<Index<TypeTag>, Problem>,
+    single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
+}
+
+#[allow(dead_code)]
+impl Types {
+    const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
+    const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+
+    fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
+        use std::iter::repeat;
+
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags_slices
+            .extend(repeat(Slice::default()).take(length));
+
+        Slice::extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
+    }
+
+    fn reserve_type_tag(&mut self) -> Index<TypeTag> {
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags_slices.push(Slice::default());
+
+        Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
+    }
+
+    fn push_type_tag(&mut self, tag: TypeTag, type_slice: Slice<TypeTag>) -> Index<TypeTag> {
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags_slices.push(type_slice);
+
+        Index::push_new(&mut self.tags, tag)
+    }
+
+    fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags[index.index()] = tag;
+        self.tags_slices[index.index()] = type_slice;
+    }
+
+    fn from_old_type_slice(&mut self, old: &[Type]) -> Slice<TypeTag> {
+        let slice = self.reserve_type_tags(old.len());
+
+        for (index, argument) in slice.into_iter().zip(old) {
+            self.from_old_type_at(index, argument);
+        }
+
+        slice
+    }
+
+    fn tag_union_help(
+        &mut self,
+        tags: &[(TagName, Vec<Type>)],
+        extension: &TypeExtension,
+    ) -> (UnionTags, Slice<TypeTag>) {
+        let tag_names_slice =
+            Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
+
+        let type_slices = Slice::extend_new(
+            &mut self.tags_slices,
+            std::iter::repeat(Slice::default()).take(tags.len()),
+        );
+
+        for (slice_index, (_, types)) in type_slices.indices().zip(tags) {
+            self.tags_slices[slice_index] = self.from_old_type_slice(types);
+        }
+
+        let union_tags = UnionTags {
+            length: tags.len() as u16,
+            labels_start: tag_names_slice.start() as u32,
+            values_start: type_slices.start() as u32,
+            _marker: std::marker::PhantomData,
+        };
+
+        let type_slice = match extension {
+            TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+            TypeExtension::Closed => Slice::default(),
+        };
+
+        (union_tags, type_slice)
+    }
+
+    fn alias_shared_help(
+        &mut self,
+        symbol: Symbol,
+        type_arguments: &[OptAbleType],
+        lambda_set_variables: &[LambdaSet],
+        infer_ext_in_output_types: &[Type],
+    ) -> AliasShared {
+        let lambda_set_slice = {
+            let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+            for (index, argument) in slice.into_iter().zip(lambda_set_variables) {
+                self.from_old_type_at(index, &argument.0);
+            }
+
+            Slice::new(slice.start() as _, slice.len() as _)
+        };
+
+        let infer_ext_in_output_slice = {
+            let slice = self.reserve_type_tags(infer_ext_in_output_types.len());
+
+            for (index, ty) in slice.into_iter().zip(infer_ext_in_output_types) {
+                self.from_old_type_at(index, ty);
+            }
+
+            Slice::new(slice.start() as _, slice.len() as _)
+        };
+
+        let type_argument_abilities = Slice::extend_new(
+            &mut self.type_arg_abilities,
+            type_arguments.iter().map(|a| a.opt_abilities.clone()),
+        );
+
+        AliasShared {
+            symbol,
+            type_argument_abilities,
+            type_argument_regions: Slice::default(),
+            lambda_set_variables: lambda_set_slice,
+            infer_ext_in_output_variables: infer_ext_in_output_slice,
+        }
+    }
+
+    pub fn from_old_type(&mut self, old: &Type) -> Index<TypeTag> {
+        let index = self.reserve_type_tag();
+        self.from_old_type_at(index, old);
+        index
+    }
+
+    fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
+        match old {
+            Type::EmptyRec => self.set_type_tag(index, TypeTag::EmptyRecord, Slice::default()),
+            Type::EmptyTagUnion => {
+                self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
+            }
+            Type::Function(arguments, lambda_set, return_type) => {
+                let argument_slice = self.from_old_type_slice(arguments);
+
+                let tag = TypeTag::Function(
+                    self.from_old_type(lambda_set),
+                    self.from_old_type(return_type),
+                );
+
+                self.set_type_tag(index, tag, argument_slice)
+            }
+            Type::Apply(symbol, arguments, region) => {
+                let type_argument_regions =
+                    Slice::extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
+
+                let type_slice = {
+                    let slice = self.reserve_type_tags(arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(arguments) {
+                        self.from_old_type_at(index, &argument.value);
+                    }
+
+                    slice
+                };
+
+                self.set_type_tag(
+                    index,
+                    TypeTag::Apply {
+                        symbol: *symbol,
+                        type_argument_regions,
+                        region: *region,
+                    },
+                    type_slice,
+                )
+            }
+            Type::TagUnion(tags, extension) => {
+                let (union_tags, type_slice) = self.tag_union_help(tags, extension);
+
+                self.set_type_tag(index, TypeTag::TagUnion(union_tags), type_slice)
+            }
+            Type::RecursiveTagUnion(rec_var, tags, extension) => {
+                let (union_tags, type_slice) = self.tag_union_help(tags, extension);
+                let tag = TypeTag::RecursiveTagUnion(*rec_var, union_tags);
+
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::FunctionOrTagUnion(tag_name, symbol, extension) => {
+                let type_slice = match extension {
+                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Closed => Slice::default(),
+                };
+
+                self.single_tag_union_tag_names
+                    .insert(index, tag_name.clone());
+
+                let tag = TypeTag::FunctionOrTagUnion(*symbol);
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::UnspecializedLambdaSet { unspecialized } => {
+                let tag = TypeTag::UnspecializedLambdaSet {
+                    unspecialized: *unspecialized,
+                };
+                self.set_type_tag(index, tag, Slice::default())
+            }
+            Type::Record(fields, extension) => {
+                let type_slice = match extension {
+                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Closed => Slice::default(),
+                };
+
+                // should we sort at this point?
+                let field_type_slice = {
+                    let slice = self.reserve_type_tags(fields.len());
+
+                    for (index, argument) in slice.into_iter().zip(fields.values()) {
+                        self.from_old_type_at(index, argument.as_inner());
+                    }
+
+                    slice
+                };
+
+                let field_types = Slice::extend_new(
+                    &mut self.field_types,
+                    fields.values().map(|f| f.map(|_| ())),
+                );
+
+                let field_names = Slice::extend_new(&mut self.field_names, fields.keys().cloned());
+
+                let record_fields = RecordFields {
+                    length: fields.len() as u16,
+                    field_names_start: field_names.start() as u32,
+                    variables_start: field_type_slice.start() as u32,
+                    field_types_start: field_types.start() as u32,
+                };
+
+                let tag = TypeTag::Record(record_fields);
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::ClosureTag {
+                name,
+                captures,
+                ambient_function,
+            } => {
+                let type_slice = self.from_old_type_slice(captures);
+
+                let tag = TypeTag::ClosureTag {
+                    name: *name,
+                    ambient_function: *ambient_function,
+                };
+                self.set_type_tag(index, tag, type_slice)
+            }
+
+            Type::DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+            }) => {
+                //    pub symbol: Symbol,
+                //    pub type_arguments: Vec<Loc<OptAbleType>>,
+                //    pub lambda_set_variables: Vec<LambdaSet>,
+
+                let type_argument_regions =
+                    Slice::extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
+
+                let type_arguments_slice = {
+                    let slice = self.reserve_type_tags(type_arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(type_arguments) {
+                        self.from_old_type_at(index, &argument.value.typ);
+                    }
+
+                    slice
+                };
+
+                let lambda_set_slice = {
+                    let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+                    let it = slice.into_iter().zip(lambda_set_variables);
+                    for (index, argument) in it {
+                        self.from_old_type_at(index, &argument.0);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let infer_ext_in_output_slice = {
+                    let slice = self.reserve_type_tags(infer_ext_in_output_types.len());
+
+                    let it = slice.into_iter().zip(infer_ext_in_output_types);
+                    for (index, argument) in it {
+                        self.from_old_type_at(index, argument);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let type_argument_abilities = Slice::extend_new(
+                    &mut self.type_arg_abilities,
+                    type_arguments.iter().map(|a| a.value.opt_abilities.clone()),
+                );
+
+                let alias_shared = AliasShared {
+                    symbol: *symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables: lambda_set_slice,
+                    infer_ext_in_output_variables: infer_ext_in_output_slice,
+                };
+
+                let shared = Index::push_new(&mut self.aliases, alias_shared);
+
+                let tag = TypeTag::DelayedAlias { shared };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+            Type::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+                actual,
+                kind,
+            } => {
+                let type_arguments_slice = {
+                    let slice = self.reserve_type_tags(type_arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(type_arguments) {
+                        self.from_old_type_at(index, &argument.typ);
+                    }
+
+                    slice
+                };
+
+                let alias_shared = self.alias_shared_help(
+                    *symbol,
+                    type_arguments,
+                    lambda_set_variables,
+                    infer_ext_in_output_types,
+                );
+
+                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let actual = self.from_old_type(actual);
+
+                let tag = match kind {
+                    AliasKind::Structural => TypeTag::StructuralAlias { shared, actual },
+                    AliasKind::Opaque => TypeTag::StructuralAlias { shared, actual },
+                };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+
+            Type::HostExposedAlias {
+                name,
+                type_arguments,
+                lambda_set_variables,
+                actual_var,
+                actual,
+            } => {
+                let type_arguments_slice = self.from_old_type_slice(type_arguments);
+
+                let lambda_set_slice = {
+                    let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+                    for (index, argument) in slice.into_iter().zip(lambda_set_variables) {
+                        self.from_old_type_at(index, &argument.0);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let alias_shared = AliasShared {
+                    symbol: *name,
+                    type_argument_abilities: Slice::default(),
+                    type_argument_regions: Slice::default(),
+                    lambda_set_variables: lambda_set_slice,
+                    infer_ext_in_output_variables: Slice::default(),
+                };
+
+                let tag = TypeTag::HostExposedAlias {
+                    shared: Index::push_new(&mut self.aliases, alias_shared),
+                    actual_type: self.from_old_type(actual),
+                    actual_variable: *actual_var,
+                };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+            Type::Variable(var) => {
+                self.set_type_tag(index, TypeTag::Variable(*var), Slice::default())
+            }
+            Type::RangedNumber(range) => {
+                self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
+            }
+            Type::Erroneous(problem) => {
+                self.problems.insert(index, problem.clone());
+                self.set_type_tag(index, TypeTag::Erroneous, Slice::default())
+            }
         }
     }
 }
