@@ -1994,6 +1994,7 @@ name = "linker-executable"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "libc",
  "memexec",
  "memmap2 0.5.7",
  "roc_linker",

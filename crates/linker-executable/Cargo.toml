@@ -10,6 +10,7 @@ roc_linker = { path = "../linker" }
 tempfile = "3.2.0"
 memmap2 = "0.5.7"
 indoc = "1.0.7"
+libc = "0.2.135"
 
 [target.'cfg(windows)'.dependencies]
 memexec = "0.2.0"
