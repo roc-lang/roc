@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/linker-executable",
     "crates/compiler/ident",
     "crates/compiler/region",
     "crates/compiler/collections",

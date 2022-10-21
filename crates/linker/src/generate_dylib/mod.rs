@@ -1,7 +1,7 @@
 use target_lexicon::Triple;
 
 mod elf64;
-mod pe;
+pub mod pe;
 
 #[cfg(test)]
 pub(crate) use pe::synthetic_dll;

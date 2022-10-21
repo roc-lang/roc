@@ -1990,6 +1990,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
+name = "linker-executable"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "memexec",
+ "memmap2 0.5.7",
+ "roc_linker",
+ "tempfile",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3754,7 +3765,6 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.20",
  "iced-x86",
  "indoc",
  "libc",

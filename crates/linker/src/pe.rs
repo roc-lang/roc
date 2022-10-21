@@ -183,7 +183,7 @@ impl PeMetadata {
     }
 }
 
-pub(crate) fn preprocess_windows(
+pub fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
     preprocessed_filename: &Path,
@@ -221,22 +221,12 @@ pub(crate) fn preprocess_windows(
         }
     }
 
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let start = 0x24e0 + W * md.dynamic_relocations.dummy_import_index as usize;
-
-        for b in preprocessed[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
-
     md.write_to_file(metadata_filename);
 
     Ok(())
 }
 
-pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
+pub fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
     std::fs::write("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/zig-platform/app.obj",roc_app_bytes);
@@ -488,6 +478,8 @@ impl DynamicRelocationsPe {
         let thunk_start_offset =
             roc_dll_descriptor.original_first_thunk.get(LE) - self.section_virtual_address;
         let mut thunk_offset = 0;
+
+        crate::dbg_hex!(roc_dll_descriptor.original_first_thunk.get(LE));
 
         let mut thunks = import_table.thunks(roc_dll_descriptor.original_first_thunk.get(LE))?;
         while let Some(thunk_data) = thunks.next::<ImageNtHeaders64>()? {
@@ -922,16 +914,16 @@ struct Section {
 }
 
 #[derive(Debug)]
-struct AppSymbol {
-    name: String,
+pub struct AppSymbol {
+    pub name: String,
     section_kind: SectionKind,
     offset_in_section: usize,
 }
 
 #[derive(Debug, Default)]
-struct AppSections {
+pub struct AppSections {
     sections: Vec<Section>,
-    roc_symbols: Vec<AppSymbol>,
+    pub roc_symbols: Vec<AppSymbol>,
     other_symbols: Vec<(SectionIndex, AppSymbol)>,
 }
 
@@ -972,7 +964,7 @@ fn process_internal_relocations(
 }
 
 impl AppSections {
-    fn from_data(data: &[u8]) -> Self {
+    pub fn from_data(data: &[u8]) -> Self {
         use object::ObjectSection;
 
         let file = object::File::parse(data).unwrap();
@@ -1294,12 +1286,17 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
 
-    let added_reloc_bytes = write_image_base_relocation(
+    let added_reloc_bytes1 = write_image_base_relocation(
         executable,
         md.reloc_offset_in_file,
         thunks_relocation_block_va,
         &relocations,
     );
+
+    let added_reloc_bytes2 =
+        write_image_base_relocation(executable, md.reloc_offset_in_file, 0x1000, &[0x005c]);
+
+    let added_reloc_bytes = added_reloc_bytes1 + added_reloc_bytes2;
 
     // the reloc section got bigger, and we need to update the header with the new size
     let reloc_section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
@@ -1318,13 +1315,14 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let new_virtual_size = old_section_size + added_reloc_bytes as u32;
     reloc_section.virtual_size.set(LE, new_virtual_size);
 
-    assert!(
-        reloc_section.pointer_to_raw_data.get(LE)
-            + reloc_section.virtual_size.get(LE)
-            + (added_reloc_bytes as u32)
-            < next_section_pointer_to_raw_data,
-        "new .reloc section is too big, and runs into the next section!",
-    );
+    //    assert!(
+    //        reloc_section.pointer_to_raw_data.get(LE)
+    //            + reloc_section.virtual_size.get(LE)
+    //            + (added_reloc_bytes as u32)
+    //            < next_section_pointer_to_raw_data,
+    //        "new .reloc section is too big at {:#x} bytes, and runs into the next section!",
+    //        reloc_section.virtual_size.get(LE) + (added_reloc_bytes as u32)
+    //    );
 
     //    // in the data directories, update the length of the base relocations
     //    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
@@ -1779,13 +1777,7 @@ mod test {
                 extern fn roc_magic1() callconv(.C) u8;
 
                 pub fn main() u8 {
-                    var timer = std.time.Timer.start() catch unreachable;
-
-                    if (timer.read() == 42000)  {
-                        return roc_magic1();
-                    } else {
-                        return 0;
-                    }
+                    return roc_magic1();
                 }
                 "#
             ),
@@ -1879,21 +1871,38 @@ mod test {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
 
-    #[cfg(windows)]
     #[test]
     fn app_internal_relocations_windows_xxx() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
         // let dir = Path::new("C:Users\\folkert\\Documents\\Github\\roc\\linktest");
 
+        #[cfg(unix)]
+        let dir = Path::new("/tmp/roc");
+
         test_basics(dir);
 
-        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("dynhost.exe")).unwrap();
-        let bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
+        let mut bytes = std::fs::read(dir.join("app.exe")).unwrap();
+
+        let offset = 0x600 + (0x105C - 0x1000);
+
+        let current = u32::from_le_bytes(bytes[offset..][..4].try_into().unwrap());
+        crate::dbg_hex!(current, current + 0x105C + 4);
+
+        let target = 0x9000u32;
+        let delta = target - 0x105c - 4;
+        // bytes[offset..][..4].copy_from_slice(&delta.to_le_bytes());
+
         // let bytes = std::fs::read("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/windowsLegacy.exe").unwrap();
 
         // find_pe_section(&bytes, 0x14001079);
-        unsafe { memexec::memexec_exe(&bytes).unwrap() };
+        #[cfg(windows)]
+        unsafe {
+            memexec::memexec_exe(&bytes).unwrap()
+        };
+
+        #[cfg(unix)]
+        {}
     }
 
     #[ignore]

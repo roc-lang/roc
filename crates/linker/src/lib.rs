@@ -10,9 +10,9 @@ use target_lexicon::Triple;
 
 mod elf;
 mod macho;
-mod pe;
+pub mod pe;
 
-mod generate_dylib;
+pub mod generate_dylib;
 mod metadata;
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
