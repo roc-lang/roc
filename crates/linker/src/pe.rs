@@ -1779,7 +1779,13 @@ mod test {
                 extern fn roc_magic1() callconv(.C) u8;
 
                 pub fn main() u8 {
-                    return roc_magic1();
+                    var timer = std.time.Timer.start() catch unreachable;
+
+                    if (timer.read() == 42000)  {
+                        return roc_magic1();
+                    } else {
+                        return 0;
+                    }
                 }
                 "#
             ),
@@ -1878,10 +1884,12 @@ mod test {
     fn app_internal_relocations_windows_xxx() {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
+        // let dir = Path::new("C:Users\\folkert\\Documents\\Github\\roc\\linktest");
 
         test_basics(dir);
 
-        let bytes = std::fs::read(dir.join("app.exe")).unwrap();
+        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("dynhost.exe")).unwrap();
+        let bytes = std::fs::read(dir.join("dynhost.exe")).unwrap();
         // let bytes = std::fs::read("/home/folkertdev/roc/roc/crates/cli_testing_examples/platform-switching/windowsLegacy.exe").unwrap();
 
         // find_pe_section(&bytes, 0x14001079);
