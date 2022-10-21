@@ -314,7 +314,10 @@ fn to_encoder_record(
                 record_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
                 field_var,
-                loc_expr: Box::new(Loc::at_zero(Var(rcd_sym, record_var))),
+                loc_expr: Box::new(Loc::at_zero(Var(
+                    rcd_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
                 field: field_name,
             };
 

@@ -401,7 +401,7 @@ mod cli_run {
     // uses C platform
     fn platform_switching_main() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "main.roc",
             "rocLovesPlatforms",
             "Which platform am I running on now?\n",
@@ -416,7 +416,7 @@ mod cli_run {
     #[test]
     fn platform_switching_rust() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesRust.roc",
             "rocLovesRust",
             "Roc <3 Rust!\n",
@@ -427,7 +427,7 @@ mod cli_run {
     #[test]
     fn platform_switching_zig() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesZig.roc",
             "rocLovesZig",
             "Roc <3 Zig!\n",
@@ -438,7 +438,7 @@ mod cli_run {
     #[test]
     fn platform_switching_wasm() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesWebAssembly.roc",
             "rocLovesWebAssembly",
             "Roc <3 Web Assembly!\n",
@@ -449,7 +449,7 @@ mod cli_run {
     #[test]
     fn platform_switching_swift() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/platform-switching",
+            "examples/platform-switching",
             "rocLovesSwift.roc",
             "rocLovesSwift",
             "Roc <3 Swift!\n",

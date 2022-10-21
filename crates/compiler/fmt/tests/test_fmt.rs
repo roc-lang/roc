@@ -3493,6 +3493,65 @@ mod test_fmt {
     }
 
     #[test]
+    fn def_when() {
+        expr_formats_same(indoc!(
+            r#"
+            myLongFunctionName = \x ->
+                when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+            123
+        "#
+        ));
+    }
+
+    #[test]
+    #[ignore] // TODO: reformat when-in-function-body with extra newline
+    fn def_when_with_python_indentation() {
+        expr_formats_to(
+            // vvv Currently this input formats to _itself_ :( vvv
+            // Instead, if the body of the `when` is multiline (the overwhelmingly common case)
+            // we want to make sure the `when` is at the beginning of the line, inserting
+            // a newline if necessary.
+            indoc!(
+                r#"
+                myLongFunctionName = \x -> when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+                123
+            "#
+            ),
+            indoc!(
+                r#"
+                myLongFunctionName = \x ->
+                    when b is
+                        1 | 2 ->
+                            when c is
+                                6 | 7 ->
+                                    8
+
+                        3 | 4 ->
+                            5
+
+                123
+            "#
+            ),
+        );
+    }
+
+    #[test]
     fn when_with_alternatives_1() {
         expr_formats_same(indoc!(
             r#"

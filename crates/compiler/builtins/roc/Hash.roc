@@ -9,11 +9,11 @@ interface Hash
         addU32,
         addU64,
         addU128,
-        addI8,
-        addI16,
-        addI32,
-        addI64,
-        addI128,
+        hashI8,
+        hashI16,
+        hashI32,
+        hashI64,
+        hashI128,
         complete,
         hashStrBytes,
         hashList,
@@ -55,21 +55,6 @@ Hasher has
     ## Adds a single U128 to the hasher.
     addU128 : a, U128 -> a | a has Hasher
 
-    ## Adds a single I8 to the hasher.
-    addI8 : a, I8 -> a | a has Hasher
-
-    ## Adds a single I16 to the hasher.
-    addI16 : a, I16 -> a | a has Hasher
-
-    ## Adds a single I32 to the hasher.
-    addI32 : a, I32 -> a | a has Hasher
-
-    ## Adds a single I64 to the hasher.
-    addI64 : a, I64 -> a | a has Hasher
-
-    ## Adds a single I128 to the hasher.
-    addI128 : a, I128 -> a | a has Hasher
-
     ## Completes the hasher, extracting a hash value from its
     ## accumulated hash state.
     complete : a -> U64 | a has Hasher
@@ -82,6 +67,26 @@ hashStrBytes = \hasher, s ->
 hashList = \hasher, lst ->
     List.walk lst hasher \accumHasher, elem ->
         hash accumHasher elem
+
+## Adds a single I8 to a hasher.
+hashI8 : a, I8 -> a | a has Hasher
+hashI8 = \hasher, n -> addU8 hasher (Num.toU8 n)
+
+## Adds a single I16 to a hasher.
+hashI16 : a, I16 -> a | a has Hasher
+hashI16 = \hasher, n -> addU16 hasher (Num.toU16 n)
+
+## Adds a single I32 to a hasher.
+hashI32 : a, I32 -> a | a has Hasher
+hashI32 = \hasher, n -> addU32 hasher (Num.toU32 n)
+
+## Adds a single I64 to a hasher.
+hashI64 : a, I64 -> a | a has Hasher
+hashI64 = \hasher, n -> addU64 hasher (Num.toU64 n)
+
+## Adds a single I128 to a hasher.
+hashI128 : a, I128 -> a | a has Hasher
+hashI128 = \hasher, n -> addU128 hasher (Num.toU128 n)
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
 ## The container is iterated using the walk method passed in.

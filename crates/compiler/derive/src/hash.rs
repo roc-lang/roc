@@ -99,7 +99,10 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
                 record_var,
                 field_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
-                loc_expr: Box::new(Loc::at_zero(Expr::Var(rcd_sym, record_var))),
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(
+                    rcd_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
                 field: field_name,
             };
 

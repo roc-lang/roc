@@ -284,6 +284,7 @@ mod test_parse {
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_function.expr,
+        pass/when_in_function_python_style_indent.expr,
         pass/when_in_parens_indented.expr,
         pass/when_in_parens.expr,
         pass/when_with_alternative_patterns.expr,

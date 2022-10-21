@@ -1398,6 +1398,8 @@ define_builtins! {
         75 LIST_WALK_TRY: "walkTry"
         76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
         77 LIST_COUNT_IF: "countIf"
+        78 LIST_WALK_FROM: "walkFrom"
+        79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1526,11 +1528,11 @@ define_builtins! {
         6  HASH_ADD_U32: "addU32"
         7  HASH_ADD_U64: "addU64"
         8  HASH_ADD_U128: "addU128"
-        9  HASH_ADD_I8: "addI8"
-        10 HASH_ADD_I16: "addI16"
-        11 HASH_ADD_I32: "addI32"
-        12 HASH_ADD_I64: "addI64"
-        13 HASH_ADD_I128: "addI128"
+        9  HASH_HASH_I8: "hashI8"
+        10 HASH_HASH_I16: "hashI16"
+        11 HASH_HASH_I32: "hashI32"
+        12 HASH_HASH_I64: "hashI64"
+        13 HASH_HASH_I128: "hashI128"
         14 HASH_COMPLETE: "complete"
         15 HASH_HASH_STR_BYTES: "hashStrBytes"
         16 HASH_HASH_LIST: "hashList"

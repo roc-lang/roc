@@ -1122,11 +1122,6 @@ mod hash {
             addU32: tAddU32,
             addU64: tAddU64,
             addU128: tAddU128,
-            addI8: tAddI8,
-            addI16: tAddI16,
-            addI32: tAddI32,
-            addI64: tAddI64,
-            addI128: tAddI128,
             complete: tComplete,
         }]
 
@@ -1165,11 +1160,6 @@ mod hash {
         tAddU32 = \@THasher total, n -> @THasher (do32 total n)
         tAddU64 = \@THasher total, n -> @THasher (do64 total n)
         tAddU128 = \@THasher total, n -> @THasher (do128 total n)
-        tAddI8 = \@THasher total, n -> @THasher (do8 total (Num.toU8 n))
-        tAddI16 = \@THasher total, n -> @THasher (do16 total (Num.toU16 n))
-        tAddI32 = \@THasher total, n -> @THasher (do32 total (Num.toU32 n))
-        tAddI64 = \@THasher total, n -> @THasher (do64 total (Num.toU64 n))
-        tAddI128 = \@THasher total, n -> @THasher (do128 total (Num.toU128 n))
         tComplete = \@THasher _ -> Num.maxU64
 
         tRead = \@THasher bytes -> bytes
