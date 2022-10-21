@@ -20,4 +20,8 @@ We obviously want our UI library to go fast, and in my experience, this communic
 - Use an arena allocator when running the view code to generate the virtual DOM, and free it all at once on the next render.
 - Don't try to serialize event handler functions. Instead keep them in a Roc Dict, and give each an ID. Then create a JS event listener that passes this ID to an event dispatcher in Wasm, which can look up the Roc handler and call it.
 - When decoding DOM events, don't serialize the entire Event object, but only the pieces of it that the Roc handler function actually needs. (In fact, this is necessary since the whole Event object may not be serializable.)
-- Provide a way to initialize the virtual DOM from a server-rendered DOM
+
+## Medium-term goals
+- Allow the app developer to run the same view code on the back end or front end, for server-side rendering.
+- Provide a way to initialize the virtual DOM from server-rendered HTML.
+- Make it easy for the app developer to avoid bloat by making most of the page static, with a few pockets of interactivity.
