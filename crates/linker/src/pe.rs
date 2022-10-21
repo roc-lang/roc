@@ -327,7 +327,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
             let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
-            for (name, app_relocation) in section.relocations.iter() {
+            let it = section
+                .relocations
+                .iter()
+                .flat_map(|(name, rs)| rs.iter().map(move |r| (name, r)));
+
+            for (name, app_relocation) in it {
                 let AppRelocation {
                     offset_in_section,
                     relocation,
@@ -648,6 +653,11 @@ impl Preprocessor {
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_section_names: &[[u8; 8]]) {
         const W: usize = std::mem::size_of::<ImageSectionHeader>();
 
+        // only correct for the first section, but that is OK because it's overwritten later
+        // anyway. But, this value may be used to check whether a previous section overruns into
+        // the app sections.
+        let pointer_to_raw_data = result.len() - self.additional_length;
+
         let previous_section_header =
             load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
 
@@ -673,7 +683,7 @@ impl Preprocessor {
                 // NOTE: this must be a valid virtual address, using 0 is invalid!
                 virtual_address: object::U32::new(LE, next_virtual_address as u32),
                 size_of_raw_data: Default::default(),
-                pointer_to_raw_data: Default::default(),
+                pointer_to_raw_data: object::U32::new(LE, pointer_to_raw_data as u32),
                 pointer_to_relocations: Default::default(),
                 pointer_to_linenumbers: Default::default(),
                 number_of_relocations: Default::default(),
@@ -873,7 +883,7 @@ struct Section {
     /// File range of the section (in the app object)
     file_range: Range<usize>,
     kind: SectionKind,
-    relocations: MutMap<String, AppRelocation>,
+    relocations: MutMap<String, Vec<AppRelocation>>,
     app_section_index: SectionIndex,
 }
 
@@ -949,7 +959,7 @@ impl AppSections {
                 _ => continue,
             };
 
-            let mut relocations = MutMap::default();
+            let mut relocations: MutMap<String, Vec<AppRelocation>> = MutMap::default();
 
             for (offset_in_section, relocation) in section.relocations() {
                 match relocation.target() {
@@ -961,14 +971,14 @@ impl AppSections {
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
                         let name = symbol.and_then(|s| s.name()).unwrap_or_default();
 
-                        relocations.insert(
-                            name.to_string(),
-                            AppRelocation {
+                        relocations
+                            .entry(name.to_string())
+                            .or_default()
+                            .push(AppRelocation {
                                 offset_in_section,
                                 address,
                                 relocation,
-                            },
-                        );
+                            });
                     }
                     _ => todo!(),
                 }
@@ -1137,6 +1147,7 @@ fn write_image_base_relocation(
     // relocations are encoded in such a way that we can only decode them from front to back.
     let mut next_block_start = reloc_section_start as u32;
     let mut blocks = vec![];
+    let mut block_has_relocation = false;
 
     loop {
         let header =
@@ -1144,6 +1155,10 @@ fn write_image_base_relocation(
 
         if header.virtual_address.get(LE) == 0 {
             break;
+        }
+
+        if new_block_va == header.virtual_address.get(LE) {
+            block_has_relocation = true;
         }
 
         blocks.push((next_block_start, *header));
@@ -1159,73 +1174,96 @@ fn write_image_base_relocation(
     // extra space that we'll use for the new relocations
     let shift_amount = relocations.len() * ENTRY_WIDTH;
 
-    let mut found_block = false;
+    if block_has_relocation {
+        // now, starting from the back, shift sections that need to be shifted and add the
+        // new relocations to the right block
+        while let Some((block_start, header)) = blocks.pop() {
+            let header_va = header.virtual_address.get(LE);
+            let header_size = header.size_of_block.get(LE);
 
-    // now, starting from the back, shift sections that need to be shifted and add the
-    // new relocations to the right block
-    while let Some((block_start, header)) = blocks.pop() {
-        let header_va = header.virtual_address.get(LE);
-        let header_size = header.size_of_block.get(LE);
+            let block_start = block_start as usize;
 
-        let block_start = block_start as usize;
+            match header_va.cmp(&new_block_va) {
+                std::cmp::Ordering::Greater => {
+                    // shift this block
+                    mmap.copy_within(
+                        block_start..block_start + header_size as usize,
+                        block_start + shift_amount,
+                    );
+                }
+                std::cmp::Ordering::Equal => {
+                    // extend this block
+                    let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
 
-        match header_va.cmp(&new_block_va) {
-            std::cmp::Ordering::Greater => {
-                // shift this block
-                mmap.copy_within(
-                    block_start..block_start + header_size as usize,
-                    block_start + shift_amount,
-                );
-            }
-            std::cmp::Ordering::Equal => {
-                // extend this block
-                let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
+                    let new_size = header.size_of_block.get(LE) + shift_amount as u32;
+                    header.size_of_block.set(LE, new_size);
 
-                let new_size = header.size_of_block.get(LE) + shift_amount as u32;
-                header.size_of_block.set(LE, new_size);
+                    let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
+                    let entries = load_structs_inplace_mut::<u16>(
+                        mmap,
+                        block_start + HEADER_WIDTH,
+                        number_of_entries,
+                    );
 
-                let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
-                let entries = load_structs_inplace_mut::<u16>(
-                    mmap,
-                    block_start + HEADER_WIDTH,
-                    number_of_entries,
-                );
+                    entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
 
-                entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
-
-                // sort by VA. Upper 4 bits store the relocation type
-                entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
-
-                found_block = true;
-            }
-            std::cmp::Ordering::Less => {
-                if found_block {
+                    // sort by VA. Upper 4 bits store the relocation type
+                    entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+                }
+                std::cmp::Ordering::Less => {
+                    // done
                     break;
-                } else {
-                    // we don't currently implement adding a new block if the block does not
-                    // already exist. Adding that logic is not hard, but let's see if we can get
-                    // away with not having it.
-                    internal_error!("the .rdata section with our dummy .dll info is not covered by a relocation block");
                 }
             }
         }
-    }
 
-    shift_amount
+        shift_amount
+    } else {
+        let header =
+            load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
+
+        let size_of_block = HEADER_WIDTH + relocations.len() * ENTRY_WIDTH;
+
+        header.virtual_address.set(LE, new_block_va);
+        header.size_of_block.set(LE, size_of_block as u32);
+
+        let number_of_entries = relocations.len();
+        let entries = load_structs_inplace_mut::<u16>(
+            mmap,
+            next_block_start as usize + HEADER_WIDTH,
+            number_of_entries,
+        );
+
+        entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
+
+        // sort by VA. Upper 4 bits store the relocation type
+        entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
+
+        size_of_block
+    }
 }
 
 /// the roc app functions are called from the host with an indirect call: the code will look
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
+    let thunks_start_va = (md.rdata_virtual_address - md.image_base as u32)
+        + md.thunks_start_offset_in_section as u32;
+
+    // relocations are defined per 4kb page
+    const BLOCK_SIZE: u32 = 4096;
+
+    let thunks_offset_in_block = thunks_start_va % BLOCK_SIZE;
+    let thunks_relocation_block_va = thunks_start_va - thunks_offset_in_block;
+
     let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
-        .map(|i| (md.thunks_start_offset_in_section + 2 * i) as u16)
+        .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
 
     let added_reloc_bytes = write_image_base_relocation(
         executable,
         md.reloc_offset_in_file,
-        md.rdata_virtual_address - md.image_base as u32,
+        thunks_relocation_block_va,
         &relocations,
     );
 
@@ -1233,9 +1271,38 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let reloc_section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
         + md.reloc_section_index * std::mem::size_of::<ImageSectionHeader>();
 
-    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    let new_virtual_size = ptr.virtual_size.get(LE) + added_reloc_bytes as u32;
-    ptr.virtual_size.set(LE, new_virtual_size);
+    let next_section = load_struct_inplace::<ImageSectionHeader>(
+        executable,
+        reloc_section_header_start + std::mem::size_of::<ImageSectionHeader>(),
+    );
+
+    let next_section_pointer_to_raw_data = next_section.pointer_to_raw_data.get(LE);
+
+    let reloc_section =
+        load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
+    let old_section_size = reloc_section.virtual_size.get(LE);
+    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
+    reloc_section.virtual_size.set(LE, new_virtual_size);
+
+    assert!(
+        reloc_section.pointer_to_raw_data.get(LE)
+            + reloc_section.virtual_size.get(LE)
+            + (added_reloc_bytes as u32)
+            < next_section_pointer_to_raw_data,
+        "new .reloc section is too big, and runs into the next section!",
+    );
+
+    //    // in the data directories, update the length of the base relocations
+    //    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+    //        executable,
+    //        md.dynamic_relocations.data_directories_offset_in_file as usize
+    //            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
+    //                * std::mem::size_of::<pe::ImageDataDirectory>(),
+    //    );
+    //
+    //    let old_dir_size = dir.size.get(LE);
+    //    debug_assert_eq!(old_section_size, old_dir_size);
+    //    dir.size.set(LE, new_virtual_size);
 }
 
 #[cfg(test)]
