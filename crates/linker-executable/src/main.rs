@@ -80,7 +80,7 @@ fn zig_host_app(dir: &Path, host_zig: &str, app_zig: &str) {
             "-rdynamic",
             "--strip",
             "-rdynamic",
-            "-OReleaseFast",
+            "-OReleaseSmall",
         ])
         .output()
         .unwrap();
