@@ -77,9 +77,6 @@ roc_gen_llvm = {path = "../compiler/gen_llvm"}
 inkwell = {path = "../vendor/inkwell"}
 signal-hook = "0.3.14"
 
-[target.'cfg(windows)'.dependencies]
-memexec = "0.2.0"
-
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]
 roc_repl_expect = { path = "../repl_expect" }
