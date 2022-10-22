@@ -3117,7 +3117,9 @@ fn layout_from_flat_type<'a>(
 
             for (label, field) in it {
                 match field {
-                    RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                    RecordField::Required(field_var)
+                    | RecordField::Demanded(field_var)
+                    | RecordField::RigidRequired(field_var) => {
                         sortables
                             .push((label, cached!(Layout::from_var(env, field_var), criteria)));
                     }
@@ -3220,7 +3222,7 @@ fn sort_record_fields_help<'a>(
 
     for (label, field) in fields_map {
         match field {
-            RecordField::Demanded(v) | RecordField::Required(v) => {
+            RecordField::Demanded(v) | RecordField::Required(v) | RecordField::RigidRequired(v) => {
                 let Cacheable(layout, _) = Layout::from_var(env, v);
                 sorted_fields.push((label, v, Ok(layout?)));
             }

@@ -834,6 +834,15 @@ fn type_to_variable<'a>(
                         cached,
                         mempool.get(*type_id),
                     )),
+                    RigidRequired(type_id) => RigidRequired(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
+                    )),
                     Optional(type_id) => Optional(type_to_variable(
                         arena,
                         mempool,

@@ -1104,10 +1104,8 @@ fn write_flat_type<'a>(
                     buf.push_str(label.as_str());
 
                     match record_field {
-                        Optional(_) => buf.push_str(" ? "),
-                        Required(_) => buf.push_str(" : "),
-                        Demanded(_) => buf.push_str(" : "),
-                        RigidOptional(_) => buf.push_str(" ? "),
+                        Optional(_) | RigidOptional(_) => buf.push_str(" ? "),
+                        Required(_) | Demanded(_) | RigidRequired(_) => buf.push_str(" : "),
                     };
 
                     write_content(
