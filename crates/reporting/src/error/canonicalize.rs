@@ -2035,11 +2035,7 @@ pub fn to_circular_def_doc<'b>(
                     alloc.reflow(" is defined directly in terms of itself:"),
                 ]),
                 alloc.region(lines.convert_region(Region::span_across(symbol_region, expr_region))),
-                alloc.concat([
-                    alloc.reflow("Since Roc evaluates values strict, running this program would create an infinite number of "),
-                    alloc.symbol_unqualified(*symbol),
-                    alloc.reflow(" values!"),
-                ]),
+                alloc.reflow("Roc evaluates values strictly, so running this program would enter an infinite loop!"),
                 alloc.hint("").append(alloc.concat([
                     alloc.reflow("Did you mean to define "),alloc.symbol_unqualified(*symbol),alloc.reflow(" as a function?"),
                 ])),
