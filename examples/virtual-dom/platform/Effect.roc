@@ -25,8 +25,11 @@ nodeId = \id -> @NodeId id
 EventHandlerId := Nat
 eventHandlerId = \id -> @EventHandlerId id
 
+TagId := U8
+AttrTypeId := U8
+
 ## createElement tagName
-createElement : Str -> Effect NodeId
+createElement : TagId -> Effect NodeId
 
 ## createTextNode content
 createTextNode : Str -> Effect NodeId
@@ -38,10 +41,10 @@ appendChild : NodeId, NodeId -> Effect {}
 removeNode : NodeId -> Effect {}
 
 ## setAttribute nodeId attrName value
-setAttribute : NodeId, Str, Str -> Effect {}
+setAttribute : NodeId, AttrTypeId, Str -> Effect {}
 
 ## removeAttribute nodeId attrName
-removeAttribute : NodeId, Str -> Effect {}
+removeAttribute : NodeId, AttrTypeId -> Effect {}
 
 ## setProperty nodeId propName json
 setProperty : NodeId, Str, List U8 -> Effect {}

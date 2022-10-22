@@ -25,7 +25,7 @@ const utf8Encoder = new TextEncoder();
 
 export const init = async (wasmFilename: string) => {
   const effects = {
-    // createElement : Str -> Effect NodeId
+    // createElement : TagId -> Effect NodeId
     createElement: (tagId: number): number => {
       const tagName = tagNames[tagId];
       const node = document.createElement(tagName);
@@ -53,7 +53,7 @@ export const init = async (wasmFilename: string) => {
       node?.parentElement?.removeChild(node);
     },
 
-    // setAttribute : NodeId, Str, Str -> Effect {}
+    // setAttribute : NodeId, AttrTypeId, Str -> Effect {}
     setAttribute: (nodeId: number, typeId: number, valueAddr: number): void => {
       const node = nodes[nodeId] as Element;
       const name = attrTypeNames[typeId];
@@ -61,10 +61,10 @@ export const init = async (wasmFilename: string) => {
       node.setAttribute(name, value);
     },
 
-    // removeAttribute : NodeId, Str -> Effect {}
-    removeAttribute: (nodeId: number, nameAddr: number): void => {
+    // removeAttribute : NodeId, AttrTypeId -> Effect {}
+    removeAttribute: (nodeId: number, typeId: number): void => {
       const node = nodes[nodeId] as Element;
-      const name = decodeRocStr(nameAddr);
+      const name = attrTypeNames[typeId];
       node.removeAttribute(name);
     },
 
