@@ -1372,7 +1372,8 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 
 fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
     if !output.status.success() {
-        match dbg!(std::str::from_utf8(&output.stderr)) {
+        dbg!(file_name, cmd_name);
+        match std::str::from_utf8(&output.stderr) {
             Ok(stderr) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
                 file_name,
