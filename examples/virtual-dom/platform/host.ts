@@ -162,22 +162,23 @@ const setListener = (
     let outerListIndex32 = outerListBaseAddr >> 2;
     accessors.forEach((accessor) => {
       const json = accessCyclicStructure(accessor, ev);
+      const length16 = json.length;
 
-      // Due to encoding overhead, there are rare chars that go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
-      const capacity = json.length * 3; // Extremely conservative, but simple. The allocation is short-lived.
-      const rcAddr = roc_alloc(4 + capacity, 4);
+      // Due to UTF-8 encoding overhead, a few code points go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
+      const capacity8 = length16 * 3; // Extremely "worst-case", but simple, and the allocation is short-lived.
+      const rcAddr = roc_alloc(4 + capacity8, 4);
       memory32[rcAddr >> 2] = 1;
       const baseAddr = rcAddr + 4;
 
       // Write JSON to the heap allocation of the inner `List U8`
-      const allocation = memory8.subarray(baseAddr, baseAddr + capacity);
+      const allocation = memory8.subarray(baseAddr, baseAddr + capacity8);
       const { written } = utf8Encoder.encodeInto(json, allocation);
       const length = written || 0; // TypeScript claims that `written` can be undefined, though I don't see this in the spec.
 
       // Write the fields of the inner `List U8` into the heap allocation of the outer List
       memory32[outerListIndex32++] = baseAddr;
       memory32[outerListIndex32++] = length;
-      memory32[outerListIndex32++] = capacity;
+      memory32[outerListIndex32++] = capacity8;
     });
 
     const roc_dom_event = app.exports.roc_dom_event as RocDomEvent;
