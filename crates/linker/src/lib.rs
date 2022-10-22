@@ -128,7 +128,14 @@ fn generate_dynamic_lib(target: &Triple, custom_names: &[String], dummy_lib_path
         let bytes = crate::generate_dylib::generate(target, custom_names)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
+        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+
+        if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+            let mut path = dummy_lib_path.to_owned();
+            path.set_extension("lib");
+            let bytes = include_bytes!("../libapp.lib");
+            std::fs::write(&path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+        }
     }
 }
 
