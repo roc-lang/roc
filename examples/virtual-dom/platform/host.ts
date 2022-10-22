@@ -1,5 +1,5 @@
-const nodes: Node[] = [];
-const listeners: Array<[string, (e: Event) => void]> = [];
+const nodes: Array<Node | null> = [];
+const listeners: Array<null | Listener> = [];
 let memory8 = new Uint8Array(1024);
 let memory32 = new Uint32Array(memory8.buffer);
 const utf8Decoder = new TextDecoder();
@@ -9,7 +9,8 @@ const utf8Encoder = new TextEncoder();
 const app = new WebAssembly.Instance(
   new WebAssembly.Module(new ArrayBuffer(1024))
 );
-
+type Handler = (e: Event) => void;
+type Listener = [string, Handler];
 type RocAlloc = (size: number, alignment: number) => number;
 type RocDomEvent = (
   jsonListAddr: number,
@@ -27,17 +28,39 @@ const decodeRocStr = (strAddr8: number): string => {
     const bytes = memory8.slice(strAddr8, strAddr8 + len);
     return utf8Decoder.decode(bytes);
   } else {
-    return decodeRocListU8(strAddr8);
+    return decodeRocListUtf8(strAddr8);
   }
 };
 
 // decode a Roc List of UTF-8 bytes to a JavaScript string
-const decodeRocListU8 = (listAddr8: number): string => {
+const decodeRocListUtf8 = (listAddr8: number): string => {
   const listIndex32 = listAddr8 >> 2;
   const bytesAddr8 = memory32[listIndex32];
   const len = memory32[listIndex32 + 1];
   const bytes = memory8.slice(bytesAddr8, bytesAddr8 + len);
   return utf8Decoder.decode(bytes);
+};
+
+const findNode = (id: number): Node => {
+  const node = nodes[id];
+  if (node) {
+    return node;
+  } else {
+    throw new Error(
+      `Virtual DOM Node #${id} not found. This is a bug in virtual-dom, not your app!`
+    );
+  }
+};
+
+const findElement = (id: number): HTMLElement => {
+  const node = nodes[id];
+  if (node && node instanceof HTMLElement) {
+    return node;
+  } else {
+    throw new Error(
+      `Virtual DOM Element #${id} not found. This is a bug in virtual-dom, not your app!`
+    );
+  }
 };
 
 const insertNode = (node: Node): number => {
@@ -65,15 +88,16 @@ const createTextNode = (contentAddr: number): number => {
 
 // appendChild : NodeId, NodeId -> Effect {}
 const appendChild = (parentId: number, childId: number): void => {
-  const parent = nodes[parentId];
-  const child = nodes[childId];
+  const parent = findElement(parentId);
+  const child = findNode(childId);
   parent.appendChild(child);
 };
 
 // removeNode : NodeId -> Effect {}
 const removeNode = (id: number): void => {
   const node = nodes[id];
-  node.parentElement?.removeChild(node);
+  nodes[id] = null;
+  node?.parentElement?.removeChild(node);
 };
 
 // setAttribute : NodeId, Str, Str -> Effect {}
@@ -103,7 +127,7 @@ const setProperty = (
 ): void => {
   const node = nodes[nodeId] as Element;
   const propName = decodeRocStr(propNameAddr);
-  const json = decodeRocListU8(jsonAddr);
+  const json = decodeRocListUtf8(jsonAddr);
   const value = JSON.parse(json);
   node[propName] = value;
 };
@@ -147,7 +171,7 @@ const setListener = (
   accessorsJsonAddr: number,
   handlerId: number
 ): void => {
-  const node = nodes[nodeId];
+  const element = findElement(nodeId);
   const eventType = decodeRocStr(eventTypeAddr);
   const accessorsJson = decodeRocStr(accessorsJsonAddr);
   const accessors: CyclicStructureAccessor[] = JSON.parse(accessorsJson);
@@ -186,14 +210,28 @@ const setListener = (
   };
 
   listeners[handlerId] = [eventType, rocEventListener];
-  node.addEventListener(eventType, rocEventListener);
+  element.addEventListener(eventType, rocEventListener);
+};
+
+const findListener = (element: Element, handlerId: number) => {
+  const listener = listeners[handlerId];
+  if (listener) {
+    return listener;
+  } else {
+    throw new Error(
+      `Event listener #${handlerId} not found. This is a bug in virtual-dom, not your app!` +
+        "It should have been on this node:\n" +
+        element.outerHTML
+    );
+  }
 };
 
 // removeListener : NodeId, EventHandlerId -> Effect {}
 const removeListener = (nodeId: number, handlerId: number): void => {
-  const node = nodes[nodeId];
-  const [eventType, handler] = listeners[handlerId];
-  node.removeEventListener(eventType, handler);
+  const element = findElement(nodeId);
+  const [eventType, handler] = findListener(element, handlerId);
+  listeners[handlerId] = null;
+  element.removeEventListener(eventType, handler);
 };
 
 // 'var' lets us keep this out of the way at the bottom of the file, but have it in scope everywhere.
