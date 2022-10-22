@@ -652,6 +652,8 @@ pub fn rebuild_host(
             command.arg("--release");
         }
 
+        dbg!(&shared_lib_path);
+
         let source_file = if shared_lib_path.is_some() {
             command.env("RUSTFLAGS", "-C link-dead-code");
             command.args(&["--bin", "host"]);
@@ -661,7 +663,7 @@ pub fn rebuild_host(
             "src/lib.rs"
         };
 
-        let output = command.output().unwrap();
+        let output = dbg!(command).output().unwrap();
 
         validate_output(source_file, "cargo build", output);
 
@@ -1372,7 +1374,6 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 
 fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
     if !output.status.success() {
-        dbg!(file_name, cmd_name);
         match std::str::from_utf8(&output.stderr) {
             Ok(stderr) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
