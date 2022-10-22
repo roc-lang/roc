@@ -1,44 +1,195 @@
+type JsEventDispatcher = (e: Event) => void;
+type Listener = [string, JsEventDispatcher];
+type RocWasmExports = {
+  roc_alloc: (size: number, alignment: number) => number;
+  roc_dispatch_event: (
+    jsonListAddr: number,
+    jsonListLength: number,
+    handlerId: number
+  ) => void;
+  main: () => number;
+};
+type CyclicStructureAccessor =
+  | { ObjectField: [string, CyclicStructureAccessor] }
+  | {
+      ArrayIndex: [number, CyclicStructureAccessor];
+    }
+  | {
+      SerializableValue: undefined;
+    };
+
 const nodes: Array<Node | null> = [];
-const listeners: Array<null | Listener> = [];
-let memory8 = new Uint8Array(1024);
-let memory32 = new Uint32Array(memory8.buffer);
+const listeners: Array<Listener | null> = [];
 const utf8Decoder = new TextDecoder();
 const utf8Encoder = new TextEncoder();
 
-// TODO: make this actually work!
-const app = new WebAssembly.Instance(
-  new WebAssembly.Module(new ArrayBuffer(1024))
-);
-type Handler = (e: Event) => void;
-type Listener = [string, Handler];
-type RocAlloc = (size: number, alignment: number) => number;
-type RocDomEvent = (
-  jsonListAddr: number,
-  jsonListLength: number,
-  handlerId: number
-) => void;
+export const init = async (wasmFilename: string) => {
+  const effects = {
+    // createElement : Str -> Effect NodeId
+    createElement: (tagId: number): number => {
+      const tagName = tagNames[tagId];
+      const node = document.createElement(tagName);
+      return insertNode(node);
+    },
 
-// decode a Roc `Str` to a JavaScript string
-const decodeRocStr = (strAddr8: number): string => {
-  const lastByte = memory8[strAddr8 + 12];
-  const isSmall = lastByte >= 0x80;
+    // createTextNode : Str -> Effect NodeId
+    createTextNode: (contentAddr: number): number => {
+      const content = decodeRocStr(contentAddr);
+      const node = document.createTextNode(content);
+      return insertNode(node);
+    },
 
-  if (isSmall) {
-    const len = lastByte & 0x7f;
-    const bytes = memory8.slice(strAddr8, strAddr8 + len);
+    // appendChild : NodeId, NodeId -> Effect {}
+    appendChild: (parentId: number, childId: number): void => {
+      const parent = findElement(parentId);
+      const child = findNode(childId);
+      parent.appendChild(child);
+    },
+
+    // removeNode : NodeId -> Effect {}
+    removeNode: (id: number): void => {
+      const node = nodes[id];
+      nodes[id] = null;
+      node?.parentElement?.removeChild(node);
+    },
+
+    // setAttribute : NodeId, Str, Str -> Effect {}
+    setAttribute: (nodeId: number, typeId: number, valueAddr: number): void => {
+      const node = nodes[nodeId] as Element;
+      const name = attrTypeNames[typeId];
+      const value = decodeRocStr(valueAddr);
+      node.setAttribute(name, value);
+    },
+
+    // removeAttribute : NodeId, Str -> Effect {}
+    removeAttribute: (nodeId: number, nameAddr: number): void => {
+      const node = nodes[nodeId] as Element;
+      const name = decodeRocStr(nameAddr);
+      node.removeAttribute(name);
+    },
+
+    // setProperty : NodeId, Str, List U8 -> Effect {}
+    setProperty: (
+      nodeId: number,
+      propNameAddr: number,
+      jsonAddr: number
+    ): void => {
+      const node = nodes[nodeId] as Element;
+      const propName = decodeRocStr(propNameAddr);
+      const json = decodeRocListUtf8(jsonAddr);
+      const value = JSON.parse(json);
+      node[propName] = value;
+    },
+
+    // removeProperty : NodeId, Str -> Effect {}
+    removeProperty: (nodeId: number, propNameAddr: number): void => {
+      const node = nodes[nodeId] as Element;
+      const propName = decodeRocStr(propNameAddr);
+      node[propName] = null;
+    },
+
+    // setListener : NodeId, Str, List Accessor, EventHandlerId -> Effect {}
+    setListener: (
+      nodeId: number,
+      eventTypeAddr: number,
+      accessorsJsonAddr: number,
+      handlerId: number
+    ): void => {
+      const element = findElement(nodeId);
+      const eventType = decodeRocStr(eventTypeAddr);
+      const accessorsJson = decodeRocStr(accessorsJsonAddr);
+      const accessors: CyclicStructureAccessor[] = JSON.parse(accessorsJson);
+
+      // Dispatch a DOM event to the specified handler function in Roc
+      const dispatchEvent = (ev: Event) => {
+        const { roc_alloc, roc_dispatch_event } = app.exports as RocWasmExports;
+
+        const outerListRcAddr = roc_alloc(4 + accessors.length * 12, 4);
+        memory32[outerListRcAddr >> 2] = 1;
+        const outerListBaseAddr = outerListRcAddr + 4;
+
+        let outerListIndex32 = outerListBaseAddr >> 2;
+        accessors.forEach((accessor) => {
+          const json = accessCyclicStructure(accessor, ev);
+          const length16 = json.length;
+
+          // Due to UTF-8 encoding overhead, a few code points go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
+          const capacity8 = length16 * 3; // Extremely "worst-case", but simple, and the allocation is short-lived.
+          const rcAddr = roc_alloc(4 + capacity8, 4);
+          memory32[rcAddr >> 2] = 1;
+          const baseAddr = rcAddr + 4;
+
+          // Write JSON to the heap allocation of the inner `List U8`
+          const allocation = memory8.subarray(baseAddr, baseAddr + capacity8);
+          const { written } = utf8Encoder.encodeInto(json, allocation);
+          const length = written || 0; // TypeScript claims that `written` can be undefined, though I don't see this in the spec.
+
+          // Write the fields of the inner `List U8` into the heap allocation of the outer List
+          memory32[outerListIndex32++] = baseAddr;
+          memory32[outerListIndex32++] = length;
+          memory32[outerListIndex32++] = capacity8;
+        });
+
+        roc_dispatch_event(outerListBaseAddr, accessors.length, handlerId);
+      };
+
+      // Make things easier to debug
+      dispatchEvent.name = `dispatchEvent${handlerId}`;
+      element.setAttribute("data-roc-event-handler-id", `${handlerId}`);
+
+      listeners[handlerId] = [eventType, dispatchEvent];
+      element.addEventListener(eventType, dispatchEvent);
+    },
+
+    // removeListener : NodeId, EventHandlerId -> Effect {}
+    removeListener: (nodeId: number, handlerId: number): void => {
+      const element = findElement(nodeId);
+      const [eventType, dispatchEvent] = findListener(element, handlerId);
+      listeners[handlerId] = null;
+      element.removeAttribute("data-roc-event-handler-id");
+      element.removeEventListener(eventType, dispatchEvent);
+    },
+  };
+
+  // decode a Roc `Str` to a JavaScript string
+  const decodeRocStr = (strAddr8: number): string => {
+    const lastByte = memory8[strAddr8 + 12];
+    const isSmall = lastByte >= 0x80;
+
+    if (isSmall) {
+      const len = lastByte & 0x7f;
+      const bytes = memory8.slice(strAddr8, strAddr8 + len);
+      return utf8Decoder.decode(bytes);
+    } else {
+      return decodeRocListUtf8(strAddr8);
+    }
+  };
+
+  // decode a Roc List of UTF-8 bytes to a JavaScript string
+  const decodeRocListUtf8 = (listAddr8: number): string => {
+    const listIndex32 = listAddr8 >> 2;
+    const bytesAddr8 = memory32[listIndex32];
+    const len = memory32[listIndex32 + 1];
+    const bytes = memory8.slice(bytesAddr8, bytesAddr8 + len);
     return utf8Decoder.decode(bytes);
-  } else {
-    return decodeRocListUtf8(strAddr8);
-  }
-};
+  };
 
-// decode a Roc List of UTF-8 bytes to a JavaScript string
-const decodeRocListUtf8 = (listAddr8: number): string => {
-  const listIndex32 = listAddr8 >> 2;
-  const bytesAddr8 = memory32[listIndex32];
-  const len = memory32[listIndex32 + 1];
-  const bytes = memory8.slice(bytesAddr8, bytesAddr8 + len);
-  return utf8Decoder.decode(bytes);
+  const wasmImports = { effects };
+  const promise = fetch(wasmFilename);
+  const instanceAndModule = await WebAssembly.instantiateStreaming(
+    promise,
+    wasmImports
+  );
+  const app = instanceAndModule.instance;
+  const memory = app.exports.memory as WebAssembly.Memory;
+  const memory8 = new Uint8Array(memory.buffer);
+  const memory32 = new Uint32Array(memory.buffer);
+
+  const { main } = app.exports as RocWasmExports;
+  const exitCode = main();
+  if (exitCode) {
+    throw new Error(`Roc exited with error code ${exitCode}`);
+  }
 };
 
 const findNode = (id: number): Node => {
@@ -72,145 +223,24 @@ const insertNode = (node: Node): number => {
   return i;
 };
 
-// createElement : Str -> Effect NodeId
-const createElement = (tagId: number): number => {
-  const tagName = tagNames[tagId];
-  const node = document.createElement(tagName);
-  return insertNode(node);
-};
-
-// createTextNode : Str -> Effect NodeId
-const createTextNode = (contentAddr: number): number => {
-  const content = decodeRocStr(contentAddr);
-  const node = document.createTextNode(content);
-  return insertNode(node);
-};
-
-// appendChild : NodeId, NodeId -> Effect {}
-const appendChild = (parentId: number, childId: number): void => {
-  const parent = findElement(parentId);
-  const child = findNode(childId);
-  parent.appendChild(child);
-};
-
-// removeNode : NodeId -> Effect {}
-const removeNode = (id: number): void => {
-  const node = nodes[id];
-  nodes[id] = null;
-  node?.parentElement?.removeChild(node);
-};
-
-// setAttribute : NodeId, Str, Str -> Effect {}
-const setAttribute = (
-  nodeId: number,
-  typeId: number,
-  valueAddr: number
-): void => {
-  const node = nodes[nodeId] as Element;
-  const name = attrTypeNames[typeId];
-  const value = decodeRocStr(valueAddr);
-  node.setAttribute(name, value);
-};
-
-// removeAttribute : NodeId, Str -> Effect {}
-const removeAttribute = (nodeId: number, nameAddr: number): void => {
-  const node = nodes[nodeId] as Element;
-  const name = decodeRocStr(nameAddr);
-  node.removeAttribute(name);
-};
-
-// setProperty : NodeId, Str, List U8 -> Effect {}
-const setProperty = (
-  nodeId: number,
-  propNameAddr: number,
-  jsonAddr: number
-): void => {
-  const node = nodes[nodeId] as Element;
-  const propName = decodeRocStr(propNameAddr);
-  const json = decodeRocListUtf8(jsonAddr);
-  const value = JSON.parse(json);
-  node[propName] = value;
-};
-
-// removeProperty : NodeId, Str -> Effect {}
-const removeProperty = (nodeId: number, propNameAddr: number): void => {
-  const node = nodes[nodeId] as Element;
-  const propName = decodeRocStr(propNameAddr);
-  node[propName] = null;
-};
-
-type CyclicStructureAccessor =
-  | { ObjectField: [string, CyclicStructureAccessor] }
-  | {
-      ArrayIndex: [number, CyclicStructureAccessor];
-    }
-  | {
-      SerializableValue: undefined;
-    };
-
 const accessCyclicStructure = (
   accessor: CyclicStructureAccessor,
   structure: any
 ): string => {
-  if ("SerializableValue" in accessor) {
-    return JSON.stringify(accessor.SerializableValue);
-  } else if ("ObjectField" in accessor) {
-    const [field, childAccessor] = accessor.ObjectField;
-    return accessCyclicStructure(childAccessor, structure[field]);
-  } else if ("ArrayIndex" in accessor) {
-    const [index, childAccessor] = accessor.ArrayIndex;
-    return accessCyclicStructure(childAccessor, structure[index]);
+  while (true) {
+    if ("SerializableValue" in accessor) {
+      return JSON.stringify(structure);
+    } else if ("ObjectField" in accessor) {
+      const [field, childAccessor] = accessor.ObjectField;
+      structure = structure[field];
+      accessor = childAccessor;
+    } else if ("ArrayIndex" in accessor) {
+      const [index, childAccessor] = accessor.ArrayIndex;
+      structure = structure[index];
+      accessor = childAccessor;
+    }
+    throw new Error("Invalid CyclicStructureAccessor");
   }
-  throw new Error("Invalid CyclicStructureAccessor");
-};
-
-// setListener : NodeId, Str, List Accessor, EventHandlerId -> Effect {}
-const setListener = (
-  nodeId: number,
-  eventTypeAddr: number,
-  accessorsJsonAddr: number,
-  handlerId: number
-): void => {
-  const element = findElement(nodeId);
-  const eventType = decodeRocStr(eventTypeAddr);
-  const accessorsJson = decodeRocStr(accessorsJsonAddr);
-  const accessors: CyclicStructureAccessor[] = JSON.parse(accessorsJson);
-
-  const rocEventListener = (ev: Event) => {
-    const roc_alloc = app.exports.roc_alloc as RocAlloc;
-
-    const outerListRcAddr = roc_alloc(4 + accessors.length * 12, 4);
-    memory32[outerListRcAddr >> 2] = 1;
-    const outerListBaseAddr = outerListRcAddr + 4;
-
-    let outerListIndex32 = outerListBaseAddr >> 2;
-    accessors.forEach((accessor) => {
-      const json = accessCyclicStructure(accessor, ev);
-      const length16 = json.length;
-
-      // Due to UTF-8 encoding overhead, a few code points go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
-      const capacity8 = length16 * 3; // Extremely "worst-case", but simple, and the allocation is short-lived.
-      const rcAddr = roc_alloc(4 + capacity8, 4);
-      memory32[rcAddr >> 2] = 1;
-      const baseAddr = rcAddr + 4;
-
-      // Write JSON to the heap allocation of the inner `List U8`
-      const allocation = memory8.subarray(baseAddr, baseAddr + capacity8);
-      const { written } = utf8Encoder.encodeInto(json, allocation);
-      const length = written || 0; // TypeScript claims that `written` can be undefined, though I don't see this in the spec.
-
-      // Write the fields of the inner `List U8` into the heap allocation of the outer List
-      memory32[outerListIndex32++] = baseAddr;
-      memory32[outerListIndex32++] = length;
-      memory32[outerListIndex32++] = capacity8;
-    });
-
-    const roc_dom_event = app.exports.roc_dom_event as RocDomEvent;
-    roc_dom_event(outerListBaseAddr, accessors.length, handlerId);
-  };
-
-  listeners[handlerId] = [eventType, rocEventListener];
-  element.addEventListener(eventType, rocEventListener);
 };
 
 const findListener = (element: Element, handlerId: number) => {
@@ -226,16 +256,7 @@ const findListener = (element: Element, handlerId: number) => {
   }
 };
 
-// removeListener : NodeId, EventHandlerId -> Effect {}
-const removeListener = (nodeId: number, handlerId: number): void => {
-  const element = findElement(nodeId);
-  const [eventType, handler] = findListener(element, handlerId);
-  listeners[handlerId] = null;
-  element.removeEventListener(eventType, handler);
-};
-
-// 'var' lets us keep this out of the way at the bottom of the file, but have it in scope everywhere.
-var tagNames = [
+const tagNames = [
   "a",
   "abbr",
   "address",
@@ -351,7 +372,7 @@ var tagNames = [
   "wbr",
 ];
 
-var attrTypeNames = [
+const attrTypeNames = [
   "accept",
   "accept-charset",
   "accesskey",

@@ -27,7 +27,7 @@ We obviously want our UI library to go fast, and in my experience, this communic
 - Make it easy for the app developer to avoid bloat by making most of the page static, with a few pockets of interactivity.
 
 ## Short term TODO
-- [ ] JS to load and initialize WebAssembly
+- [x] JS to load and initialize WebAssembly
 - [ ] Make the Wasm part of the host, for allocators and stuff (probably Zig?)
 - [ ] Prototype without virtual DOM. Just call the Effects directly.
 - [ ] Events in Roc, with CyclicStructureAccessor type, etc.
