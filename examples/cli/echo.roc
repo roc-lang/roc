@@ -6,8 +6,8 @@ app "echo"
 main : Program
 main = Program.noArgs mainTask
 
-mainTask : List Str -> Task ExitCode [] [Read [Stdin], Write [Stdout]]
-mainTask = \_args ->
+mainTask : Task ExitCode [] [Read [Stdin], Write [Stdout]]
+mainTask =
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
     Task.loop {} (\_ -> Task.map tick Step)
     |> Program.exit 0
