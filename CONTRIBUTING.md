@@ -10,7 +10,7 @@ All contributions are appreciated! Typo fixes, bug fixes, feature requests,
 bug reports are all helpful for the project.
 
 If you are looking for a good place to start, consider reaching out on the `#contributing` channel on [Roc Zulip][roc-zulip].
-Before making your first pull request, definitely talk to an existing contributor on [Roc Zulip][roc-zulip] first about what you plan to do! This can not only avoid duplicated effort, it can also avoid making a whole PR only to discover it won't be accepted because the change doesn't fit with the goals of the language's design or implementation.
+Before making your first pull request, definitely talk to an existing contributor on [Roc Zulip][roc-zulip] first about what you plan to do! This can not only avoid duplicated effort, it can also avoid making a whole PR only to discover it won't be accepted because the change doesn't fit with the goals of the language's design or implementation. 
 
 If you are interested in larger, implementation- or research-heavy projects
 related to Roc, check out [Roc Project Ideas][project-ideas] and reach out to us
