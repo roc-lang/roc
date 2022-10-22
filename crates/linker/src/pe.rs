@@ -186,12 +186,18 @@ pub(crate) fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
     preprocessed_filename: &Path,
+    dummy_dll_symbols: &[String],
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
     let data = open_mmap(host_exe_filename);
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut preprocessed = Preprocessor::preprocess(preprocessed_filename, &data, &new_sections);
+    let mut preprocessed = Preprocessor::preprocess(
+        preprocessed_filename,
+        &data,
+        dummy_dll_symbols.len(),
+        &new_sections,
+    );
 
     // get the metadata from the preprocessed executable before the destructive operations below
     let md = PeMetadata::from_preprocessed_host(&preprocessed, &new_sections);
@@ -560,7 +566,8 @@ impl DynamicRelocationsPe {
 /// update existing section headers to point to a different (shifted) location in the file
 struct Preprocessor {
     header_offset: u64,
-    additional_length: usize,
+    additional_header_space: usize,
+    additional_reloc_space: usize,
     extra_sections_start: usize,
     extra_sections_width: usize,
     section_count_offset: u64,
@@ -574,9 +581,17 @@ struct Preprocessor {
 impl Preprocessor {
     const SECTION_HEADER_WIDTH: usize = std::mem::size_of::<ImageSectionHeader>();
 
-    fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
-        let this = Self::new(data, extra_sections);
-        let mut result = open_mmap_mut(output_path, data.len() + this.additional_length);
+    fn preprocess(
+        output_path: &Path,
+        data: &[u8],
+        dummy_dll_symbols: usize,
+        extra_sections: &[[u8; 8]],
+    ) -> MmapMut {
+        let this = Self::new(data, dummy_dll_symbols, extra_sections);
+        let mut result = open_mmap_mut(
+            output_path,
+            data.len() + this.additional_header_space + this.additional_reloc_space,
+        );
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
@@ -584,7 +599,7 @@ impl Preprocessor {
         result
     }
 
-    fn new(data: &[u8], extra_sections: &[[u8; 8]]) -> Self {
+    fn new(data: &[u8], dummy_dll_symbols: usize, extra_sections: &[[u8; 8]]) -> Self {
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
@@ -609,13 +624,16 @@ impl Preprocessor {
         let extra_alignments = div_ceil(extra_sections_width, file_alignment);
         let new_headers_size = old_headers_size + extra_alignments * file_alignment;
 
-        let additional_length = new_headers_size - old_headers_size;
+        let additional_header_space = new_headers_size - old_headers_size;
+        let additional_reloc_space =
+            Self::additional_reloc_space(data, dummy_dll_symbols, file_alignment);
 
         Self {
             extra_sections_start: section_table_offset as usize
                 + sections.len() as usize * Self::SECTION_HEADER_WIDTH,
             extra_sections_width,
-            additional_length,
+            additional_header_space,
+            additional_reloc_space,
             header_offset,
             // the section count is stored 6 bytes into the header
             section_count_offset: header_offset + 4 + 2,
@@ -624,6 +642,39 @@ impl Preprocessor {
             old_headers_size,
             new_headers_size,
             section_alignment,
+        }
+    }
+
+    fn additional_reloc_space(data: &[u8], extra_symbols: usize, file_alignment: usize) -> usize {
+        let file = object::read::pe::PeFile64::parse(data).unwrap();
+
+        let reloc_section = file
+            .section_table()
+            .iter()
+            .find(|h| h.name == *b".reloc\0\0")
+            .unwrap_or_else(|| internal_error!("host binary does not have a .reloc section"));
+
+        // we use the virtual size here because it is more granular; the `size_of_raw_data` is
+        // rounded up to the file alignment
+        let available_space =
+            reloc_section.size_of_raw_data.get(LE) - reloc_section.virtual_size.get(LE);
+
+        // worst case, each relocation needs its own header
+        let worst_case = std::mem::size_of::<ImageBaseRelocation>() + std::mem::size_of::<u16>();
+
+        if available_space < (extra_symbols * worst_case) as u32 {
+            // resize that section
+            let new_size = next_multiple_of(
+                reloc_section.virtual_size.get(LE) as usize + (extra_symbols * worst_case),
+                file_alignment,
+            );
+
+            let delta = new_size - reloc_section.size_of_raw_data.get(LE) as usize;
+            debug_assert_eq!(delta % file_alignment, 0);
+
+            delta
+        } else {
+            0
         }
     }
 
@@ -647,7 +698,8 @@ impl Preprocessor {
             .copy_from_slice(&data[extra_sections_start..][..rest_of_headers]);
 
         // copy all of the actual (post-header) data
-        result[self.new_headers_size..].copy_from_slice(&data[self.old_headers_size..]);
+        let source = &data[self.old_headers_size..];
+        result[self.new_headers_size..][..source.len()].copy_from_slice(source);
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_section_names: &[[u8; 8]]) {
@@ -656,7 +708,7 @@ impl Preprocessor {
         // only correct for the first section, but that is OK because it's overwritten later
         // anyway. But, this value may be used to check whether a previous section overruns into
         // the app sections.
-        let pointer_to_raw_data = result.len() - self.additional_length;
+        let pointer_to_raw_data = result.len() - self.additional_header_space;
 
         let previous_section_header =
             load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
@@ -743,15 +795,25 @@ impl Preprocessor {
         // now be updated to point to the correct place in the file
         let shift = self.new_headers_size - self.old_headers_size;
         let mut offset = self.section_table_offset as usize;
-        loop {
-            let header = load_struct_inplace_mut::<object::pe::ImageSectionHeader>(result, offset);
 
+        let headers = load_structs_inplace_mut::<object::pe::ImageSectionHeader>(
+            result,
+            offset,
+            self.new_section_count,
+        );
+
+        let mut it = headers.iter_mut().peekable();
+        while let Some(header) = it.next() {
             let old = header.pointer_to_raw_data.get(LE);
             header.pointer_to_raw_data.set(LE, old + shift as u32);
 
-            // stop when we hit the NULL section
-            if header.name == [0; 8] {
-                break;
+            if header.name == *b".reloc\0\0" {
+                // assumes `.reloc` is the final section
+                debug_assert_eq!(it.peek().map(|s| s.name).as_ref(), extra_sections.first());
+
+                let old = header.size_of_raw_data.get(LE);
+                let new = old + self.additional_reloc_space as u32;
+                header.size_of_raw_data.set(LE, new);
             }
 
             offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
@@ -1557,7 +1619,7 @@ mod test {
 
         let sections_len_old = image_headers_old.file_header().number_of_sections.get(LE);
 
-        let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
+        let mmap = Preprocessor::preprocess(output_file, input_data, 0, new_sections);
 
         let image_headers_new =
             load_struct_inplace::<ImageNtHeaders64>(&mmap, dos_header.nt_headers_offset() as usize);
@@ -1667,6 +1729,7 @@ mod test {
             &dir.join("host.exe"),
             &dir.join("metadata"),
             &dir.join("preprocessedhost"),
+            &names,
             false,
             false,
         )
@@ -1881,7 +1944,12 @@ mod test {
 
         let extra_sections = [*b"\0\0\0\0\0\0\0\0", *b"\0\0\0\0\0\0\0\0"];
 
-        Preprocessor::preprocess(&dir.join("app.exe"), host_bytes, extra_sections.as_slice());
+        Preprocessor::preprocess(
+            &dir.join("app.exe"),
+            host_bytes,
+            0,
+            extra_sections.as_slice(),
+        );
     }
 
     #[cfg(windows)]
