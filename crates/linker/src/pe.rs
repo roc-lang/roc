@@ -233,8 +233,12 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
         count,
     );
 
+    dbg!(&descriptors);
+
     // move the dummy to the final position
     descriptors.swap(dr.dummy_import_index as usize, count - 1);
+
+    dbg!(&descriptors);
 
     // zero it out for good measure
     if let Some(d) = descriptors.last_mut() {
