@@ -123,9 +123,9 @@ fn make_dummy_dll_symbols(
     custom_names
 }
 
-fn generate_dynamic_lib(target: &Triple, custom_names: &[String], dummy_lib_path: &Path) {
-    if !dummy_lib_is_up_to_date(target, dummy_lib_path, custom_names) {
-        let bytes = crate::generate_dylib::generate(target, custom_names)
+fn generate_dynamic_lib(target: &Triple, dummy_dll_symbols: &[String], dummy_lib_path: &Path) {
+    if !dummy_lib_is_up_to_date(target, dummy_lib_path, dummy_dll_symbols) {
+        let bytes = crate::generate_dylib::generate(target, dummy_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
         std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
