@@ -190,8 +190,6 @@ pub(crate) fn preprocess_windows(
 ) -> object::read::Result<()> {
     let data = open_mmap(host_exe_filename);
 
-    std::fs::copy(host_exe_filename, "/tmp/roc/dynhost.exe").unwrap();
-
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut preprocessed = Preprocessor::preprocess(
         preprocessed_filename,
