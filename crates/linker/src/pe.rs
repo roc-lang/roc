@@ -915,6 +915,8 @@ fn find_thunks_start_offset(
         })
         .expect("Invalid thunk virtual address");
 
+    crate::dbg_hex!(dummy_thunks_address, section_va, offset_in_file);
+
     // and get the offset in the file of 0x1400037f0
     (dummy_thunks_address - section_va + offset_in_file) as usize
 }
