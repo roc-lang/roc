@@ -214,21 +214,40 @@ pub(crate) fn preprocess_windows(
         dir.size.set(LE, new);
     }
 
-    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let start = md.dynamic_relocations.imports_offset_in_file as usize
-            + W * md.dynamic_relocations.dummy_import_index as usize;
-
-        for b in preprocessed[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
+    remove_dummy_dll_import_table_entry(&mut preprocessed, &md);
 
     md.write_to_file(metadata_filename);
 
     Ok(())
+}
+
+fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
+    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+    let dr = &md.dynamic_relocations;
+
+    // there is one zeroed-out descriptor at the back
+    let count = dr.import_directory_size as usize / W - 1;
+
+    let descriptors = load_structs_inplace_mut::<ImageImportDescriptor>(
+        executable,
+        dr.import_directory_offset_in_file as usize,
+        count,
+    );
+
+    // move the dummy to the final position
+    descriptors.swap(dr.dummy_import_index as usize, count - 1);
+
+    // make this the new zeroed-out descriptor
+    if let Some(d) = descriptors.last_mut() {
+        *d = ImageImportDescriptor {
+            original_first_thunk: Default::default(),
+            time_date_stamp: Default::default(),
+            forwarder_chain: Default::default(),
+            name: Default::default(),
+            first_thunk: Default::default(),
+        }
+    }
 }
 
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
@@ -431,7 +450,10 @@ struct DynamicRelocationsPe {
     section_offset_in_file: u32,
 
     /// Offset in the file of the imports directory
-    imports_offset_in_file: u32,
+    import_directory_offset_in_file: u32,
+
+    /// Size in the file of the imports directory
+    import_directory_size: u32,
 
     /// Offset in the file of the data directories
     data_directories_offset_in_file: u32,
@@ -536,8 +558,9 @@ impl DynamicRelocationsPe {
 
         let import_table = ImportTable::new(section_data, section_va, import_va);
 
-        let imports_offset_in_section = import_va.wrapping_sub(section_va);
-        let imports_offset_in_file = offset_in_file + imports_offset_in_section;
+        let (import_directory_offset_in_file, import_directory_size) = data_dir
+            .file_range(&sections)
+            .expect("import directory exists");
 
         let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?.unwrap();
 
@@ -546,10 +569,11 @@ impl DynamicRelocationsPe {
             address_and_offset: Default::default(),
             section_virtual_address: section_va,
             section_offset_in_file: offset_in_file,
-            imports_offset_in_file,
+            import_directory_offset_in_file,
             data_directories_offset_in_file,
             dummy_import_index,
             section_headers_offset_in_file,
+            import_directory_size,
         };
 
         this.append_roc_imports(&import_table, &descriptor)?;
@@ -854,7 +878,7 @@ fn find_thunks_start_offset(
     // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
-    let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
+    let dummy_import_desc_start = dynamic_relocations.import_directory_offset_in_file as usize
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
@@ -1554,7 +1578,7 @@ mod test {
         remove_dummy_dll_import_table_test(
             &mut data,
             dynamic_relocations.data_directories_offset_in_file,
-            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.import_directory_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
 
