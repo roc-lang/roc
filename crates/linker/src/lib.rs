@@ -5,7 +5,7 @@ use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::mem;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
 mod elf;
@@ -128,8 +128,80 @@ fn generate_dynamic_lib(target: &Triple, dummy_dll_symbols: &[String], dummy_lib
         let bytes = crate::generate_dylib::generate(target, dummy_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
+        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+
+        if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+            generate_import_library(dummy_lib_path, dummy_dll_symbols);
+        }
     }
+}
+
+fn generate_import_library(dummy_lib_path: &Path, custom_names: &[String]) {
+    let def_file_content = generate_def_file(custom_names).expect("write to string never fails");
+
+    let mut def_path = dummy_lib_path.to_owned();
+    def_path.set_extension("def");
+
+    std::fs::write(def_path, def_file_content.as_bytes())
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    let mut def_filename = PathBuf::from(generate_dylib::APP_DLL);
+    def_filename.set_extension("def");
+
+    let mut lib_filename = PathBuf::from(generate_dylib::APP_DLL);
+    lib_filename.set_extension("lib");
+
+    let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+    // use zig to generate the .lib file. Here is a good description of what is in an import library
+    //
+    // > https://www.codeproject.com/Articles/1253835/The-Structure-of-import-Library-File-lib
+    //
+    // For when we want to do this in-memory in the future. We can also consider using
+    //
+    // > https://github.com/messense/implib-rs
+    let output = std::process::Command::new(&zig)
+        .current_dir(dummy_lib_path.parent().unwrap())
+        .args(&[
+            "dlltool",
+            "-d",
+            def_filename.to_str().unwrap(),
+            "-m",
+            "i386:x86-64",
+            "-D",
+            generate_dylib::APP_DLL,
+            "-l",
+            lib_filename.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        use std::io::Write;
+
+        std::io::stdout().write_all(&output.stdout).unwrap();
+        std::io::stderr().write_all(&output.stderr).unwrap();
+
+        panic!("zig dlltool failed");
+    }
+}
+
+fn generate_def_file(custom_names: &[String]) -> Result<String, std::fmt::Error> {
+    use std::fmt::Write;
+
+    let mut def_file = String::new();
+
+    writeln!(def_file, "LIBRARY libapp")?;
+    writeln!(def_file, "EXPORTS")?;
+
+    for (i, name) in custom_names.iter().enumerate() {
+        // 1-indexed of course...
+        let index = i + 1;
+
+        writeln!(def_file, "    {name} @{index}")?;
+    }
+
+    Ok(def_file)
 }
 
 fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]>) -> bool {
