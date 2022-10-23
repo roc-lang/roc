@@ -225,7 +225,9 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
     let dr = &md.dynamic_relocations;
-    let count = dr.import_directory_size as usize / W;
+
+    // there is one zeroed-out descriptor at the back
+    let count = dr.import_directory_size as usize / W - 1;
 
     let descriptors = load_structs_inplace_mut::<ImageImportDescriptor>(
         executable,
@@ -233,14 +235,10 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
         count,
     );
 
-    dbg!(&descriptors);
-
     // move the dummy to the final position
     descriptors.swap(dr.dummy_import_index as usize, count - 1);
 
-    dbg!(&descriptors);
-
-    // zero it out for good measure
+    // make this the new zeroed-out descriptor
     if let Some(d) = descriptors.last_mut() {
         *d = ImageImportDescriptor {
             original_first_thunk: Default::default(),
@@ -250,6 +248,7 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
             first_thunk: Default::default(),
         }
     }
+    dbg!(&descriptors);
 }
 
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
@@ -1988,5 +1987,49 @@ mod test {
     #[ignore]
     fn preprocessing_wine() {
         assert_eq!("Hello there\n", wine_test(preprocessing_help))
+    }
+
+    #[ignore]
+    #[test]
+    fn rust_remove_dummy_dll() {
+        let mut executable = std::fs::read(
+            "/home/folkertdev/roc/ssh-stuff/platform-switching/rust-platform/dynhost.exe",
+        )
+        .unwrap();
+
+        let dynamic_relocations = DynamicRelocationsPe {
+            name_by_virtual_address: Default::default(),
+            address_and_offset: Default::default(),
+            section_virtual_address: Default::default(),
+            section_offset_in_file: Default::default(),
+            import_directory_offset_in_file: 0x00000000000fead8,
+            import_directory_size: 0x104,
+            data_directories_offset_in_file: Default::default(),
+            dummy_import_index: Default::default(),
+            section_headers_offset_in_file: Default::default(),
+        };
+
+        let md = PeMetadata {
+            dynhost_file_size: Default::default(),
+            last_host_section_size: Default::default(),
+            last_host_section_address: Default::default(),
+            host_section_count: Default::default(),
+            optional_header_offset: Default::default(),
+            dynamic_relocations,
+            thunks_start_offset_in_file: Default::default(),
+            thunks_start_offset_in_section: Default::default(),
+            rdata_virtual_address: Default::default(),
+            reloc_offset_in_file: Default::default(),
+            reloc_section_index: Default::default(),
+            image_base: Default::default(),
+            file_alignment: Default::default(),
+            section_alignment: Default::default(),
+            imports: Default::default(),
+            exports: Default::default(),
+        };
+
+        remove_dummy_dll_import_table_entry(&mut executable, &md);
+
+        std::fs::write("/tmp/roc/processed-dynhost.exe", &executable).unwrap()
     }
 }
