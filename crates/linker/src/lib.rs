@@ -136,13 +136,13 @@ fn generate_dynamic_lib(target: &Triple, custom_names: &[String], dummy_lib_path
     }
 }
 fn generate_import_library(dummy_lib_path: &Path, custom_names: &[String]) {
-    let def_file_content = generate_def_file(custom_names).unwrap();
-    println!("{}", &def_file_content);
+    let def_file_content = generate_def_file(custom_names).expect("write to string never fails");
 
     let mut def_path = dummy_lib_path.to_owned();
     def_path.set_extension("def");
 
-    std::fs::write(def_path, def_file_content.as_bytes()).unwrap();
+    std::fs::write(def_path, def_file_content.as_bytes())
+        .unwrap_or_else(|e| internal_error!("{e}"));
 
     let mut def_filename = PathBuf::from(generate_dylib::APP_DLL);
     def_filename.set_extension("def");
@@ -152,9 +152,13 @@ fn generate_import_library(dummy_lib_path: &Path, custom_names: &[String]) {
 
     let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
 
-    // we need to compile the app first
+    // use zig to generate the .lib file. Here is a good description of what is in an import library
+    //
+    // > https://www.codeproject.com/Articles/1253835/The-Structure-of-import-Library-File-lib
+    //
+    // For when we want to do this in-memory in the future
     let output = std::process::Command::new(&zig)
-        .current_dir(dbg!(dummy_lib_path.parent().unwrap()))
+        .current_dir(dummy_lib_path.parent().unwrap())
         .args(&[
             "dlltool",
             "-d",
@@ -175,7 +179,7 @@ fn generate_import_library(dummy_lib_path: &Path, custom_names: &[String]) {
         std::io::stdout().write_all(&output.stdout).unwrap();
         std::io::stderr().write_all(&output.stderr).unwrap();
 
-        panic!("zig build-obj failed");
+        panic!("zig dlltool failed");
     }
 }
 
