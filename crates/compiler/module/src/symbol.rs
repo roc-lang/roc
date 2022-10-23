@@ -1318,6 +1318,7 @@ define_builtins! {
         52 STR_REPLACE_LAST: "replaceLast"
         53 STR_WITH_CAPACITY: "withCapacity"
         54 STR_WITH_PREFIX: "withPrefix"
+        55 STR_GRAPHEMES: "graphemes"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
