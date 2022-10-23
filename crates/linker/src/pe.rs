@@ -55,7 +55,7 @@ struct PeMetadata {
     thunks_start_offset_in_section: usize,
 
     /// Virtual address of the .rdata section
-    rdata_virtual_address: u32,
+    rdata_virtual_address: u64,
 
     /// The offset into the file of the .reloc section
     reloc_offset_in_file: usize,
@@ -119,7 +119,7 @@ impl PeMetadata {
         let thunks_start_offset_in_section =
             thunks_start_offset_in_file - rdata_section.file_range().unwrap().0 as usize;
 
-        let rdata_virtual_address = rdata_section.address() as u32;
+        let rdata_virtual_address = rdata_section.address();
 
         let (reloc_section_index, reloc_section) = dynhost_obj
             .sections()
@@ -1333,7 +1333,7 @@ fn write_image_base_relocation(
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    let thunks_start_va = (md.rdata_virtual_address - md.image_base as u32)
+    let thunks_start_va = (md.rdata_virtual_address - md.image_base) as u32
         + md.thunks_start_offset_in_section as u32;
 
     // relocations are defined per 4kb page
