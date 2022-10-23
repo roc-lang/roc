@@ -248,7 +248,6 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
             first_thunk: Default::default(),
         }
     }
-    dbg!(&descriptors);
 }
 
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
@@ -1346,6 +1345,12 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
+
+    dbg!(
+        md.reloc_offset_in_file,
+        thunks_relocation_block_va,
+        &relocations,
+    );
 
     let added_reloc_bytes = write_image_base_relocation(
         executable,
