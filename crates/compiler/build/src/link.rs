@@ -649,8 +649,6 @@ pub fn rebuild_host(
             command.arg("--release");
         }
 
-        dbg!(&shared_lib_path);
-
         let source_file = if shared_lib_path.is_some() {
             command.env("RUSTFLAGS", "-C link-dead-code");
             command.args(&["--bin", "host"]);
@@ -660,7 +658,7 @@ pub fn rebuild_host(
             "src/lib.rs"
         };
 
-        let output = dbg!(command).output().unwrap();
+        let output = command.output().unwrap();
 
         validate_output(source_file, "cargo build", output);
 
