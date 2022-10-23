@@ -38,6 +38,9 @@ cargo run --bin roc-docs crates/compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
+# Manually add this tip to all the builtin docs.
+find www/build/builtins -type f -name 'index.html' -exec sed -i 's!<div class="module-links">!<div class="module-links"><div style="padding: 1em;font-style: italic;line-height: 1.3em;"><strong>Tip:</strong> <a href="/different-names">Some names</a> differ from other languages.</div>!' {} \;
+
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/examples/cli/" rather than "/builtins/"
