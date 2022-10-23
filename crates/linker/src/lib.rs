@@ -156,7 +156,9 @@ fn generate_import_library(dummy_lib_path: &Path, custom_names: &[String]) {
     //
     // > https://www.codeproject.com/Articles/1253835/The-Structure-of-import-Library-File-lib
     //
-    // For when we want to do this in-memory in the future
+    // For when we want to do this in-memory in the future. We can also consider using
+    //
+    // > https://github.com/messense/implib-rs
     let output = std::process::Command::new(&zig)
         .current_dir(dummy_lib_path.parent().unwrap())
         .args(&[
