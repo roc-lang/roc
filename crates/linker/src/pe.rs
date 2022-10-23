@@ -1727,14 +1727,14 @@ mod test {
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
         let dylib_bytes = crate::generate_dylib::synthetic_dll(&names);
-        std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
+        std::fs::write(dir.join("libapp.dll"), dylib_bytes).unwrap();
 
-        // now we can compile the host (it uses libapp.obj, hence the order here)
+        // now we can compile the host (it uses libapp.dll, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
                 "build-exe",
-                "libapp.obj",
+                "libapp.dll",
                 "host.zig",
                 "-lc",
                 "-target",

@@ -55,7 +55,7 @@ pub fn build_and_preprocess_host(
     exported_closure_types: Vec<String>,
 ) {
     let dummy_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("libapp.obj")
+        host_input_path.with_file_name("libapp.dll")
     } else {
         host_input_path.with_file_name("libapp.so")
     };
