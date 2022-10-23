@@ -1346,7 +1346,12 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
 
-    dbg!(
+    crate::dbg_hex!(
+        md.rdata_virtual_address,
+        md.image_base,
+        md.thunks_start_offset_in_section,
+        thunks_offset_in_block,
+        thunks_start_va,
         md.reloc_offset_in_file,
         thunks_relocation_block_va,
         &relocations,
