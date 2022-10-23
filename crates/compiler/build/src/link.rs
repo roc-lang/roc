@@ -524,36 +524,33 @@ pub fn rebuild_host(
     let swift_host_src = host_input_path.with_file_name("host.swift");
     let swift_host_header_src = host_input_path.with_file_name("host.h");
 
+    let os = roc_target::OperatingSystem::from(target.operating_system);
+    let executable_extension = match os {
+        roc_target::OperatingSystem::Windows => "exe",
+        roc_target::OperatingSystem::Unix => "",
+        roc_target::OperatingSystem::Wasi => "",
+    };
+
+    let object_extension = match os {
+        roc_target::OperatingSystem::Windows => "obj",
+        roc_target::OperatingSystem::Unix => "o",
+        roc_target::OperatingSystem::Wasi => "o",
+    };
+
     let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
         if matches!(opt_level, OptLevel::Development) {
             host_input_path.with_file_name("host.o")
         } else {
             host_input_path.with_file_name("host.bc")
         }
+    } else if shared_lib_path.is_some() {
+        host_input_path
+            .with_file_name("dynhost")
+            .with_extension(executable_extension)
     } else {
-        let os = roc_target::OperatingSystem::from(target.operating_system);
-
-        if shared_lib_path.is_some() {
-            let extension = match os {
-                roc_target::OperatingSystem::Windows => "exe",
-                roc_target::OperatingSystem::Unix => "",
-                roc_target::OperatingSystem::Wasi => "",
-            };
-
-            host_input_path
-                .with_file_name("dynhost")
-                .with_extension(extension)
-        } else {
-            let extension = match os {
-                roc_target::OperatingSystem::Windows => "obj",
-                roc_target::OperatingSystem::Unix => "o",
-                roc_target::OperatingSystem::Wasi => "o",
-            };
-
-            host_input_path
-                .with_file_name("host")
-                .with_extension(extension)
-        }
+        host_input_path
+            .with_file_name("host")
+            .with_extension(object_extension)
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -656,6 +653,7 @@ pub fn rebuild_host(
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
             command.arg("--release");
         }
+
         let source_file = if shared_lib_path.is_some() {
             command.env("RUSTFLAGS", "-C link-dead-code");
             command.args(&["--bin", "host"]);
@@ -664,13 +662,16 @@ pub fn rebuild_host(
             command.arg("--lib");
             "src/lib.rs"
         };
+
         let output = command.output().unwrap();
 
         validate_output(source_file, "cargo build", output);
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
-            std::fs::copy(cargo_out_dir.join("host"), &host_dest).unwrap();
+            let mut exe_path = cargo_out_dir.join("host");
+            exe_path.set_extension(executable_extension);
+            std::fs::copy(&exe_path, &host_dest).unwrap();
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
