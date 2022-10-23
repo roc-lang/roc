@@ -226,15 +226,17 @@ expect update (single "a" Bool.true) "a" alterValue == empty
 ##         |> Bool.isEq Bool.true
 contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
-    step = \_, Pair key _val ->
-        if key == needle then
-            Break {}
-        else
-            Continue {}
+    (Pair key _value) <- List.any list
+    key == needle
 
-    when List.iterate list {} step is
-        Continue _ -> Bool.false
-        Break _ -> Bool.true
+expect contains empty "a" == Bool.false
+expect contains (single "a" {}) "a" == Bool.true
+expect contains (single "b" {}) "a" == Bool.false
+expect
+    Dict.empty
+    |> Dict.insert 1234 "5678"
+    |> Dict.contains 1234
+    |> Bool.isEq Bool.true
 
 ## Returns a dictionary containing the key and value provided as input.
 ##

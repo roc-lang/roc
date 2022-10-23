@@ -8,7 +8,6 @@ interface List
         map,
         len,
         withCapacity,
-        iterate,
         walkBackwards,
         concat,
         first,
