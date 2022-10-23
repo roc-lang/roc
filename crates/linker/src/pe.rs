@@ -1403,8 +1403,6 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
                     * std::mem::size_of::<pe::ImageDataDirectory>(),
         );
 
-        let old_dir_size = dir.size.get(LE);
-        debug_assert_eq!(old_section_size, old_dir_size);
         dir.size.set(LE, new_virtual_size);
     }
 }
