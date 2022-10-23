@@ -2,7 +2,9 @@ use memmap2::{Mmap, MmapMut};
 use object::Object;
 use roc_build::link::{rebuild_host, LinkType};
 use roc_error_macros::internal_error;
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
+use roc_reporting::report::RenderTarget;
 use std::cmp::Ordering;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -92,6 +94,63 @@ pub fn link_preprocessed_host(
 ) {
     let metadata = host_input_path.with_file_name("metadata");
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
+}
+
+// Exposed function to load a platform file and generate a dummy lib for it.
+pub fn generate_dummy_lib(input_path: &Path, triple: &Triple) -> std::io::Result<i32> {
+    // Note: this should theoretically just be able to load the host, I think.
+    // Instead, I am loading an entire app because that was simpler and had example code.
+    // If this was expected to stay around for the the long term, we should change it.
+    // But hopefully it will be removable once we have surgical linking on all platforms.
+    let target_info = triple.into();
+    let arena = &bumpalo::Bump::new();
+    let subs_by_module = Default::default();
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        input_path.to_path_buf(),
+        subs_by_module,
+        LoadConfig {
+            target_info,
+            render: RenderTarget::Generic,
+            threading: Threading::AllAvailable,
+            exec_mode: ExecutionMode::Executable,
+        },
+    )
+    .unwrap_or_else(|problem| todo!("{:?}", problem));
+
+    let exposed_to_host = loaded
+        .exposed_to_host
+        .values
+        .keys()
+        .map(|x| x.as_str(&loaded.interns).to_string())
+        .collect();
+
+    let exported_closure_types = loaded
+        .exposed_to_host
+        .closure_types
+        .iter()
+        .map(|x| {
+            format!(
+                "{}_{}",
+                x.module_string(&loaded.interns),
+                x.as_str(&loaded.interns)
+            )
+        })
+        .collect();
+
+    if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
+        let dummy_lib = if let target_lexicon::OperatingSystem::Windows = triple.operating_system {
+            platform_path.with_file_name("libapp.obj")
+        } else {
+            platform_path.with_file_name("libapp.so")
+        };
+
+        let dummy_dll_symbols = make_dummy_dll_symbols(exposed_to_host, exported_closure_types);
+        generate_dynamic_lib(triple, &dummy_dll_symbols, &dummy_lib);
+    } else {
+        unreachable!();
+    };
+    Ok(0)
 }
 
 fn make_dummy_dll_symbols(
