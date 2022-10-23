@@ -934,9 +934,10 @@ fn redirect_dummy_dll_functions(
     thunks_start_offset: usize,
 ) {
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
-    let mut targets = function_definition_vas.iter();
+    // this is an O(n^2) loop, hopefully that does not become a problem. If it does we can sort
+    // both vectors to get linear complexity in the loop.
     'outer: for (i, host_name) in imports.iter().enumerate() {
-        for (roc_app_target_name, roc_app_target_va) in targets.by_ref() {
+        for (roc_app_target_name, roc_app_target_va) in function_definition_vas {
             if host_name == roc_app_target_name {
                 // addresses are 64-bit values
                 let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
