@@ -1,6 +1,9 @@
 fn main() {
-    // println!("cargo:rustc-link-lib=dylib=libapp");
-    // println!("cargo:rustc-link-search=.");
+    #[cfg(not(windows))]
+    println!("cargo:rustc-link-lib=dylib=app");
 
-    cc::Build::new().object("foo.lib").compile("app");
+    #[cfg(windows)]
+    println!("cargo:rustc-link-lib=dylib=libapp");
+
+    println!("cargo:rustc-link-search=.");
 }
