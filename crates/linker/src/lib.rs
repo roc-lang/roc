@@ -139,6 +139,11 @@ pub fn generate_dummy_lib(input_path: &Path, triple: &Triple) -> std::io::Result
         .collect();
 
     if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
+        let platform_path = input_path
+            .to_path_buf()
+            .parent()
+            .unwrap()
+            .join(platform_path);
         let dummy_lib = if let target_lexicon::OperatingSystem::Windows = triple.operating_system {
             platform_path.with_file_name("libapp.obj")
         } else {
