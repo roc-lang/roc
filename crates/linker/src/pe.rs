@@ -1382,17 +1382,20 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         "new .reloc section is too big, and runs into the next section!",
     );
 
-    //    // in the data directories, update the length of the base relocations
-    //    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
-    //        executable,
-    //        md.dynamic_relocations.data_directories_offset_in_file as usize
-    //            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
-    //                * std::mem::size_of::<pe::ImageDataDirectory>(),
-    //    );
-    //
-    //    let old_dir_size = dir.size.get(LE);
-    //    debug_assert_eq!(old_section_size, old_dir_size);
-    //    dir.size.set(LE, new_virtual_size);
+    // in the data directories, update the length of the base relocations
+    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+        executable,
+        md.dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
+                * std::mem::size_of::<pe::ImageDataDirectory>(),
+    );
+
+    // it is crucial that the directory size is rounded up to a multiple of 8!
+    let old = dir.size.get(LE);
+    let new = new_virtual_size;
+    let delta = next_multiple_of((new - old) as usize, 8);
+
+    dir.size.set(LE, old + delta as u32);
 }
 
 #[cfg(test)]
