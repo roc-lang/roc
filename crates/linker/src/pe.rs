@@ -55,7 +55,7 @@ struct PeMetadata {
     thunks_start_offset_in_section: usize,
 
     /// Virtual address of the .rdata section
-    rdata_virtual_address: u32,
+    dummy_dll_thunk_section_virtual_address: u32,
 
     /// The offset into the file of the .reloc section
     reloc_offset_in_file: usize,
@@ -108,18 +108,16 @@ impl PeMetadata {
             .unwrap();
 
         let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
-        let thunks_start_offset_in_file =
-            find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
 
-        let rdata_section = dynhost_obj
-            .sections()
-            .find(|s| s.name() == Ok(".rdata"))
-            .unwrap();
+        let dummy_dll_thunks = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+        let thunks_start_offset_in_file = dummy_dll_thunks.offset_in_file as usize;
 
-        let thunks_start_offset_in_section =
-            thunks_start_offset_in_file - rdata_section.file_range().unwrap().0 as usize;
+        let dummy_dll_thunk_section_virtual_address =
+            dummy_dll_thunks.section.virtual_address.get(LE);
 
-        let rdata_virtual_address = rdata_section.address() as u32;
+        let thunks_start_offset_in_section = (dummy_dll_thunks.offset_in_file
+            - dummy_dll_thunks.section.pointer_to_raw_data.get(LE) as u64)
+            as usize;
 
         let (reloc_section_index, reloc_section) = dynhost_obj
             .sections()
@@ -175,7 +173,7 @@ impl PeMetadata {
             dynamic_relocations,
             thunks_start_offset_in_file,
             thunks_start_offset_in_section,
-            rdata_virtual_address,
+            dummy_dll_thunk_section_virtual_address,
             reloc_offset_in_file,
             reloc_section_index,
         }
@@ -844,12 +842,16 @@ impl Preprocessor {
         }
     }
 }
+struct DummyDllThunks<'a> {
+    section: &'a object::pe::ImageSectionHeader,
+    offset_in_file: u64,
+}
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
-fn find_thunks_start_offset(
-    executable: &[u8],
+fn find_thunks_start_offset<'a>(
+    executable: &'a [u8],
     dynamic_relocations: &DynamicRelocationsPe,
-) -> usize {
+) -> DummyDllThunks<'a> {
     // The host executable contains indirect calls to functions that the host should provide
     //
     //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
@@ -904,19 +906,21 @@ fn find_thunks_start_offset(
     let sections = nt_headers.sections(executable, offset).unwrap();
 
     // find the section the virtual address is in
-    let (section_va, offset_in_file) = sections
+    let (section_virtual_address, section) = sections
         .iter()
         .find_map(|section| {
             section
                 .pe_data_containing(executable, dummy_thunks_address)
-                .map(|(_section_data, section_va)| {
-                    (section_va, section.pointer_to_raw_data.get(LE))
-                })
+                .map(|(_section_data, section_va)| (section_va, section))
         })
         .expect("Invalid thunk virtual address");
 
-    // and get the offset in the file of 0x1400037f0
-    (dummy_thunks_address - section_va + offset_in_file) as usize
+    DummyDllThunks {
+        section,
+        // and get the offset in the file of 0x1400037f0
+        offset_in_file: dummy_thunks_address as u64 - section_virtual_address as u64
+            + section.pointer_to_raw_data.get(LE) as u64,
+    }
 }
 
 /// Make the thunks point to our actual roc application functions
@@ -1333,7 +1337,7 @@ fn write_image_base_relocation(
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    let thunks_start_va = (md.rdata_virtual_address - md.image_base as u32)
+    let thunks_start_va = (md.dummy_dll_thunk_section_virtual_address - md.image_base as u32)
         + md.thunks_start_offset_in_section as u32;
 
     // relocations are defined per 4kb page
