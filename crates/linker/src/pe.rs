@@ -1337,8 +1337,8 @@ fn write_image_base_relocation(
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    let thunks_start_va = (md.dummy_dll_thunk_section_virtual_address - md.image_base as u32)
-        + md.thunks_start_offset_in_section as u32;
+    let thunks_start_va =
+        md.dummy_dll_thunk_section_virtual_address + md.thunks_start_offset_in_section as u32;
 
     // relocations are defined per 4kb page
     const BLOCK_SIZE: u32 = 4096;
