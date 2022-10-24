@@ -44,7 +44,7 @@ pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
-pub const CMD_GEN_DUMMY_LIB: &str = "gen-dummy-lib";
+pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -277,8 +277,8 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(true)
             )
         )
-        .subcommand(Command::new(CMD_GEN_DUMMY_LIB)
-            .about("Generate a dummy shared library that can be used for linking a platform binary")
+        .subcommand(Command::new(CMD_GEN_STUB_LIB)
+            .about("Generate a stubbed shared library that can be used for linking a platform binary.\nThe stubbed library has prototypes, but no function bodies.\n\nNote: This command will be removed in favor of just using `roc build` once all platforms support the surgical linker")
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for an app using the platform")
