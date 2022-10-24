@@ -1,7 +1,7 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
@@ -1237,9 +1237,6 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
             match resolver.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(spec_symbol)
-                }
-                roc_types::types::MemberImpl::Derived => {
-                    todo_abilities!("get type from obligated opaque")
                 }
                 // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
                 // which will make this simpler.

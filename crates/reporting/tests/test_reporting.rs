@@ -11484,4 +11484,51 @@ All branches in an `if` must have the same type!
         { a : Str }
     "###
     );
+
+    test_report!(
+        underivable_opaque_doesnt_error_for_derived_bodies,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            F := U8 -> U8 has [Hash, Eq, Encoding]
+
+            main = ""
+            "#
+        ),
+    @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Hash` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                           ^^^^
+
+    Note: `Hash` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Hash` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                 ^^
+
+    Note: `Eq` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Eq` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Encoding` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                     ^^^^^^^^
+
+    Note: `Encoding` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Encoding` for `F`.
+    "###
+    );
 }

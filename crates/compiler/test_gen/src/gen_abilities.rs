@@ -376,6 +376,30 @@ fn encode_use_stdlib_without_wrapping_custom() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derive_to_encoder_for_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Json]
+                provides [main] to "./platform"
+
+            HelloWorld := { a: Str } has [Encoding]
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":"Hello, World!"}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_encoder_encode_custom_has_capture() {
     assert_evals_to!(
         indoc!(
@@ -764,6 +788,32 @@ fn decode_use_stdlib() {
         ),
         15,
         u8
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_derive_decoder_for_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Json]
+                provides [main] to "./platform"
+
+            HelloWorld := { a: Str } has [Decoding]
+
+            main =
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok (@HelloWorld {a}) -> a
+                    _ -> "FAIL"
+            "#
+        ),
+        RocStr::from(r#"Hello, World!"#),
+        RocStr
     )
 }
 
@@ -1590,6 +1640,33 @@ mod hash {
                 RocList<u8>
             )
         }
+
+        #[test]
+        fn derived_hash_for_opaque_record() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        Q := {{ a: U8, b: U8, c: U8 }} has [Hash]
+
+                        q = @Q {{ a: 15, b: 27, c: 31 }}
+
+                        main =
+                            @THasher []
+                            |> Hash.hash q
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[15, 27, 31]),
+                RocList<u8>
+            )
+        }
     }
 }
 
@@ -1638,6 +1715,23 @@ mod eq {
                 app "test" provides [main] to "./platform"
 
                 main = Bool.isEq 10u8 10u8
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    fn derive_structural_eq_for_opaque() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := U8 has [Eq]
+
+                main = (@Q 15) == (@Q 15)
                 "#
             ),
             true,
