@@ -122,11 +122,14 @@ pub fn frontload_ability_constraints(
             let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
             let infer_variables = vars.flex_vars.iter().copied();
 
+            let signature_expectation =
+                constraints.push_expected_type(Expected::NoExpectation(signature.clone()));
+
             def_pattern_state
                 .constraints
                 .push(constraints.equal_types_var(
                     signature_var,
-                    Expected::NoExpectation(signature.clone()),
+                    signature_expectation,
                     Category::Storage(file!(), line!()),
                     Region::zero(),
                 ));

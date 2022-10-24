@@ -269,12 +269,11 @@ impl Constraints {
     pub fn equal_types_var(
         &mut self,
         var: Variable,
-        expected: Expected<Type>,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
     ) -> Constraint {
         let type_index = Self::push_type_variable(var);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))
