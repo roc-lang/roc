@@ -182,9 +182,11 @@ pub fn constrain_pattern(
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
+                let type_index = constraints.push_type(expected.get_type());
+
                 state
                     .delayed_is_open_constraints
-                    .push(constraints.is_open_type(expected.get_type()));
+                    .push(constraints.is_open_type(type_index));
             }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
@@ -193,9 +195,11 @@ pub fn constrain_pattern(
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             if could_be_a_tag_union(expected.get_type_ref()) {
+                let type_index = constraints.push_type(expected.get_type_ref().clone());
+
                 state
                     .delayed_is_open_constraints
-                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+                    .push(constraints.is_open_type(type_index));
             }
 
             state.headers.insert(
@@ -212,9 +216,9 @@ pub fn constrain_pattern(
             specializes: _,
         } => {
             if could_be_a_tag_union(expected.get_type_ref()) {
-                state
-                    .constraints
-                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+                let type_index = constraints.push_type(expected.get_type_ref().clone());
+
+                state.constraints.push(constraints.is_open_type(type_index));
             }
 
             state.headers.insert(

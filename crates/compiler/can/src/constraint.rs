@@ -332,9 +332,7 @@ impl Constraints {
         Constraint::PatternPresence(type_index, expected_index, category_index, region)
     }
 
-    pub fn is_open_type(&mut self, typ: Type) -> Constraint {
-        let type_index = self.push_type(typ);
-
+    pub fn is_open_type(&mut self, type_index: TypeOrVar) -> Constraint {
         Constraint::IsOpenType(type_index)
     }
 
