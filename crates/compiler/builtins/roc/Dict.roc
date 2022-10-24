@@ -26,15 +26,20 @@ interface Dict
         Hash.{ Hasher },
     ]
 
-## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.
+## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
+## can associate keys with values.
 ##
 ## ### Inserting
 ##
-## The most basic way to use a dictionary is to start with an empty one and then:
-## 1. Call [Dict.insert] passing a key and a value, to associate that key with that value in the dictionary.
-## 2. Later, call [Dict.get] passing the same key as before, and it will return the value you stored.
+## The most basic way to use a dictionary is to start with an empty one and 
+## then:
+## 1. Call `Dict.insert` passing a key and a value, to associate that key with 
+## that value in the dictionary.
+## 2. Later, call `Dict.get` passing the same key as before, and it will return 
+## the value you stored.
 ##
-## Here's an example of a dictionary which uses a city's name as the key, and its population as the associated value.
+## Here's an example of a dictionary which uses a city's name as the key, and 
+## its population as the associated value.
 ##
 ##     populationByCity =
 ##         Dict.empty
@@ -46,11 +51,12 @@ interface Dict
 ##
 ## ### Accessing keys or values
 ##
-## We can use [Dict.keys] and [Dict.values] functions to get only the keys or only the values.
+## We can use `Dict.keys` and `Dict.values` functions to get only the keys or 
+## only the values.
 ##
-## You may notice that these lists have the same order as the original insertion order. This will be true if
-## all you ever do is [insert] and [get] operations on the dictionary, but [remove] operations can change this order.
-## Let's see how that looks.
+## You may notice that these lists have the same order as the original insertion
+## order. This will be true if all you ever do is `Dict.insert` and `Dict.get` operations 
+## on the dictionary, but `Dict.remove` operations can change this order.
 ##
 ## ### Removing
 ##
@@ -62,29 +68,45 @@ interface Dict
 ##         ==
 ##         ["London", "Amsterdam", "Shanghai", "Delhi"]
 ##
-## Notice that the order changed! Philadelphia has been not only removed from the list, but Amsterdam - the last
-## entry we inserted - has been moved into the spot where Philadelphia was previously. This is exactly what
-## [Dict.remove] does: it removes an element and moves the most recent insertion into the vacated spot.
+## Notice that the order has changed. Philadelphia was not only removed from the
+## list, but Amsterdam - the last entry we inserted - has been moved into the 
+## spot where Philadelphia was previously. This is exactly what `Dict.remove` 
+## does. It removes an element and moves the most recent insertion into the 
+## vacated spot.
 ##
-## This move is done as a performance optimization, and it lets [remove] have
-## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
+## This move is done as a performance optimization, and it lets `Dict.remove` 
+## have [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## ### Equality
 ##
-## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
-## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
-## `fn dict1 == fn dict2` also being `Bool.true`, even if `fn` relies on the dictionary's ordering.
+## Two dictionaries are equal when their contents and orderings match. This 
+## means that when `dict1 == dict2` the expression `fn dict1 == fn dict2` will 
+## also evaluate to `Bool.true`. The function `fn` can count on the ordering of 
+## values in the dictionary to also match.
 Dict k v := List [Pair k v] has [Eq { isEq: dictEq }]
 
 dictEq = \@Dict l1, @Dict l2 -> l1 == l2
 
-## An empty dictionary.
+## Return an empty dictionary.
 empty : Dict k v
 empty = @Dict []
 
+## Return a dictionary with space allocated for a number of entries. This 
+## provides a performance optimisation if you know how many entries will be 
+## inserted.
 withCapacity : Nat -> Dict k v
 withCapacity = \n -> @Dict (List.withCapacity n)
 
+## Get the value at a given key. If there is a value for the specified key it 
+## will return [Ok value], otherwise return [Err KeyNotFound].
+## 
+##     expect 
+##         dictionary = 
+##             Dict.empty
+##             |> Dict.insert 1 "Apple"
+##             |> Dict.insert 2 "Orange"
+##         Dict.get dictionary 1 == Ok "Apple" &&
+##         Dict.get dictionary 2000 == Err KeyNotFound
 get : Dict k v, k -> Result v [KeyNotFound]* | k has Eq
 get = \@Dict list, needle ->
     when List.findFirst list (\Pair key _ -> key == needle) is
@@ -94,10 +116,27 @@ get = \@Dict list, needle ->
         Err NotFound ->
             Err KeyNotFound
 
+## Iterate through the keys and values in the dictionary and call the function 
+## `state, k, v -> state` for each value with an initial `state` value provided
+## for the first call.
+##
+##     expect 
+##         Dict.empty
+##         |> Dict.insert "Apples" 12
+##         |> Dict.insert "Orange" 24
+##         |> Dict.walk 0 (\count, _, qty -> count + qty) 
+##         |> Bool.isEq 36
 walk : Dict k v, state, (state, k, v -> state) -> state
 walk = \@Dict list, initialState, transform ->
     List.walk list initialState (\state, Pair k v -> transform state k v)
 
+## Insert a value into the dictionary at a specified key.
+##
+##     expect 
+##         Dict.empty
+##         |> Dict.insert "Apples" 12
+##         |> Dict.get "Apples"
+##         |> Bool.isEq (Ok 12)
 insert : Dict k v, k, v -> Dict k v | k has Eq
 insert = \@Dict list, k, v ->
     when List.findFirstIndex list (\Pair key _ -> key == k) is
@@ -109,6 +148,15 @@ insert = \@Dict list, k, v ->
             |> List.set index (Pair k v)
             |> @Dict
 
+## Returns the number of values in the dictionary.
+## 
+##     expect 
+##         Dict.empty
+##         |> Dict.insert "One" "A Song"
+##         |> Dict.insert "Two" "Candy Canes"
+##         |> Dict.insert "Three" "Boughs of Holly"
+##         |> Dict.len
+##         |> Bool.isEq 3
 len : Dict k v -> Nat
 len = \@Dict list ->
     List.len list
@@ -127,7 +175,7 @@ remove = \@Dict list, key ->
             |> List.dropLast
             |> @Dict
 
-## Insert or remove a value in a Dict based on its presence
+## Insert or remove a value for a specified key. Provide a function that can
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
