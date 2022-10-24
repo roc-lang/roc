@@ -600,12 +600,11 @@ impl Constraints {
 
     pub fn store(
         &mut self,
-        typ: Type,
+        type_index: TypeOrVar,
         variable: Variable,
         filename: &'static str,
         line_number: u32,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
         let string_index = Index::push_new(&mut self.strings, filename);
 
         Constraint::Store(type_index, variable, string_index, line_number)

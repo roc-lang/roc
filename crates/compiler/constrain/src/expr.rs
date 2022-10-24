@@ -443,8 +443,8 @@ pub fn constrain_expr(
         }
         Var(symbol, variable) => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
-            let store_expected =
-                constraints.store(expected.get_type_ref().clone(), *variable, file!(), line!());
+            let expected_type = constraints.push_type(expected.get_type_ref().clone());
+            let store_expected = constraints.store(expected_type, *variable, file!(), line!());
 
             let store_into_var =
                 constraints.push_expected_type(expected.replace(Type::Variable(*variable)));
@@ -456,12 +456,9 @@ pub fn constrain_expr(
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
             // lookup the member in the environment.
-            let store_expected = constraints.store(
-                expected.get_type_ref().clone(),
-                specialization_var,
-                file!(),
-                line!(),
-            );
+            let expected_type = constraints.push_type(expected.get_type_ref().clone());
+            let store_expected =
+                constraints.store(expected_type, specialization_var, file!(), line!());
             let store_specialization_var = constraints
                 .push_expected_type(Expected::NoExpectation(Type::Variable(specialization_var)));
             let lookup_constr = constraints.lookup(symbol, store_specialization_var, region);
@@ -1538,10 +1535,12 @@ fn constrain_function_def(
                     let ret_constraint =
                         attach_resolution_constraints(constraints, env, ret_constraint);
 
+                    let signature_index = constraints.push_type(signature);
+
                     let cons = [
                         ret_constraint,
                         // Store type into AST vars. We use Store so errors aren't reported twice
-                        constraints.store(signature, expr_var, std::file!(), std::line!()),
+                        constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                     ];
                     let expr_con = constraints.and_constraint(cons);
 
@@ -1575,6 +1574,7 @@ fn constrain_function_def(
             let closure_var = function_def.closure_type;
 
             let ret_type = *ret_type.clone();
+            let ret_type_index = constraints.push_type(ret_type.clone());
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -1681,7 +1681,7 @@ fn constrain_function_def(
                     region,
                 ),
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -1793,10 +1793,12 @@ fn constrain_destructure_def(
                 annotation_expected,
             );
 
+            let signature_index = constraints.push_type(signature);
+
             let cons = [
                 ret_constraint,
                 // Store type into AST vars. We use Store so errors aren't reported twice
-                constraints.store(signature, expr_var, std::file!(), std::line!()),
+                constraints.store(signature_index, expr_var, std::file!(), std::line!()),
             ];
             let expr_con = constraints.and_constraint(cons);
 
@@ -1889,10 +1891,12 @@ fn constrain_value_def(
             );
             let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
 
+            let signature_index = constraints.push_type(signature.clone());
+
             let cons = [
                 ret_constraint,
                 // Store type into AST vars. We use Store so errors aren't reported twice
-                constraints.store(signature.clone(), expr_var, std::file!(), std::line!()),
+                constraints.store(signature_index, expr_var, std::file!(), std::line!()),
             ];
             let expr_con = constraints.and_constraint(cons);
 
@@ -2331,6 +2335,7 @@ fn constrain_typed_def(
             let ret_var = *ret_var;
             let closure_var = *closure_var;
             let ret_type = *ret_type.clone();
+            let ret_type_index = constraints.push_type(ret_type.clone());
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -2401,7 +2406,7 @@ fn constrain_typed_def(
                 ),
                 constraints.store_index(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -3083,6 +3088,7 @@ fn constraint_recursive_function(
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
             let ret_type = *ret_type.clone();
+            let ret_type_index = constraints.push_type(ret_type.clone());
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -3158,7 +3164,7 @@ fn constraint_recursive_function(
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -3279,11 +3285,13 @@ pub fn rec_defs_help_simple(
                         let ret_constraint =
                             attach_resolution_constraints(constraints, env, ret_constraint);
 
+                        let signature_index = constraints.push_type(signature.clone());
+
                         let cons = [
                             ret_constraint,
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             constraints.store(
-                                signature.clone(),
+                                signature_index,
                                 expr_var,
                                 std::file!(),
                                 std::line!(),
@@ -3512,6 +3520,7 @@ fn rec_defs_help(
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let ret_type = *ret_type.clone();
+                        let ret_type_index = constraints.push_type(ret_type.clone());
 
                         vars.push(ret_var);
                         vars.push(closure_var);
@@ -3585,7 +3594,7 @@ fn rec_defs_help(
                                 std::file!(),
                                 std::line!(),
                             ),
-                            constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                            constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ];
 
@@ -3624,10 +3633,17 @@ fn rec_defs_help(
                         let ret_constraint =
                             attach_resolution_constraints(constraints, env, ret_constraint);
 
+                        let signature_index = constraints.push_type(signature);
+
                         let cons = [
                             ret_constraint,
                             // Store type into AST vars. We use Store so errors aren't reported twice
-                            constraints.store(signature, expr_var, std::file!(), std::line!()),
+                            constraints.store(
+                                signature_index,
+                                expr_var,
+                                std::file!(),
+                                std::line!(),
+                            ),
                         ];
                         let def_con = constraints.and_constraint(cons);
 
