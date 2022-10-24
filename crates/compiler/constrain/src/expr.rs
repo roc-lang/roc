@@ -1680,7 +1680,7 @@ fn constrain_function_def(
                     Category::ClosureSize,
                     region,
                 ),
-                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
@@ -2404,8 +2404,8 @@ fn constrain_typed_def(
                     Category::ClosureSize,
                     region,
                 ),
-                constraints.store_index(signature_index, *fn_var, std::file!(), std::line!()),
-                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
+                constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
@@ -3163,7 +3163,7 @@ fn constraint_recursive_function(
                 },
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
-                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
@@ -3582,13 +3582,8 @@ fn rec_defs_help(
                             ),
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             // Store type into AST vars. We use Store so errors aren't reported twice
-                            constraints.store_index(
-                                signature_index,
-                                *fn_var,
-                                std::file!(),
-                                std::line!(),
-                            ),
-                            constraints.store_index(
+                            constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
+                            constraints.store(
                                 signature_index,
                                 expr_var,
                                 std::file!(),
