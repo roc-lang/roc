@@ -49,11 +49,11 @@ false = @Bool False
 ## gate. The infix operator `&&` can also be used as shorthand for 
 ## `Bool.and`.
 ##
-##     expect Bool.and Bool.true Bool.true == Bool.true
-##     expect Bool.true && Bool.true == Bool.true
-##     expect Bool.false && Bool.true == Bool.false
-##     expect Bool.true && Bool.false == Bool.false
-##     expect Bool.false && Bool.false == Bool.false
+##     expect (Bool.and Bool.true Bool.true) == Bool.true
+##     expect (Bool.true && Bool.true) == Bool.true
+##     expect (Bool.false && Bool.true) == Bool.false
+##     expect (Bool.true && Bool.false) == Bool.false
+##     expect (Bool.false && Bool.false) == Bool.false
 ##
 ## **Performance Note** that in Roc the `&&` and `||` work the same way as any 
 ## other function. However, in some languages `&&` and `||` are special-cased.
