@@ -18,8 +18,8 @@ pub struct Constraints {
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
-    pub expectations: Vec<Expected<Type>>,
-    pub pattern_expectations: Vec<PExpected<Type>>,
+    pub expectations: Vec<Expected<Cell<Type>>>,
+    pub pattern_expectations: Vec<PExpected<Cell<Type>>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
     pub sketched_rows: Vec<SketchedRows>,
@@ -38,8 +38,8 @@ impl std::fmt::Debug for Constraints {
             .field("let_constraints", &self.let_constraints)
             .field("categories", &self.categories)
             .field("pattern_categories", &self.pattern_categories)
-            .field("expectations", &self.expectations)
-            .field("pattern_expectations", &self.pattern_expectations)
+            .field("expectations", &"<expectations>")
+            .field("pattern_expectations", &"<pattern expectations>")
             .field("includes_tags", &self.includes_tags)
             .field("strings", &self.strings)
             .field("sketched_rows", &self.sketched_rows)
@@ -57,6 +57,8 @@ impl Default for Constraints {
 }
 
 pub type TypeIndex = Index<Cell<Type>>;
+pub type ExpectedTypeIndex = Index<Expected<Cell<Type>>>;
+pub type PExpectedTypeIndex = Index<PExpected<Cell<Type>>>;
 pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
 
 impl Constraints {
@@ -209,9 +211,8 @@ impl Constraints {
         EitherIndex::from_right(index)
     }
 
-    #[inline(always)]
-    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> Index<Expected<Type>> {
-        Index::push_new(&mut self.expectations, expected)
+    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> Index<Expected<Cell<Type>>> {
+        Index::push_new(&mut self.expectations, expected.map(Cell::new))
     }
 
     #[inline(always)]
@@ -253,7 +254,6 @@ impl Constraints {
         }
     }
 
-    #[inline(always)]
     pub fn equal_types(
         &mut self,
         typ: Type,
@@ -262,13 +262,12 @@ impl Constraints {
         region: Region,
     ) -> Constraint {
         let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
-    #[inline(always)]
     pub fn equal_types_var(
         &mut self,
         var: Variable,
@@ -277,13 +276,12 @@ impl Constraints {
         region: Region,
     ) -> Constraint {
         let type_index = Self::push_type_variable(var);
-        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
-    #[inline(always)]
     pub fn equal_types_with_storage(
         &mut self,
         typ: Type,
@@ -293,7 +291,7 @@ impl Constraints {
         storage_var: Variable,
     ) -> Constraint {
         let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         let equal = Constraint::Eq(Eq(type_index, expected_index, category_index, region));
@@ -319,7 +317,8 @@ impl Constraints {
         region: Region,
     ) -> Constraint {
         let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
+        let expected_index =
+            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Self::push_pattern_category(self, category);
 
         Constraint::Pattern(type_index, expected_index, category_index, region)
@@ -333,7 +332,8 @@ impl Constraints {
         region: Region,
     ) -> Constraint {
         let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
+        let expected_index =
+            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Index::push_new(&mut self.pattern_categories, category);
 
         Constraint::PatternPresence(type_index, expected_index, category_index, region)
@@ -577,7 +577,7 @@ impl Constraints {
     ) -> Constraint {
         Constraint::Lookup(
             symbol,
-            Index::push_new(&mut self.expectations, expected),
+            Index::push_new(&mut self.expectations, expected.map(Cell::new)),
             region,
         )
     }
@@ -659,14 +659,15 @@ impl Constraints {
         let equality = match category_and_expectation {
             Ok((category, expected)) => {
                 let category = Index::push_new(&mut self.categories, category);
-                let expected = Index::push_new(&mut self.expectations, expected);
+                let expected = Index::push_new(&mut self.expectations, expected.map(Cell::new));
                 let equality = Eq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.eq, equality);
                 Ok(equality)
             }
             Err((category, expected)) => {
                 let category = Index::push_new(&mut self.pattern_categories, category);
-                let expected = Index::push_new(&mut self.pattern_expectations, expected);
+                let expected =
+                    Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
                 let equality = PatternEq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.pattern_eq, equality);
                 Err(equality)
@@ -709,7 +710,7 @@ roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
     pub TypeOrVar,
-    pub Index<Expected<Type>>,
+    pub Index<Expected<Cell<Type>>>,
     pub Index<Category>,
     pub Region,
 );
@@ -717,7 +718,7 @@ pub struct Eq(
 #[derive(Clone, Copy, Debug)]
 pub struct PatternEq(
     pub TypeOrVar,
-    pub Index<PExpected<Type>>,
+    pub PExpectedTypeIndex,
     pub Index<PatternCategory>,
     pub Region,
 );
@@ -750,10 +751,10 @@ pub struct OpportunisticResolve {
 pub enum Constraint {
     Eq(Eq),
     Store(TypeOrVar, Variable, Index<&'static str>, u32),
-    Lookup(Symbol, Index<Expected<Type>>, Region),
+    Lookup(Symbol, ExpectedTypeIndex, Region),
     Pattern(
         TypeOrVar,
-        Index<PExpected<Type>>,
+        PExpectedTypeIndex,
         Index<PatternCategory>,
         Region,
     ),
@@ -772,7 +773,7 @@ pub enum Constraint {
     IncludesTag(Index<IncludesTag>),
     PatternPresence(
         TypeOrVar,
-        Index<PExpected<Type>>,
+        PExpectedTypeIndex,
         Index<PatternCategory>,
         Region,
     ),

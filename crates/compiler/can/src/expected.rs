@@ -38,6 +38,16 @@ impl<T> PExpected<T> {
         }
     }
 
+    #[inline(always)]
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> PExpected<U> {
+        match self {
+            PExpected::NoExpectation(val) => PExpected::NoExpectation(f(val)),
+            PExpected::ForReason(reason, val, region) => {
+                PExpected::ForReason(reason, f(val), region)
+            }
+        }
+    }
+
     pub fn replace<U>(self, new: U) -> PExpected<U> {
         match self {
             PExpected::NoExpectation(_val) => PExpected::NoExpectation(new),
@@ -86,6 +96,17 @@ impl<T> Expected<T> {
                 Some(*region)
             }
             _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Expected<U> {
+        match self {
+            Expected::NoExpectation(val) => Expected::NoExpectation(f(val)),
+            Expected::ForReason(reason, val, region) => Expected::ForReason(reason, f(val), region),
+            Expected::FromAnnotation(pattern, size, source, val) => {
+                Expected::FromAnnotation(pattern, size, source, f(val))
+            }
         }
     }
 

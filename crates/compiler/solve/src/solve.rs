@@ -911,7 +911,7 @@ fn solve(
                 );
 
                 let expectation = &constraints.expectations[expectation_index.index()];
-                let expected = type_to_var(
+                let expected = type_cell_to_var(
                     subs,
                     rank,
                     problems,
@@ -919,7 +919,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    expectation.get_type_ref(),
+                    &expectation.get_type_ref(),
                 );
 
                 match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
@@ -961,7 +961,7 @@ fn solve(
                             *region,
                             category.clone(),
                             actual_type,
-                            expectation.clone().replace(expected_type),
+                            expectation.replace_ref(expected_type),
                         );
 
                         problems.push(problem);
@@ -1023,7 +1023,7 @@ fn solve(
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
 
-                        let expected = type_to_var(
+                        let expected = type_cell_to_var(
                             subs,
                             rank,
                             problems,
@@ -1031,7 +1031,7 @@ fn solve(
                             obligation_cache,
                             pools,
                             aliases,
-                            expectation.get_type_ref(),
+                            &expectation.get_type_ref(),
                         );
 
                         match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
@@ -1078,7 +1078,7 @@ fn solve(
                                     *region,
                                     Category::Lookup(*symbol),
                                     actual_type,
-                                    expectation.clone().replace(expected_type),
+                                    expectation.replace_ref(expected_type),
                                 );
 
                                 problems.push(problem);
@@ -1130,7 +1130,7 @@ fn solve(
                 );
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
-                let expected = type_to_var(
+                let expected = type_cell_to_var(
                     subs,
                     rank,
                     problems,
@@ -1138,7 +1138,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    expectation.get_type_ref(),
+                    &expectation.get_type_ref(),
                 );
 
                 let mode = match constraint {
@@ -1185,7 +1185,7 @@ fn solve(
                             *region,
                             category.clone(),
                             actual_type,
-                            expectation.clone().replace(expected_type),
+                            expectation.replace_ref(expected_type),
                         );
 
                         problems.push(problem);
@@ -1479,7 +1479,7 @@ fn solve(
                     real_var,
                 );
 
-                let branches_var = type_to_var(
+                let branches_var = type_cell_to_var(
                     subs,
                     rank,
                     problems,
@@ -1487,7 +1487,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    expected_type,
+                    &expected_type,
                 );
 
                 let real_content = subs.get_content_without_compacting(real_var);
