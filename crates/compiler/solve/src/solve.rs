@@ -919,7 +919,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    &expectation.get_type_ref(),
+                    expectation.get_type_ref(),
                 );
 
                 match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
@@ -1031,7 +1031,7 @@ fn solve(
                             obligation_cache,
                             pools,
                             aliases,
-                            &expectation.get_type_ref(),
+                            expectation.get_type_ref(),
                         );
 
                         match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
@@ -1138,7 +1138,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    &expectation.get_type_ref(),
+                    expectation.get_type_ref(),
                 );
 
                 let mode = match constraint {
@@ -1349,7 +1349,7 @@ fn solve(
                             obligation_cache,
                             pools,
                             aliases,
-                            &cell,
+                            cell,
                         );
                         tys.push(Type::Variable(actual));
                     }
@@ -1487,7 +1487,7 @@ fn solve(
                     obligation_cache,
                     pools,
                     aliases,
-                    &expected_type,
+                    expected_type,
                 );
 
                 let real_content = subs.get_content_without_compacting(real_var);
