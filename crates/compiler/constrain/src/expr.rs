@@ -1966,16 +1966,17 @@ fn constrain_when_branch_help(
             state.headers.extend(partial_state.headers);
         } else {
             // Make sure the bound variables in the patterns on the same branch agree in their types.
-            for (sym, typ1) in state.headers.iter() {
-                if let Some(typ2) = partial_state.headers.get(sym) {
-                    let type_index = constraints.push_type(typ1.value.clone());
-                    let expected_index =
-                        constraints.push_expected_type(Expected::NoExpectation(typ2.value.clone()));
+            for (sym, all_branches_bound_typ) in state.headers.iter() {
+                if let Some(this_bound_typ) = partial_state.headers.get(sym) {
+                    let whole_typ = constraints.push_type(all_branches_bound_typ.value.clone());
+                    let this_typ = constraints
+                        .push_expected_type(Expected::NoExpectation(this_bound_typ.value.clone()));
+
                     state.constraints.push(constraints.equal_types(
-                        type_index,
-                        expected_index,
+                        whole_typ,
+                        this_typ,
                         Category::When,
-                        typ2.region,
+                        this_bound_typ.region,
                     ));
                 }
 
