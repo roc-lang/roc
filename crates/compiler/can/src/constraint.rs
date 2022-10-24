@@ -558,14 +558,10 @@ impl Constraints {
     pub fn lookup(
         &mut self,
         symbol: Symbol,
-        expected: Expected<Type>,
+        expected_index: ExpectedTypeIndex,
         region: Region,
     ) -> Constraint {
-        Constraint::Lookup(
-            symbol,
-            Index::push_new(&mut self.expectations, expected.map(Cell::new)),
-            region,
-        )
+        Constraint::Lookup(symbol, expected_index, region)
     }
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {

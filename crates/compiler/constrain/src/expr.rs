@@ -276,21 +276,19 @@ pub fn constrain_expr(
             vars.push(*record_var);
             vars.push(*ext_var);
 
-            let con = constraints.lookup(
-                *symbol,
-                ForReason(
-                    Reason::RecordUpdateKeys(
-                        *symbol,
-                        updates
-                            .iter()
-                            .map(|(key, field)| (key.clone(), field.region))
-                            .collect(),
-                    ),
-                    record_type,
-                    region,
+            let record_being_updated_expectation = constraints.push_expected_type(ForReason(
+                Reason::RecordUpdateKeys(
+                    *symbol,
+                    updates
+                        .iter()
+                        .map(|(key, field)| (key.clone(), field.region))
+                        .collect(),
                 ),
+                record_type,
                 region,
-            );
+            ));
+
+            let con = constraints.lookup(*symbol, record_being_updated_expectation, region);
 
             // ensure constraints are solved in this order, gives better errors
             cons.insert(0, fields_con);
@@ -447,8 +445,12 @@ pub fn constrain_expr(
             // Save the expectation in the variable, then lookup the symbol's type in the environment
             let store_expected =
                 constraints.store(expected.get_type_ref().clone(), *variable, file!(), line!());
-            let lookup_constr =
-                constraints.lookup(*symbol, expected.replace(Type::Variable(*variable)), region);
+
+            let store_into_var =
+                constraints.push_expected_type(expected.replace(Type::Variable(*variable)));
+
+            let lookup_constr = constraints.lookup(*symbol, store_into_var, region);
+
             constraints.and_constraint([store_expected, lookup_constr])
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
@@ -460,11 +462,9 @@ pub fn constrain_expr(
                 file!(),
                 line!(),
             );
-            let lookup_constr = constraints.lookup(
-                symbol,
-                Expected::NoExpectation(Type::Variable(specialization_var)),
-                region,
-            );
+            let store_specialization_var = constraints
+                .push_expected_type(Expected::NoExpectation(Type::Variable(specialization_var)));
+            let lookup_constr = constraints.lookup(symbol, store_specialization_var, region);
 
             // Make sure we attempt to resolve the specialization, if we can.
             if let Some(specialization_id) = specialization_id {
@@ -545,11 +545,9 @@ pub fn constrain_expr(
             {
                 vars.push(*var);
 
-                all_constraints.push(constraints.lookup(
-                    *symbol,
-                    NoExpectation(Type::Variable(*var)),
-                    Region::zero(),
-                ));
+                let store_into =
+                    constraints.push_expected_type(NoExpectation(Type::Variable(*var)));
+                all_constraints.push(constraints.lookup(*symbol, store_into, Region::zero()));
             }
 
             constraints.exists_many(vars, all_constraints)
@@ -597,11 +595,10 @@ pub fn constrain_expr(
             {
                 vars.push(*var);
 
-                all_constraints.push(constraints.lookup(
-                    *symbol,
-                    NoExpectation(Type::Variable(*var)),
-                    Region::zero(),
-                ));
+                let store_into =
+                    constraints.push_expected_type(NoExpectation(Type::Variable(*var)));
+
+                all_constraints.push(constraints.lookup(*symbol, store_into, Region::zero()));
             }
 
             constraints.exists_many(vars, all_constraints)
@@ -2844,11 +2841,9 @@ fn constrain_closure_size(
         captured_types.push(Type::Variable(*var));
 
         // make the variable equal to the looked-up type of symbol
-        captured_symbols_constraints.push(constraints.lookup(
-            *symbol,
-            Expected::NoExpectation(Type::Variable(*var)),
-            Region::zero(),
-        ));
+        let store_into =
+            constraints.push_expected_type(Expected::NoExpectation(Type::Variable(*var)));
+        captured_symbols_constraints.push(constraints.lookup(*symbol, store_into, Region::zero()));
     }
 
     let finalizer = {

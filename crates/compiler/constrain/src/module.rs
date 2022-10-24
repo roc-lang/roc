@@ -69,18 +69,16 @@ fn constrain_symbols_from_requires(
                 // Otherwise, this symbol comes from an app module - we want to check that the type
                 // provided by the app is in fact what the package module requires.
                 let arity = loc_type.value.arity();
-                let provided_eq_requires_constr = constraints.lookup(
-                    loc_symbol.value,
-                    Expected::FromAnnotation(
-                        loc_symbol.map(|&s| Pattern::Identifier(s)),
-                        arity,
-                        AnnotationSource::RequiredSymbol {
-                            region: loc_type.region,
-                        },
-                        loc_type.value,
-                    ),
-                    loc_type.region,
-                );
+                let expected = constraints.push_expected_type(Expected::FromAnnotation(
+                    loc_symbol.map(|&s| Pattern::Identifier(s)),
+                    arity,
+                    AnnotationSource::RequiredSymbol {
+                        region: loc_type.region,
+                    },
+                    loc_type.value,
+                ));
+                let provided_eq_requires_constr =
+                    constraints.lookup(loc_symbol.value, expected, loc_type.region);
                 constraints.and_constraint([provided_eq_requires_constr, constraint])
             }
         })
