@@ -263,12 +263,12 @@ pub fn constrain_pattern(
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
-            state.constraints.push(constraints.equal_types(
-                num_type.clone(), // TODO check me if something breaks!
-                Expected::NoExpectation(int_type),
-                Category::Int,
-                region,
-            ));
+            state.constraints.push({
+                let type_index = constraints.push_type(num_type.clone()); // TODO check me if something breaks!
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(int_type));
+                constraints.equal_types(type_index, expected_index, Category::Int, region)
+            });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(constraints.equal_pattern_types(
@@ -295,12 +295,12 @@ pub fn constrain_pattern(
             // Link the free num var with the float var and our expectation.
             let float_type = builtins::num_float(Type::Variable(precision_var));
 
-            state.constraints.push(constraints.equal_types(
-                num_type.clone(), // TODO check me if something breaks!
-                Expected::NoExpectation(float_type),
-                Category::Frac,
-                region,
-            ));
+            state.constraints.push({
+                let type_index = constraints.push_type(num_type.clone()); // TODO check me if something breaks!
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(float_type));
+                constraints.equal_types(type_index, expected_index, Category::Frac, region)
+            });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(constraints.equal_pattern_types(
@@ -336,12 +336,17 @@ pub fn constrain_pattern(
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
-            state.constraints.push(constraints.equal_types(
-                num_type.clone(), // TODO check me if something breaks!
-                Expected::NoExpectation(int_type),
-                Category::Int,
-                region,
-            ));
+            state.constraints.push({
+                let type_index = constraints.push_type(num_type.clone());
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(int_type));
+                constraints.equal_types(
+                    type_index, // TODO check me if something breaks!
+                    expected_index,
+                    Category::Int,
+                    region,
+                )
+            });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(constraints.equal_pattern_types(
@@ -452,9 +457,12 @@ pub fn constrain_pattern(
 
             let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
+            let whole_var_index = constraints.push_type(Type::Variable(*whole_var));
+            let expected_record =
+                constraints.push_expected_type(Expected::NoExpectation(record_type));
             let whole_con = constraints.equal_types(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(record_type),
+                whole_var_index,
+                expected_record,
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
@@ -561,9 +569,12 @@ pub fn constrain_pattern(
             );
 
             // Next, link `whole_var` to the opaque type of "@Id who"
+            let whole_var_index = constraints.push_type(Type::Variable(*whole_var));
+            let expected_opaque =
+                constraints.push_expected_type(Expected::NoExpectation(opaque_type));
             let whole_con = constraints.equal_types(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(opaque_type),
+                whole_var_index,
+                expected_opaque,
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );

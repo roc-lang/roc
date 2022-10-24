@@ -211,7 +211,7 @@ impl Constraints {
         EitherIndex::from_right(index)
     }
 
-    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> Index<Expected<Cell<Type>>> {
+    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> ExpectedTypeIndex {
         Index::push_new(&mut self.expectations, expected.map(Cell::new))
     }
 
@@ -256,13 +256,11 @@ impl Constraints {
 
     pub fn equal_types(
         &mut self,
-        typ: Type,
-        expected: Expected<Type>,
+        type_index: TypeOrVar,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))

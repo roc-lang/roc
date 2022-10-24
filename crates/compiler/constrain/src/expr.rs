@@ -292,7 +292,11 @@ pub fn constrain_expr(
             let and_constraint = constraints.and_constraint(cons);
             constraints.exists(vars, and_constraint)
         }
-        Str(_) => constraints.equal_types(str_type(), expected, Category::Str, region),
+        Str(_) => {
+            let str_index = constraints.push_type(str_type());
+            let expected_index = constraints.push_expected_type(expected);
+            constraints.equal_types(str_index, expected_index, Category::Str, region)
+        }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             constraints,
             *num_var,
@@ -306,9 +310,11 @@ pub fn constrain_expr(
             loc_elems,
         } => {
             if loc_elems.is_empty() {
+                let elem_type_index = constraints.push_type(empty_list_type(*elem_var));
+                let expected_index = constraints.push_expected_type(expected);
                 let eq = constraints.equal_types(
-                    empty_list_type(*elem_var),
-                    expected,
+                    elem_type_index,
+                    expected_index,
                     Category::List,
                     region,
                 );
@@ -336,9 +342,11 @@ pub fn constrain_expr(
                     list_constraints.push(constraint);
                 }
 
+                let elem_type_index = constraints.push_type(list_type(list_elem_type));
+                let expected_index = constraints.push_expected_type(expected);
                 list_constraints.push(constraints.equal_types(
-                    list_type(list_elem_type),
-                    expected,
+                    elem_type_index,
+                    expected_index,
                     Category::List,
                     region,
                 ));
@@ -1005,13 +1013,17 @@ pub fn constrain_expr(
                     category.clone(),
                     region,
                 ),
-                constraints.equal_types(function_type.clone(), expected, category.clone(), region),
-                constraints.equal_types(
-                    function_type,
-                    NoExpectation(Variable(*function_var)),
-                    category,
-                    region,
-                ),
+                {
+                    let type_index = constraints.push_type(function_type.clone());
+                    let expected_index = constraints.push_expected_type(expected);
+                    constraints.equal_types(type_index, expected_index, category.clone(), region)
+                },
+                {
+                    let type_index = constraints.push_type(function_type);
+                    let expected_index =
+                        constraints.push_expected_type(NoExpectation(Variable(*function_var)));
+                    constraints.equal_types(type_index, expected_index, category, region)
+                },
                 record_con,
             ];
 
@@ -1173,12 +1185,17 @@ pub fn constrain_expr(
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
             // variables of the opaque type
             // TODO: better expectation here
-            let link_type_variables_con = constraints.equal_types(
-                arg_type,
-                Expected::NoExpectation((**specialized_def_type).clone()),
-                Category::OpaqueArg,
-                arg_loc_expr.region,
-            );
+            let link_type_variables_con = {
+                let type_index = constraints.push_type(arg_type);
+                let expected_index = constraints
+                    .push_expected_type(Expected::NoExpectation((**specialized_def_type).clone()));
+                constraints.equal_types(
+                    type_index,
+                    expected_index,
+                    Category::OpaqueArg,
+                    arg_loc_expr.region,
+                )
+            };
 
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
@@ -1225,12 +1242,17 @@ pub fn constrain_expr(
             );
 
             // Tie the type of the value wrapped by the opaque to the opaque's type variables.
-            let link_type_variables_con = constraints.equal_types(
-                argument_type.clone(),
-                Expected::NoExpectation((*specialized_def_type).clone()),
-                Category::OpaqueArg,
-                region,
-            );
+            let link_type_variables_con = {
+                let arg_type_index = constraints.push_type(argument_type.clone());
+                let expected_specialized = constraints
+                    .push_expected_type(Expected::NoExpectation((*specialized_def_type).clone()));
+                constraints.equal_types(
+                    arg_type_index,
+                    expected_specialized,
+                    Category::OpaqueArg,
+                    region,
+                )
+            };
 
             let lambda_set = Type::ClosureTag {
                 name: *function_name,
@@ -1441,12 +1463,17 @@ fn constrain_function_def(
                             signature.clone(),
                         );
 
-                        def_pattern_state.constraints.push(constraints.equal_types(
-                            Type::Variable(expr_var),
-                            annotation_expected,
-                            Category::Storage(std::file!(), std::line!()),
-                            Region::span_across(&annotation.region, &loc_body_expr.region),
-                        ));
+                        {
+                            let expr_type_index = constraints.push_type(Type::Variable(expr_var));
+                            let expected_index =
+                                constraints.push_expected_type(annotation_expected);
+                            def_pattern_state.constraints.push(constraints.equal_types(
+                                expr_type_index,
+                                expected_index,
+                                Category::Storage(std::file!(), std::line!()),
+                                Region::span_across(&annotation.region, &loc_body_expr.region),
+                            ));
+                        }
 
                         def_pattern_state
                     };
@@ -1544,12 +1571,16 @@ fn constrain_function_def(
                 signature.clone(),
             );
 
-            def_pattern_state.constraints.push(constraints.equal_types(
-                Type::Variable(expr_var),
-                annotation_expected,
-                Category::Storage(std::file!(), std::line!()),
-                Region::span_across(&annotation.region, &loc_body_expr.region),
-            ));
+            {
+                let expr_type_index = constraints.push_type(Type::Variable(expr_var));
+                let expected_index = constraints.push_expected_type(annotation_expected);
+                def_pattern_state.constraints.push(constraints.equal_types(
+                    expr_type_index,
+                    expected_index,
+                    Category::Storage(std::file!(), std::line!()),
+                    Region::span_across(&annotation.region, &loc_body_expr.region),
+                ));
+            }
 
             constrain_typed_function_arguments_simple(
                 constraints,
@@ -1929,9 +1960,12 @@ fn constrain_when_branch_help(
             // Make sure the bound variables in the patterns on the same branch agree in their types.
             for (sym, typ1) in state.headers.iter() {
                 if let Some(typ2) = partial_state.headers.get(sym) {
+                    let type_index = constraints.push_type(typ1.value.clone());
+                    let expected_index =
+                        constraints.push_expected_type(Expected::NoExpectation(typ2.value.clone()));
                     state.constraints.push(constraints.equal_types(
-                        typ1.value.clone(),
-                        Expected::NoExpectation(typ2.value.clone()),
+                        type_index,
+                        expected_index,
                         Category::When,
                         typ2.region,
                     ));
@@ -2016,7 +2050,9 @@ fn constrain_empty_record(
     region: Region,
     expected: Expected<Type>,
 ) -> Constraint {
-    constraints.equal_types(Type::EmptyRec, expected, Category::Record, region)
+    let record_type_index = constraints.push_type(Type::EmptyRec);
+    let expected_index = constraints.push_expected_type(expected);
+    constraints.equal_types(record_type_index, expected_index, Category::Record, region)
 }
 
 /// Constrain top-level module declarations
@@ -2214,12 +2250,16 @@ fn constrain_typed_def(
         signature.clone(),
     );
 
-    def_pattern_state.constraints.push(constraints.equal_types(
-        expr_type.clone(),
-        annotation_expected,
-        Category::Storage(std::file!(), std::line!()),
-        Region::span_across(&annotation.region, &def.loc_expr.region),
-    ));
+    {
+        let type_index = constraints.push_type(expr_type.clone());
+        let expected_index = constraints.push_expected_type(annotation_expected);
+        def_pattern_state.constraints.push(constraints.equal_types(
+            type_index,
+            expected_index,
+            Category::Storage(std::file!(), std::line!()),
+            Region::span_across(&annotation.region, &def.loc_expr.region),
+        ));
+    }
 
     // when a def is annotated, and its body is a closure, treat this
     // as a named function (in elm terms) for error messages.
@@ -3072,7 +3112,11 @@ fn constraint_recursive_function(
                     state_constraints,
                     expr_con,
                 ),
-                constraints.equal_types(fn_type, expected, Category::Lambda, region),
+                {
+                    let type_index = constraints.push_type(fn_type);
+                    let expected_index = constraints.push_expected_type(expected);
+                    constraints.equal_types(type_index, expected_index, Category::Lambda, region)
+                },
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
@@ -3482,12 +3526,17 @@ fn rec_defs_help(
                                 state_constraints,
                                 expr_con,
                             ),
-                            constraints.equal_types(
-                                fn_type.clone(),
-                                expected.clone(),
-                                Category::Lambda,
-                                region,
-                            ),
+                            {
+                                let fn_type_index = constraints.push_type(fn_type.clone());
+                                let expected_index =
+                                    constraints.push_expected_type(expected.clone());
+                                constraints.equal_types(
+                                    fn_type_index,
+                                    expected_index,
+                                    Category::Lambda,
+                                    region,
+                                )
+                            },
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             constraints.store_index(
