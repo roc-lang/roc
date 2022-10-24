@@ -2115,6 +2115,26 @@ impl Subs {
     pub fn is_inhabited(&self, var: Variable) -> bool {
         is_inhabited(self, var)
     }
+
+    pub fn is_function(&self, mut var: Variable) -> bool {
+        loop {
+            match self.get_content_without_compacting(var) {
+                Content::FlexVar(_)
+                | Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. }
+                | Content::RangedNumber(_)
+                | Content::Error => return false,
+                Content::LambdaSet(_) => return true,
+                Content::Structure(FlatType::Func(..)) => return true,
+                Content::Structure(_) => return false,
+                Content::Alias(_, _, real_var, _) => {
+                    var = *real_var;
+                }
+            }
+        }
+    }
 }
 
 #[inline(always)]
