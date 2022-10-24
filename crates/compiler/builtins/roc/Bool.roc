@@ -90,8 +90,8 @@ or : Bool, Bool -> Bool
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation) 
 ## gate. The operator `!` can also be used as shorthand for `Bool.not`.
 ##
-##     expect Bool.not Bool.false == Bool.true
-##     expect !Bool.true == Bool.false
+##     expect (Bool.not Bool.false) == Bool.true
+##     expect (!Bool.false) == Bool.true
 not : Bool -> Bool
 
 ## This will call the function `Bool.isEq` on the inputs, and then `Bool.not`
