@@ -161,6 +161,14 @@ len : Dict k v -> Nat
 len = \@Dict list ->
     List.len list
 
+## Remove a value from the dictionary for a specified key. 
+##
+##     expect 
+##         Dict.empty
+##         |> Dict.insert "Some" "Value"
+##         |> Dict.remove "Some"
+##         |> Dict.len 
+##         |> Bool.isEq 0
 remove : Dict k v, k -> Dict k v | k has Eq
 remove = \@Dict list, key ->
     when List.findFirstIndex list (\Pair k _ -> k == key) is
@@ -175,7 +183,10 @@ remove = \@Dict list, key ->
             |> List.dropLast
             |> @Dict
 
-## Insert or remove a value for a specified key. Provide a function that can
+## Insert or remove a value for a specified key. This function enables a 
+## performance optimisation for the use case of providing a default for a
+## missing value. This is more efficient than doing both a `Dict.get` and then 
+## a `Dict.instert` and supports being piped. 
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
@@ -187,7 +198,7 @@ update = \dict, key, alter ->
         Present value -> insert dict key value
         Missing -> remove dict key
 
-## Internal for testing only
+# Internal for testing only
 alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
 alterValue = \possibleValue ->
     when possibleValue is
@@ -199,6 +210,13 @@ expect update empty "a" alterValue == single "a" Bool.false
 expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true
 expect update (single "a" Bool.true) "a" alterValue == empty
 
+## Check if the dictionary has a value for a specified key.
+##
+##     expect 
+##         Dict.empty
+##         |> Dict.insert 1234 "5678"
+##         |> Dict.contains 1234
+##         |> Bool.isEq Bool.true
 contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
     step = \_, Pair key _val ->
@@ -211,16 +229,37 @@ contains = \@Dict list, needle ->
         Continue _ -> Bool.false
         Break _ -> Bool.true
 
+## Returns a dictionary containing the key and value provided as input.
+##
+##     expect 
+##         Dict.single "A" "B"
+##         |> Bool.isEq (Dict.insert Dict.empty "A" "B")
 single : k, v -> Dict k v
 single = \key, value ->
     @Dict [Pair key value]
 
-## Returns a [List] of the dictionary's keys.
+## Return the keys of a dictionary as a [List].
+##
+##     expect 
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Dict.keys
+##         |> Bool.isEq [1,2,3,4]
 keys : Dict k v -> List k
 keys = \@Dict list ->
     List.map list (\Pair k _ -> k)
 
-## Returns a [List] of the Dict's values
+## Return the values of a dictionary as a [List].
+##
+##     expect
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Dict.values
+##         |> Bool.isEq ["One","Two","Three","Four"]
 values : Dict k v -> List v
 values = \@Dict list ->
     List.map list (\Pair _ v -> v)
