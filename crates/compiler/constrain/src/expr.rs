@@ -1632,7 +1632,7 @@ fn constrain_function_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let signature_closure_type = *signature_closure_type.clone();
-            let signature_index = constraints.push_type(signature.clone());
+            let signature_index = constraints.push_type(signature);
             let cons = [
                 constraints.let_constraint(
                     [],
