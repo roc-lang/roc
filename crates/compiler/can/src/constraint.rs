@@ -322,14 +322,11 @@ impl Constraints {
 
     pub fn pattern_presence(
         &mut self,
-        typ: Type,
-        expected: PExpected<Type>,
+        type_index: TypeOrVar,
+        expected_index: PExpectedTypeIndex,
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index =
-            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Index::push_new(&mut self.pattern_categories, category);
 
         Constraint::PatternPresence(type_index, expected_index, category_index, region)

@@ -399,13 +399,17 @@ pub fn constrain_pattern(
 
                 let field_type = match typ {
                     DestructType::Guard(guard_var, loc_guard) => {
-                        state.constraints.push(constraints.pattern_presence(
-                            Type::Variable(*guard_var),
-                            PExpected::ForReason(
+                        let guard_type = constraints.push_type(Type::Variable(*guard_var));
+                        let expected_pat =
+                            constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::PatternGuard,
                                 pat_type.clone(),
                                 loc_guard.region,
-                            ),
+                            ));
+
+                        state.constraints.push(constraints.pattern_presence(
+                            guard_type,
+                            expected_pat,
                             PatternCategory::PatternGuard,
                             region,
                         ));
@@ -423,13 +427,17 @@ pub fn constrain_pattern(
                         RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        state.constraints.push(constraints.pattern_presence(
-                            Type::Variable(*expr_var),
-                            PExpected::ForReason(
+                        let expr_type = constraints.push_type(Type::Variable(*expr_var));
+                        let expected_pat =
+                            constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::OptionalField,
                                 pat_type.clone(),
                                 loc_expr.region,
-                            ),
+                            ));
+
+                        state.constraints.push(constraints.pattern_presence(
+                            expr_type,
+                            expected_pat,
                             PatternCategory::PatternDefault,
                             region,
                         ));
@@ -476,8 +484,10 @@ pub fn constrain_pattern(
                 region,
             );
 
+            let expected = constraints.push_pat_expected_type(expected);
+
             let record_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
+                whole_var_index,
                 expected,
                 PatternCategory::Record,
                 region,
@@ -527,12 +537,10 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let tag_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
-                expected,
-                pat_category,
-                region,
-            );
+            let whole_type = constraints.push_type(Type::Variable(*whole_var));
+            let expected = constraints.push_pat_expected_type(expected);
+
+            let tag_con = constraints.pattern_presence(whole_type, expected, pat_category, region);
 
             state.vars.push(*whole_var);
             state.vars.push(*ext_var);
@@ -601,16 +609,21 @@ pub fn constrain_pattern(
             // This must **always** be a presence constraint, that is enforcing
             // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
+            let arg_pattern_type = constraints.push_type(arg_pattern_type);
+            let specialized_type = constraints
+                .push_pat_expected_type(PExpected::NoExpectation((**specialized_def_type).clone()));
             let link_type_variables_con = constraints.pattern_presence(
                 arg_pattern_type,
-                PExpected::NoExpectation((**specialized_def_type).clone()),
+                specialized_type,
                 PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
 
             // Next, link `whole_var` (the type of "@Id who") to the expected type
+            let whole_type = constraints.push_type(Type::Variable(*whole_var));
+            let expected = constraints.push_pat_expected_type(expected);
             let opaque_pattern_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
+                whole_type,
                 expected,
                 PatternCategory::Opaque(*opaque),
                 region,
