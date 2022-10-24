@@ -281,14 +281,12 @@ impl Constraints {
 
     pub fn equal_types_with_storage(
         &mut self,
-        typ: Type,
-        expected: Expected<Type>,
+        type_index: TypeOrVar,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
         storage_var: Variable,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         let equal = Constraint::Eq(Eq(type_index, expected_index, category_index, region));

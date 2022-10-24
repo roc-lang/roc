@@ -151,6 +151,10 @@ fn constrain_untyped_closure(
     );
 
     let pattern_state_constraints = constraints.and_constraint(pattern_state.constraints);
+
+    let function_type = constraints.push_type(function_type);
+    let expected = constraints.push_expected_type(expected);
+
     let cons = [
         constraints.let_constraint(
             [],
@@ -211,7 +215,9 @@ pub fn constrain_expr(
                     rec_constraints.push(field_con);
                 }
 
-                let record_type = Type::Record(field_types, TypeExtension::Closed);
+                let record_type =
+                    constraints.push_type(Type::Record(field_types, TypeExtension::Closed));
+                let expected = constraints.push_expected_type(expected);
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
@@ -1113,12 +1119,15 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
+            let tag_union_type = constraints.push_type(Type::TagUnion(
+                vec![(name.clone(), types)],
+                TypeExtension::from_type(Type::Variable(*ext_var)),
+            ));
+            let expected = constraints.push_expected_type(expected);
+
             let union_con = constraints.equal_types_with_storage(
-                Type::TagUnion(
-                    vec![(name.clone(), types)],
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
-                ),
-                expected.clone(),
+                tag_union_type,
+                expected,
                 Category::TagApply {
                     tag_name: name.clone(),
                     args_count: arguments.len(),
@@ -1139,13 +1148,15 @@ pub fn constrain_expr(
             name,
             closure_name,
         } => {
+            let function_or_tag_union = constraints.push_type(Type::FunctionOrTagUnion(
+                name.clone(),
+                *closure_name,
+                TypeExtension::from_type(Type::Variable(*ext_var)),
+            ));
+            let expected = constraints.push_expected_type(expected);
             let union_con = constraints.equal_types_with_storage(
-                Type::FunctionOrTagUnion(
-                    name.clone(),
-                    *closure_name,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
-                ),
-                expected.clone(),
+                function_or_tag_union,
+                expected,
                 Category::TagApply {
                     tag_name: name.clone(),
                     args_count: 0,
@@ -1167,7 +1178,7 @@ pub fn constrain_expr(
             let (arg_var, arg_loc_expr) = &**argument;
             let arg_type = Type::Variable(*arg_var);
 
-            let opaque_type = Type::Alias {
+            let opaque_type = constraints.push_type(Type::Alias {
                 symbol: *name,
                 type_arguments: type_arguments
                     .iter()
@@ -1179,7 +1190,7 @@ pub fn constrain_expr(
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,
-            };
+            });
 
             // Constrain the argument
             let arg_con = constrain_expr(
@@ -1192,6 +1203,7 @@ pub fn constrain_expr(
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the
             // expected type
+            let expected = constraints.push_expected_type(expected);
             let opaque_con = constraints.equal_types_with_storage(
                 opaque_type,
                 expected,
