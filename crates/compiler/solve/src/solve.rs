@@ -1338,7 +1338,7 @@ fn solve(
                 );
 
                 let payload_types = constraints.variables[types.indices()]
-                    .into_iter()
+                    .iter()
                     .map(|v| Type::Variable(*v))
                     .collect();
 

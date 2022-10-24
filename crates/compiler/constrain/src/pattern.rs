@@ -347,7 +347,7 @@ pub fn constrain_pattern(
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
-            let num_type_index = constraints.push_type(num_type.clone());
+            let num_type_index = constraints.push_type(num_type);
 
             state.constraints.push({
                 let expected_index =

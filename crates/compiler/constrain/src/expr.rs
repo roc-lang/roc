@@ -1642,7 +1642,7 @@ fn constrain_function_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                ret_type.clone(),
+                ret_type,
             );
 
             let ret_constraint = constrain_expr(
@@ -2366,7 +2366,7 @@ fn constrain_typed_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                ret_type.clone(),
+                ret_type,
             );
 
             let ret_constraint = constrain_expr(
@@ -3140,7 +3140,7 @@ fn constraint_recursive_function(
                 env,
                 loc_body_expr.region,
                 &loc_body_expr.value,
-                NoExpectation(ret_type.clone()),
+                NoExpectation(ret_type),
             );
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
