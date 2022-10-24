@@ -238,6 +238,9 @@ pub fn constrain_pattern(
                 region,
                 Category::Num,
             );
+            let num_type = constraints.push_type(num_type);
+
+            let expected = constraints.push_pat_expected_type(expected);
 
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
@@ -259,18 +262,19 @@ pub fn constrain_pattern(
                 region,
                 Category::Int,
             );
+            let num_type = constraints.push_type(num_type);
 
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
             state.constraints.push({
-                let type_index = constraints.push_type(num_type.clone()); // TODO check me if something breaks!
                 let expected_index =
                     constraints.push_expected_type(Expected::NoExpectation(int_type));
-                constraints.equal_types(type_index, expected_index, Category::Int, region)
+                constraints.equal_types(num_type, expected_index, Category::Int, region)
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
                 expected,
@@ -294,17 +298,18 @@ pub fn constrain_pattern(
 
             // Link the free num var with the float var and our expectation.
             let float_type = builtins::num_float(Type::Variable(precision_var));
+            let num_type_index = constraints.push_type(num_type); // TODO check me if something breaks!
 
             state.constraints.push({
-                let type_index = constraints.push_type(num_type.clone()); // TODO check me if something breaks!
                 let expected_index =
                     constraints.push_expected_type(Expected::NoExpectation(float_type));
-                constraints.equal_types(type_index, expected_index, Category::Frac, region)
+                constraints.equal_types(num_type_index, expected_index, Category::Frac, region)
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                num_type, // TODO check me if something breaks!
+                num_type_index,
                 expected,
                 PatternCategory::Float,
                 region,
@@ -312,8 +317,10 @@ pub fn constrain_pattern(
         }
 
         StrLiteral(_) => {
+            let str_type = constraints.push_type(builtins::str_type());
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                builtins::str_type(),
+                str_type,
                 expected,
                 PatternCategory::Str,
                 region,
@@ -336,12 +343,13 @@ pub fn constrain_pattern(
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
+            let num_type_index = constraints.push_type(num_type.clone());
+
             state.constraints.push({
-                let type_index = constraints.push_type(num_type.clone());
                 let expected_index =
                     constraints.push_expected_type(Expected::NoExpectation(int_type));
                 constraints.equal_types(
-                    type_index, // TODO check me if something breaks!
+                    num_type_index, // TODO check me if something breaks!
                     expected_index,
                     Category::Int,
                     region,
@@ -349,8 +357,9 @@ pub fn constrain_pattern(
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                num_type,
+                num_type_index,
                 expected,
                 PatternCategory::Character,
                 region,

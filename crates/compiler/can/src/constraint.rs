@@ -215,6 +215,10 @@ impl Constraints {
         Index::push_new(&mut self.expectations, expected.map(Cell::new))
     }
 
+    pub fn push_pat_expected_type(&mut self, expected: PExpected<Type>) -> PExpectedTypeIndex {
+        Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new))
+    }
+
     #[inline(always)]
     pub fn push_category(&mut self, category: Category) -> Index<Category> {
         match category {
@@ -306,14 +310,11 @@ impl Constraints {
 
     pub fn equal_pattern_types(
         &mut self,
-        typ: Type,
-        expected: PExpected<Type>,
+        type_index: TypeOrVar,
+        expected_index: PExpectedTypeIndex,
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index =
-            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Self::push_pattern_category(self, category);
 
         Constraint::Pattern(type_index, expected_index, category_index, region)
