@@ -920,6 +920,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                     RecordField::RigidOptional(_) => "r?",
                     RecordField::Required(_) => ":",
                     RecordField::Demanded(_) => ":",
+                    RecordField::RigidRequired(_) => "r:",
                 };
                 write!(
                     f,
@@ -2113,6 +2114,26 @@ impl Subs {
     /// Returns true iff the given type is inhabited by at least one value.
     pub fn is_inhabited(&self, var: Variable) -> bool {
         is_inhabited(self, var)
+    }
+
+    pub fn is_function(&self, mut var: Variable) -> bool {
+        loop {
+            match self.get_content_without_compacting(var) {
+                Content::FlexVar(_)
+                | Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. }
+                | Content::RangedNumber(_)
+                | Content::Error => return false,
+                Content::LambdaSet(_) => return true,
+                Content::Structure(FlatType::Func(..)) => return true,
+                Content::Structure(_) => return false,
+                Content::Alias(_, _, real_var, _) => {
+                    var = *real_var;
+                }
+            }
+        }
     }
 }
 
@@ -3831,6 +3852,7 @@ fn flat_type_to_err_type(
                     Required(_) => Required(error_type),
                     Demanded(_) => Demanded(error_type),
                     RigidOptional(_) => RigidOptional(error_type),
+                    RigidRequired(_) => RigidRequired(error_type),
                 };
 
                 err_fields.insert(label, err_record_field);

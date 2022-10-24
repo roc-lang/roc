@@ -66,7 +66,8 @@ pub fn build_and_preprocess_host(
         host_input_path.with_file_name("dynhost")
     };
 
-    generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib);
+    let dummy_dll_symbols = make_dummy_dll_symbols(exposed_to_host, exported_closure_types);
+    generate_dynamic_lib(target, &dummy_dll_symbols, &dummy_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
     let metadata = host_input_path.with_file_name("metadata");
     // let prehost = host_input_path.with_file_name("preprocessedhost");
@@ -77,6 +78,7 @@ pub fn build_and_preprocess_host(
         &metadata,
         preprocessed_host_path,
         &dummy_lib,
+        &dummy_dll_symbols,
         false,
         false,
     )
@@ -92,12 +94,10 @@ pub fn link_preprocessed_host(
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
-fn generate_dynamic_lib(
-    target: &Triple,
+fn make_dummy_dll_symbols(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
-    dummy_lib_path: &Path,
-) {
+) -> Vec<String> {
     let mut custom_names = Vec::new();
 
     for sym in exposed_to_host {
@@ -120,8 +120,12 @@ fn generate_dynamic_lib(
     // so they must be in alphabetical order
     custom_names.sort_unstable();
 
-    if !dummy_lib_is_up_to_date(target, dummy_lib_path, &custom_names) {
-        let bytes = crate::generate_dylib::generate(target, &custom_names)
+    custom_names
+}
+
+fn generate_dynamic_lib(target: &Triple, custom_names: &[String], dummy_lib_path: &Path) {
+    if !dummy_lib_is_up_to_date(target, dummy_lib_path, custom_names) {
+        let bytes = crate::generate_dylib::generate(target, custom_names)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
         std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
@@ -182,12 +186,14 @@ fn dummy_lib_is_up_to_date(
 }
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
+#[allow(clippy::too_many_arguments)]
 fn preprocess(
     target: &Triple,
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
     shared_lib: &Path,
+    dummy_dll_symbols: &[String],
     verbose: bool,
     time: bool,
 ) {
@@ -229,6 +235,7 @@ fn preprocess(
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
+                dummy_dll_symbols,
                 verbose,
                 time,
             )

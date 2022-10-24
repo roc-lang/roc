@@ -19,6 +19,7 @@ use roc_mono::{ir::OptLevel, layout::Layout};
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
+use roc_types::subs::{Subs, Variable};
 use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
@@ -410,6 +411,27 @@ pub fn render_expects_in_memory<'a>(
     )
 }
 
+fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, Vec<Variable>) {
+    lookups
+        .iter()
+        .filter_map(
+            |ExpectLookup {
+                 symbol,
+                 var,
+                 ability_info: _,
+             }| {
+                // mono will have dropped lookups that resolve to functions, so we should not keep
+                // them either.
+                if subs.is_function(*var) {
+                    None
+                } else {
+                    Some((*symbol, *var))
+                }
+            },
+        )
+        .unzip()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_expect_failure<'a>(
     writer: &mut impl std::io::Write,
@@ -439,16 +461,7 @@ fn render_expect_failure<'a>(
     };
     let subs = arena.alloc(&mut data.subs);
 
-    let (symbols, variables): (Vec<_>, Vec<_>) = current
-        .iter()
-        .map(
-            |ExpectLookup {
-                 symbol,
-                 var,
-                 ability_info: _,
-             }| (*symbol, *var),
-        )
-        .unzip();
+    let (symbols, variables) = split_expect_lookups(subs, current);
 
     let (offset, expressions) = crate::get_values(
         target_info,

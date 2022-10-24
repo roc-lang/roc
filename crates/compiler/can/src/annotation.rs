@@ -1209,7 +1209,7 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
-                    field_types.insert(label.clone(), Required(field_type));
+                    field_types.insert(label.clone(), RigidRequired(field_type));
 
                     break 'inner label;
                 }
@@ -1246,7 +1246,7 @@ fn can_assigned_fields<'a>(
                         }
                     };
 
-                    field_types.insert(field_name.clone(), Required(field_type));
+                    field_types.insert(field_name.clone(), RigidRequired(field_type));
 
                     break 'inner field_name;
                 }

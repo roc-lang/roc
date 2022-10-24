@@ -79,6 +79,16 @@ fn view(input: ConstModel) RocStr {
     return output;
 }
 
+fn print_output(viewed: RocStr) void {
+    const stdout = std.io.getStdOut().writer();
+
+    for (viewed.asSlice()) |char| {
+        stdout.print("{c}", .{char}) catch unreachable;
+    }
+
+    stdout.print("\n", .{}) catch unreachable;
+}
+
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
@@ -191,12 +201,14 @@ fn call_the_closure(program: Program) void {
     _ = program;
 
     var allocator = std.heap.page_allocator;
-    const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
     var buf: [1000]u8 = undefined;
 
     var model = init(&allocator);
+
+    const init_viewed = view(model);
+    print_output(init_viewed);
 
     while (true) {
         const line = (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch unreachable) orelse return;
@@ -210,11 +222,7 @@ fn call_the_closure(program: Program) void {
         model = update(&allocator, model, to_append);
 
         const viewed = view(model);
-        for (viewed.asSlice()) |char| {
-            stdout.print("{c}", .{char}) catch unreachable;
-        }
-
-        stdout.print("\n", .{}) catch unreachable;
+        print_output(viewed);
     }
 
     // The closure returns result, nothing interesting to do with it

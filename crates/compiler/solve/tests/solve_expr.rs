@@ -8009,4 +8009,39 @@ mod solve_expr {
             print_only_under_alias: true
         );
     }
+
+    #[test]
+    fn self_recursive_function_not_syntactically_a_function() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [fx] to "./platform"
+
+                after : ({} -> a), ({} -> b) -> ({} -> b)
+
+                fx = after (\{} -> {}) \{} -> if Bool.true then fx {} else {}
+                "#
+            ),
+            "{} -> {}",
+        );
+    }
+
+    #[test]
+    fn self_recursive_function_not_syntactically_a_function_nested() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    after : ({} -> a), ({} -> b) -> ({} -> b)
+
+                    fx = after (\{} -> {}) \{} -> if Bool.true then fx {} else {}
+
+                    fx
+                "#
+            ),
+            "{} -> {}",
+        );
+    }
 }

@@ -2427,6 +2427,7 @@ fn type_to_variable<'a>(
                             Optional(t) => Optional(helper!(t)),
                             Required(t) => Required(helper!(t)),
                             Demanded(t) => Demanded(helper!(t)),
+                            RigidRequired(t) => RigidRequired(helper!(t)),
                             RigidOptional(t) => RigidOptional(helper!(t)),
                         }
                     };
@@ -3413,11 +3414,17 @@ fn adjust_rank_content(
                         let var = subs[var_index];
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
 
-                        // When generalizing annotations with rigid optionals, we want to promote
-                        // them to non-rigid, so that usages at specialized sites don't have to
-                        // exactly include the optional field.
-                        if let RecordField::RigidOptional(()) = subs[field_index] {
-                            subs[field_index] = RecordField::Optional(());
+                        // When generalizing annotations with rigid optional/required fields,
+                        // we want to promote them to non-rigid, so that usages at
+                        // specialized sites don't have to exactly include the optional/required field.
+                        match subs[field_index] {
+                            RecordField::RigidOptional(()) => {
+                                subs[field_index] = RecordField::Optional(());
+                            }
+                            RecordField::RigidRequired(()) => {
+                                subs[field_index] = RecordField::Required(());
+                            }
+                            _ => {}
                         }
                     }
 
@@ -3791,7 +3798,8 @@ fn deep_copy_var_help(
                                 let slice = SubsSlice::extend_new(
                                     &mut subs.record_fields,
                                     field_types.into_iter().map(|f| match f {
-                                        RecordField::RigidOptional(()) => internal_error!("RigidOptionals should be generalized to non-rigid by this point"),
+                                        RecordField::RigidOptional(())
+                                        | RecordField::RigidRequired(()) => internal_error!("Rigid optional/required should be generalized to non-rigid by this point"),
 
                                         RecordField::Demanded(_)
                                         | RecordField::Required(_)

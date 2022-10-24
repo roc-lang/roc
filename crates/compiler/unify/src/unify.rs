@@ -1845,6 +1845,7 @@ fn unify_shared_fields<M: MetaCollector>(
             //
             // Demanded does not unify with Optional
             // RigidOptional does not unify with Required or Demanded
+            // RigidRequired does not unify with Optional
             // Unifying Required with Demanded => Demanded
             // Unifying Optional with Required => Required
             // Unifying Optional with RigidOptional => RigidOptional
@@ -1861,15 +1862,26 @@ fn unify_shared_fields<M: MetaCollector>(
                 (Required(val), Optional(_)) => Required(val),
                 (Optional(val), Required(_)) => Required(val),
                 (Optional(val), Optional(_)) => Optional(val),
+
+                // rigid optional
                 (RigidOptional(val), Optional(_)) | (Optional(_), RigidOptional(val)) => {
                     RigidOptional(val)
                 }
-                (RigidOptional(_), Demanded(_) | Required(_))
-                | (Demanded(_) | Required(_), RigidOptional(_)) => {
+                (RigidOptional(_), Demanded(_) | Required(_) | RigidRequired(_))
+                | (Demanded(_) | Required(_) | RigidRequired(_), RigidOptional(_)) => {
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
                 (RigidOptional(val), RigidOptional(_)) => RigidOptional(val),
+
+                // rigid required
+                (RigidRequired(_), Optional(_)) | (Optional(_), RigidRequired(_)) => {
+                    // this is an error, but we continue to give better error messages
+                    continue;
+                }
+                (RigidRequired(val), Demanded(_) | Required(_))
+                | (Demanded(_) | Required(_), RigidRequired(val)) => RigidRequired(val),
+                (RigidRequired(val), RigidRequired(_)) => RigidRequired(val),
             };
 
             matching_fields.push((name, actual));

@@ -125,6 +125,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToNum; STR_TO_NUM; 1,
     StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
+    StrGraphemes; STR_GRAPHEMES; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,

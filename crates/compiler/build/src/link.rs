@@ -435,7 +435,12 @@ pub fn build_c_host_native(
             _ => {
                 command.args(&[
                     shared_lib_path.to_str().unwrap(),
-                    &bitcode::get_builtins_host_obj_path(),
+                    // This line is commented out because
+                    // @bhansconnect: With the addition of Str.graphemes, always
+                    // linking the built-ins led to a surgical linker bug for
+                    // optimized builds. Disabling until it is needed for dev
+                    // builds.
+                    // &bitcode::get_builtins_host_obj_path(),
                     "-fPIE",
                     "-pie",
                     "-lm",
