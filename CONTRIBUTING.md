@@ -60,6 +60,26 @@ This command will generate the documentation in the [`generated-docs`](generated
    git config --global commit.gpgsign true
    ```
 
+#### Committed files without signing?
+It is common that people forget to sign their commits. You can find which commits need to be signed by running `git log --show-signature` command.
+
+If you have only one commit, running `git commit --amend --no-edit -S` would sign the latest commit 🚀
+
+In case you have multiple commits, you can sign them by two ways
+ 1. Switching to interactive rebase mode and editing the file
+       - Enter into interactive mode, by running `git rebase -i HEAD~n` where `n` is the number of commits up to the most current commit you would like to see.
+       - This would display a set of commits in a text file like below
+           ```
+           pick hash2 commit message 2
+           pick hash1 commit message 1
+           ```
+       - After each of the commit you want to sign, add the command `exec git commit --amend --no-edit -S`
+ 2. Run git rebase command recursively
+       - Find the commit till you want to sign, using the `git log --show-signature` command. 
+       - Run the command `git rebase --exec 'git commit --amend --no-edit -n -S' -i HASH` which would sign all commits till commit `HASH`
+
+Please note that if you had pushed these commits already, you might have to do a **force push** which might lead to confusions among other contributors. So, always make sure you have signed commits before pushing.
+
 ## Can we do better?
 
 Feel free to open an issue if you think this document can be improved or is unclear in any way.
