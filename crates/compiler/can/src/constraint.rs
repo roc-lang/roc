@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
@@ -8,10 +10,9 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
-#[derive(Debug)]
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Type>,
+    pub types: Vec<Cell<Type>>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
@@ -27,11 +28,36 @@ pub struct Constraints {
     pub cycles: Vec<Cycle>,
 }
 
+impl std::fmt::Debug for Constraints {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Constraints")
+            .field("constraints", &self.constraints)
+            .field("types", &"<types>")
+            .field("variables", &self.variables)
+            .field("loc_symbols", &self.loc_symbols)
+            .field("let_constraints", &self.let_constraints)
+            .field("categories", &self.categories)
+            .field("pattern_categories", &self.pattern_categories)
+            .field("expectations", &self.expectations)
+            .field("pattern_expectations", &self.pattern_expectations)
+            .field("includes_tags", &self.includes_tags)
+            .field("strings", &self.strings)
+            .field("sketched_rows", &self.sketched_rows)
+            .field("eq", &self.eq)
+            .field("pattern_eq", &self.pattern_eq)
+            .field("cycles", &self.cycles)
+            .finish()
+    }
+}
+
 impl Default for Constraints {
     fn default() -> Self {
         Self::new()
     }
 }
+
+pub type TypeIndex = Index<Cell<Type>>;
+pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
@@ -52,9 +78,9 @@ impl Constraints {
         let cycles = Vec::new();
 
         types.extend([
-            Type::EmptyRec,
-            Type::EmptyTagUnion,
-            Type::Apply(Symbol::STR_STR, vec![], Region::zero()),
+            Cell::new(Type::EmptyRec),
+            Cell::new(Type::EmptyTagUnion),
+            Cell::new(Type::Apply(Symbol::STR_STR, vec![], Region::zero())),
         ]);
 
         categories.extend([
@@ -107,9 +133,9 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Type> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
-    pub const STR: Index<Type> = Index::new(2);
+    pub const EMPTY_RECORD: Index<Cell<Type>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Type>> = Index::new(1);
+    pub const STR: Index<Cell<Type>> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -139,7 +165,7 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(&mut self, typ: Type) -> EitherIndex<Type, Variable> {
+    pub fn push_type(&mut self, typ: Type) -> EitherIndex<Cell<Type>, Variable> {
         match typ {
             Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
             Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
@@ -148,7 +174,7 @@ impl Constraints {
             }
             Type::Variable(var) => Self::push_type_variable(var),
             other => {
-                let index: Index<Type> = Index::push_new(&mut self.types, other);
+                let index: Index<Cell<Type>> = Index::push_new(&mut self.types, Cell::new(other));
                 EitherIndex::from_left(index)
             }
         }
@@ -175,7 +201,7 @@ impl Constraints {
     }
 
     #[inline(always)]
-    const fn push_type_variable(var: Variable) -> EitherIndex<Type, Variable> {
+    const fn push_type_variable(var: Variable) -> TypeOrVar {
         // that's right, we use the variable's integer value as the index
         // that way, we don't need to push anything onto a vector
         let index: Index<Variable> = Index::new(var.index());
@@ -330,9 +356,9 @@ impl Constraints {
     where
         I: IntoIterator<Item = Type>,
     {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = Index::push_new(&mut self.types, Cell::new(typ));
         let category_index = Index::push_new(&mut self.pattern_categories, category);
-        let types_slice = Slice::extend_new(&mut self.types, types);
+        let types_slice = Slice::extend_new(&mut self.types, types.into_iter().map(Cell::new));
 
         let includes_tag = IncludesTag {
             type_index,
@@ -377,7 +403,7 @@ impl Constraints {
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
 
-            self.types.push(value);
+            self.types.push(Cell::new(value));
             self.loc_symbols.push((symbol, region));
         }
 
@@ -605,7 +631,7 @@ impl Constraints {
 
     pub fn store_index(
         &mut self,
-        type_index: EitherIndex<Type, Variable>,
+        type_index: TypeOrVar,
         variable: Variable,
         filename: &'static str,
         line_number: u32,
@@ -682,7 +708,7 @@ roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
-    pub EitherIndex<Type, Variable>,
+    pub TypeOrVar,
     pub Index<Expected<Type>>,
     pub Index<Category>,
     pub Region,
@@ -690,7 +716,7 @@ pub struct Eq(
 
 #[derive(Clone, Copy, Debug)]
 pub struct PatternEq(
-    pub EitherIndex<Type, Variable>,
+    pub TypeOrVar,
     pub Index<PExpected<Type>>,
     pub Index<PatternCategory>,
     pub Region,
@@ -723,15 +749,10 @@ pub struct OpportunisticResolve {
 #[derive(Clone, Copy)]
 pub enum Constraint {
     Eq(Eq),
-    Store(
-        EitherIndex<Type, Variable>,
-        Variable,
-        Index<&'static str>,
-        u32,
-    ),
+    Store(TypeOrVar, Variable, Index<&'static str>, u32),
     Lookup(Symbol, Index<Expected<Type>>, Region),
     Pattern(
-        EitherIndex<Type, Variable>,
+        TypeOrVar,
         Index<PExpected<Type>>,
         Index<PatternCategory>,
         Region,
@@ -747,10 +768,10 @@ pub enum Constraint {
     Let(Index<LetConstraint>, Slice<Variable>),
     And(Slice<Constraint>),
     /// Presence constraints
-    IsOpenType(EitherIndex<Type, Variable>), // Theory; always applied to a variable? if yes the use that
+    IsOpenType(TypeOrVar), // Theory; always applied to a variable? if yes the use that
     IncludesTag(Index<IncludesTag>),
     PatternPresence(
-        EitherIndex<Type, Variable>,
+        TypeOrVar,
         Index<PExpected<Type>>,
         Index<PatternCategory>,
         Region,
@@ -782,9 +803,9 @@ pub struct LetConstraint {
 
 #[derive(Debug, Clone)]
 pub struct IncludesTag {
-    pub type_index: Index<Type>,
+    pub type_index: TypeIndex,
     pub tag_name: TagName,
-    pub types: Slice<Type>,
+    pub types: Slice<Cell<Type>>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
 }
