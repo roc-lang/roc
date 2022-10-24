@@ -8117,19 +8117,19 @@ mod solve_expr {
     }
 
     #[test]
-    fn multiple_variables_bound_to_an_ability() {
+    fn multiple_variables_bound_to_an_ability_from_type_def() {
         infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
 
-                F a : a | a has Hash
+                F a : a | a has Hash & Eq & Decoding
 
                 main : F a -> F a
                 #^^^^{-1}
                 "#
             ),
-            @"main : a -[[main(0)]]-> a | a has Hash"
+            @"main : a -[[main(0)]]-> a | a has Hash & Decoding & Eq"
             print_only_under_alias: true
         );
     }
