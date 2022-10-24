@@ -127,6 +127,25 @@ Node : [
     Element Tag Nat (List Attribute) (List Node),
 ]
 
+# TODO
+#
+# Node state : [
+#     None,
+#     Text Str,
+#     Element Tag Nat (List (Fact state)) (List (Node state)),
+#     CustomElement Str Nat (List (Fact state)) (List (Node state)),
+#     Lazy (Result { state, elem : Elem state } [NotCached] -> { state, elem : Elem state }),
+# ]
+# 
+# Fact state : [
+#     Event (Handler state),
+#     Attribute AttrType Str,
+#     CustomAttribute Str Str,
+#     Property PropType (List U8),
+#     CustomProperty Str (List U8),
+#     Style Str Str
+# ]
+
 Attribute : Html.Attributes.Attribute
 
 text : Str -> Node
