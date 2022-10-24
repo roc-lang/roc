@@ -1000,11 +1000,11 @@ pub fn constrain_expr(
 
             let closure_type = Type::Variable(*closure_var);
 
-            let function_type = Type::Function(
+            let function_type_index = constraints.push_type(Type::Function(
                 vec![record_type],
                 Box::new(closure_type),
                 Box::new(field_type),
-            );
+            ));
 
             let cons = [
                 constraints.equal_types_var(
@@ -1014,15 +1014,23 @@ pub fn constrain_expr(
                     region,
                 ),
                 {
-                    let type_index = constraints.push_type(function_type.clone());
                     let expected_index = constraints.push_expected_type(expected);
-                    constraints.equal_types(type_index, expected_index, category.clone(), region)
+                    constraints.equal_types(
+                        function_type_index,
+                        expected_index,
+                        category.clone(),
+                        region,
+                    )
                 },
                 {
-                    let type_index = constraints.push_type(function_type);
-                    let expected_index =
+                    let function_var_index =
                         constraints.push_expected_type(NoExpectation(Variable(*function_var)));
-                    constraints.equal_types(type_index, expected_index, category, region)
+                    constraints.equal_types(
+                        function_type_index,
+                        function_var_index,
+                        category,
+                        region,
+                    )
                 },
                 record_con,
             ];
@@ -3499,11 +3507,11 @@ fn rec_defs_help(
                             &mut vars,
                         );
 
-                        let fn_type = Type::Function(
+                        let fn_type_index = constraints.push_type(Type::Function(
                             pattern_types,
                             Box::new(Type::Variable(closure_var)),
                             Box::new(ret_type.clone()),
-                        );
+                        ));
                         let body_type = NoExpectation(ret_type.clone());
                         let expr_con = constrain_expr(
                             constraints,
@@ -3518,6 +3526,7 @@ fn rec_defs_help(
 
                         let signature_index = constraints.push_type(signature);
                         let state_constraints = constraints.and_constraint(state.constraints);
+                        let expected_index = constraints.push_expected_type(expected);
                         let cons = [
                             constraints.let_constraint(
                                 [],
@@ -3526,17 +3535,12 @@ fn rec_defs_help(
                                 state_constraints,
                                 expr_con,
                             ),
-                            {
-                                let fn_type_index = constraints.push_type(fn_type.clone());
-                                let expected_index =
-                                    constraints.push_expected_type(expected.clone());
-                                constraints.equal_types(
-                                    fn_type_index,
-                                    expected_index,
-                                    Category::Lambda,
-                                    region,
-                                )
-                            },
+                            constraints.equal_types(
+                                fn_type_index,
+                                expected_index,
+                                Category::Lambda,
+                                region,
+                            ),
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             constraints.store_index(
