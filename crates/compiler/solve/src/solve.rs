@@ -1327,27 +1327,21 @@ fn solve(
                 let tys_cells = &constraints.types[types.indices()];
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
-                let actual = {
-                    let typ = typ_cell.replace(Type::EmptyTagUnion);
-                    let actual = type_to_var(
-                        subs,
-                        rank,
-                        problems,
-                        abilities_store,
-                        obligation_cache,
-                        pools,
-                        aliases,
-                        &typ,
-                    );
-                    typ_cell.replace(Type::Variable(actual));
-                    actual
-                };
+                let actual = type_cell_to_var(
+                    subs,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    pools,
+                    aliases,
+                    typ_cell,
+                );
 
                 let tys = {
                     let mut tys = Vec::with_capacity(tys_cells.len());
                     for cell in tys_cells {
-                        let ty = cell.replace(Type::EmptyTagUnion);
-                        let actual = type_to_var(
+                        let actual = type_cell_to_var(
                             subs,
                             rank,
                             problems,
@@ -1355,9 +1349,8 @@ fn solve(
                             obligation_cache,
                             pools,
                             aliases,
-                            &ty,
+                            &cell,
                         );
-                        cell.replace(Type::Variable(actual));
                         tys.push(Type::Variable(actual));
                     }
                     tys
@@ -2057,8 +2050,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         let mut local_def_vars = Self::with_length(types_slice.len());
 
         for (&(symbol, region), typ_cell) in (loc_symbols_slice.iter()).zip(types_slice) {
-            let typ = typ_cell.replace(Type::EmptyTagUnion);
-            let var = type_to_var(
+            let var = type_cell_to_var(
                 subs,
                 rank,
                 problems,
@@ -2066,9 +2058,8 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
                 obligation_cache,
                 pools,
                 aliases,
-                &typ,
+                typ_cell,
             );
-            typ_cell.replace(Type::Variable(var));
 
             local_def_vars.push((symbol, Loc { value: var, region }));
         }
@@ -2077,7 +2068,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -2109,8 +2100,7 @@ fn either_type_index_to_var(
         Ok(type_index) => {
             let typ_cell = &constraints.types[type_index.index()];
 
-            let typ = typ_cell.replace(Type::EmptyTagUnion);
-            let var = type_to_var(
+            type_cell_to_var(
                 subs,
                 rank,
                 problems,
@@ -2118,16 +2108,40 @@ fn either_type_index_to_var(
                 obligation_cache,
                 pools,
                 aliases,
-                &typ,
-            );
-            typ_cell.replace(Type::Variable(var));
-            var
+                typ_cell,
+            )
         }
         Err(var_index) => {
             // we cheat, and  store the variable directly in the index
             unsafe { Variable::from_index(var_index.index() as _) }
         }
     }
+}
+
+/// Converts a type in a cell to a variable, leaving the converted variable behind for re-use.
+fn type_cell_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    problems: &mut Vec<TypeError>,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    pools: &mut Pools,
+    aliases: &mut Aliases,
+    typ_cell: &Cell<Type>,
+) -> Variable {
+    let typ = typ_cell.replace(Type::EmptyTagUnion);
+    let var = type_to_var(
+        subs,
+        rank,
+        problems,
+        abilities_store,
+        obligation_cache,
+        pools,
+        aliases,
+        &typ,
+    );
+    typ_cell.replace(Type::Variable(var));
+    var
 }
 
 pub(crate) fn type_to_var(
