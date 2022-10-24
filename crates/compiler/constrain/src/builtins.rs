@@ -132,20 +132,23 @@ pub fn single_quote_literal(
         Category::Character,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let expect_precision_var = constraints.push_expected_type(ForReason(
+        reason,
+        num_int(Type::Variable(precision_var)),
+        region,
+    ));
+
     constrs.extend([
+        constraints.equal_types(
+            num_type_index,
+            expect_precision_var,
+            Category::Character,
+            region,
+        ),
         {
-            let type_index = constraints.push_type(num_type.clone());
-            let expected_index = constraints.push_expected_type(ForReason(
-                reason,
-                num_int(Type::Variable(precision_var)),
-                region,
-            ));
-            constraints.equal_types(type_index, expected_index, Category::Character, region)
-        },
-        {
-            let type_index = constraints.push_type(num_type);
             let expected_index = constraints.push_expected_type(expected);
-            constraints.equal_types(type_index, expected_index, Category::Character, region)
+            constraints.equal_types(num_type_index, expected_index, Category::Character, region)
         },
     ]);
 
@@ -175,20 +178,18 @@ pub fn float_literal(
         Category::Frac,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let expect_precision_var = constraints.push_expected_type(ForReason(
+        reason,
+        num_float(Type::Variable(precision_var)),
+        region,
+    ));
+
     constrs.extend([
+        constraints.equal_types(num_type_index, expect_precision_var, Category::Frac, region),
         {
-            let type_index = constraints.push_type(num_type.clone());
-            let expected_index = constraints.push_expected_type(ForReason(
-                reason,
-                num_float(Type::Variable(precision_var)),
-                region,
-            ));
-            constraints.equal_types(type_index, expected_index, Category::Frac, region)
-        },
-        {
-            let type_index = constraints.push_type(num_type);
             let expected_index = constraints.push_expected_type(expected);
-            constraints.equal_types(type_index, expected_index, Category::Frac, region)
+            constraints.equal_types(num_type_index, expected_index, Category::Frac, region)
         },
     ]);
 
