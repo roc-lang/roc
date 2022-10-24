@@ -75,11 +75,11 @@ and : Bool, Bool -> Bool
 ## the logic [OR](https://en.wikipedia.org/wiki/Logical_disjunction) gate.
 ## The infix operator `||` can also be used as shorthand for `Bool.or`.
 ##
-##     expect Bool.or Bool.false Bool.true == Bool.true
-##     expect Bool.true || Bool.true == Bool.true
-##     expect Bool.false || Bool.true == Bool.true
-##     expect Bool.true || Bool.false == Bool.true
-##     expect Bool.false || Bool.false == Bool.false
+##     expect (Bool.or Bool.false Bool.true) == Bool.true
+##     expect (Bool.true || Bool.true) == Bool.true
+##     expect (Bool.false || Bool.true) == Bool.true
+##     expect (Bool.true || Bool.false) == Bool.true
+##     expect (Bool.false || Bool.false) == Bool.false
 ##
 ## **Performance Note** that in Roc the `&&` and `||` work the same way as any 
 ## other functions. However, in some languages `&&` and `||` are special-cased. 
@@ -102,7 +102,7 @@ not : Bool -> Bool
 ## **Note** that `isNotEq` does not accept arguments whose types contain 
 ## functions.
 ##
-##     expect Bool.isNotEq Bool.false Bool.true == Bool.true
+##     expect (Bool.isNotEq Bool.false Bool.true) == Bool.true
 ##     expect (Bool.false != Bool.false) == Bool.false
 ##     expect "Apples" != "Oranges"
 isNotEq : a, a -> Bool | a has Eq
