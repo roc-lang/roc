@@ -11459,16 +11459,15 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-    <<<<<<< HEAD
-            demanded_vs_optional_record_field,
-            indoc!(
-                r#"
+        demanded_vs_optional_record_field,
+        indoc!(
+            r#"
             foo : { a : Str } -> Str
             foo = \{ a ? "" } -> a
             foo
             "#
-            ),
-        @r###"
+        ),
+    @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
     The 1st argument to `foo` is weird:
@@ -11484,7 +11483,7 @@ All branches in an `if` must have the same type!
 
         { a : Str }
     "###
-        );
+    );
 
     test_report!(
         underivable_opaque_doesnt_error_for_derived_bodies,
