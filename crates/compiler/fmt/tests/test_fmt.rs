@@ -5705,6 +5705,39 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn clauses_with_multiple_abilities() {
+        expr_formats_same(indoc!(
+            r#"
+            f : {} -> a | a has Eq & Hash & Decode
+
+            f
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode,
+                              b has Eq & Hash
+
+                f
+                "#
+            ),
+            indoc!(
+                // TODO: ideally, this would look a bit nicer - consider
+                // f : {} -> a
+                //   | a has Eq & Hash & Decode,
+                //     b has Eq & Hash
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode, b has Eq & Hash
+
+                f
+                "#
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

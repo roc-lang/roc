@@ -117,6 +117,10 @@ pub enum Problem {
     IllegalHasClause {
         region: Region,
     },
+    DuplicateHasAbility {
+        ability: Symbol,
+        region: Region,
+    },
     AbilityMemberMissingHasClause {
         member: Symbol,
         ability: Symbol,

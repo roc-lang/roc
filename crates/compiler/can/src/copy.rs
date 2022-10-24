@@ -162,7 +162,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     #[inline(always)]
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
         SubsSlice::extend_new(
-            &mut self.target.closure_names,
+            &mut self.target.symbol_names,
             self.source.get_subs_slice(lambda_names).iter().cloned(),
         )
     }
@@ -821,11 +821,14 @@ fn deep_copy_type_vars<C: CopyEnv>(
         let new_content = match content {
             // The vars for which we want to do something interesting.
             FlexVar(opt_name) => FlexVar(opt_name.map(|n| env.clone_name(n))),
-            FlexAbleVar(opt_name, ability) => {
-                FlexAbleVar(opt_name.map(|n| env.clone_name(n)), ability)
-            }
+            FlexAbleVar(opt_name, abilities) => FlexAbleVar(
+                opt_name.map(|n| env.clone_name(n)),
+                env.clone_lambda_names(abilities),
+            ),
             RigidVar(name) => RigidVar(env.clone_name(name)),
-            RigidAbleVar(name, ability) => RigidAbleVar(env.clone_name(name), ability),
+            RigidAbleVar(name, abilities) => {
+                RigidAbleVar(env.clone_name(name), env.clone_lambda_names(abilities))
+            }
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
@@ -1044,8 +1047,8 @@ mod test {
     use roc_region::all::Loc;
     use roc_types::{
         subs::{
-            self, Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs,
-            SubsIndex, SubsSlice, Variable,
+            self, Content, Content::*, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
+            Subs, SubsIndex, SubsSlice, Variable,
         },
         types::Uls,
     };
@@ -1107,7 +1110,8 @@ mod test {
         let mut subs = Subs::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let var = new_var(&mut subs, FlexAbleVar(Some(field_name), Symbol::UNDERSCORE));
+        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let var = new_var(&mut subs, FlexAbleVar(Some(field_name), abilities));
 
         let mut copied = vec![];
 
@@ -1116,8 +1120,9 @@ mod test {
         assert_ne!(var, copy);
 
         match subs.get_content_without_compacting(var) {
-            FlexAbleVar(Some(name), Symbol::UNDERSCORE) => {
+            FlexAbleVar(Some(name), abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => unreachable!("{:?}", it),
         }
@@ -1128,7 +1133,8 @@ mod test {
         let mut subs = Subs::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let var = new_var(&mut subs, RigidAbleVar(field_name, Symbol::UNDERSCORE));
+        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let var = new_var(&mut subs, RigidAbleVar(field_name, abilities));
 
         let mut copied = vec![];
 
@@ -1136,8 +1142,9 @@ mod test {
 
         assert_ne!(var, copy);
         match subs.get_content_without_compacting(var) {
-            RigidAbleVar(name, Symbol::UNDERSCORE) => {
+            RigidAbleVar(name, abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => internal_error!("{:?}", it),
         }

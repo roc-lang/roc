@@ -70,8 +70,8 @@ pub fn run_solve(
         subs.rigid_var(var, name);
     }
 
-    for (var, (name, ability)) in rigid_variables.able {
-        subs.rigid_able_var(var, name, ability);
+    for (var, (name, abilities)) in rigid_variables.able {
+        subs.rigid_able_var(var, name, abilities);
     }
 
     for var in rigid_variables.wildcards {

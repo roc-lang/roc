@@ -357,14 +357,14 @@ fn canonicalize_alias<'a>(
                 // This is a valid lowercase rigid var for the type def.
                 let named_variable = named.swap_remove(index);
                 let var = named_variable.variable();
-                let opt_bound_ability = named_variable.opt_ability();
+                let opt_bound_abilities = named_variable.opt_abilities().map(ToOwned::to_owned);
                 let name = named_variable.name();
 
                 can_vars.push(Loc {
                     value: AliasVar {
                         name,
                         var,
-                        opt_bound_ability,
+                        opt_bound_abilities,
                     },
                     region: loc_lowercase.region,
                 });
@@ -386,7 +386,7 @@ fn canonicalize_alias<'a>(
                         value: AliasVar {
                             name: loc_lowercase.value.clone(),
                             var: var_store.fresh(),
-                            opt_bound_ability: None,
+                            opt_bound_abilities: None,
                         },
                         region: loc_lowercase.region,
                     });
@@ -859,7 +859,7 @@ fn canonicalize_opaque<'a>(
                             alias_var.region,
                             OptAbleType {
                                 typ: Type::Variable(var_store.fresh()),
-                                opt_ability: alias_var.value.opt_bound_ability,
+                                opt_abilities: alias_var.value.opt_bound_abilities.clone(),
                             },
                         )
                     })
@@ -1345,7 +1345,7 @@ fn resolve_abilities<'a>(
                 .introduced_variables
                 .able
                 .iter()
-                .partition(|av| av.ability == ability);
+                .partition(|av| av.abilities.contains(&ability));
 
             let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
                 [one] => one.variable,
@@ -2872,7 +2872,7 @@ fn make_tag_union_of_alias_recursive<'a>(
 
     let alias_opt_able_vars = alias.type_variables.iter().map(|l| OptAbleType {
         typ: Type::Variable(l.value.var),
-        opt_ability: l.value.opt_bound_ability,
+        opt_abilities: l.value.opt_bound_abilities.clone(),
     });
 
     let lambda_set_vars = alias.lambda_set_variables.iter();

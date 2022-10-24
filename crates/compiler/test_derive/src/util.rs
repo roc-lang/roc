@@ -164,12 +164,14 @@ macro_rules! v {
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
      ($name:ident has $ability:path) => {{
-         use roc_types::subs::{Subs, SubsIndex,  Content};
+         use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =
                  SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
 
-             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), $ability))
+             let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, [$ability]);
+
+             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), abilities_slice))
          }
      }};
      (^$rec_var:ident) => {{

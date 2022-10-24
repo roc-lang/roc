@@ -439,7 +439,7 @@ pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HasClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
-    pub ability: AbilityName<'a>,
+    pub abilities: &'a [AbilityName<'a>],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]

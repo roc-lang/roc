@@ -244,17 +244,76 @@ pub struct AliasCommon {
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Represents a collection of abilities bound to a type variable.
+///
+/// Enforces the invariants
+///   - There are no duplicate abilities (like a [VecSet][roc_collections::VecSet])
+///   - Inserted abilities are in sorted order; they can be extracted with
+///     [AbilitySet::into_sorted_iter]
+///
+/// This is useful for inserting into [Subs][crate::subs::Subs], so that the set need not be
+/// re-sorted.
+///
+/// In the future we might want to do some small-vec optimizations, though that may be trivialized
+/// away with a SoA representation of canonicalized types.
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct AbilitySet(Vec<Symbol>);
+
+impl AbilitySet {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self(Vec::with_capacity(cap))
+    }
+
+    pub fn singleton(ability: Symbol) -> Self {
+        Self(vec![ability])
+    }
+
+    pub fn insert(&mut self, ability: Symbol) -> bool {
+        match self.0.binary_search(&ability) {
+            Ok(_) => true,
+            Err(insert_index) => {
+                self.0.insert(insert_index, ability);
+                false
+            }
+        }
+    }
+
+    pub fn contains(&self, ability: &Symbol) -> bool {
+        self.0.contains(ability)
+    }
+
+    pub fn sorted_iter(&self) -> impl ExactSizeIterator<Item = &Symbol> {
+        self.0.iter()
+    }
+
+    pub fn into_sorted_iter(self) -> impl ExactSizeIterator<Item = Symbol> {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<Symbol> for AbilitySet {
+    fn from_iter<T: IntoIterator<Item = Symbol>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (lo, hi) = iter.size_hint();
+        let mut this = Self::with_capacity(hi.unwrap_or(lo));
+        for item in iter {
+            this.insert(item);
+        }
+        this
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct OptAbleVar {
     pub var: Variable,
-    pub opt_ability: Option<Symbol>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleVar {
     pub fn unbound(var: Variable) -> Self {
         Self {
             var,
-            opt_ability: None,
+            opt_abilities: None,
         }
     }
 }
@@ -262,14 +321,14 @@ impl OptAbleVar {
 #[derive(PartialEq, Eq, Debug)]
 pub struct OptAbleType {
     pub typ: Type,
-    pub opt_ability: Option<Symbol>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleType {
     pub fn unbound(typ: Type) -> Self {
         Self {
             typ,
-            opt_ability: None,
+            opt_abilities: None,
         }
     }
 }
@@ -421,7 +480,7 @@ impl Clone for OptAbleType {
         // This passes through `Type`, so defer to that to bump the clone counter.
         Self {
             typ: self.typ.clone(),
-            opt_ability: self.opt_ability,
+            opt_abilities: self.opt_abilities.clone(),
         }
     }
 }
@@ -567,8 +626,8 @@ impl fmt::Debug for Type {
 
                 for arg in type_arguments {
                     write!(f, " {:?}", &arg.typ)?;
-                    if let Some(ab) = arg.opt_ability {
-                        write!(f, ":{:?}", ab)?;
+                    if let Some(abs) = &arg.opt_abilities {
+                        write!(f, ":{:?}", abs)?;
                     }
                 }
 
@@ -1368,7 +1427,7 @@ impl Type {
                                 arg_ann.region,
                                 OptAbleType {
                                     typ: arg_ann.value.clone(),
-                                    opt_ability: alias_var.value.opt_bound_ability,
+                                    opt_abilities: alias_var.value.opt_bound_abilities.clone(),
                                 },
                             ));
                         }
@@ -1414,7 +1473,7 @@ impl Type {
                                 value:
                                     AliasVar {
                                         var: placeholder,
-                                        opt_bound_ability,
+                                        opt_bound_abilities,
                                         ..
                                     },
                                 ..
@@ -1431,7 +1490,7 @@ impl Type {
                             );
                             named_args.push(OptAbleType {
                                 typ: filler.value.clone(),
-                                opt_ability: *opt_bound_ability,
+                                opt_abilities: opt_bound_abilities.clone(),
                             });
                             substitution.insert(*placeholder, filler.value);
                         }
@@ -2111,8 +2170,8 @@ impl AliasKind {
 pub struct AliasVar {
     pub name: Lowercase,
     pub var: Variable,
-    /// `Some` if this variable is bound to an ability; `None` otherwise.
-    pub opt_bound_ability: Option<Symbol>,
+    /// `Some` if this variable is bound to abilities; `None` otherwise.
+    pub opt_bound_abilities: Option<AbilitySet>,
 }
 
 impl AliasVar {
@@ -2120,7 +2179,7 @@ impl AliasVar {
         Self {
             name,
             var,
-            opt_bound_ability: None,
+            opt_bound_abilities: None,
         }
     }
 }
@@ -2129,7 +2188,7 @@ impl From<&AliasVar> for OptAbleVar {
     fn from(av: &AliasVar) -> OptAbleVar {
         OptAbleVar {
             var: av.var,
-            opt_ability: av.opt_bound_ability,
+            opt_abilities: av.opt_bound_abilities.clone(),
         }
     }
 }
@@ -2207,8 +2266,8 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    FlexAbleVar(Lowercase, Symbol),
-    RigidAbleVar(Lowercase, Symbol),
+    FlexAbleVar(Lowercase, AbilitySet),
+    RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),

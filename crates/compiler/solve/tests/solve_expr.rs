@@ -8115,4 +8115,40 @@ mod solve_expr {
             @"N#Bool.isEq(3) : N, N -[[#N_isEq(3)]]-> Bool"
         );
     }
+
+    #[test]
+    fn multiple_variables_bound_to_an_ability_from_type_def() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                F a : a | a has Hash & Eq & Decoding
+
+                main : F a -> F a
+                #^^^^{-1}
+                "#
+            ),
+            @"main : a -[[main(0)]]-> a | a has Hash & Decoding & Eq"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn rigid_able_bounds_are_superset_of_flex_bounds_admitted() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                f : x -> x | x has Hash
+                g : x -> x | x has Decoding & Encoding
+
+                main : x -> x | x has Hash & Decoding & Encoding
+                main = \x -> x |> f |> g
+                "#
+            ),
+            "x -> x | x has Hash & Encoding & Decoding",
+        );
+    }
 }

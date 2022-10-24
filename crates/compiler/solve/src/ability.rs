@@ -10,7 +10,8 @@ use roc_solve_problem::{
 };
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
+    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
+    Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
 use roc_unify::unify::{Env, MustImplementConstraints};
@@ -486,6 +487,7 @@ struct Descend(bool);
 
 trait DerivableVisitor {
     const ABILITY: Symbol;
+    const ABILITY_SLICE: SubsSlice<Symbol>;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
@@ -493,20 +495,8 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
-    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
+    fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
+        if abilities != [Self::ABILITY] {
             Err(NotDerivable {
                 var,
                 context: NotDerivableContext::NoContext,
@@ -636,7 +626,7 @@ trait DerivableVisitor {
             match *content {
                 FlexVar(opt_name) => {
                     // Promote the flex var to be bound to the ability.
-                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY_SLICE));
                 }
                 RigidVar(_) => {
                     return Err(NotDerivable {
@@ -644,8 +634,18 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
-                FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
-                RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
+                FlexAbleVar(opt_name, abilities) => {
+                    // This flex var inherits the ability.
+                    let merged_abilites = roc_unify::unify::merged_ability_slices(
+                        subs,
+                        abilities,
+                        Self::ABILITY_SLICE,
+                    );
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
+                }
+                RigidAbleVar(_, abilities) => {
+                    Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?
+                }
                 RecursionVar {
                     structure,
                     opt_name: _,
@@ -771,6 +771,7 @@ trait DerivableVisitor {
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_ENCODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -849,6 +850,7 @@ impl DerivableVisitor for DeriveEncoding {
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_DECODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -938,6 +940,7 @@ impl DerivableVisitor for DeriveDecoding {
 struct DeriveHash;
 impl DerivableVisitor for DeriveHash {
     const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_HASH;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -1027,6 +1030,7 @@ impl DerivableVisitor for DeriveHash {
 struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
     const ABILITY: Symbol = Symbol::BOOL_EQ;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
