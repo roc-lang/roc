@@ -13,13 +13,13 @@ interface Bool
 ## [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) floating point standard 
 ## specifies that two `NaN`s are not equal.
 Eq has
-    ## Returns `Bool.true` if the inputs values are are equal. This is 
+    ## Returns `Bool.true` if the input values are equal. This is 
     ## equivalent to the logic 
     ## [XNOR](https://en.wikipedia.org/wiki/Logical_equality) gate. The infix 
     ## operator `==` can be used as shorthand for `Bool.isEq`.
     ##
     ## **Note** that when `isEq` is determined by the Roc compiler, values are 
-    ## compared using structural equality. This relues for this are as follows:
+    ## compared using structural equality. The rules for this are as follows:
     ##
     ## 1. Tags are equal if their name and also contents are equal.
     ## 2. Records are equal if their fields are equal.
@@ -58,7 +58,7 @@ false = @Bool False
 ## **Performance Note** that in Roc the `&&` and `||` work the same way as any 
 ## other function. However, in some languages `&&` and `||` are special-cased.
 ## In these languages the compiler will skip evaluating the expression after the
-## first operator under certain circumstances. For example an expresion like
+## first operator under certain circumstances. For example an expression like
 ## `enablePets && likesDogs user` would compile to.
 ##
 ##     if enablePets then
@@ -82,7 +82,7 @@ and : Bool, Bool -> Bool
 ##     expect Bool.false || Bool.false == Bool.false
 ##
 ## **Performance Note** that in Roc the `&&` and `||` work the same way as any 
-## other function. However, in some languages `&&` and `||` are special-cased. 
+## other functions. However, in some languages `&&` and `||` are special-cased. 
 ## Refer to the note in `Bool.and` for more detail.
 or : Bool, Bool -> Bool
 
