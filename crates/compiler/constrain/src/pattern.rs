@@ -506,12 +506,12 @@ pub fn constrain_pattern(
             tag_name,
             arguments,
         } => {
-            let mut argument_types = Vec::with_capacity(arguments.len());
+            let argument_types = constraints.variable_slice(arguments.iter().map(|(var, _)| *var));
+
             for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
 
                 let pattern_type = Type::Variable(*pattern_var);
-                argument_types.push(pattern_type.clone());
 
                 let expected = PExpected::ForReason(
                     PReason::TagArg {
@@ -532,11 +532,12 @@ pub fn constrain_pattern(
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
+            let expected_type = constraints.push_type(expected.get_type_ref().clone());
 
             let whole_con = constraints.includes_tag(
-                expected.clone().get_type(),
+                expected_type,
                 tag_name.clone(),
-                argument_types.clone(),
+                argument_types,
                 pat_category.clone(),
                 region,
             );

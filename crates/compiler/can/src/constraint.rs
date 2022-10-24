@@ -336,25 +336,20 @@ impl Constraints {
         Constraint::IsOpenType(type_index)
     }
 
-    pub fn includes_tag<I>(
+    pub fn includes_tag(
         &mut self,
-        typ: Type,
+        type_index: TypeOrVar,
         tag_name: TagName,
-        types: I,
+        payloads: Slice<Variable>,
         category: PatternCategory,
         region: Region,
-    ) -> Constraint
-    where
-        I: IntoIterator<Item = Type>,
-    {
-        let type_index = Index::push_new(&mut self.types, Cell::new(typ));
+    ) -> Constraint {
         let category_index = Index::push_new(&mut self.pattern_categories, category);
-        let types_slice = Slice::extend_new(&mut self.types, types.into_iter().map(Cell::new));
 
         let includes_tag = IncludesTag {
             type_index,
             tag_name,
-            types: types_slice,
+            types: payloads,
             pattern_category: category_index,
             region,
         };
@@ -364,7 +359,7 @@ impl Constraints {
         Constraint::IncludesTag(includes_tag_index)
     }
 
-    fn variable_slice<I>(&mut self, it: I) -> Slice<Variable>
+    pub fn variable_slice<I>(&mut self, it: I) -> Slice<Variable>
     where
         I: IntoIterator<Item = Variable>,
     {
@@ -795,9 +790,9 @@ pub struct LetConstraint {
 
 #[derive(Debug, Clone)]
 pub struct IncludesTag {
-    pub type_index: TypeIndex,
+    pub type_index: TypeOrVar,
     pub tag_name: TagName,
-    pub types: Slice<Cell<Type>>,
+    pub types: Slice<Variable>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
 }

@@ -1323,40 +1323,29 @@ fn solve(
                     region,
                 } = includes_tag;
 
-                let typ_cell = &constraints.types[type_index.index()];
-                let tys_cells = &constraints.types[types.indices()];
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
-                let actual = type_cell_to_var(
+                let actual = either_type_index_to_var(
+                    constraints,
                     subs,
                     rank,
+                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
-                    pools,
                     aliases,
-                    typ_cell,
+                    *type_index,
                 );
 
-                let tys = {
-                    let mut tys = Vec::with_capacity(tys_cells.len());
-                    for cell in tys_cells {
-                        let actual = type_cell_to_var(
-                            subs,
-                            rank,
-                            problems,
-                            abilities_store,
-                            obligation_cache,
-                            pools,
-                            aliases,
-                            cell,
-                        );
-                        tys.push(Type::Variable(actual));
-                    }
-                    tys
-                };
+                let payload_types = constraints.variables[types.indices()]
+                    .into_iter()
+                    .map(|v| Type::Variable(*v))
+                    .collect();
 
-                let tag_ty = Type::TagUnion(vec![(tag_name.clone(), tys)], TypeExtension::Closed);
+                let tag_ty = Type::TagUnion(
+                    vec![(tag_name.clone(), payload_types)],
+                    TypeExtension::Closed,
+                );
                 let includes = type_to_var(
                     subs,
                     rank,
