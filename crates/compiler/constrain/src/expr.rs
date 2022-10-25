@@ -1826,14 +1826,15 @@ fn constrain_destructure_def(
                 resolutions_to_make: vec![],
             };
 
+            let signature_index = constraints.push_type(signature);
+
             let annotation_expected = FromAnnotation(
                 loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                // TODO coalesce with other signatures
-                constraints.push_type(signature.clone()),
+                signature_index,
             );
 
             // This will fill in inference variables in the `signature` as well, so that we can
@@ -1846,8 +1847,6 @@ fn constrain_destructure_def(
                 &loc_expr.value,
                 annotation_expected,
             );
-
-            let signature_index = constraints.push_type(signature);
 
             let cons = [
                 ret_constraint,
