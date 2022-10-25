@@ -1526,6 +1526,8 @@ fn solve(
                 );
 
                 let should_check_exhaustiveness;
+                let has_unification_error =
+                    !matches!(unify_cond_and_patterns_outcome, Success { .. });
                 match unify_cond_and_patterns_outcome {
                     Success {
                         vars,
@@ -1645,6 +1647,49 @@ fn solve(
 
                 if should_check_exhaustiveness {
                     use roc_can::exhaustive::{check, ExhaustiveSummary};
+
+                    // If the condition type likely comes from an positive-position value (e.g. a
+                    // literal or a return type), rather than an input position, we employ the
+                    // heuristic that the positive-position value would only need to be open if the
+                    // branches of the `when` constrained them as open. To avoid suggesting
+                    // catch-all branches, now mark the condition type as closed, so that we only
+                    // show the variants that explicitly not matched.
+                    //
+                    // We avoid this heuristic if the condition type likely comes from a negative
+                    // position, e.g. a function parameter, since in that case if the condition
+                    // type is open, we definitely want to show the catch-all branch as necessary.
+                    //
+                    // For example:
+                    //
+                    //   x : [A, B, C]
+                    //
+                    //   when x is
+                    //      A -> ..
+                    //      B -> ..
+                    //
+                    // This is checked as "almost equal" and hence exhaustiveness-checked with
+                    // [A, B] compared to [A, B, C]*. However, we really want to compare against
+                    // [A, B, C] (notice the closed union), so we optimistically close the
+                    // condition type here.
+                    //
+                    // On the other hand, in a case like
+                    //
+                    //   f : [A, B, C]* -> ..
+                    //   f = \x -> when x is
+                    //     A -> ..
+                    //     B -> ..
+                    //
+                    // we want to show `C` and/or `_` as necessary branches, so this heuristic is
+                    // not applied.
+                    //
+                    // In the above case, notice it would not be safe to apply this heuristic if
+                    // `C` was matched as well. Since the positive/negative value determination is
+                    // only an estimate, we also only apply this heursitic in the "almost equal"
+                    // case, when there was in fact a unification error.
+                    let cond_source_is_likely_positive_value = category_and_expected.is_ok();
+                    if cond_source_is_likely_positive_value && has_unification_error {
+                        close_pattern_matched_tag_unions(subs, real_var);
+                    }
 
                     let ExhaustiveSummary {
                         errors,
@@ -1812,6 +1857,57 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         // other than tag unions. Recursive tag unions are constructed
         // at a later time (during occurs checks after tag unions are
         // resolved), so that's not handled here either.
+    }
+}
+
+fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
+    let mut stack = vec![var];
+    while let Some(var) = stack.pop() {
+        use {Content::*, FlatType::*};
+
+        let desc = subs.get(var);
+        match desc.content {
+            Structure(TagUnion(tags, mut ext)) => {
+                // Close the extension, chasing it as far as it goes.
+                loop {
+                    match subs.get_content_without_compacting(ext) {
+                        Structure(FlatType::EmptyTagUnion) => {
+                            break;
+                        }
+                        FlexVar(..) | FlexAbleVar(..) => {
+                            subs.set_content_unchecked(ext, Structure(FlatType::EmptyTagUnion));
+                            break;
+                        }
+                        Structure(FlatType::TagUnion(_, deep_ext))
+                        | Structure(FlatType::RecursiveTagUnion(_, _, deep_ext)) => {
+                            ext = *deep_ext;
+                        }
+                        _ => internal_error!("not a tag union"),
+                    }
+                }
+
+                // Also open up all nested tag unions.
+                let all_vars = tags.variables().into_iter();
+                stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+            }
+
+            Structure(Record(fields, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Alias(_, _, real_var, _) => {
+                stack.push(real_var);
+            }
+
+            _ => {
+                // Everything else is not a type that can be opened/matched in a pattern match.
+            }
+        }
+
+        // Recursive tag unions are constructed at a later time
+        // (during occurs checks after tag unions are resolved),
+        // so that's not handled here.
     }
 }
 
