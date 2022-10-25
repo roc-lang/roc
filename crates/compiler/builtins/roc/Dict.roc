@@ -273,7 +273,7 @@ values = \@Dict list ->
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
-## both dictionaries will be combined. Note that where there are pairs 
+## both dictionaries will be combined. Note that where there are pairs
 ## with the same key, the value contained in the first input will be
 ## retained, and the value in the second input will be removed.
 ##
@@ -313,13 +313,12 @@ insertAll = \xs, @Dict ys ->
 ##         |> Dict.insert 2 "And Me"
 ##         |> Dict.insert 3 "But Not Me"
 ##         |> Dict.insert 4 "Or Me"
-expect Dict.keepShared first second == first
-
 keepShared : Dict k v, Dict k v -> Dict k v | k has Eq
 keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
     |> @Dict
 
+expect Dict.keepShared first second == first
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those pairs that
