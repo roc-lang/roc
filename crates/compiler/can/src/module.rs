@@ -1,5 +1,5 @@
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
-use crate::annotation::canonicalize_annotation;
+use crate::annotation::{canonicalize_annotation, ValueAnnotation};
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
@@ -442,6 +442,7 @@ pub fn canonicalize_module_defs<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
+                ValueAnnotation(true),
             );
 
             ann.add_to(

@@ -7,6 +7,7 @@ use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
+use crate::annotation::ValueAnnotation;
 use crate::derive;
 use crate::env::Env;
 use crate::expr::AccessorData;
@@ -327,6 +328,7 @@ fn canonicalize_alias<'a>(
         ann.region,
         var_store,
         pending_abilities_in_scope,
+        ValueAnnotation(false),
     );
 
     // Record all the annotation's references in output.references.lookups
@@ -1329,6 +1331,7 @@ fn resolve_abilities<'a>(
                 typ.region,
                 var_store,
                 pending_abilities_in_scope,
+                ValueAnnotation(true),
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -1996,6 +1999,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
+                ValueAnnotation(true),
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -2095,6 +2099,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
+                ValueAnnotation(true),
             );
 
             // Record all the annotation's references in output.references.lookups

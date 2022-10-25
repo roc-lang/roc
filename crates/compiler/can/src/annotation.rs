@@ -260,14 +260,18 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
+/// Is an annotation on a value, or a value prototype (ability member)?
+pub(crate) struct ValueAnnotation(pub bool);
+
 /// Canonicalizes a top-level type annotation.
-pub fn canonicalize_annotation(
+pub(crate) fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
     annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
+    value_annotation: ValueAnnotation,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -301,8 +305,18 @@ pub fn canonicalize_annotation(
         annot => (annot, region),
     };
 
+    let pol = if value_annotation.0 {
+        // Values always have positive polarity.
+        CanPolarity::Pos
+    } else {
+        // This is an annotation for an alias or opaque type; the polarity can only be determined
+        // contextually.
+        CanPolarity::Disregard
+    };
+
     let typ = can_annotation_help(
         env,
+        pol,
         annotation,
         region,
         scope,
@@ -317,6 +331,30 @@ pub fn canonicalize_annotation(
         introduced_variables,
         references,
         aliases,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CanPolarity {
+    /// Polarity should be disregarded for now; relevant in aliaes + opaques.
+    Disregard,
+    Neg,
+    Pos,
+}
+
+impl CanPolarity {
+    fn set_neg(self) -> Self {
+        match self {
+            CanPolarity::Disregard => CanPolarity::Disregard,
+            CanPolarity::Neg | CanPolarity::Pos => CanPolarity::Neg,
+        }
+    }
+
+    fn set_pos(self) -> Self {
+        match self {
+            CanPolarity::Disregard => CanPolarity::Disregard,
+            CanPolarity::Neg | CanPolarity::Pos => CanPolarity::Pos,
+        }
     }
 }
 
@@ -472,6 +510,7 @@ fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase 
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
+    pol: CanPolarity,
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
     scope: &mut Scope,
@@ -489,6 +528,7 @@ fn can_annotation_help(
             for arg in *argument_types {
                 let arg_ann = can_annotation_help(
                     env,
+                    pol.set_neg(),
                     &arg.value,
                     arg.region,
                     scope,
@@ -503,6 +543,7 @@ fn can_annotation_help(
 
             let ret = can_annotation_help(
                 env,
+                pol.set_pos(),
                 &return_type.value,
                 return_type.region,
                 scope,
@@ -550,6 +591,7 @@ fn can_annotation_help(
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(
                     env,
+                    pol,
                     &arg.value,
                     arg.region,
                     scope,
@@ -649,6 +691,7 @@ fn can_annotation_help(
 
             let inner_type = can_annotation_help(
                 env,
+                CanPolarity::Disregard,
                 &loc_inner.value,
                 region,
                 scope,
@@ -783,6 +826,7 @@ fn can_annotation_help(
         Record { fields, ext } => {
             let ext_type = can_extension_type(
                 env,
+                pol,
                 scope,
                 var_store,
                 introduced_variables,
@@ -806,6 +850,7 @@ fn can_annotation_help(
             } else {
                 let field_types = can_assigned_fields(
                     env,
+                    pol,
                     &fields.items,
                     region,
                     scope,
@@ -821,6 +866,7 @@ fn can_annotation_help(
         TagUnion { tags, ext, .. } => {
             let ext_type = can_extension_type(
                 env,
+                pol,
                 scope,
                 var_store,
                 introduced_variables,
@@ -844,6 +890,7 @@ fn can_annotation_help(
             } else {
                 let mut tag_types = can_tags(
                     env,
+                    pol,
                     tags.items,
                     region,
                     scope,
@@ -863,6 +910,7 @@ fn can_annotation_help(
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
             env,
+            pol,
             nested,
             region,
             scope,
@@ -989,6 +1037,7 @@ fn canonicalize_has_clause(
 #[allow(clippy::too_many_arguments)]
 fn can_extension_type<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
@@ -1013,15 +1062,16 @@ fn can_extension_type<'a>(
 
     use roc_problem::can::ExtensionTypeKind;
 
-    let (empty_ext_type, valid_extension_type): (_, fn(&Type) -> bool) = match ext_problem_kind {
-        ExtensionTypeKind::Record => (Type::EmptyRec, valid_record_ext_type),
-        ExtensionTypeKind::TagUnion => (Type::EmptyTagUnion, valid_tag_ext_type),
+    let valid_extension_type: fn(&Type) -> bool = match ext_problem_kind {
+        ExtensionTypeKind::Record => valid_record_ext_type,
+        ExtensionTypeKind::TagUnion => valid_tag_ext_type,
     };
 
     match opt_ext {
         Some(loc_ann) => {
             let ext_type = can_annotation_help(
                 env,
+                pol,
                 &loc_ann.value,
                 loc_ann.region,
                 scope,
@@ -1050,7 +1100,22 @@ fn can_extension_type<'a>(
                 Type::Variable(var)
             }
         }
-        None => empty_ext_type,
+        None => match ext_problem_kind {
+            ExtensionTypeKind::Record => Type::EmptyRec,
+            ExtensionTypeKind::TagUnion => {
+                // In negative positions a missing extension variable forces a closed tag union;
+                // otherwise, open-in-output-position means we give the tag an inference variable.
+                match pol {
+                    CanPolarity::Neg | CanPolarity::Disregard => Type::EmptyTagUnion,
+                    CanPolarity::Pos => {
+                        let var = var_store.fresh();
+                        introduced_variables.insert_inferred(Loc::at_zero(var));
+
+                        Type::Variable(var)
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -1180,6 +1245,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn can_assigned_fields<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     fields: &&[Loc<AssignedField<'a, TypeAnnotation<'a>>>],
     region: Region,
     scope: &mut Scope,
@@ -1209,6 +1275,7 @@ fn can_assigned_fields<'a>(
                 RequiredValue(field_name, _, annotation) => {
                     let field_type = can_annotation_help(
                         env,
+                        pol,
                         &annotation.value,
                         annotation.region,
                         scope,
@@ -1226,6 +1293,7 @@ fn can_assigned_fields<'a>(
                 OptionalValue(field_name, _, annotation) => {
                     let field_type = can_annotation_help(
                         env,
+                        pol,
                         &annotation.value,
                         annotation.region,
                         scope,
@@ -1293,6 +1361,7 @@ fn can_assigned_fields<'a>(
 #[allow(clippy::too_many_arguments)]
 fn can_tags<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     tags: &'a [Loc<Tag<'a>>],
     region: Region,
     scope: &mut Scope,
@@ -1322,6 +1391,7 @@ fn can_tags<'a>(
                     for arg in args.iter() {
                         let ann = can_annotation_help(
                             env,
+                            pol,
                             &arg.value,
                             arg.region,
                             scope,
