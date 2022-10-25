@@ -333,6 +333,36 @@ impl OptAbleType {
     }
 }
 
+/// Polarity of a type, or roughly, what side of an arrow it appears on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Polarity {
+    /// A type that appears in negative/input position
+    Neg,
+    /// A type that appears in positive/output position
+    Pos,
+}
+
+impl std::ops::Neg for Polarity {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        match self {
+            Polarity::Neg => todo!(),
+            Polarity::Pos => todo!(),
+        }
+    }
+}
+
+impl Polarity {
+    pub fn is_neg(&self) -> bool {
+        matches!(self, Self::Neg)
+    }
+
+    pub fn is_pos(&self) -> bool {
+        matches!(self, Self::Pos)
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum Type {
     EmptyRec,

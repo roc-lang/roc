@@ -316,6 +316,7 @@ mod solve_expr {
                 DebugPrint {
                     print_lambda_sets: true,
                     print_only_under_alias: options.print_only_under_alias,
+                    ignore_polarity: true,
                 },
             );
             subs.rollback_to(snapshot);
@@ -844,7 +845,7 @@ mod solve_expr {
                 List.map ["a", "b"] \elem -> Foo elem
                 "#
             ),
-            "List [Foo Str]*",
+            "List [Foo Str]",
         )
     }
 
@@ -859,7 +860,7 @@ mod solve_expr {
                 foo "hi"
                 "#
             ),
-            "[Foo Str]*",
+            "[Foo Str]",
         )
     }
 
@@ -872,7 +873,7 @@ mod solve_expr {
                 List.map ["a", "b"] Foo
                 "#
             ),
-            "List [Foo Str]*",
+            "List [Foo Str]",
         )
     }
 
@@ -885,7 +886,7 @@ mod solve_expr {
                 [\x -> Bar x, Foo]
                 "#
             ),
-            "List (a -> [Bar a, Foo a]*)",
+            "List (a -> [Bar a, Foo a])",
         )
     }
 
@@ -898,7 +899,7 @@ mod solve_expr {
                 [Foo, \x -> Bar x]
                 "#
             ),
-            "List (a -> [Bar a, Foo a]*)",
+            "List (a -> [Bar a, Foo a])",
         )
     }
 
@@ -917,7 +918,7 @@ mod solve_expr {
                 }
                 "#
             ),
-            "{ x : List [Foo]*, y : List (a -> [Foo a]*), z : List (b, c -> [Foo b c]*) }",
+            "{ x : List [Foo], y : List (a -> [Foo a]), z : List (b, c -> [Foo b c]) }",
         )
     }
 
@@ -1572,7 +1573,7 @@ mod solve_expr {
                     Foo
                 "#
             ),
-            "[Foo]*",
+            "[Foo]",
         );
     }
 
@@ -1611,7 +1612,7 @@ mod solve_expr {
                     Foo "happy" 12
                 "#
             ),
-            "[Foo Str (Num *)]*",
+            "[Foo Str (Num *)]",
         );
     }
 
@@ -1652,7 +1653,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[Foo a] -> [Foo a]*",
+            "[Foo a] -> [Foo a]",
         );
     }
 
@@ -1664,7 +1665,7 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[Foo a *] -> [Foo a Str]*",
+            "[Foo a *] -> [Foo a Str]",
         );
     }
 
@@ -2672,7 +2673,7 @@ mod solve_expr {
                    fromBit
                 "#
             ),
-            "Num * -> [False, True]*",
+            "Num * -> [False, True]",
         );
     }
 
@@ -2899,7 +2900,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil]* as d",
+            "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil] as d",
         );
     }
 
@@ -3160,7 +3161,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[S a, Z] as a -> [S b, Z]* as b",
+            "[S a, Z] as a -> [S b, Z] as b",
         );
     }
 
@@ -3179,7 +3180,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[S a, Z] as a -> [S b, Z]* as b",
+            "[S a, Z] as a -> [S b, Z] as b",
         );
     }
 
@@ -3250,7 +3251,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil]* as d",
+            "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
         );
     }
 
@@ -3317,7 +3318,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e]*, Nil]* as e",
+            "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e], Nil] as e",
         );
     }
 
@@ -4248,10 +4249,10 @@ mod solve_expr {
                         Foo Bar 1
                 "#
             ),
-            "[Foo [Bar]* (Num *)]*",
+            "[Foo [Bar] (Num *)]",
         );
 
-        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar]* (Num *)]*");
+        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar] (Num *)]");
     }
 
     #[test]
@@ -4979,7 +4980,7 @@ mod solve_expr {
                 canIGo
                 "#
             ),
-            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]*",
+            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]",
         )
     }
 
@@ -5106,7 +5107,7 @@ mod solve_expr {
                        B -> Y
                  "#
             ),
-            "[A, B] -> [X, Y]*",
+            "[A, B] -> [X, Y]",
         )
     }
 
@@ -5122,7 +5123,7 @@ mod solve_expr {
                        _ -> Z
                  "#
             ),
-            "[A, B]* -> [X, Y, Z]*",
+            "[A, B]* -> [X, Y, Z]",
         )
     }
 
@@ -5137,7 +5138,7 @@ mod solve_expr {
                        A N -> Y
                  "#
             ),
-            "[A [M, N]] -> [X, Y]*",
+            "[A [M, N]] -> [X, Y]",
         )
     }
 
@@ -5153,7 +5154,7 @@ mod solve_expr {
                        A _ -> Z
                  "#
             ),
-            "[A [M, N]*] -> [X, Y, Z]*",
+            "[A [M, N]*] -> [X, Y, Z]",
         )
     }
 
@@ -5168,7 +5169,7 @@ mod solve_expr {
                        A (N K) -> X
                  "#
             ),
-            "[A [M [J], N [K]]] -> [X]*",
+            "[A [M [J], N [K]]] -> [X]",
         )
     }
 
@@ -5184,7 +5185,7 @@ mod solve_expr {
                        A N -> X
                  "#
             ),
-            "[A [M, N], B] -> [X]*",
+            "[A [M, N], B] -> [X]",
         )
     }
 
@@ -5199,9 +5200,6 @@ mod solve_expr {
                          t -> t
                  "#
             ),
-            // TODO: we could be a bit smarter by subtracting "A" as a possible
-            // tag in the union known by t, which would yield the principal type
-            // [A,]a -> [X]a
             "[A, X]a -> [A, X]a",
         )
     }
@@ -5528,7 +5526,7 @@ mod solve_expr {
                     Job lst s -> P lst s
                 "#
             ),
-            "[P (List ([Job (List a) Str] as a)) Str]*",
+            "[P (List ([Job (List a) Str] as a)) Str]",
         )
     }
 
@@ -5646,7 +5644,7 @@ mod solve_expr {
                 else @Id (Id 21 (Z "felix"))
                 "#
             ),
-            r#"Id [Y Str, Z Str]*"#,
+            r#"Id [Y Str, Z Str]"#,
         )
     }
 
@@ -5933,7 +5931,7 @@ mod solve_expr {
                 if Bool.true then List.first [] else Str.toI64 ""
                 "#
             ),
-            "Result I64 [InvalidNumStr, ListWasEmpty]*",
+            "Result I64 [InvalidNumStr, ListWasEmpty]",
         )
     }
 
@@ -7853,7 +7851,7 @@ mod solve_expr {
                 g ""
                 "#
             ),
-            "[A Str, B Str]*",
+            "[A Str, B Str]",
         );
     }
 

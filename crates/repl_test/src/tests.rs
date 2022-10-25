@@ -144,26 +144,26 @@ fn bool_false() {
 
 #[test]
 fn arbitrary_tag_unions() {
-    expect_success("if 1 == 1 then Red else Green", "Red : [Green, Red]*");
-    expect_success("if 1 != 1 then Red else Green", "Green : [Green, Red]*");
+    expect_success("if 1 == 1 then Red else Green", "Red : [Green, Red]");
+    expect_success("if 1 != 1 then Red else Green", "Green : [Green, Red]");
 }
 
 #[test]
 fn tag_without_arguments() {
-    expect_success("True", "True : [True]*");
-    expect_success("False", "False : [False]*");
+    expect_success("True", "True : [True]");
+    expect_success("False", "False : [False]");
 }
 
 #[test]
 fn byte_tag_union() {
     expect_success(
         "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
-        "Red : [Blue, Green, Red]*",
+        "Red : [Blue, Green, Red]",
     );
 
     expect_success(
         "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
-        "{ y: { x: Red } } : { y : { x : [Blue, Green, Red]* } }",
+        "{ y: { x: Red } } : { y : { x : [Blue, Green, Red] } }",
     );
 }
 
@@ -171,24 +171,24 @@ fn byte_tag_union() {
 fn tag_in_record() {
     expect_success(
         "{ x: Foo 1 2 3, y : 4 }",
-        "{ x: Foo 1 2 3, y: 4 } : { x : [Foo (Num *) (Num *) (Num *)]*, y : Num * }",
+        "{ x: Foo 1 2 3, y: 4 } : { x : [Foo (Num *) (Num *) (Num *)], y : Num * }",
     );
     expect_success(
         "{ x: Foo 1 2 3 }",
-        "{ x: Foo 1 2 3 } : { x : [Foo (Num *) (Num *) (Num *)]* }",
+        "{ x: Foo 1 2 3 } : { x : [Foo (Num *) (Num *) (Num *)] }",
     );
-    expect_success("{ x: Unit }", "{ x: Unit } : { x : [Unit]* }");
+    expect_success("{ x: Unit }", "{ x: Unit } : { x : [Unit] }");
 }
 
 #[test]
 fn single_element_tag_union() {
-    expect_success("True 1", "True 1 : [True (Num *)]*");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]*");
+    expect_success("True 1", "True 1 : [True (Num *)]");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]");
 }
 
 #[test]
 fn newtype_of_unit() {
-    expect_success("Foo Bar", "Foo Bar : [Foo [Bar]*]*");
+    expect_success("Foo Bar", "Foo Bar : [Foo [Bar]]");
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn newtype_of_big_data() {
                 A lefty
                 "#
         ),
-        r#"A (Left "loosey") : [A (Either Str Str)]*"#,
+        r#"A (Left "loosey") : [A (Either Str Str)]"#,
     )
 }
 
@@ -217,7 +217,7 @@ fn newtype_nested() {
                 A (B (C lefty))
                 "#
         ),
-        r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]*]*]*"#,
+        r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]]]"#,
     )
 }
 
@@ -232,17 +232,17 @@ fn newtype_of_big_of_newtype() {
                 A big
                 "#
         ),
-        r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]*"#,
+        r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]"#,
     )
 }
 
 #[test]
 fn tag_with_arguments() {
-    expect_success("True 1", "True 1 : [True (Num *)]*");
+    expect_success("True 1", "True 1 : [True (Num *)]");
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [False (Float *), True (Num *)]*",
+        "True 3 : [False (Float *), True (Num *)]",
     )
 }
 
@@ -886,7 +886,7 @@ fn function_in_unwrapped_record() {
 fn function_in_tag() {
     expect_success(
         r#"Adder (\x -> x + 1)"#,
-        r#"Adder <function> : [Adder (Num a -> Num a)]*"#,
+        r#"Adder <function> : [Adder (Num a -> Num a)]"#,
     )
 }
 
@@ -894,7 +894,7 @@ fn function_in_tag() {
 fn newtype_of_record_of_tag_of_record_of_tag() {
     expect_success(
         r#"A {b: C {d: 1}}"#,
-        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }]* }]*"#,
+        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]"#,
     )
 }
 
@@ -1089,7 +1089,7 @@ fn opaque_pattern_and_call() {
             f (@F (Package A {}))
             "#
         ),
-        r#"@F (Package {} A) : F {} [A]*"#,
+        r#"@F (Package {} A) : F {} [A]"#,
     )
 }
 

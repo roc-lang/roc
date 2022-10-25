@@ -291,6 +291,7 @@ fn assemble_derived_golden(
             DebugPrint {
                 print_lambda_sets: true,
                 print_only_under_alias,
+                ..DebugPrint::NOTHING
             },
         );
         subs.rollback_to(snapshot);

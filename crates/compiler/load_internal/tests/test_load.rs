@@ -229,10 +229,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
         .unwrap_or_default()
         .is_empty());
 
-    let debug_print = DebugPrint {
-        print_lambda_sets: false,
-        print_only_under_alias: false,
-    };
+    let debug_print = DebugPrint::NOTHING;
 
     let interns = &loaded_module.interns;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
