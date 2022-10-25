@@ -3747,7 +3747,6 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.20",
  "iced-x86",
  "indoc",
  "libc",
