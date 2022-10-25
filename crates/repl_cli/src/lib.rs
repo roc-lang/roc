@@ -463,7 +463,7 @@ pub fn main() -> io::Result<()> {
                     }
                     ":help" => {
                         // TODO add link to repl tutorial(does not yet exist).
-                        println!("{}", TIPS);
+                        print!("\n{}", TIPS);
                     }
                     ":exit" | ":quit" | ":q" => {
                         break;
