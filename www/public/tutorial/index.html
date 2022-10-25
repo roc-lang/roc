@@ -1,0 +1,1682 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+
+  <title>Roc Tutorial</title>
+  <meta name="description" content="Learn how to use the Roc programming language.">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" href="/site.css">
+  <link rel="icon" href="/favicon.svg">
+</head>
+
+<body>
+<h1>Tutorial</h1>
+
+<p>Welcome to Roc!</p>
+
+<p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and optionally annotate your types.</p>
+
+<h2 id="installation">Installation</h2>
+
+<p>Roc doesn't have a numbered release yet, but you can download a nightly release of the
+    <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
+    (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
+    be sure to add <code>roc</code> to your <code>PATH</code> (here's how to do that on
+    <a href="https://medium.com/codex/adding-executable-program-commands-to-the-path-variable-5e45f1bdf6ce">Mac or Linux</a>,
+    and <a href="https://medium.com/@kevinmarkvi/how-to-add-executables-to-your-path-in-windows-5ffa4ce61a53">on Windows</a>).
+</p>
+
+<p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information. If you get stuck, there are plenty of people happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"><code>#beginners</code> stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
+
+<h2 id="strings-and-numbers">Strings and Numbers</h2>
+
+<p>Let's start by getting acquainted with Roc's <i>Read Eval Print Loop</i>, or REPL for
+short.</p>
+
+<p>Run this in a terminal:</p>
+<code class="snippet">roc repl</code>
+<p>If Roc is <a href="#installation">installed</a>, you should see this:</p>
+<samp>The rockin’ roc repl</samp>
+<p>So far, so good!</p>
+<h3 id="hello-world">Hello, World!</h3>
+<p>Try typing this at the REPL prompt and pressing enter:</p>
+<code class="snippet">"Hello, World!"</code>
+<p>The REPL should cheerfully display the following:</p>
+<samp>"Hello, World!" <span class="ann">:</span> Str</span></samp>
+<p>Congratulations! You&#39;ve just written your first Roc code!</p>
+<h3 id="arithmetic">Arithmetic</h3>
+<p>When you entered the <em>expression</em> <code>&quot;Hello, World!&quot;</code> into the REPL,
+the REPL printed it back out. It also printed <code><span class="ann">:</span> Str</code>, because
+<code>Str</code> is the expression's type. We'll talk about types later; for now, let's ignore
+the <code><span class="ann">:</span></code> and whatever comes after it whenever the REPL prints them.</p>
+<p>Next let's try putting in a more complicated expression:</p>
+<samp>1 + 1
+
+2 <span class="ann">:</span> Num *</samp>
+<p>According to the Roc REPL, one plus one equals two. Sounds right!</p>
+<p>Roc will respect <a href="https://en.wikipedia.org/wiki/Order_of_operations">order of operations</a> when using multiple arithmetic operators
+like <code>+</code> and <code>-</code>, but you can use parentheses to specify exactly how they should
+be grouped.</p>
+<samp>1 + 2 * (3 - 4)
+
+-1 <span class="ann">:</span> Num *</samp>
+<h3 id="functions">Functions</h3>
+<p>Let&#39;s try calling a function:</p>
+<pre><code class="lang-coffee"><span class="hljs-meta">&gt;&gt;</span> Str.concat <span class="hljs-string">"Hi "</span> <span class="hljs-string">"there!"</span>
+<span class="hljs-string">"Hi there!"</span> : Str
+</code></pre>
+<p>In this expression, we&#39;re calling the <code>Str.concat</code> function
+passing two arguments: the string <code>&quot;Hi &quot;</code> and the string <code>&quot;there!&quot;</code>. The
+<code>Str.concat</code> function <em>concatenates</em> two strings together (that is, it puts
+one after the other) and returns the resulting combined string of
+<code>&quot;Hi there!&quot;</code>.</p>
+<p>Note that in Roc, we don&#39;t need parentheses or commas to call functions.
+We don&#39;t write <code>Str.concat(&quot;Hi &quot;, &quot;there!&quot;)</code> but rather <code>Str.concat &quot;Hi &quot; &quot;there!&quot;</code>.</p>
+<p>Just like in the arithmetic example above, we can use parentheses to specify
+how nested function calls should work. For example, we could write this:</p>
+<pre><code class="lang-coffee">&gt;&gt; Str<span class="hljs-selector-class">.concat</span> <span class="hljs-string">"Birds: "</span> (Num<span class="hljs-selector-class">.toStr</span> <span class="hljs-number">42</span>)
+<span class="hljs-string">"Birds: 42"</span> : Str
+</code></pre>
+<p>This calls <code>Num.toStr</code> on the number <code>42</code>, which converts it into the string
+<code>&quot;42&quot;</code>, and then passes that string as the second argument to <code>Str.concat</code>.
+The parentheses are important here to specify how the function calls nest!
+Try removing them, and see what happens:</p>
+<pre><code class="lang-coffee">&gt;&gt; Str<span class="hljs-selector-class">.concat</span> <span class="hljs-string">"Birds: "</span> Num<span class="hljs-selector-class">.toStr</span> <span class="hljs-number">42</span>
+&lt;error&gt;
+</code></pre>
+<p>This error message says that we&#39;ve given <code>Str.concat</code> too many arguments.
+Indeed we have! We&#39;ve passed it three arguments: the string <code>&quot;Birds&quot;</code>, the
+function <code>Num.toStr</code>, and the number <code>42</code>. That&#39;s not what we wanted to do.
+Putting parentheses around the <code>Num.toStr 42</code> call clarifies that we want it
+to be evaluated as its own expression, rather than being two arguments to
+<code>Str.concat</code>.</p>
+<p>Both the <code>Str.concat</code> function and the <code>Num.toStr</code> function have a <code>.</code> in
+their names. In <code>Str.concat</code>, <code>Str</code> is the name of a <em>module</em>, and <code>concat</code>
+is the name of a function inside that module. Similarly, <code>Num</code> is a different
+module, and <code>toStr</code> is a function inside that module.</p>
+<p>We&#39;ll get into more depth about modules later, but for now you can think of
+a module as a named collection of functions. It&#39;ll be awhile before we want
+to use them for more than that anyway!</p>
+<h2 id="building-an-application">Building an Application</h2>
+<p>Let&#39;s move out of the REPL and create our first Roc application.</p>
+<p>Create a new file called <code>Hello.roc</code> and put this inside it:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">app</span> <span class="hljs-string">"hello"</span>
+    packages { pf: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+    imports [pf.Stdout, pf.<span class="hljs-keyword">Program</span>]
+    provides [main] to pf
+
+main = Stdout.<span class="hljs-keyword">line</span> <span class="hljs-string">"I'm a Roc application!"</span> |&gt; <span class="hljs-keyword">Program</span>.quick
+</code></pre>
+<blockquote>
+<p><strong>NOTE:</strong> This assumes you&#39;ve put Hello.roc in the root directory of the Roc
+source code. If you&#39;d like to put it somewhere else, you&#39;ll need to replace
+<code>&quot;examples/cli/cli-platform/main.roc&quot;</code> with the path to the
+<code>examples/cli/cli-platform/main.roc</code> file in that source code. In the future,
+Roc will have the tutorial built in, and this aside will no longer be
+necessary!</p>
+</blockquote>
+<p>Try running this with:</p>
+<pre><code class="lang-sh"><span class="hljs-variable">$ </span>roc Hello.roc
+</code></pre>
+<p>You should see this:</p>
+<pre><code class="lang-sh">I<span class="hljs-comment">'m a Roc application!</span>
+</code></pre>
+<p>Congratulations - you&#39;ve now written your first Roc application! We&#39;ll go over what the parts of
+this file above <code>main</code> do later, but first let&#39;s play around a bit.
+Try replacing the <code>main</code> line with this:</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">main</span> = Stdout.line <span class="hljs-string">"There are \(total) animals."</span> |&gt; Program.quick
+
+<span class="hljs-attr">birds</span> = <span class="hljs-number">3</span>
+
+<span class="hljs-attr">iguanas</span> = <span class="hljs-number">2</span>
+
+<span class="hljs-attr">total</span> = Num.toStr (birds + iguanas)
+</code></pre>
+<p>Now if you run <code>roc Hello.roc</code>, you should see this:</p>
+<pre><code class="lang-sh">There are <span class="hljs-number">5</span> animals.
+</code></pre>
+<p><code>Hello.roc</code> now has four definitions - or <em>defs</em> for
+short - namely, <code>main</code>, <code>birds</code>, <code>iguanas</code>, and <code>total</code>.</p>
+<p>A definition names an expression.</p>
+<ul>
+<li>The first def assigns the name <code>main</code> to the expression <code>Stdout.line &quot;There are \(total) animals.&quot; |&gt; Program.quick</code>.  The <code>Stdout.line</code> function takes a string and prints it as a line to [<code>stdout</code>] (the terminal&#39;s standard output device). Then <code>Program.quick</code> wrap this expression into an executable Roc program.</li>
+<li>The next two defs assign the names <code>birds</code> and <code>iguanas</code> to the expressions <code>3</code> and <code>2</code>.</li>
+<li>The last def assigns the name <code>total</code> to the expression <code>Num.toStr (birds + iguanas)</code>.</li>
+</ul>
+<p>Once we have a def, we can use its name in other expressions.
+For example, the <code>total</code> expression refers to <code>birds</code> and <code>iguanas</code>.</p>
+<p>We can also refer to defs inside strings using <em>string interpolation</em>. The
+string <code>&quot;There are \(total) animals.&quot;</code> evaluates to the same thing as calling
+<code>Str.concat &quot;There are &quot; (Str.concat total &quot; animals.&quot;)</code> directly.</p>
+<p>You can name a def using any combination of letters and numbers, but they have
+to start with a letter. Note that definitions are constant; once we&#39;ve assigned
+a name to an expression, we can&#39;t reassign it! We&#39;d get an error if we wrote this:</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">birds</span> = <span class="hljs-number">3</span>
+
+<span class="hljs-attr">birds</span> = <span class="hljs-number">2</span>
+</code></pre>
+<p>Order of defs doesn&#39;t matter. We defined <code>birds</code> and <code>iguanas</code> before
+<code>total</code> (which uses both of them), but we defined <code>main</code> before <code>total</code> even though
+it uses <code>total</code>. If you like, you can change the order of these defs to anything
+you like, and everything will still work the same way!</p>
+<p>This works because Roc expressions don&#39;t have <em>side effects</em>. We&#39;ll talk more
+about side effects later.</p>
+<h2 id="functions-and-if-">Functions and <code>if</code></h2>
+<p>So far we&#39;ve called functions like <code>Num.toStr</code>, <code>Str.concat</code>, and <code>Stdout.line</code>.
+Next let&#39;s try defining a function of our own.</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">main</span> = Stdout.line <span class="hljs-string">"There are \(total) animals."</span> |&gt; Program.quick
+
+<span class="hljs-attr">birds</span> = <span class="hljs-number">3</span>
+
+<span class="hljs-attr">iguanas</span> = <span class="hljs-number">2</span>
+
+<span class="hljs-attr">total</span> = addAndStringify birds iguanas
+
+<span class="hljs-attr">addAndStringify</span> = \num1, num2 -&gt;
+    Num.toStr (num1 + num2)
+</code></pre>
+<p>This new <code>addAndStringify</code> function we&#39;ve defined takes two numbers, adds them,
+calls <code>Num.toStr</code> on the result, and returns that. The <code>\num1, num2 -&gt;</code> syntax
+defines a function&#39;s arguments, and the expression after the <code>-&gt;</code> is the body
+of the function. The expression at the end of the body (<code>Num.toStr (num1 + num2)</code>
+in this case) is returned automatically.</p>
+<p>Let&#39;s modify the function to return an empty string if the numbers add to zero.</p>
+<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
+    <span class="hljs-built_in">sum</span> = num1 + num2
+
+    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        <span class="hljs-string">""</span>
+    <span class="hljs-keyword">else</span>
+        Num.toStr <span class="hljs-built_in">sum</span>
+</code></pre>
+<p>We did two things here:</p>
+<ul>
+<li>We introduced a local def named <code>sum</code>, and set it equal to <code>num1 + num2</code>. Because we defined <code>sum</code> inside <code>addAndStringify</code>, it will not be accessible outside that function.</li>
+<li>We added an <code>if</code> / <code>then</code> / <code>else</code> conditional to return either <code>&quot;&quot;</code> or <code>Num.toStr sum</code> depending on whether <code>sum == 0</code>.</li>
+</ul>
+<p>Of note, we couldn&#39;t have done <code>total = num1 + num2</code> because that would be
+redefining <code>total</code> in the global scope, and defs can&#39;t be redefined. (However, we could use the name
+<code>sum</code> for a def in a different function, because then they&#39;d be in completely
+different scopes and wouldn&#39;t affect each other.)</p>
+<p>Also note that every <code>if</code> must be accompanied by both <code>then</code> and also <code>else</code>.
+Having an <code>if</code> without an <code>else</code> is an error, because in Roc, everything is
+an expression - which means it must evaluate to a value. If there were ever an
+<code>if</code> without an <code>else</code>, that would be an expression that might not evaluate to
+a value!</p>
+<p>We can combine <code>if</code> and <code>else</code> to get <code>else if</code>, like so:</p>
+<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
+    <span class="hljs-built_in">sum</span> = num1 + num2
+
+    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        <span class="hljs-string">""</span>
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> &lt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        <span class="hljs-string">"negative"</span>
+    <span class="hljs-keyword">else</span>
+        Num.toStr <span class="hljs-built_in">sum</span>
+</code></pre>
+<p>Note that <code>else if</code> is not a separate language keyword! It&#39;s just an <code>if</code>/<code>else</code> where
+the <code>else</code> branch contains another <code>if</code>/<code>else</code>. This is easier to see with different indentation:</p>
+<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
+    <span class="hljs-built_in">sum</span> = num1 + num2
+
+    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        <span class="hljs-string">""</span>
+    <span class="hljs-keyword">else</span>
+        <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> &lt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+            <span class="hljs-string">"negative"</span>
+        <span class="hljs-keyword">else</span>
+            Num.toStr <span class="hljs-built_in">sum</span>
+</code></pre>
+<p>This code is equivalent to writing <code>else if sum &lt; 0 then</code> on one line, although the stylistic
+convention is to write <code>else if</code> on the same line.</p>
+<blockquote>
+<p><em>Note</em>: In Roc, <code>if</code> conditions must always be booleans. (Roc doesn&#39;t have a concept of &quot;truthiness,&quot;
+so the compiler will report an error for conditionals like <code>if 1 then</code> or <code>if &quot;true&quot; then</code>.)</p>
+</blockquote>
+<h2 id="records">Records</h2>
+<p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
+it take one argument like so:</p>
+<pre><code class="lang-coffee">total = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">5</span>, iguanas: <span class="hljs-number">7</span> }
+
+<span class="hljs-keyword">addAndStringify </span>= \<span class="hljs-keyword">counts </span>-&gt;
+    Num.toStr (<span class="hljs-keyword">counts.birds </span>+ <span class="hljs-keyword">counts.iguanas)</span>
+</code></pre>
+<p>The function now takes a <em>record</em>, which is a group of values that travel together.
+Records are not objects; they don&#39;t have methods or inheritance, they just store values.</p>
+<p>We create the record when we write <code>{ birds: 5, iguanas: 7 }</code>. This defines
+a record with two <em>fields</em> - namely, the <code>birds</code> field and the <code>iguanas</code> field -
+and then assigns the number <code>5</code> to the <code>birds</code> field and the number <code>7</code> to the
+<code>iguanas</code> field. Order doesn&#39;t matter with record fields; we could have also specified
+<code>iguanas</code> first and <code>birds</code> second, and Roc would consider it the exact same record.</p>
+<p>When we write <code>counts.birds</code>, it accesses the <code>birds</code> field of the <code>counts</code> record,
+and when we write <code>counts.iguanas</code> it accesses the <code>iguanas</code> field. When we use <code>==</code>
+on records, it compares all the fields in both records with <code>==</code>, and only returns true
+if all fields on both records return true for their <code>==</code> comparisons. If one record has
+more fields than the other, or if the types associated with a given field are different
+between one field and the other, the Roc compiler will give an error at build time.</p>
+<blockquote>
+<p><strong>Note:</strong> Some other languages have a concept of &quot;identity equality&quot; that&#39;s separate from
+the &quot;structural equality&quot; we just described. Roc does not have a concept of identity equality;
+this is the only way equality works!</p>
+</blockquote>
+<p>The <code>addAndStringify</code> function will accept any record with at least the fields <code>birds</code> and
+<code>iguanas</code>, but it will also accept records with more fields. For example:</p>
+<pre><code class="lang-coffee">total = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">5</span>, iguanas: <span class="hljs-number">7</span> }
+
+totalWithNote = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">4</span>, iguanas: <span class="hljs-number">3</span>, note: <span class="hljs-string">"Whee!"</span> }
+
+<span class="hljs-keyword">addAndStringify </span>= \<span class="hljs-keyword">counts </span>-&gt;
+    Num.toStr (<span class="hljs-keyword">counts.birds </span>+ <span class="hljs-keyword">counts.iguanas)</span>
+</code></pre>
+<p>This works because <code>addAndStringify</code> only uses <code>counts.birds</code> and <code>counts.iguanas</code>.
+If we were to use <code>counts.note</code> inside <code>addAndStringify</code>, then we would get an error
+because <code>total</code> is calling <code>addAndStringify</code> passing a record that doesn&#39;t have a <code>note</code> field.</p>
+<p>Record fields can have any combination of types we want. <code>totalWithNote</code> uses a record that
+has a mixture of numbers and strings, but we can also have record fields with other types of
+values - including other records, or even functions!</p>
+<pre><code class="lang-coffee">{ <span class="hljs-attribute">birds</span>: <span class="hljs-number">4</span>, nestedRecord: { someFunction: (\arg -&gt; arg + <span class="hljs-number">1</span>), name: <span class="hljs-string">"Sam"</span> } }
+</code></pre>
+<h3 id="record-shorthands">Record shorthands</h3>
+<p>Roc has a couple of shorthands you can use to express some record-related operations more concisely.</p>
+<p>Instead of writing <code>\record -&gt; record.x</code> we can write <code>.x</code> and it will evaluate to the same thing:
+a function that takes a record and returns its <code>x</code> field. You can do this with any field you want.
+For example:</p>
+<pre><code class="lang-elm"><span class="hljs-built_in">return</span>Foo = .foo
+
+<span class="hljs-built_in">return</span>Foo { foo: <span class="hljs-string">"hi!"</span>, bar: <span class="hljs-string">"blah"</span> }
+<span class="hljs-comment"># returns "hi!"</span>
+</code></pre>
+<p>Whenever we&#39;re setting a field to be a def that has the same name as the field -
+for example, <code>{ x: x }</code> - we can shorten it to just writing the name of the def alone -
+for example, <code>{ x }</code>. We can do this with as many fields as we like, e.g.
+<code>{ x: x, y: y }</code> can alternately be written <code>{ x, y }</code>, <code>{ x: x, y }</code>, or <code>{ x, y: y }</code>.</p>
+<h3 id="record-destructuring">Record destructuring</h3>
+<p>We can use <em>destructuring</em> to avoid naming a record in a function argument, instead
+giving names to its individual fields:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">addAndStringify </span>= \{ <span class="hljs-keyword">birds, </span>iguanas } -&gt;
+    Num.toStr (<span class="hljs-keyword">birds </span>+ iguanas)
+</code></pre>
+<p>Here, we&#39;ve <em>destructured</em> the record to create a <code>birds</code> def that&#39;s assigned to its <code>birds</code>
+field, and an <code>iguanas</code> def that&#39;s assigned to its <code>iguanas</code> field. We can customize this if we
+like:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">addAndStringify </span>= \{ <span class="hljs-keyword">birds, </span>iguanas: lizards } -&gt;
+    Num.toStr (<span class="hljs-keyword">birds </span>+ lizards)
+</code></pre>
+<p>In this version, we created a <code>lizards</code> def that&#39;s assigned to the record&#39;s <code>iguanas</code> field.
+(We could also do something similar with the <code>birds</code> field if we like.)</p>
+<p>Finally, destructuring can be used in defs too:</p>
+<pre><code class="lang-coffee"><span class="xml"></span><span class="hljs-template-variable">{ x, y }</span><span class="xml"> = </span><span class="hljs-template-variable">{ x: 5, y: 10 }</span><span class="xml"></span>
+</code></pre>
+<h3 id="building-records-from-other-records">Building records from other records</h3>
+<p>So far we&#39;ve only constructed records from scratch, by specifying all of their fields. We can
+also construct new records by using another record to use as a starting point, and then
+specifying only the fields we want to be different. For example, here are two ways to
+get the same record:</p>
+<pre><code class="lang-coffee">original = { <span class="hljs-string">birds:</span> <span class="hljs-number">5</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">7</span>, <span class="hljs-string">zebras:</span> <span class="hljs-number">2</span>, <span class="hljs-string">goats:</span> <span class="hljs-number">1</span> }
+
+fromScratch = { <span class="hljs-string">birds:</span> <span class="hljs-number">4</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">3</span>, <span class="hljs-string">zebras:</span> <span class="hljs-number">2</span>, <span class="hljs-string">goats:</span> <span class="hljs-number">1</span> }
+fromOriginal = { original &amp; <span class="hljs-string">birds:</span> <span class="hljs-number">4</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">3</span> }
+</code></pre>
+<p>The <code>fromScratch</code> and <code>fromOriginal</code> records are equal, although they&#39;re assembled in
+different ways.</p>
+<ul>
+<li><code>fromScratch</code> was built using the same record syntax we&#39;ve been using up to this point.</li>
+<li><code>fromOriginal</code> created a new record using the contents of <code>original</code> as defaults for fields that it didn&#39;t specify after the <code>&amp;</code>.</li>
+</ul>
+<p>Note that when we do this, the fields you&#39;re overriding must all be present on the original record,
+and their values must have the same type as the corresponding values in the original record.</p>
+<h2 id="tags">Tags</h2>
+<p>Sometimes we want to represent that something can have one of several values. For example:</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">stoplightColor</span> =
+    <span class="hljs-keyword">if</span> something &gt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        Red
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-attr">something</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        Yellow
+    <span class="hljs-keyword">else</span>
+        Green
+</code></pre>
+<p>Here, <code>stoplightColor</code> can have one of three values: <code>Red</code>, <code>Yellow</code>, or <code>Green</code>.
+The capitalization is very important! If these were lowercase (<code>red</code>, <code>yellow</code>, <code>green</code>),
+then they would refer to defs. However, because they are capitalized, they instead
+refer to <em>tags</em>.</p>
+<p>A tag is a literal value just like a number or a string. Similarly to how I can write
+the number <code>42</code> or the string <code>&quot;forty-two&quot;</code> without defining them first, I can also write
+the tag <code>FortyTwo</code> without defining it first. Also, similarly to how <code>42 == 42</code> and
+<code>&quot;forty-two&quot; == &quot;forty-two&quot;</code>, it&#39;s also the case that <code>FortyTwo == FortyTwo</code>.</p>
+<p>Let&#39;s say we wanted to turn <code>stoplightColor</code> from a <code>Red</code>, <code>Green</code>, or <code>Yellow</code> into
+a string. Here&#39;s one way we could do that:</p>
+<pre><code class="lang-elm"><span class="hljs-attr">stoplightStr</span> =
+    <span class="hljs-keyword">if</span> <span class="hljs-attr">stoplightColor</span> == Red <span class="hljs-keyword">then</span>
+        <span class="hljs-string">"red"</span>
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-attr">stoplightColor</span> == Green <span class="hljs-keyword">then</span>
+        <span class="hljs-string">"green"</span>
+    <span class="hljs-keyword">else</span>
+        <span class="hljs-string">"yellow"</span>
+</code></pre>
+<p>We can express this logic more concisely using <code>when</code>/<code>is</code> instead of <code>if</code>/<code>then</code>:</p>
+<pre><code class="lang-elm">stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        R<span class="hljs-function"><span class="hljs-title">ed</span> -&gt;</span> <span class="hljs-string">"red"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> -&gt;</span> <span class="hljs-string">"green"</span>
+        Y<span class="hljs-function"><span class="hljs-title">ellow</span> -&gt;</span> <span class="hljs-string">"yellow"</span>
+</code></pre>
+<p>This results in the same value for <code>stoplightStr</code>. In both the <code>when</code> version and the <code>if</code> version, we
+have three conditional branches, and each of them evaluates to a string. The difference is how the
+conditions are specified; here, we specify between <code>when</code> and <code>is</code> that we&#39;re making comparisons against
+<code>stoplightColor</code>, and then we specify the different things we&#39;re comparing it to: <code>Red</code>, <code>Green</code>, and <code>Yellow</code>.</p>
+<p>Besides being more concise, there are other advantages to using <code>when</code> here.</p>
+<ol>
+<li>We don&#39;t have to specify an <code>else</code> branch, so the code can be more self-documenting about exactly what all the options are.</li>
+<li>We get more compiler help. If we try deleting any of these branches, we&#39;ll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the <code>Green -&gt;</code> branch, the compiler will say that we didn&#39;t handle the possibility that <code>stoplightColor</code> could be <code>Green</code>. It knows this because <code>Green</code> is one of the possibilities in our <code>stoplightColor = if …</code> definition.</li>
+</ol>
+<p>We can still have the equivalent of an <code>else</code> branch in our <code>when</code> if we like. Instead of writing &quot;else&quot;, we write
+&quot;_ -&gt;&quot; like so:</p>
+<pre><code class="lang-coffee">stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        Red<span class="hljs-function"> -&gt;</span> <span class="hljs-string">"red"</span>
+        _<span class="hljs-function"> -&gt;</span> <span class="hljs-string">"not red"</span>
+</code></pre>
+<p>This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case -
+for example, if we introduce the possibility of <code>stoplightColor</code> being <code>Orange</code>, the compiler can no longer
+tell us we forgot to handle that possibility in our <code>when</code>. After all, we are handling it - just maybe not
+in the way we&#39;d decide to if the compiler had drawn our attention to it!</p>
+<p>We can make this <code>when</code> <em>exhaustive</em> (that is, covering all possibilities) without using <code>_ -&gt;</code> by using
+<code>|</code> to specify multiple matching conditions for the same branch:</p>
+<pre><code class="lang-coffee">stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        R<span class="hljs-function"><span class="hljs-title">ed</span> -&gt;</span> <span class="hljs-string">"red"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow -&gt;</span> <span class="hljs-string">"not red"</span>
+</code></pre>
+<p>You can read <code>Green | Yellow</code> as &quot;either <code>Green</code> or <code>Yellow</code>&quot;. By writing it this way, if we introduce the
+possibility that <code>stoplightColor</code> can be <code>Orange</code>, we&#39;ll get a compiler error telling us we forgot to cover
+that case in this <code>when</code>, and then we can handle it however we think is best.</p>
+<p>We can also combine <code>if</code> and <code>when</code> to make branches more specific:</p>
+<pre><code class="lang-coffee">stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        R<span class="hljs-function"><span class="hljs-title">ed</span> -&gt;</span> <span class="hljs-string">"red"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow <span class="hljs-keyword">if</span> contrast &gt; 75 -&gt;</span> <span class="hljs-string">"not red, but very high contrast"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow <span class="hljs-keyword">if</span> contrast &gt; 50 -&gt;</span> <span class="hljs-string">"not red, but high contrast"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow -&gt;</span> <span class="hljs-string">"not red"</span>
+</code></pre>
+<p>This will give the same answer for <code>stoplightStr</code> as if we had written the following:</p>
+<pre><code class="lang-coffee">stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        R<span class="hljs-function"><span class="hljs-title">ed</span> -&gt;</span> <span class="hljs-string">"red"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow -&gt;</span>
+            <span class="hljs-keyword">if</span> contrast &gt; <span class="hljs-number">75</span> <span class="hljs-keyword">then</span>
+                <span class="hljs-string">"not red, but very high contrast"</span>
+            <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> contrast &gt; <span class="hljs-number">50</span> <span class="hljs-keyword">then</span>
+                <span class="hljs-string">"not red, but high contrast"</span>
+            <span class="hljs-keyword">else</span>
+                <span class="hljs-string">"not red"</span>
+</code></pre>
+<p>Either style can be a reasonable choice depending on the circumstances.</p>
+<h3 id="tags-with-payloads">Tags with payloads</h3>
+<p>Tags can have <em>payloads</em> - that is, values contained within them. For example:</p>
+<pre><code class="lang-coffee">stoplightColor =
+    <span class="hljs-keyword">if</span> something &gt; <span class="hljs-number">100</span> <span class="hljs-keyword">then</span>
+        Red
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> something &gt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        Yellow
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> something == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
+        Green
+    <span class="hljs-keyword">else</span>
+        Custom <span class="hljs-string">"some other color"</span>
+
+stoplightStr =
+    <span class="hljs-keyword">when</span> stoplightColor <span class="hljs-keyword">is</span>
+        R<span class="hljs-function"><span class="hljs-title">ed</span> -&gt;</span> <span class="hljs-string">"red"</span>
+        G<span class="hljs-function"><span class="hljs-title">reen</span> | Yellow -&gt;</span> <span class="hljs-string">"not red"</span>
+        C<span class="hljs-function"><span class="hljs-title">ustom</span> description -&gt;</span> description
+</code></pre>
+<p>This makes two changes to our earlier <code>stoplightColor</code> / <code>stoplightStr</code> example.</p>
+<ol>
+<li>We sometimes set <code>stoplightColor</code> to be <code>Custom &quot;some other color&quot;</code>. When we did this, we gave the <code>Custom</code> tag a <em>payload</em> of the string <code>&quot;some other color&quot;</code>.</li>
+<li>We added a <code>Custom</code> tag in our <code>when</code>, with a payload which we named <code>description</code>. Because we did this, we were able to refer to <code>description</code> in the body of the branch (that is, the part after the <code>-&gt;</code>) just like any other def.</li>
+</ol>
+<p>Any tag can be given a payload like this. A payload doesn&#39;t have to be a string; we could also have said (for example) <code>Custom { r: 40, g: 60, b: 80 }</code> to specify an RGB color instead of a string. Then in our <code>when</code> we could have written <code>Custom record -&gt;</code> and then after the <code>-&gt;</code> used <code>record.r</code>, <code>record.g</code>, and <code>record.b</code> to access the <code>40</code>, <code>60</code>, <code>80</code> values. We could also have written <code>Custom { r, g, b } -&gt;</code> to <em>destructure</em> the record, and then
+accessed these <code>r</code>, <code>g</code>, and <code>b</code> defs after the <code>-&gt;</code> instead.</p>
+<p>A tag can also have a payload with more than one value. Instead of <code>Custom { r: 40, g: 60, b: 80 }</code> we could
+write <code>Custom 40 60 80</code>. If we did that, then instead of destructuring a record with <code>Custom { r, g, b } -&gt;</code>
+inside a <code>when</code>, we would write <code>Custom r g b -&gt;</code> to destructure the values directly out of the payload.</p>
+<p>We refer to whatever comes before a <code>-&gt;</code> in a <code>when</code> expression as a <em>pattern</em> - so for example, in the
+<code>Custom description -&gt; description</code> branch, <code>Custom description</code> would be a pattern. In programming, using
+patterns in branching conditionals like <code>when</code> is known as <a href="https://en.wikipedia.org/wiki/Pattern_matching">pattern matching</a>. You may hear people say things like &quot;let&#39;s pattern match on <code>Custom</code> here&quot; as a way to
+suggest making a <code>when</code> branch that begins with something like <code>Custom description -&gt;</code>.</p>
+<h2 id="booleans">Booleans</h2>
+<p>In many programming languages, <code>true</code> and <code>false</code> are special language keywords that refer to
+the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed
+as the ordinary values <code>Bool.true</code> and <code>Bool.false</code>.</p>
+<p>This design is partly to keep the number of special keywords in the language smaller, but mainly
+to suggest how booleans are intended be used in Roc: for
+<a href="https://en.wikipedia.org/wiki/Boolean_algebra"><em>boolean logic</em></a> (<code>&amp;&amp;</code>, <code>||</code>, and so on) as opposed
+to for data modeling. Tags are the preferred choice for data modeling, and having tag values be
+more concise than boolean values helps make this preference clear.</p>
+<p>As an example of why tags are encouraged for data modeling, in many languages it would be common
+to write a record like <code>{ name: &quot;Richard&quot;, isAdmin: Bool.true }</code>, but in Roc it would be preferable
+to write something like <code>{ name: &quot;Richard&quot;, role: Admin }</code>. At first, the <code>role</code> field might only
+ever be set to <code>Admin</code> or <code>Normal</code>, but because the data has been modeled using tags instead of
+booleans, it&#39;s much easier to add other alternatives in the future, like <code>Guest</code> or <code>Moderator</code> -
+some of which might also want payloads.</p>
+<h2 id="lists">Lists</h2>
+<p>Another thing we can do in Roc is to make a <em>list</em> of values. Here&#39;s an example:</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">names</span> = [<span class="hljs-string">"Sam"</span>, <span class="hljs-string">"Lee"</span>, <span class="hljs-string">"Ari"</span>]
+</code></pre>
+<p>This is a list with three elements in it, all strings. We can add a fourth
+element using <code>List.append</code> like so:</p>
+<pre><code class="lang-coffee"><span class="hljs-built_in">List</span>.<span class="hljs-built_in">append</span> names <span class="hljs-string">"Jess"</span>
+</code></pre>
+<p>This returns a <strong>new</strong> list with <code>&quot;Jess&quot;</code> after <code>&quot;Ari&quot;</code>, and doesn&#39;t modify the original list at all.
+All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable,
+meaning whenever we want to &quot;change&quot; them, we want to instead pass them to a function which returns some
+variation of what was passed in.</p>
+<h3 id="list-map">List.map</h3>
+<p>A common way to transform one list into another is to use <code>List.map</code>. Here&#39;s an example of how to
+use it:</p>
+<pre><code class="lang-coffee">List.map [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] \num -&gt; num * <span class="hljs-number">2</span>
+</code></pre>
+<p>This returns <code>[2, 4, 6]</code>. <code>List.map</code> takes two arguments:</p>
+<ol>
+<li>An input list</li>
+<li>A function that will be called on each element of that list</li>
+</ol>
+<p>It then returns a list which it creates by calling the given function on each element in the input list.
+In this example, <code>List.map</code> calls the function <code>\num -&gt; num * 2</code> on each element in
+<code>[1, 2, 3]</code> to get a new list of <code>[2, 4, 6]</code>.</p>
+<p>We can also give <code>List.map</code> a named function, instead of an anonymous one:</p>
+<p>For example, the <code>Num.isOdd</code> function returns <code>true</code> if it&#39;s given an odd number, and <code>false</code> otherwise.
+So <code>Num.isOdd 5</code> returns <code>true</code> and <code>Num.isOdd 2</code> returns <code>false</code>.</p>
+<p>As such, calling <code>List.map [1, 2, 3] Num.isOdd</code> returns a new list of <code>[Bool.true, Bool.false, Bool.true]</code>.</p>
+<h3 id="list-element-type-compatibility">List element type compatibility</h3>
+<p>If we tried to give <code>List.map</code> a function that didn&#39;t work on the elements in the list, then we&#39;d get
+an error at compile time. Here&#39;s a valid, and then an invalid example:</p>
+<pre><code class="lang-coffee"># working <span class="hljs-built_in">example</span>
+List.<span class="hljs-built_in">map</span> [-<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, -<span class="hljs-number">4</span>] Num.isNegative
+# returns [Bool.<span class="hljs-literal">true</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">true</span>]
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-comment"># invalid example</span>
+<span class="hljs-built_in">List</span>.map [<span class="hljs-string">"A"</span>, <span class="hljs-string">"B"</span>, <span class="hljs-string">"C"</span>] Num.isNegative
+<span class="hljs-comment"># error: isNegative doesn't work on strings!</span>
+</code></pre>
+<p>Because <code>Num.isNegative</code> works on numbers and not strings, calling <code>List.map</code> with <code>Num.isNegative</code> and a
+list of numbers works, but doing the same with a list of strings doesn&#39;t work.</p>
+<p>This wouldn&#39;t work either:</p>
+<pre><code class="lang-coffee">List.map [<span class="hljs-string">"A"</span>, <span class="hljs-string">"B"</span>, <span class="hljs-string">"C"</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isNegative
+</code></pre>
+<p>In fact, this wouldn&#39;t work for a more fundamental reason: every element in a Roc list has to share the same type.
+For example, we can have a list of strings like <code>[&quot;Sam&quot;, &quot;Lee&quot;, &quot;Ari&quot;]</code>, or a list of numbers like
+<code>[1, 2, 3, 4, 5]</code> but we can&#39;t have a list which mixes strings and numbers like <code>[&quot;Sam&quot;, 1, &quot;Lee&quot;, 2, 3]</code> -
+that would be a compile-time error.</p>
+<p>Ensuring all elements in a list share a type eliminates entire categories of problems.
+For example, it means that whenever you use <code>List.append</code> to
+add elements to a list, as long as you don&#39;t have any compile-time errors, you won&#39;t get any runtime errors
+from calling <code>List.map</code> afterwards - no matter what you appended to the list! More generally, it&#39;s safe to assume
+that unless you run out of memory, <code>List.map</code> will run successfully unless you got a compile-time error about an
+incompatibility (like <code>Num.negate</code> on a list of strings).</p>
+<h3 id="lists-that-hold-elements-of-different-types">Lists that hold elements of different types</h3>
+<p>We can use tags with payloads to make a list that contains a mixture of different types. For example:</p>
+<pre><code class="lang-coffee"><span class="hljs-symbol">List.map</span> [<span class="hljs-keyword">StrElem </span><span class="hljs-string">"A"</span>, <span class="hljs-keyword">StrElem </span><span class="hljs-string">"b"</span>, NumElem <span class="hljs-number">1</span>, <span class="hljs-keyword">StrElem </span><span class="hljs-string">"c"</span>, NumElem -<span class="hljs-number">3</span>] \elem -&gt;
+    when elem is
+        NumElem num -&gt; Num.isNegative num
+        <span class="hljs-keyword">StrElem </span><span class="hljs-keyword">str </span>-&gt; <span class="hljs-keyword">Str.isCapitalized </span><span class="hljs-keyword">str
+</span>
+# returns [<span class="hljs-keyword">Bool.true, </span><span class="hljs-keyword">Bool.false, </span><span class="hljs-keyword">Bool.false, </span><span class="hljs-keyword">Bool.false, </span><span class="hljs-keyword">Bool.true]</span>
+</code></pre>
+<p>Compare this with the example from earlier, which caused a compile-time error:</p>
+<pre><code class="lang-coffee">List.map [<span class="hljs-string">"A"</span>, <span class="hljs-string">"B"</span>, <span class="hljs-string">"C"</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isNegative
+</code></pre>
+<p>The version that uses tags works because we aren&#39;t trying to call <code>Num.isNegative</code> on each element.
+Instead, we&#39;re using a <code>when</code> to tell when we&#39;ve got a string or a number, and then calling either
+<code>Num.isNegative</code> or <code>Str.isCapitalized</code> depending on which type we have.</p>
+<p>We could take this as far as we like, adding more different tags (e.g. <code>BoolElem Bool.true</code>) and then adding
+more branches to the <code>when</code> to handle them appropriately.</p>
+<h3 id="using-tags-as-functions">Using tags as functions</h3>
+<p>Let&#39;s say I want to apply a tag to a bunch of elements in a list. For example:</p>
+<pre><code class="lang-elm">List.<span class="hljs-built_in">map</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] \<span class="hljs-built_in">str</span> -&gt; Foo <span class="hljs-built_in">str</span>
+</code></pre>
+<p>This is a perfectly reasonable way to write it, but I can also write it like this:</p>
+<pre><code class="lang-elm"><span class="hljs-built_in">List</span>.<span class="hljs-built_in">map</span> <span class="hljs-meta">[</span><span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span><span class="hljs-meta">]</span> Foo
+</code></pre>
+<p>These two versions compile to the same thing. As a convenience, Roc lets you specify
+a tag name where a function is expected; when you do this, the compiler infers that you
+want a function which uses all of its arguments as the payload to the given tag.</p>
+<h3 id="-list-any-and-list-all-"><code>List.any</code> and <code>List.all</code></h3>
+<p>There are several functions that work like <code>List.map</code> - they walk through each element of a list and do
+something with it. Another is <code>List.any</code>, which returns <code>Bool.true</code> if calling the given function on any element
+in the list returns <code>true</code>:</p>
+<pre><code class="lang-coffee">List.any [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isOdd
+# returns `Bool.true` because <span class="hljs-number">1</span> and <span class="hljs-number">3</span> are odd
+</code></pre>
+<pre><code class="lang-coffee">List.any [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isNegative
+# returns `Bool.false` because none <span class="hljs-keyword">of</span> these is negative
+</code></pre>
+<p>There&#39;s also <code>List.all</code> which only returns <code>true</code> if all the elements in the list pass the test:</p>
+<pre><code class="lang-coffee">List.<span class="hljs-keyword">all</span> [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isOdd
+# returns `Bool.<span class="hljs-literal">false</span>` because <span class="hljs-number">2</span> <span class="hljs-keyword">is</span> <span class="hljs-keyword">not</span> odd
+</code></pre>
+<pre><code class="lang-coffee">List.<span class="hljs-keyword">all</span> [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>] Num.isPositive
+# returns `Bool.<span class="hljs-literal">true</span>` because <span class="hljs-keyword">all</span> <span class="hljs-keyword">of</span> these are <span class="hljs-built_in">positive</span>
+</code></pre>
+<h3 id="removing-elements-from-a-list">Removing elements from a list</h3>
+<p>You can also drop elements from a list. One way is <code>List.dropAt</code> - for example:</p>
+<pre><code class="lang-coffee">List.dropAt [<span class="hljs-string">"Sam"</span>, <span class="hljs-string">"Lee"</span>, <span class="hljs-string">"Ari"</span>] <span class="hljs-number">1</span>
+# drops the element <span class="hljs-keyword">at</span> offset <span class="hljs-number">1</span> (<span class="hljs-string">"Lee"</span>) <span class="hljs-keyword">and</span> returns [<span class="hljs-string">"Sam"</span>, <span class="hljs-string">"Ari"</span>]
+</code></pre>
+<p>Another way is to use <code>List.keepIf</code>, which passes each of the list&#39;s elements to the given
+function, and then keeps them only if that function returns <code>true</code>.</p>
+<pre><code class="lang-coffee">List.keepIf [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>, <span class="hljs-number">5</span>] Num.isEven
+# returns [<span class="hljs-number">2</span>, <span class="hljs-number">4</span>]
+</code></pre>
+<p>There&#39;s also <code>List.dropIf</code>, which does the reverse:</p>
+<pre><code class="lang-coffee">List.dropIf [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>, <span class="hljs-number">5</span>] Num.isEven
+# returns [<span class="hljs-number">1</span>, <span class="hljs-number">3</span>, <span class="hljs-number">5</span>]
+</code></pre>
+<h3 id="custom-operations-that-walk-over-a-list">Custom operations that walk over a list</h3>
+<p>You can make your own custom operations that walk over all the elements in a list, using <code>List.walk</code>.
+Let&#39;s look at an example and then walk (ha!) through it.</p>
+<pre><code class="lang-coffee">List.walk [<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>, <span class="hljs-number">5</span>] { evens: [], odds: [] } \<span class="hljs-keyword">state</span>, elem -&gt;
+    if Num.isEven elem then
+        { <span class="hljs-keyword">state</span> &amp; evens: List.append <span class="hljs-keyword">state</span>.evens elem }
+    else
+        { <span class="hljs-keyword">state</span> &amp; odds: List.append <span class="hljs-keyword">state</span>.odds elem }
+
+<span class="hljs-comment"># returns { evens: [2, 4], odds: [1, 3, 5] }</span>
+</code></pre>
+<p><code>List.walk</code> walks through each element of the list, building up a state as it goes. At the end,
+it returns the final state - whatever it ended up being after processing the last element. The <code>\state, elem -&gt;</code>
+function it takes as its last argument accepts both the current state as well as the current list element
+it&#39;s looking at, and then returns the new state based on whatever it decides to do with that element.</p>
+<p>In this example, we walk over the list <code>[1, 2, 3, 4, 5]</code> and add each element to either the <code>evens</code> or <code>odds</code>
+field of a <code>state</code> record <code>{ evens, odds }</code>. By the end, that record has a list of all the even numbers in the
+list as well as a list of all the odd numbers.</p>
+<p>The state doesn&#39;t have to be a record; it can be anything you want. For example, if you made it a boolean, you
+could implement <code>List.any</code> using <code>List.walk</code>. You could also make the state be a list, and implement <code>List.map</code>,
+<code>List.keepIf</code>, or <code>List.dropIf</code>. There are a lot of things you can do with <code>List.walk</code> - it&#39;s very flexible!</p>
+<p>It can be tricky to remember the argument order for <code>List.walk</code> at first. A helpful trick is that the arguments
+follow the same pattern as what we&#39;ve seen with <code>List.map</code>, <code>List.any</code>, <code>List.keepIf</code>, and <code>List.dropIf</code>: the
+first argument is a list, and the last argument is a function. The difference here is that <code>List.walk</code> has one
+more argument than those other functions; the only place it could go while preserving that pattern is the middle!</p>
+<p>That third argument specifies the initial <code>state</code> - what it&#39;s set to before the <code>\state, elem -&gt;</code> function has
+been called on it even once. (If the list is empty, the <code>\state, elem -&gt;</code> function will never get called and
+the initial state gets returned immediately.)</p>
+<blockquote>
+<p><strong>Note:</strong> Other languages give this operation different names, such as &quot;fold,&quot; &quot;reduce,&quot; &quot;accumulate,&quot;
+&quot;aggregate,&quot; &quot;compress,&quot; and &quot;inject.&quot;</p>
+</blockquote>
+<h3 id="getting-an-individual-element-from-a-list">Getting an individual element from a list</h3>
+<p>Another thing we can do with a list is to get an individual element out of it. <code>List.get</code> is a common way to do this;
+it takes a list and an index, and then returns the element at that index...if there is one. But what if there isn&#39;t?</p>
+<p>For example, what do each of these return?</p>
+<pre><code class="lang-coffee"><span class="hljs-built_in">List</span>.<span class="hljs-keyword">get</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">1</span>
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-built_in">List</span>.<span class="hljs-keyword">get</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">100</span>
+</code></pre>
+<p>The answer is that the first one returns <code>Ok &quot;b&quot;</code> and the second one returns <code>Err OutOfBounds</code>.
+They both return tags! This is done so that the caller becomes responsible for handling the possibility that
+the index is outside the bounds of that particular list.</p>
+<p>Here&#39;s how calling <code>List.get</code> can look in practice:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">when</span> List.get [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] index <span class="hljs-keyword">is</span>
+    O<span class="hljs-function"><span class="hljs-title">k</span> str -&gt;</span> <span class="hljs-string">"I got this string: \(str)"</span>
+    E<span class="hljs-function"><span class="hljs-title">rr</span> OutOfBounds -&gt;</span> <span class="hljs-string">"That index was out of bounds, sorry!"</span>
+</code></pre>
+<p>There&#39;s also <code>List.first</code>, which always gets the first element, and <code>List.last</code> which always gets the last.
+They return <code>Err ListWasEmpty</code> instead of <code>Err OutOfBounds</code>, because the only way they can fail is if you
+pass them an empty list!</p>
+<p>These functions demonstrate a common pattern in Roc: operations that can fail returning either an <code>Ok</code> tag
+with the answer (if successful), or an <code>Err</code> tag with another tag describing what went wrong (if unsuccessful).
+In fact, it&#39;s such a common pattern that there&#39;s a whole module called <code>Result</code> which deals with these two tags.
+Here are some examples of <code>Result</code> functions:</p>
+<pre><code class="lang-coffee"><span class="hljs-built_in">Result</span>.withDefault (List.get [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">100</span>) <span class="hljs-string">""</span>
+# returns <span class="hljs-string">""</span> because that<span class="hljs-symbol">'s</span> the <span class="hljs-keyword">default</span> we said to <span class="hljs-keyword">use</span> <span class="hljs-keyword">if</span> List.get returned an <span class="hljs-literal">Err</span>
+</code></pre>
+<pre><code class="lang-coffee">Result.isOk (List.get [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">1</span>)
+# returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
+
+# Note: There<span class="hljs-string">'s a Result.isErr function that works similarly.</span>
+</code></pre>
+<h3 id="the-pipe-operator">The pipe operator</h3>
+<p>When you have nested function calls, sometimes it can be clearer to write them in a &quot;pipelined&quot;
+style using the <code>|&gt;</code> operator. Here are three examples of writing the same expression; they all
+compile to exactly the same thing, but two of them use the <code>|&gt;</code> operator to change how the calls look.</p>
+<pre><code class="lang-coffee">Result<span class="hljs-selector-class">.withDefault</span> (List<span class="hljs-selector-class">.get</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">1</span>) <span class="hljs-string">""</span>
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-built_in">List</span>.<span class="hljs-keyword">get</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-number">1</span>
+    |&gt; Result.withDefault <span class="hljs-string">""</span>
+</code></pre>
+<p>The <code>|&gt;</code> operator takes the value that comes before the <code>|&gt;</code> and passes it as the first argument to whatever
+comes after the <code>|&gt;</code> - so in the example above, the <code>|&gt;</code> takes <code>List.get [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;] 1</code> and passes that
+value as the first argument to <code>Result.withDefault</code> - making <code>&quot;&quot;</code> the second argument to <code>Result.withDefault</code>.</p>
+<p>We can take this a step further like so:</p>
+<pre><code class="lang-coffee">[<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>]
+    <span class="hljs-string">|&gt; List.get 1</span>
+    <span class="hljs-string">|&gt; Result.withDefault ""</span>
+</code></pre>
+<p>This is still equivalent to the first expression. Since <code>|&gt;</code> is known as the &quot;pipe operator,&quot; we can read
+this as &quot;start with <code>[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]</code>, then pipe it to <code>List.get</code>, then pipe it to <code>Result.withDefault</code>.&quot;</p>
+<p>One reason the <code>|&gt;</code> operator injects the value as the first argument is to make it work better with
+functions where argument order matters. For example, these two uses of <code>List.append</code> are equivalent:</p>
+<pre><code class="lang-coffee"><span class="hljs-built_in">List</span>.<span class="hljs-built_in">append</span> [<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>] <span class="hljs-string">"d"</span>
+</code></pre>
+<pre><code class="lang-coffee">[<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>, <span class="hljs-string">"c"</span>]
+    |&gt; <span class="hljs-built_in">List</span>.<span class="hljs-built_in">append</span> <span class="hljs-string">"d"</span>
+</code></pre>
+<p>Another example is <code>Num.div</code>. All three of the following do the same thing, because <code>a / b</code> in Roc is syntax
+sugar for <code>Num.div a b</code>:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">first</span> / <span class="hljs-keyword">second</span>
+</code></pre>
+<pre><code class="lang-coffee">Num.<span class="hljs-keyword">div</span> <span class="hljs-keyword">first</span> <span class="hljs-keyword">second</span>
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-keyword">first</span>
+    |&gt; Num.<span class="hljs-keyword">div</span> <span class="hljs-keyword">second</span>
+</code></pre>
+<p>All operators in Roc are syntax sugar for normal function calls. See the &quot;Operator Desugaring Table&quot;
+at the end of this tutorial for a complete list of them.</p>
+<h2 id="types">Types</h2>
+<p>Sometimes you may want to document the type of a definition. For example, you might write:</p>
+<pre><code class="lang-ruby"><span class="hljs-comment"># Takes a firstName string and a lastName string, and returns a string</span>
+fullName = <span class="hljs-string">\firstName,</span> lastName<span class="hljs-function"> -&gt;</span>
+    <span class="hljs-string">"\(firstName) \(lastName)"</span>
+</code></pre>
+<p>Comments can be valuable documentation, but they can also get out of date and become misleading.
+If someone changes this function and forgets to update the comment, it will no longer be accurate.</p>
+<h3 id="type-annotations">Type annotations</h3>
+<p>Here&#39;s another way to document this function&#39;s type, which doesn&#39;t have that problem:</p>
+<pre><code class="lang-coffee"><span class="hljs-function"><span class="hljs-title">fullName</span> : Str, Str -&gt;</span> Str
+<span class="hljs-function"><span class="hljs-title">fullName</span> = \firstName, lastName -&gt;</span>
+    <span class="hljs-string">"\(firstName) \(lastName)"</span>
+</code></pre>
+<p>The <code>fullName :</code> line is a <em>type annotation</em>. It&#39;s a strictly optional piece of metadata we can add
+above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for
+accuracy. If the annotation ever doesn&#39;t fit with the implementation, we&#39;ll get a compile-time error.</p>
+<p>The annotation <code>fullName : Str, Str -&gt; Str</code> says &quot;<code>fullName</code> is a function that takes two strings as
+arguments and returns a string.&quot;</p>
+<p>We can give type annotations to any value, not just functions. For example:</p>
+<pre><code class="lang-coffee"><span class="hljs-attribute">firstName</span> : Str
+firstName = <span class="hljs-string">"Amy"</span>
+
+<span class="hljs-literal">last</span>Name : Str
+<span class="hljs-literal">last</span>Name = <span class="hljs-string">"Lee"</span>
+</code></pre>
+<p>These annotations say that both <code>firstName</code> and <code>lastName</code> have the type <code>Str</code>.</p>
+<p>We can annotate records similarly. For example, we could move <code>firstName</code> and <code>lastName</code> into a record like so:</p>
+<pre><code class="lang-coffee"><span class="hljs-string">amy :</span> { <span class="hljs-string">firstName :</span> Str, <span class="hljs-string">lastName :</span> Str }
+amy = { <span class="hljs-string">firstName:</span> <span class="hljs-string">"Amy"</span>, <span class="hljs-string">lastName:</span> <span class="hljs-string">"Lee"</span> }
+
+<span class="hljs-string">jen :</span> { <span class="hljs-string">firstName :</span> Str, <span class="hljs-string">lastName :</span> Str }
+jen = { <span class="hljs-string">firstName:</span> <span class="hljs-string">"Jen"</span>, <span class="hljs-string">lastName:</span> <span class="hljs-string">"Majura"</span> }
+</code></pre>
+<p>When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
+so:</p>
+<pre><code class="lang-coffee"><span class="hljs-string">Musician :</span> { <span class="hljs-string">firstName :</span> Str, <span class="hljs-string">lastName :</span> Str }
+
+<span class="hljs-string">amy :</span> Musician
+amy = { <span class="hljs-string">firstName:</span> <span class="hljs-string">"Amy"</span>, <span class="hljs-string">lastName:</span> <span class="hljs-string">"Lee"</span> }
+
+<span class="hljs-string">simone :</span> Musician
+simone = { <span class="hljs-string">firstName:</span> <span class="hljs-string">"Simone"</span>, <span class="hljs-string">lastName:</span> <span class="hljs-string">"Simons"</span> }
+</code></pre>
+<p>Here, <code>Musician</code> is a <em>type alias</em>. A type alias is like a def, except it gives a name to a type
+instead of to a value. Just like how you can read <code>name : Str</code> as &quot;<code>name</code> has the type <code>Str</code>,&quot;
+you can also read <code>Musician : { firstName : Str, lastName : Str }</code> as &quot;<code>Musician</code> has the type
+<code>{ firstName : Str, lastName : Str }</code>.&quot;</p>
+<p>We can also give type annotations to tag unions:</p>
+<pre><code class="lang-coffee">colorFromStr : Str<span class="hljs-function"> -&gt;</span> [Red, Green, Yellow]
+colorFromStr = <span class="hljs-string">\string</span> <span class="hljs-function">-&gt;</span>
+    <span class="hljs-keyword">when</span> string <span class="hljs-keyword">is</span>
+        <span class="hljs-string">"red"</span><span class="hljs-function"> -&gt;</span> Red
+        <span class="hljs-string">"green"</span><span class="hljs-function"> -&gt;</span> Green
+        _<span class="hljs-function"> -&gt;</span> Yellow
+</code></pre>
+<p>You can read the type <code>[Red, Green, Yellow]</code> as &quot;a tag union of the tags <code>Red</code>, <code>Green</code>, and <code>Yellow</code>.&quot;</p>
+<p>When we annotate a list type, we have to specify the type of its elements:</p>
+<pre><code class="lang-coffee">names : <span class="hljs-built_in">List</span> <span class="hljs-built_in">Str</span>
+names = [<span class="hljs-string">"Amy"</span>, <span class="hljs-string">"Simone"</span>, <span class="hljs-string">"Tarja"</span>]
+</code></pre>
+<p>You can read <code>List Str</code> as &quot;a list of strings.&quot; Here, <code>Str</code> is a <em>type parameter</em> that tells us what type of
+<code>List</code> we&#39;re dealing with. <code>List</code> is a <em>parameterized type</em>, which means it&#39;s a type that requires a type
+parameter; there&#39;s no way to give something a type of <code>List</code> without a type parameter - you have to specify
+what type of list it is, such as <code>List Str</code> or <code>List Bool</code> or <code>List { firstName : Str, lastName : Str }</code>.</p>
+<p>There are some functions that work on any list, regardless of its type parameter. For example, <code>List.isEmpty</code>
+has this type:</p>
+<pre><code class="lang-coffee">isEmpty : <span class="hljs-built_in">List</span> * -&gt; <span class="hljs-built_in">Bool</span>
+</code></pre>
+<p>The <code>*</code> is a <em>wildcard type</em> - that is, a type that&#39;s compatible with any other type. <code>List *</code> is compatible
+with any type of <code>List</code> - so, <code>List Str</code>, <code>List Bool</code>, and so on. So you can call
+<code>List.isEmpty [&quot;I am a List Str&quot;]</code> as well as <code>List.isEmpty [Bool.true]</code>, and they will both work fine.</p>
+<p>The wildcard type also comes up with empty lists. Suppose we have one function that takes a <code>List Str</code> and another
+function that takes a <code>List Bool</code>. We might reasonably expect to be able to pass an empty list (that is, <code>[]</code>) to
+either of these functions. And so we can! This is because a <code>[]</code> value has the type <code>List *</code> - that is,
+&quot;a list with a wildcard type parameter,&quot; or &quot;a list whose element type could be anything.&quot;</p>
+<p><code>List.reverse</code> works similarly to <code>List.isEmpty</code>, but with an important distinction. As with <code>isEmpty</code>, we can
+call <code>List.reverse</code> on any list, regardless of its type parameter. However, consider these calls:</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">strings </span>: List <span class="hljs-keyword">Str
+</span><span class="hljs-keyword">strings </span>= List.<span class="hljs-keyword">reverse </span>[<span class="hljs-string">"a"</span>, <span class="hljs-string">"b"</span>]
+
+<span class="hljs-keyword">bools </span>: List <span class="hljs-keyword">Bool
+</span><span class="hljs-keyword">bools </span>= List.<span class="hljs-keyword">reverse </span>[<span class="hljs-keyword">Bool.true, </span><span class="hljs-keyword">Bool.false]</span>
+</code></pre>
+<p>In the <code>strings</code> example, we have <code>List.reverse</code> returning a <code>List Str</code>. In the <code>bools</code> example, it&#39;s returning a
+<code>List Bool</code>. So what&#39;s the type of <code>List.reverse</code>?</p>
+<p>We saw that <code>List.isEmpty</code> has the type <code>List * -&gt; Bool</code>, so we might think the type of <code>List.reverse</code> would be
+<code>reverse : List * -&gt; List *</code>. However, remember that we also saw that the type of the empty list is <code>List *</code>?
+<code>List * -&gt; List *</code> is actually the type of a function that always returns empty lists! That&#39;s not what we want.</p>
+<p>What we want is something like one of these:</p>
+<pre><code class="lang-coffee"><span class="hljs-built_in">reverse</span> : List <span class="hljs-built_in">elem</span> -&gt; List <span class="hljs-built_in">elem</span>
+</code></pre>
+<pre><code class="lang-coffee">reverse : <span class="hljs-type">List</span> <span class="hljs-keyword">value</span> -&gt; <span class="hljs-type">List</span> <span class="hljs-keyword">value</span>
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-built_in">reverse</span> : <span class="hljs-built_in">List</span> a -&gt; <span class="hljs-built_in">List</span> a
+</code></pre>
+<p>Any of these will work, because <code>elem</code>, <code>value</code>, and <code>a</code> are all <em>type variables</em>. A type variable connects
+two or more types in the same annotation. So you can read <code>List elem -&gt; List elem</code> as &quot;takes a list and returns
+a list that has the same element type.&quot; Just like <code>List.reverse</code> does!</p>
+<p>You can choose any name you like for a type variable, but it has to be lowercase. (You may have noticed all the
+types we&#39;ve used until now are uppercase; that is no accident! Lowercase types are always type variables, so
+all other named types have to be uppercase.) All three of the above type annotations are equivalent;
+the only difference is that we chose different names (<code>elem</code>, <code>value</code>, and <code>a</code>) for their type variables.</p>
+<p>You can tell some interesting things about functions based on the type parameters involved. For example,
+any function that returns <code>List *</code> definitely always returns an empty list. You don&#39;t need to look at the rest
+of the type annotation, or even the function&#39;s implementation! The only way to have a function that returns
+<code>List *</code> is if it returns an empty list.</p>
+<p>Similarly, the only way to have a function whose type is <code>a -&gt; a</code> is if the function&#39;s implementation returns
+its argument without modifying it in any way. This is known as <a href="https://en.wikipedia.org/wiki/Identity_function">the identity function</a>.</p>
+<h2 id="numeric-types">Numeric types</h2>
+<p>Roc has different numeric types that each have different tradeoffs.
+They can all be broken down into two categories: <a href="https://en.wikipedia.org/wiki/Fraction">fractions</a>,
+and <a href="https://en.wikipedia.org/wiki/Integer">integers</a>. In Roc we call these <code>Frac</code> and <code>Int</code> for short.</p>
+<h3 id="integers">Integers</h3>
+<p>Roc&#39;s integer types have two important characteristics: their <em>size</em> and their <a href="https://en.wikipedia.org/wiki/Signedness"><em>signedness</em></a>.
+Together, these two characteristics determine the range of numbers the integer type can represent.</p>
+<p>For example, the Roc type <code>U8</code> can represent the numbers 0 through 255, whereas the <code>I16</code> type can represent
+the numbers -32768 through 32767. You can actually infer these ranges from their names (<code>U8</code> and <code>I16</code>) alone!</p>
+<p>The <code>U</code> in <code>U8</code> indicates that it&#39;s <em>unsigned</em>, meaning that it can&#39;t have a minus <a href="https://en.wikipedia.org/wiki/Sign_(mathematics">sign</a>), and therefore can&#39;t be negative. The fact that it&#39;s unsigned tells us immediately that
+its lowest value is zero. The 8 in <code>U8</code> means it is 8 <a href="https://en.wikipedia.org/wiki/Bit">bits</a> in size, which
+means it has room to represent 2⁸ (which is equal to 256) different numbers. Since one of those 256 different numbers
+is 0, we can look at <code>U8</code> and know that it goes from <code>0</code> (since it&#39;s unsigned) to <code>255</code> (2⁸ - 1, since it&#39;s 8 bits).</p>
+<p>If we change <code>U8</code> to <code>I8</code>, making it a <em>signed</em> 8-bit integer, the range changes. Because it&#39;s still 8 bits, it still
+has room to represent 2⁸ (that is, 256) different numbers. However, now in addition to one of those 256 numbers
+being zero, about half of the rest will be negative, and the others positive. So instead of ranging from, say -255
+to 255 (which, counting zero, would represent 511 different numbers; too many to fit in 8 bits!) an <code>I8</code> value
+ranges from -128 to 127.</p>
+<p>Notice that the negative extreme is <code>-128</code> versus <code>127</code> (not <code>128</code>) on the positive side. That&#39;s because of
+needing room for zero; the slot for zero is taken from the positive range because zero doesn&#39;t have a minus sign.
+So in general, you can find the lowest signed number by taking its total range (256 different numbers in the case
+of an 8-bit integer) and dividing it in half (half of 256 is 128, so -128 is <code>I8</code>&#39;s lowest number). To find the
+highest number, take the positive version of the lowest number (so, convert <code>-128</code> to <code>128</code>) and then subtract 1
+to make room for zero (so, <code>128</code> becomes <code>127</code>; <code>I8</code> ranges from -128 to 127).</p>
+<p>Following this pattern, the 16 in <code>I16</code> means that it&#39;s a signed 16-bit integer.
+That tells us it has room to represent 2¹⁶ (which is equal to 65536) different numbers. Half of 65536 is 32768,
+so the lowest <code>I16</code> would be -32768, and the highest would be 32767. Knowing that, we can also quickly tell that
+the lowest <code>U16</code> would be zero (since it always is for unsigned integers), and the highest <code>U16</code> would be 65535.</p>
+<p>Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:</p>
+<ul>
+<li>Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!</li>
+<li>Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in <a href="https://en.wikipedia.org/wiki/CPU_cache#Cache_performance">cache lines</a>, which can easily be a performance bottleneck.</li>
+<li>Certain processors work faster on some numeric sizes than others. There isn&#39;t even a general rule like &quot;larger numeric sizes run slower&quot; (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!</li>
+</ul>
+<p>Here are the different fixed-size integer types that Roc supports:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">Range</th>
+<th style="text-align:left">Type</th>
+<th style="text-align:left">Size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right"><code>-128</code><br/><code>127</code></td>
+<td style="text-align:left"><code>I8</code></td>
+<td style="text-align:left">1 Byte</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>0</code><br/><code>255</code></td>
+<td style="text-align:left"><code>U8</code></td>
+<td style="text-align:left">1 Byte</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>-32_768</code><br/><code>32_767</code></td>
+<td style="text-align:left"><code>I16</code></td>
+<td style="text-align:left">2 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>0</code><br/><code>65_535</code></td>
+<td style="text-align:left"><code>U16</code></td>
+<td style="text-align:left">2 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>-2_147_483_648</code><br/><code>2_147_483_647</code></td>
+<td style="text-align:left"><code>I32</code></td>
+<td style="text-align:left">4 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>0</code><br/>(over 4 billion) <code>4_294_967_295</code></td>
+<td style="text-align:left"><code>U32</code></td>
+<td style="text-align:left">4 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>-9_223_372_036_854_775_808</code><br/><code>9_223_372_036_854_775_807</code></td>
+<td style="text-align:left"><code>I64</code></td>
+<td style="text-align:left">8 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>0</code><br/>(over 18 quintillion) <code>18_446_744_073_709_551_615</code></td>
+<td style="text-align:left"><code>U64</code></td>
+<td style="text-align:left">8 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>-170_141_183_460_469_231_731_687_303_715_884_105_728</code><br/><code>170_141_183_460_469_231_731_687_303_715_884_105_727</code></td>
+<td style="text-align:left"><code>I128</code></td>
+<td style="text-align:left">16 Bytes</td>
+</tr>
+<tr>
+<td style="text-align:right"><code>0</code><br/>(over 340 undecillion) <code>340_282_366_920_938_463_463_374_607_431_768_211_455</code></td>
+<td style="text-align:left"><code>U128</code></td>
+<td style="text-align:left">16 Bytes</td>
+</tr>
+</tbody>
+</table>
+<p>Roc also has one variable-size integer type: <code>Nat</code> (short for &quot;natural number&quot;).
+The size of <code>Nat</code> is equal to the size of a memory address, which varies by system.
+For example, when compiling for a 64-bit system, <code>Nat</code> works the same way as <code>U64</code>.
+When compiling for a 32-bit system, it works the same way as <code>U32</code>. Most popular
+computing devices today are 64-bit, so <code>Nat</code> is usually the same as <code>U64</code>, but
+Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly,
+<code>Nat</code> will work like a <code>U32</code> in that program.</p>
+<p>A common use for <code>Nat</code> is to store the length of a collection like a <code>List</code>;
+there&#39;s a function <code>List.len : List * -&gt; Nat</code> which returns the length of the given list.
+64-bit systems can represent longer lists in memory than 32-bit systems can,
+which is why the length of a list is represented as a <code>Nat</code>.</p>
+<p>If any operation would result in an integer that is either too big
+or too small to fit in that range (e.g. calling <code>Int.maxI32 + 1</code>, which adds 1 to
+the highest possible 32-bit integer), then the operation will <em>overflow</em>.
+When an overflow occurs, the program will crash.</p>
+<p>As such, it&#39;s very important to design your integer operations not to exceed these bounds!</p>
+<h3 id="fractions">Fractions</h3>
+<p>Roc has three fractional types:</p>
+<ul>
+<li><code>F32</code>, a 32-bit <a href="https://en.wikipedia.org/wiki/IEEE_754">floating-point number</a></li>
+<li><code>F64</code>, a 64-bit <a href="https://en.wikipedia.org/wiki/IEEE_754">floating-point number</a></li>
+<li><code>Dec</code>, a 128-bit decimal <a href="https://en.wikipedia.org/wiki/Fixed-point_arithmetic">fixed-point number</a></li>
+</ul>
+<p>These are different from integers in that they can represent numbers with fractional components,
+such as 1.5 and -0.123.</p>
+<p><code>Dec</code> is the best default choice for representing base-10 decimal numbers
+like currency, because it is base-10 under the hood. In contrast,
+<code>F64</code> and <code>F32</code> are base-2 under the hood, which can lead to decimal
+precision loss even when doing addition and subtraction. For example, when
+using <code>F64</code>, running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
+whereas when using <code>Dec</code>, 0.1 + 0.2 returns 0.3.</p>
+<p><code>F32</code> and <code>F64</code> have direct hardware support on common processors today. There is no hardware support
+for fixed-point decimals, so under the hood, a <code>Dec</code> is an <code>I128</code>; operations on it perform
+<a href="https://en.wikipedia.org/wiki/Fixed-point_arithmetic">base-10 fixed-point arithmetic</a>
+with 18 decimal places of precision.</p>
+<p>This means a <code>Dec</code> can represent whole numbers up to slightly over 170
+quintillion, along with 18 decimal places. (To be precise, it can store
+numbers between <code>-170_141_183_460_469_231_731.687303715884105728</code>
+and <code>170_141_183_460_469_231_731.687303715884105727</code>.) Why 18
+decimal places? It&#39;s the highest number of decimal places where you can still
+convert any <code>U64</code> to a <code>Dec</code> without losing information.</p>
+<p>While the fixed-point <code>Dec</code> has a fixed range, the floating-point <code>F32</code> and <code>F64</code> do not.
+Instead, outside of a certain range they start to lose precision instead of immediately overflowing
+the way integers and <code>Dec</code> do. <code>F64</code> can represent <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">between 15 and 17 significant digits</a> before losing precision, whereas <code>F32</code> can only represent <a href="https://en.wikipedia.org/wiki/Single-precision_floating-point_format#IEEE_754_single-precision_binary_floating-point_format:_binary32">between 6 and 9</a>.</p>
+<p>There are some use cases where <code>F64</code> and <code>F32</code> can be better choices than <code>Dec</code>
+despite their precision drawbacks. For example, in graphical applications they
+can be a better choice for representing coordinates because they take up less memory,
+various relevant calculations run faster, and decimal precision loss isn&#39;t as big a concern
+when dealing with screen coordinates as it is when dealing with something like currency.</p>
+<h3 id="num-int-and-frac">Num, Int, and Frac</h3>
+<p>Some operations work on specific numeric types - such as <code>I64</code> or <code>Dec</code> - but operations support
+multiple numeric types. For example, the <code>Num.abs</code> function works on any number, since you can
+take the <a href="https://en.wikipedia.org/wiki/Absolute_value">absolute value</a> of integers and fractions alike.
+Its type is:</p>
+<pre><code class="lang-elm"><span class="hljs-built_in">abs</span> : Num <span class="hljs-keyword">a</span> -&gt; Num <span class="hljs-keyword">a</span>
+</code></pre>
+<p>This type says <code>abs</code> takes a number and then returns a number of the same type. That&#39;s because the
+<code>Num</code> type is compatible with both integers and fractions.</p>
+<p>There&#39;s also an <code>Int</code> type which is only compatible with integers, and a <code>Frac</code> type which is only
+compatible with fractions. For example:</p>
+<pre><code class="lang-elm">Num<span class="hljs-selector-class">.xor</span> : Int <span class="hljs-selector-tag">a</span>, Int <span class="hljs-selector-tag">a</span> -&gt; Int a
+</code></pre>
+<pre><code class="lang-elm">Num<span class="hljs-selector-class">.cos</span> : Frac <span class="hljs-selector-tag">a</span> -&gt; Frac a
+</code></pre>
+<p>When you write a number literal in Roc, it has the type <code>Num *</code>. So you could call <code>Num.xor 1 1</code>
+and also <code>Num.cos 1</code> and have them all work as expected; the number literal <code>1</code> has the type
+<code>Num *</code>, which is compatible with the more constrained types <code>Int</code> and <code>Frac</code>. For the same reason,
+you can pass number literals to functions expecting even more constrained types, like <code>I32</code> or <code>F64</code>.</p>
+<h3 id="typed-number-literals">Typed Number Literals</h3>
+<p>When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
+<code>1u8</code> specifies <code>1</code> as an unsigned 8-bit integer, <code>5i32</code> specifies <code>5</code> as a signed 32-bit integer, etc.
+The full list of possible suffixes includes:
+<code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>, <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>i128</code>, <code>u128</code>, <code>nat</code>, <code>f32</code>, <code>f64</code>, <code>dec</code></p>
+<h3 id="hexadecimal-integer-literals">Hexadecimal Integer Literals</h3>
+<p>Integer literals can be written in hexadecimal form by prefixing with <code>0x</code> followed by hexadecimal characters.
+<code>0xFE</code> evaluates to decimal <code>254</code>
+The integer type can be specified as a suffix to the hexadecimal literal,
+so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bit integer.</p>
+<h3 id="binary-integer-literals">Binary Integer Literals</h3>
+<p>Integer literals can be written in binary form by prefixing with <code>0b</code> followed by the 1&#39;s and 0&#39;s representing
+each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
+The integer type can be specified as a suffix to the binary literal,
+so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
+<h2 id="tests-and-expectations">Tests and expectations</h2>
+<p>You can write automated tests for your Roc code like so:</p>
+<pre><code class="lang-swift">pluralize = \singular, plural, <span class="hljs-built_in">count</span> -&gt;
+    countStr = <span class="hljs-type">Num</span>.toStr <span class="hljs-built_in">count</span>
+
+    <span class="hljs-keyword">if</span> <span class="hljs-built_in">count</span> == <span class="hljs-number">1</span> then
+        <span class="hljs-string">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
+    <span class="hljs-keyword">else</span>
+        <span class="hljs-string">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(plural)</span>"</span>
+
+expect pluralize <span class="hljs-string">"cactus"</span> <span class="hljs-string">"cacti"</span> <span class="hljs-number">1</span> == <span class="hljs-string">"1 cactus"</span>
+
+expect pluralize <span class="hljs-string">"cactus"</span> <span class="hljs-string">"cacti"</span> <span class="hljs-number">2</span> == <span class="hljs-string">"2 cacti"</span>
+</code></pre>
+<p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
+expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
+<h3 id="inline-expect-s">Inline <code>expect</code>s</h3>
+<p>For example:</p>
+<pre><code class="lang-swift">    <span class="hljs-keyword">if</span> <span class="hljs-built_in">count</span> == <span class="hljs-number">1</span> then
+        <span class="hljs-string">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
+    <span class="hljs-keyword">else</span>
+        expect <span class="hljs-built_in">count</span> &gt; <span class="hljs-number">0</span>
+
+        <span class="hljs-string">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(plural)</span>"</span>
+</code></pre>
+<p>This <code>expect</code> will fail if you call <code>pluralize</code> passing a count of 0, and it will fail
+regardless of whether the inline <code>expect</code> is reached when running your program via <code>roc dev</code>
+or in the course of running a test (with <code>roc test</code>).</p>
+<p>So for example, if we added this top-level <code>expect</code>...</p>
+<pre><code class="lang-swift">expect pluralize <span class="hljs-string">"cactus"</span> <span class="hljs-string">"cacti"</span> <span class="hljs-number">0</span> == <span class="hljs-string">"0 cacti"</span>
+</code></pre>
+<p>...it would hit the inline <code>expect count &gt; 0</code>, which would then fail the test.</p>
+<p>Note that inline <code>expect</code>s do not halt the program! They are designed to inform, not to affect
+control flow. In fact, if you do <code>roc build</code>, they are not even included in the final binary.</p>
+<p>If you try this code out, you may note that when an <code>expect</code> fails (either a top-level or inline
+one), the failure message includes the values of any named variables - such as <code>count</code> here.
+This leads to a useful technique, which we will see next.</p>
+<h3 id="quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</h3>
+<p>An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
+<code>expect</code> to do this. Here&#39;s an example:</p>
+<pre><code class="lang-elm">\arg -&gt;
+    x = arg - <span class="hljs-number">1</span>
+
+    # Reports the value <span class="hljs-keyword">of</span> `x` without stopping the program
+    expect x != x
+
+    Num.abs x
+</code></pre>
+<p>The failure output will include both the value of <code>x</code> as well as the comment immediately above it,
+which lets you use that comment for extra context in your output.</p>
+<h2 id="interface-modules">Interface modules</h2>
+<p>[This part of the tutorial has not been written yet. Coming soon!]</p>
+<h2 id="builtin-modules">Builtin modules</h2>
+<p>There are several modules that are built into the Roc compiler, which are imported automatically into every
+Roc module. They are:</p>
+<ol>
+<li><code>Bool</code></li>
+<li><code>Str</code></li>
+<li><code>Num</code></li>
+<li><code>List</code></li>
+<li><code>Result</code></li>
+<li><code>Dict</code></li>
+<li><code>Set</code></li>
+</ol>
+<p>You may have noticed that we already used the first five - for example, when we wrote <code>Str.concat</code> and <code>Num.isEven</code>,
+we were referencing functions stored in the <code>Str</code> and <code>Num</code> modules.</p>
+<p>These modules are not ordinary <code>.roc</code> files that live on your filesystem. Rather, they are built directly into the
+Roc compiler. That&#39;s why they&#39;re called &quot;builtins!&quot;</p>
+<p>Besides being built into the compiler, the builtin modules are different from other modules in that:</p>
+<ul>
+<li>They are always imported. You never need to add them to <code>imports</code>.</li>
+<li>All their types are imported unqualified automatically. So you never need to write <code>Num.Nat</code>, because it&#39;s as if the <code>Num</code> module was imported using <code>imports [Num.{ Nat }]</code> (and the same for all the other types in the <code>Num</code> module).</li>
+</ul>
+<h2 id="the-app-module-header">The app module header</h2>
+<p>Let&#39;s take a closer look at the part of <code>Hello.roc</code> above <code>main</code>:</p>
+<pre><code class="lang-coffee"><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
+    <span class="hljs-selector-tag">packages</span> { <span class="hljs-attribute">pf</span>: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+    <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+</code></pre>
+<p>This is known as a <em>module header</em>. Every <code>.roc</code> file is a <em>module</em>, and there
+are different types of modules. We know this particular one is an <em>application module</em>
+(or <em>app module</em> for short) because it begins with the <code>app</code> keyword.</p>
+<p>The line <code>app &quot;hello&quot;</code> states that this module defines a Roc application, and
+that building this application should produce an executable named <code>hello</code>. This
+means when you run <code>roc Hello.roc</code>, the Roc compiler will build an executable
+named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You can also build the executable
+without running it by running <code>roc build Hello.roc</code>.</p>
+<p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
+<pre><code class="lang-coffee"><span class="hljs-selector-tag">packages</span> { <span class="hljs-attribute">pf</span>: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+</code></pre>
+<p>The <code>packages { pf: &quot;examples/cli/cli-platform/main.roc&quot; }</code> part says two things:</p>
+<ul>
+<li>We&#39;re going to be using a <em>package</em> (that is, a collection of modules) called <code>&quot;examples/cli/cli-platform/main.roc&quot;</code></li>
+<li>We&#39;re going to name that package <code>pf</code> so we can refer to it more concisely in the future.</li>
+</ul>
+<p>The <code>imports [pf.Stdout, pf.Program]</code> line says that we want to import the <code>Stdout</code> and <code>Program</code> modules
+from the <code>pf</code> package, and make them available in the current module.</p>
+<p>This import has a direct interaction with our definition of <code>main</code>. Let&#39;s look
+at that again:</p>
+<pre><code class="lang-coffee"><span class="hljs-attr">main</span> = Stdout.line <span class="hljs-string">"I'm a Roc application!"</span> |&gt; Program.quick
+</code></pre>
+<p>Here, <code>main</code> is calling a function called <code>Stdout.line</code>. More specifically, it&#39;s
+calling a function named <code>line</code> which is exposed by a module named
+<code>Stdout</code>.
+Then the result of that function call is passed to the <code>quick</code> function of the <code>Program</code> module,
+which effectively makes it a simple Roc program.</p>
+<p>When we write <code>imports [pf.Stdout, pf.Program]</code>, it specifies that the <code>Stdout</code>
+and <code>Program</code> modules come from the <code>pf</code> package.</p>
+<p>Since <code>pf</code> was the name we chose for the <code>examples/cli/cli-platform/main.roc</code>
+package (when we wrote <code>packages { pf: &quot;examples/cli/cli-platform/main.roc&quot; }</code>),
+this <code>imports</code> line tells the Roc compiler that when we call <code>Stdout.line</code>, it
+should look for that <code>line</code> function in the <code>Stdout</code> module of the
+<code>examples/cli/cli-platform/main.roc</code> package.</p>
+<p>If we would like to include other modules in our application, say <code>AdditionalModule.roc</code> and <code>AnotherModule.roc</code>, then they can be imported directly in <code>imports</code> like this:  </p>
+<pre><code class="lang-coffee"><span class="hljs-selector-tag">packages</span> { <span class="hljs-attribute">pf</span>: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program, AdditionalModule, AnotherModule]</span>
+<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+</code></pre>
+<h2 id="comments">Comments</h2>
+<p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They require a single space after the <code>##</code>, and can include code blocks by adding five spaces after <code>##</code>. </p>
+<pre><code class="lang-coffee">## This is a comment for documentation, and includes a <span class="hljs-keyword">code</span> block.
+##
+##     x = <span class="hljs-number">2</span>
+##     expect x == <span class="hljs-number">2</span>
+</code></pre>
+<p>Roc also supports inline comments and line comments with <code>#</code>. They can be used to add information that won&#39;t be included in documentation.</p>
+<pre><code class="lang-coffee"><span class="hljs-comment"># This is a line comment that won't appear in documentation.</span>
+myFunction : U8<span class="hljs-function"> -&gt;</span> U8
+myFunction = <span class="hljs-string">\bit</span> <span class="hljs-function">-&gt;</span> bit % <span class="hljs-number">2</span> <span class="hljs-comment"># this is an inline comment</span>
+</code></pre>
+<p>Roc does not have multiline comment syntax.</p>
+<h2 id="tasks">Tasks</h2>
+<p>Tasks are technically not part of the Roc language, but they&#39;re very common in
+platforms. Let&#39;s use the CLI platform in <code>examples/cli/cli-platform/main.roc</code> as an example!</p>
+<p>In the CLI platform, we have four operations we can do:</p>
+<ul>
+<li>Write a string to the console</li>
+<li>Read a string from user input</li>
+<li>Write a string to a file</li>
+<li>Read a string from a file</li>
+</ul>
+<p>We&#39;ll use these four operations to learn about tasks.</p>
+<p>First, let&#39;s do a basic &quot;Hello World&quot; using the tutorial app.</p>
+<pre><code class="lang-coffee"><span class="hljs-keyword">app</span> <span class="hljs-string">"cli-tutorial"</span>
+    packages { pf: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+    imports [pf.Stdout, pf.<span class="hljs-keyword">Program</span>]
+    provides [main] to pf
+
+main =
+    Stdout.<span class="hljs-keyword">line</span> <span class="hljs-string">"Hello, World!"</span>
+        |&gt; <span class="hljs-keyword">Program</span>.quick
+</code></pre>
+<p>The <code>Stdout.line</code> function takes a <code>Str</code> and writes it to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout">standard output</a>).
+It has this type:</p>
+<pre><code class="lang-coffee">Stdout.line : <span class="hljs-type">Str</span> -&gt; <span class="hljs-keyword">Task</span> {} *
+</code></pre>
+<p>A <code>Task</code> represents an <em>effect</em> - that is, an interaction with state outside your Roc program,
+such as the console&#39;s standard output, or a file.</p>
+<p>When we set <code>main</code> to be a <code>Task</code>, the task will get run when we run our program. Here, we&#39;ve set
+<code>main</code> to be a task that writes <code>&quot;Hello, World!&quot;</code> to <code>stdout</code> when it gets run, so that&#39;s what
+our program does!</p>
+<p><code>Task</code> has two type parameters: the type of value it produces when it finishes running, and any
+errors that might happen when running it. <code>Stdout.line</code> has the type <code>Task {} *</code> because it doesn&#39;t
+produce any values when it finishes (hence the <code>{}</code>) and there aren&#39;t any errors that can happen
+when it runs (hence the <code>*</code>).</p>
+<p>In contrast, <code>Stdin.line</code> produces a <code>Str</code> when it finishes reading from <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin">standard input</a>). That <code>Str</code> is reflected in its type:</p>
+<pre><code class="lang-coffee">Stdin.<span class="hljs-built_in">line</span> : <span class="hljs-built_in">Task</span> Str *
+</code></pre>
+<p>Let&#39;s change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
+<pre><code class="lang-swift">app <span class="hljs-string">"cli-tutorial"</span>
+    packages { pf: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+    imports [pf<span class="hljs-selector-class">.Stdout</span>, pf<span class="hljs-selector-class">.Stdin</span>, pf<span class="hljs-selector-class">.Task</span>, pf.Program]
+    provides [main] to pf
+
+main = Program<span class="hljs-selector-class">.quick</span> task
+
+task =
+    Task<span class="hljs-selector-class">.await</span> Stdin<span class="hljs-selector-class">.line</span> \text -&gt;
+        Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>If you run this program, at first it won&#39;t do anything. It&#39;s waiting for you to type something
+in and press Enter! Once you do, it should print back out what you entered.</p>
+<p>The <code>Task.await</code> function combines two tasks into one bigger <code>Task</code> which first runs one of the
+given tasks and then the other. In this case, it&#39;s combining a <code>Stdin.line</code> task with a <code>Stdout.line</code>
+task into one bigger <code>Task</code>, and then setting <code>main</code> to be that bigger task.</p>
+<p>The type of <code>Task.await</code> is:</p>
+<pre><code class="lang-haskell">Task<span class="hljs-selector-class">.await</span> : Task <span class="hljs-selector-tag">a</span> err, (<span class="hljs-selector-tag">a</span> -&gt; Task <span class="hljs-selector-tag">b</span> err) -&gt; Task <span class="hljs-selector-tag">b</span> err
+</code></pre>
+<p>The second argument to <code>Task.await</code> is a &quot;callback function&quot; which runs after the first task
+completes. This callback function receives the output of that first task, and then returns
+the second task.  This means the second task can make use of output from the first task, like
+we did in our <code>\text -&gt; …</code> callback function here:</p>
+<pre><code class="lang-swift">\<span class="hljs-built_in">text</span> -&gt;
+    Stdout.<span class="hljs-built_in">line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>Notice that, just like before, we&#39;re still building <code>main</code> from a single <code>Task</code>. This is how we&#39;ll
+always do it! We&#39;ll keep building up bigger and bigger <code>Task</code>s out of smaller tasks, and then setting
+<code>main</code> to be that one big <code>Task</code>.</p>
+<p>For example, we can print a prompt before we pause to read from <code>stdin</code>, so it no longer looks like
+the program isn&#39;t doing anything when we start it up:</p>
+<pre><code class="lang-swift">task =
+    Task<span class="hljs-selector-class">.await</span> (Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"Type something press Enter:"</span>) \_ -&gt;
+        Task<span class="hljs-selector-class">.await</span> Stdin<span class="hljs-selector-class">.line</span> \text -&gt;
+            Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>This works, but we can make it a little nicer to read. Let&#39;s change it to the following:</p>
+<pre><code class="lang-haskell">app <span class="hljs-string">"cli-tutorial"</span>
+    packages { pf: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
+    imports [pf<span class="hljs-selector-class">.Stdout</span>, pf<span class="hljs-selector-class">.Stdin</span>, pf<span class="hljs-selector-class">.Task</span>.{ await }, pf.Program]
+    provides [main] to pf
+
+main = Program<span class="hljs-selector-class">.quick</span> task
+
+task =
+    await (Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"Type something press Enter:"</span>) \_ -&gt;
+        await Stdin<span class="hljs-selector-class">.line</span> \text -&gt;
+            Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>Here we&#39;ve changed how we&#39;re importing the <code>Task</code> module. Before it was
+<code>pf.Task</code> and now it&#39;s <code>pf.Task.{ await }</code>. The difference is that we&#39;re
+importing <code>await</code> in an <em>unqualified</em> way, meaning now whenever we write <code>await</code>
+in this module, it will refer to <code>Task.await</code> - so we no longer need to write
+<code>Task.</code> every time we want to <code>await</code>.</p>
+<p>It&#39;s most common in Roc to call functions from other modules in a <em>qualified</em> way
+(<code>Task.await</code>) rather than unqualified (<code>await</code>) like this, but it can be nice
+for a function with an uncommon name (like &quot;await&quot;) which often gets called repeatedly
+across a small number of lines of code.</p>
+<p>Speaking of calling <code>await</code> repeatedly, if we keep calling it more and more on this
+code, we&#39;ll end up doing a lot of indenting. If we&#39;d rather not indent so much, we
+can rewrite <code>task</code> into this style which looks different but does the same thing:</p>
+<pre><code class="lang-swift">task =
+    _ &lt;- await (Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"Type something press Enter:"</span>)
+    text &lt;- await Stdin<span class="hljs-selector-class">.line</span>
+
+    Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>This <code>&lt;-</code> syntax is called <em>backpassing</em>. The <code>&lt;-</code> is a way to define an
+anonymous function, just like <code>\ … -&gt;</code> is.</p>
+<p>Here, we&#39;re using backpassing to define two anonymous functions. Here&#39;s one of them:</p>
+<pre><code class="lang-swift"><span class="hljs-built_in">text</span> &lt;-
+
+Stdout.<span class="hljs-built_in">line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>It may not look like it, but this code is defining an anonymous function! You might
+remember it as the anonymous function we previously defined like this:</p>
+<pre><code class="lang-swift">\<span class="hljs-built_in">text</span> -&gt;
+    Stdout.<span class="hljs-built_in">line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>These two anonymous functions are the same, just defined using different syntax.</p>
+<p>The reason the <code>&lt;-</code> syntax is called <em>backpassing</em> is because it both defines a
+function and passes that function <em>back</em> as an argument to whatever comes after
+the <code>&lt;-</code> (which in this case is <code>await Stdin.line</code>).</p>
+<p>Let&#39;s look at these two complete expressions side by side. They are both
+saying exactly the same thing, with different syntax!</p>
+<p>Here&#39;s the original:</p>
+<pre><code class="lang-swift">await Stdin<span class="hljs-selector-class">.line</span> \text -&gt;
+    Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>And here&#39;s the equivalent expression with backpassing syntax:</p>
+<pre><code class="lang-swift">text &lt;- await Stdin<span class="hljs-selector-class">.line</span>
+
+Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>Here&#39;s the other function we&#39;re defining with backpassing:</p>
+<pre><code class="lang-swift">_ &lt;-
+text &lt;- await Stdin<span class="hljs-selector-class">.line</span>
+
+Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>We could also have written that function this way if we preferred:</p>
+<pre><code class="lang-swift">_ &lt;-
+
+await Stdin<span class="hljs-selector-class">.line</span> \text -&gt;
+    Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>This is using a mix of a backpassing function <code>_ &lt;-</code> and a normal function <code>\text -&gt;</code>,
+which is totally allowed! Since backpassing is nothing more than syntax sugar for
+defining a function and passing back as an argument to another function, there&#39;s no
+reason we can&#39;t mix and match if we like.</p>
+<p>That said, the typical style in which this <code>task</code> would be written in Roc is using
+backpassing for all the <code>await</code> calls, like we had above:</p>
+<pre><code class="lang-swift">task =
+    _ &lt;- await (Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"Type something press Enter:"</span>)
+    text &lt;- await Stdin<span class="hljs-selector-class">.line</span>
+
+    Stdout<span class="hljs-selector-class">.line</span> <span class="hljs-string">"You just entered: \(text)"</span>
+</code></pre>
+<p>This way, it reads like a series of instructions:</p>
+<ol>
+<li>First, run the <code>Stdout.line</code> task and await its completion. Ignore its output (hence the underscore in <code>_ &lt;-</code>)</li>
+<li>Next, run the <code>Stdin.line</code> task and await its completion. Name its output <code>text</code>.</li>
+<li>Finally, run the <code>Stdout.line</code> task again, using the <code>text</code> value we got from the <code>Stdin.line</code> effect.</li>
+</ol>
+<p>Some important things to note about backpassing and <code>await</code>:</p>
+<ul>
+<li><code>await</code> is not a language keyword in Roc! It&#39;s referring to the <code>Task.await</code> function, which we imported unqualified by writing <code>Task.{ await }</code> in our module imports. (That said, it is playing a similar role here to the <code>await</code> keyword in languages that have <code>async</code>/<code>await</code> keywords, even though in this case it&#39;s a function instead of a special keyword.)</li>
+<li>Backpassing syntax does not need to be used with <code>await</code> in particular. It can be used with any function.</li>
+<li>Roc&#39;s compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between <code>\text -&gt;</code> and <code>text &lt;-</code> is how they look, so feel free to use whichever looks nicer to you!</li>
+</ul>
+<h2 id="appendix-advanced-concepts">Appendix: Advanced Concepts</h2>
+<p>Here are some concepts you likely won&#39;t need as a beginner, but may want to know about eventually.
+This is listed as an appendix rather than the main tutorial, to emphasize that it&#39;s totally fine
+to stop reading here and go build things!</p>
+<h3 id="open-records-and-closed-records">Open Records and Closed Records</h3>
+<p>Let&#39;s say I write a function which takes a record with a <code>firstName</code>
+and <code>lastName</code> field, and puts them together with a space in between:</p>
+<pre><code class="lang-swift">fullName = \<span class="hljs-keyword">user</span> <span class="hljs-title">-&gt;
+    "\(user</span>.firstName) \(user.lastName)<span class="hljs-string">"</span>
+</code></pre>
+<p>I can pass this function a record that has more fields than just
+<code>firstName</code> and <code>lastName</code>, as long as it has <em>at least</em> both of those fields
+(and both of them are strings). So any of these calls would work:</p>
+<ul>
+<li><code>fullName { firstName: &quot;Sam&quot;, lastName: &quot;Sample&quot; }</code></li>
+<li><code>fullName { firstName: &quot;Sam&quot;, lastName: &quot;Sample&quot;, email: &quot;blah@example.com&quot; }</code></li>
+<li><code>fullName { age: 5, firstName: &quot;Sam&quot;, things: 3, lastName: &quot;Sample&quot;, role: Admin }</code></li>
+</ul>
+<p>This <code>user</code> argument is an <em>open record</em> - that is, a description of a minimum set of fields
+on a record, and their types. When a function takes an open record as an argument,
+it&#39;s okay if you pass it a record with more fields than just the ones specified.</p>
+<p>In contrast, a <em>closed record</em> is one that requires an exact set of fields (and their types),
+with no additional fields accepted.</p>
+<p>If we add a type annotation to this <code>fullName</code> function, we can choose to have it accept either
+an open record or a closed record:</p>
+<pre><code class="lang-coffee"># Closed <span class="hljs-keyword">record</span>
+fullName : { <span class="hljs-type">firstName</span> : <span class="hljs-type">Str</span>, lastName : <span class="hljs-type">Str</span> } -&gt; Str
+fullName = \user -&gt;
+    <span class="hljs-string">"\(user.firstName) \(user.lastName)"</span>
+</code></pre>
+<pre><code class="lang-coffee"># Open record (because <span class="hljs-keyword">of</span> the `*`)
+fullName : { firstName : Str, lastName : Str }* -&gt; Str
+fullName = \user -&gt;
+    <span class="hljs-string">"\(user.firstName) \(user.lastName)"</span>
+</code></pre>
+<p>The <code>*</code> in the type <code>{ firstName : Str, lastName : Str }*</code> is what makes it an open record type.
+This <code>*</code> is the <em>wildcard type</em> we saw earlier with empty lists. (An empty list has the type <code>List *</code>,
+in contrast to something like <code>List Str</code> which is a list of strings.)</p>
+<p>This is because record types can optionally end in a type variable. Just like how we can have <code>List *</code>
+or <code>List a -&gt; List a</code>, we can also have <code>{ first : Str, last : Str }*</code> or
+<code>{ first : Str, last : Str }a -&gt; { first: Str, last : Str }a</code>. The differences are that in <code>List a</code>,
+the type variable is required and appears with a space after <code>List</code>; in a record, the type variable
+is optional, and appears (with no space) immediately after <code>}</code>.</p>
+<p>If the type variable in a record type is a <code>*</code> (such as in <code>{ first : Str, last : Str }*</code>), then
+it&#39;s an open record. If the type variable is missing, then it&#39;s a closed record. You can also specify
+a closed record by putting a <code>{}</code> as the type variable (so for example, <code>{ email : Str }{}</code> is another way to write
+<code>{ email : Str }</code>). In practice, closed records are basically always written without the <code>{}</code> on the end,
+but later on we&#39;ll see a situation where putting types other than <code>*</code> in that spot can be useful.</p>
+<h3 id="constrained-records">Constrained Records</h3>
+<p>The type variable can also be a named type variable, like so:</p>
+<pre><code class="lang-coffee">addHttps : { <span class="hljs-type">url</span> : <span class="hljs-type">Str</span> }a -&gt; { url : <span class="hljs-type">Str</span> }a
+addHttps = \<span class="hljs-keyword">record</span> -&gt;
+    { <span class="hljs-keyword">record</span> &amp; url: <span class="hljs-string">"https://\(record.url)"</span> }
+</code></pre>
+<p>This function uses <em>constrained records</em> in its type. The annotation is saying:</p>
+<ul>
+<li>This function takes a record which has at least a <code>url</code> field, and possibly others</li>
+<li>That <code>url</code> field has the type <code>Str</code></li>
+<li>It returns a record of exactly the same type as the one it was given</li>
+</ul>
+<p>So if we give this function a record with five fields, it will return a record with those
+same five fields. The only requirement is that one of those fields must be <code>url : Str</code>.</p>
+<p>In practice, constrained records appear in type annotations much less often than open or closed records do.</p>
+<p>Here&#39;s when you can typically expect to encounter these three flavors of type variables in records:</p>
+<ul>
+<li><em>Open records</em> are what the compiler infers when you use a record as an argument, or when destructuring it (for example, <code>{ x, y } =</code>).</li>
+<li><em>Closed records</em> are what the compiler infers when you create a new record (for example, <code>{ x: 5, y: 6 }</code>)</li>
+<li><em>Constrained records</em> are what the compiler infers when you do a record update (for example, <code>{ user &amp; email: newEmail }</code>)</li>
+</ul>
+<p>Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse.
+So a function <code>{ a : Str, b : Bool }* -&gt; Str</code> can accept an <code>{ a : Str, b : Bool, c : Bool }</code> record,
+but a function <code>{ a : Str, b : Bool, c : Bool } -&gt; Str</code> would not accept an <code>{ a : Str, b : Bool }*</code> record.</p>
+<p>This is because if a function accepts <code>{ a : Str, b : Bool, c : Bool }</code>, that means it might access the <code>c</code>
+field of that record. So if you passed it a record that was not guaranteed to have all three of those fields
+present (such as an <code>{ a : Str, b : Bool }*</code> record, which only guarantees that the fields <code>a</code> and <code>b</code> are present),
+the function might try to access a <code>c</code> field at runtime that did not exist!</p>
+<h3 id="type-variables-in-record-annotations">Type Variables in Record Annotations</h3>
+<p>You can add type annotations to make record types less flexible than what the compiler infers, but not more
+flexible. For example, you can use an annotation to tell the compiler to treat a record as closed when it would
+be inferred as open (or constrained), but you can&#39;t use an annotation to make a record open when it would be
+inferred as closed.</p>
+<p>If you like, you can always annotate your functions as accepting open records. However, in practice this may not
+always be the nicest choice. For example, let&#39;s say you have a <code>User</code> type alias, like so:</p>
+<pre><code class="lang-coffee">User : {
+    email : <span class="hljs-type">Str</span>,
+    firstName : <span class="hljs-type">Str</span>,
+    lastName : <span class="hljs-type">Str</span>,
+}
+</code></pre>
+<p>This defines <code>User</code> to be a closed record, which in practice is the most common way records named <code>User</code>
+tend to be defined.</p>
+<p>If you want to have a function take a <code>User</code>, you might write its type like so:</p>
+<pre><code class="lang-elm">isValid : <span class="hljs-keyword">User</span> <span class="hljs-title">-&gt; Bool</span>
+</code></pre>
+<p>If you want to have a function return a <code>User</code>, you might write its type like so:</p>
+<pre><code class="lang-elm"><span class="hljs-function"><span class="hljs-title">userFromEmail</span> : Str -&gt;</span> User
+</code></pre>
+<p>A function which takes a user and returns a user might look like this:</p>
+<pre><code class="lang-elm">capitalizeNames : <span class="hljs-keyword">User</span> <span class="hljs-title">-&gt; User</span>
+</code></pre>
+<p>This is a perfectly reasonable way to write all of these functions. However, I
+might decide that I really want the <code>isValid</code> function to take an open record -
+that is, a record with <em>at least</em> the fields of this <code>User</code> record, but possibly others as well.</p>
+<p>Since open records have a type variable (like <code>*</code> in <code>{ email : Str }*</code> or <code>a</code> in
+<code>{ email : Str }a -&gt; { email : Str }a</code>), in order to do this I&#39;d need to add a
+type variable to the <code>User</code> type alias:</p>
+<pre><code class="lang-coffee">User a : {
+    email : <span class="hljs-type">Str</span>,
+    firstName : <span class="hljs-type">Str</span>,
+    lastName : <span class="hljs-type">Str</span>,
+}a
+</code></pre>
+<p>Notice that the <code>a</code> type variable appears not only in <code>User a</code> but also in <code>}a</code> at the end of the
+record type!</p>
+<p>Using <code>User a</code> type alias, I can still write the same three functions, but now their types need to look different.
+This is what the first one would look like:</p>
+<pre><code class="lang-elm">isValid : <span class="hljs-keyword">User</span> <span class="hljs-title">* -&gt; Bool</span>
+</code></pre>
+<p>Here, the <code>User *</code> type alias substitutes <code>*</code> for the type variable <code>a</code> in the type alias,
+which takes it from <code>{ email : Str, … }a</code> to <code>{ email : Str, … }*</code>. Now I can pass it any
+record that has at least the fields in <code>User</code>, and possibly others as well, which was my goal.</p>
+<pre><code class="lang-elm">userFromEmail : Str -&gt; <span class="hljs-keyword">User</span> <span class="hljs-title">{}</span>
+</code></pre>
+<p>Here, the <code>User {}</code> type alias substitutes <code>{}</code> for the type variable <code>a</code> in the type alias,
+which takes it from <code>{ email : Str, … }a</code> to <code>{ email : Str, … }{}</code>. As noted earlier,
+this is another way to specify a closed record: putting a <code>{}</code> after it, in the same place that
+you&#39;d find a <code>*</code> in an open record.</p>
+<blockquote>
+<p><strong>Aside:</strong> This works because you can form new record types by replacing the type variable with
+other record types. For example, <code>{ a : Str, b : Str }</code> can also be written <code>{ a : Str }{ b : Str }</code>.
+You can chain these more than once, e.g. <code>{ a : Str }{ b : Str }{ c : Str, d : Str }</code>.
+This is more useful when used with type annotations; for example, <code>{ a : Str, b : Str }User</code> describes
+a closed record consisting of all the fields in the closed record <code>User</code>, plus <code>a : Str</code> and <code>b : Str</code>.</p>
+</blockquote>
+<p>This function still returns the same record as it always did, it just needs to be annotated as
+<code>User {}</code> now instead of just <code>User</code>, because the <code>User</code> type alias has a variable in it that must be
+specified.</p>
+<p>The third function might need to use a named type variable:</p>
+<pre><code class="lang-elm">capitalizeNames : <span class="hljs-keyword">User</span> <span class="hljs-title">a</span> -&gt; <span class="hljs-keyword">User</span> <span class="hljs-title">a</span>
+</code></pre>
+<p>If this function does a record update on the given user, and returns that - for example, if its
+definition were <code>capitalizeNames = \user -&gt; { user &amp; email: &quot;blah&quot; }</code> - then it needs to use the
+same named type variable for both the argument and return value.</p>
+<p>However, if returns a new <code>User</code> that it created from scratch, then its type could instead be:</p>
+<pre><code class="lang-elm">capitalizeNames : <span class="hljs-keyword">User</span> <span class="hljs-title">* -&gt; User</span> {}
+</code></pre>
+<p>This says that it takes a record with at least the fields specified in the <code>User</code> type alias,
+and possibly others...and then returns a record with exactly the fields specified in the <code>User</code>
+type alias, and no others.</p>
+<p>These three examples illustrate why it&#39;s relatively uncommon to use open records for type aliases:
+it makes a lot of types need to incorporate a type variable that otherwise they could omit,
+all so that <code>isValid</code> can be given something that has not only the fields <code>User</code> has, but
+some others as well. (In the case of a <code>User</code> record in particular, it may be that the extra
+fields were included due to a mistake rather than on purpose, and accepting an open record could
+prevent the compiler from raising an error that would have revealed the mistake.)</p>
+<p>That said, this is a useful technique to know about if you want to (for example) make a record
+type that accumulates more and more fields as it progresses through a series of operations.</p>
+<h3 id="open-and-closed-tag-unions">Open and Closed Tag Unions</h3>
+<p>Just like how Roc has open records and closed records, it also has open and closed tag unions.</p>
+<p>The <em>open tag union</em> (or <em>open union</em> for short) <code>[Foo Str, Bar Bool]*</code> represents a tag that might
+be <code>Foo Str</code> and might be <code>Bar Bool</code>, but might also be some other tag whose type isn&#39;t known at compile time.</p>
+<p>Because an open union represents possibilities that are impossible to know ahead of time, any <code>when</code> I use on a
+<code>[Foo Str, Bar Bool]*</code> value must include a catch-all <code>_ -&gt;</code> branch. Otherwise, if one of those
+unknown tags were to come up, the <code>when</code> would not know what to do with it! For example:</p>
+<pre><code class="lang-coffee"><span class="hljs-function"><span class="hljs-title">example</span> : [Foo Str, Bar Bool]* -&gt;</span> Bool
+<span class="hljs-function"><span class="hljs-title">example</span> = \tag -&gt;</span>
+    <span class="hljs-keyword">when</span> tag <span class="hljs-keyword">is</span>
+        F<span class="hljs-function"><span class="hljs-title">oo</span> str -&gt;</span> Str.isEmpty str
+        B<span class="hljs-function"><span class="hljs-title">ar</span> bool -&gt;</span> bool
+        _ -&gt; Bool.<span class="hljs-literal">false</span>
+</code></pre>
+<p>In contrast, a <em>closed tag union</em> (or <em>closed union</em>) like <code>[Foo Str, Bar Bool]</code> (without the <code>*</code>)
+represents an exhaustive set of possible tags. If I use a <code>when</code> on one of these, I can match on <code>Foo</code>
+only and then on <code>Bar</code> only, with no need for a catch-all branch. For example:</p>
+<pre><code class="lang-coffee"><span class="hljs-function"><span class="hljs-title">example</span> : [Foo Str, Bar Bool] -&gt;</span> Bool
+<span class="hljs-function"><span class="hljs-title">example</span> = \tag -&gt;</span>
+    <span class="hljs-keyword">when</span> tag <span class="hljs-keyword">is</span>
+        F<span class="hljs-function"><span class="hljs-title">oo</span> str -&gt;</span> Str.isEmpty str
+        B<span class="hljs-function"><span class="hljs-title">ar</span> bool -&gt;</span> bool
+</code></pre>
+<p>If we were to remove the type annotations from the previous two code examples, Roc would infer the same
+types for them anyway.</p>
+<p>It would infer <code>tag : [Foo Str, Bar Bool]</code> for the latter example because the <code>when tag is</code> expression
+only includes a <code>Foo Str</code> branch and a <code>Bar Bool</code> branch, and nothing else. Since the <code>when</code> doesn&#39;t handle
+any other possibilities, these two tags must be the only possible ones the <code>tag</code> argument could be.</p>
+<p>It would infer <code>tag : [Foo Str, Bar Bool]*</code> for the former example because the <code>when tag is</code> expression
+includes a <code>Foo Str</code> branch and a <code>Bar Bool</code> branch - meaning we know about at least those two specific
+possibilities - but also a <code>_ -&gt;</code> branch, indicating that there may be other tags we don&#39;t know about. Since
+the <code>when</code> is flexible enough to handle all possible tags, <code>tag</code> gets inferred as an open union.</p>
+<p>Putting these together, whether a tag union is inferred to be open or closed depends on which possibilities
+the implementation actually handles.</p>
+<blockquote>
+<p><strong>Aside:</strong> As with open and closed records, we can use type annotations to make tag union types less flexible
+than what would be inferred. If we added a <code>_ -&gt;</code> branch to the second example above, the compiler would still
+accept <code>example : [Foo Str, Bar Bool] -&gt; Bool</code> as the type annotation, even though the catch-all branch
+would permit the more flexible <code>example : [Foo Str, Bar Bool]* -&gt; Bool</code> annotation instead.</p>
+</blockquote>
+<h3 id="combining-open-unions">Combining Open Unions</h3>
+<p>When we make a new record, it&#39;s inferred to be a closed record. For example, in <code>foo { a: &quot;hi&quot; }</code>,
+the type of <code>{ a: &quot;hi&quot; }</code> is inferred to be <code>{ a : Str }</code>. In contrast, when we make a new tag, it&#39;s inferred
+to be an open union. So in <code>foo (Bar &quot;hi&quot;)</code>, the type of <code>Bar &quot;hi&quot;</code> is inferred to be <code>[Bar Str]*</code>.</p>
+<p>This is because open unions can accumulate additional tags based on how they&#39;re used in the program,
+whereas closed unions cannot. For example, let&#39;s look at this conditional:</p>
+<pre><code class="lang-elm"><span class="hljs-keyword">if</span> x &gt; <span class="hljs-number">5</span> <span class="hljs-keyword">then</span>
+    <span class="hljs-string">"foo"</span>
+<span class="hljs-keyword">else</span>
+    <span class="hljs-number">7</span>
+</code></pre>
+<p>This will be a type mismatch because the two branches have incompatible types. Strings and numbers are not
+type-compatible! Now let&#39;s look at another example:</p>
+<pre><code class="lang-elm"><span class="hljs-keyword">if</span> x &gt; <span class="hljs-number">5</span> then
+    <span class="hljs-literal">Ok</span> <span class="hljs-string">"foo"</span>
+<span class="hljs-keyword">else</span>
+    <span class="hljs-literal">Err</span> <span class="hljs-string">"bar"</span>
+</code></pre>
+<p>This shouldn&#39;t be a type mismatch, because we can see that the two branches are compatible; they are both
+tags that could easily coexist in the same tag union. But if the compiler inferred the type of <code>Ok &quot;foo&quot;</code> to be
+the closed union <code>[Ok Str]</code>, and likewise for <code>Err &quot;bar&quot;</code> and <code>[Err Str]</code>, then this would have to be
+a type mismatch - because those two closed unions are incompatible.</p>
+<p>Instead, the compiler infers <code>Ok &quot;foo&quot;</code> to be the open union <code>[Ok Str]*</code>, and <code>Err &quot;bar&quot;</code> to be the open
+union <code>[Err Str]*</code>. Then, when using them together in this conditional, the inferred type of the conditional
+becomes <code>[Ok Str, Err Str]*</code> - that is, the combination of the unions in each of its branches. (Branches in
+a <code>when</code> work the same way with open unions.)</p>
+<p>Earlier we saw how a function which accepts an open union must account for more possibilities, by including
+catch-all <code>_ -&gt;</code> patterns in its <code>when</code> expressions. So <em>accepting</em> an open union means you have more requirements.
+In contrast, when you already <em>have</em> a value which is an open union, you have fewer requirements. A value
+which is an open union (like <code>Ok &quot;foo&quot;</code>, which has the type <code>[Ok Str]*</code>) can be provided to anything that&#39;s
+expecting a tag union (no matter whether it&#39;s open or closed), as long as the expected tag union includes at least
+the tags in the open union you&#39;re providing.</p>
+<p>So if I have an <code>[Ok Str]*</code> value, I can pass it to functions with any of these types (among others):</p>
+<ul>
+<li><code>[Ok Str]* -&gt; Bool</code></li>
+<li><code>[Ok Str] -&gt; Bool</code></li>
+<li><code>[Ok Str, Err Bool]* -&gt; Bool</code></li>
+<li><code>[Ok Str, Err Bool] -&gt; Bool</code></li>
+<li><code>[Ok Str, Err Bool, Whatever]* -&gt; Bool</code></li>
+<li><code>[Ok Str, Err Bool, Whatever] -&gt; Bool</code></li>
+<li><code>Result Str Bool -&gt; Bool</code></li>
+<li><code>[Err Bool, Whatever]* -&gt; Bool</code></li>
+</ul>
+<p>That last one works because a function accepting an open union can accept any unrecognized tag, including
+<code>Ok Str</code> - even though it is not mentioned as one of the tags in <code>[Err Bool, Whatever]*</code>! Remember, when
+a function accepts an open tag union, any <code>when</code> branches on that union must include a catch-all <code>_ -&gt;</code> branch,
+which is the branch that will end up handling the <code>Ok Str</code> value we pass in.</p>
+<p>However, I could not pass an <code>[Ok Str]*</code> to a function with a <em>closed</em> tag union argument that did not
+mention <code>Ok Str</code> as one of its tags. So if I tried to pass <code>[Ok Str]*</code> to a function with the type
+<code>[Err Bool, Whatever] -&gt; Str</code>, I would get a type mismatch - because a <code>when</code> in that function could
+be handling the <code>Err Bool</code> possibility and the <code>Whatever</code> possibility, and since it would not necessarily have
+a catch-all <code>_ -&gt;</code> branch, it might not know what to do with an <code>Ok Str</code> if it received one.</p>
+<blockquote>
+<p><strong>Note:</strong> It wouldn&#39;t be accurate to say that a function which accepts an open union handles
+&quot;all possible tags.&quot; For example, if I have a function <code>[Ok Str]* -&gt; Bool</code> and I pass it
+<code>Ok 5</code>, that will still be a type mismatch. If you think about it, a <code>when</code> in that function might
+have the branch <code>Ok str -&gt;</code> which assumes there&#39;s a string inside that <code>Ok</code>, and if <code>Ok 5</code> type-checked,
+then that assumption would be false and things would break!</p>
+<p>So <code>[Ok Str]*</code> is more restrictive than <code>[]*</code>. It&#39;s basically saying &quot;this may or may not be an <code>Ok</code> tag,
+but if it is an <code>Ok</code> tag, then it&#39;s guaranteed to have a payload of exactly <code>Str</code>.&quot;</p>
+</blockquote>
+<p>In summary, here&#39;s a way to think about the difference between open unions in a value you have, compared to a value you&#39;re accepting:</p>
+<ul>
+<li>If you <em>have</em> a closed union, that means it has all the tags it ever will, and can&#39;t accumulate more.</li>
+<li>If you <em>have</em> an open union, that means it can accumulate more tags through conditional branches.</li>
+<li>If you <em>accept</em> a closed union, that means you only have to handle the possibilities listed in the union.</li>
+<li>If you <em>accept</em> an open union, that means you have to handle the possibility that it has a tag you can&#39;t know about.</li>
+</ul>
+<h3 id="type-variables-in-tag-unions">Type Variables in Tag Unions</h3>
+<p>Earlier we saw these two examples, one with an open tag union and the other with a closed one:</p>
+<pre><code class="lang-coffee"><span class="hljs-function"><span class="hljs-title">example</span> : [Foo Str, Bar Bool]* -&gt;</span> Bool
+<span class="hljs-function"><span class="hljs-title">example</span> = \tag -&gt;</span>
+    <span class="hljs-keyword">when</span> tag <span class="hljs-keyword">is</span>
+        F<span class="hljs-function"><span class="hljs-title">oo</span> str -&gt;</span> Str.isEmpty str
+        B<span class="hljs-function"><span class="hljs-title">ar</span> bool -&gt;</span> bool
+        _ -&gt; Bool.<span class="hljs-literal">false</span>
+</code></pre>
+<pre><code class="lang-coffee"><span class="hljs-function"><span class="hljs-title">example</span> : [Foo Str, Bar Bool] -&gt;</span> Bool
+<span class="hljs-function"><span class="hljs-title">example</span> = \tag -&gt;</span>
+    <span class="hljs-keyword">when</span> tag <span class="hljs-keyword">is</span>
+        F<span class="hljs-function"><span class="hljs-title">oo</span> str -&gt;</span> Str.isEmpty str
+        B<span class="hljs-function"><span class="hljs-title">ar</span> bool -&gt;</span> bool
+</code></pre>
+<p>Similarly to how there are open records with a <code>*</code>, closed records with nothing,
+and constrained records with a named type variable, we can also have <em>constrained tag unions</em>
+with a named type variable. Here&#39;s an example:</p>
+<pre><code class="lang-coffee"><span class="hljs-symbol">example</span> : [Foo <span class="hljs-keyword">Str, </span><span class="hljs-keyword">Bar </span><span class="hljs-keyword">Bool]a </span>-&gt; [Foo <span class="hljs-keyword">Str, </span><span class="hljs-keyword">Bar </span><span class="hljs-keyword">Bool]a
+</span><span class="hljs-symbol">example</span> = \tag -&gt;
+    when tag is
+        Foo <span class="hljs-keyword">str </span>-&gt; <span class="hljs-keyword">Bar </span>(<span class="hljs-keyword">Str.isEmpty </span><span class="hljs-keyword">str)
+</span>        <span class="hljs-keyword">Bar </span>_ -&gt; <span class="hljs-keyword">Bar </span><span class="hljs-keyword">Bool.false
+</span>        other -&gt; other
+</code></pre>
+<p>This type says that the <code>example</code> function will take either a <code>Foo Str</code> tag, or a <code>Bar Bool</code> tag,
+or possibly another tag we don&#39;t know about at compile time - and it also says that the function&#39;s
+return type is the same as the type of its argument.</p>
+<p>So if we give this function a <code>[Foo Str, Bar Bool, Baz (List Str)]</code> argument, then it will be guaranteed
+to return a <code>[Foo Str, Bar Bool, Baz (List Str)]</code> value. This is more constrained than a function that
+returned <code>[Foo Str, Bar Bool]*</code> because that would say it could return <em>any</em> other tag (in addition to
+the <code>Foo Str</code> and <code>Bar Bool</code> we already know about).</p>
+<p>If we removed the type annotation from <code>example</code> above, Roc&#39;s compiler would infer the same type anyway.
+This may be surprising if you look closely at the body of the function, because:</p>
+<ul>
+<li>The return type includes <code>Foo Str</code>, but no branch explicitly returns <code>Foo</code>. Couldn&#39;t the return type be <code>[Bar Bool]a</code> instead?</li>
+<li>The argument type includes <code>Bar Bool</code> even though we never look at <code>Bar</code>&#39;s payload. Couldn&#39;t the argument type be inferred to be <code>Bar *</code> instead of <code>Bar Bool</code>, since we never look at it?</li>
+</ul>
+<p>The reason it has this type is the <code>other -&gt; other</code> branch. Take a look at that branch, and ask this question:
+&quot;What is the type of <code>other</code>?&quot; There has to be exactly one answer! It can&#39;t be the case that <code>other</code> has one
+type before the <code>-&gt;</code> and another type after it; whenever you see a named value in Roc, it is guaranteed to have
+the same type everywhere it appears in that scope.</p>
+<p>For this reason, any time you see a function that only runs a <code>when</code> on its only argument, and that <code>when</code>
+includes a branch like <code>x -&gt; x</code> or <code>other -&gt; other</code>, the function&#39;s argument type and return type must necessarily
+be equivalent.</p>
+<blockquote>
+<p><strong>Note:</strong> Just like with records, you can also replace the type variable in tag union types with a concrete type.
+For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <code>[Foo Str, Bar Bool, Baz (List Str)]</code>.</p>
+<p>Also just like with records, you can use this to compose tag union type aliases. For example, you can write
+<code>NetworkError : [Timeout, Disconnected]</code> and then <code>Problem : [InvalidInput, UnknownFormat]NetworkError</code></p>
+</blockquote>
+<h3 id="phantom-types">Phantom Types</h3>
+<p>[This part of the tutorial has not been written yet. Coming soon!]</p>
+<h3 id="operator-desugaring-table">Operator Desugaring Table</h3>
+<p>Here are various Roc expressions involving operators, and what they desugar to.</p>
+<table>
+<thead>
+<tr>
+<th>Expression</th>
+<th>Desugars to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a + b</code></td>
+<td><code>Num.add a b</code></td>
+</tr>
+<tr>
+<td><code>a - b</code></td>
+<td><code>Num.sub a b</code></td>
+</tr>
+<tr>
+<td><code>a * b</code></td>
+<td><code>Num.mul a b</code></td>
+</tr>
+<tr>
+<td><code>a / b</code></td>
+<td><code>Num.div a b</code></td>
+</tr>
+<tr>
+<td><code>a // b</code></td>
+<td><code>Num.divTrunc a b</code></td>
+</tr>
+<tr>
+<td><code>a ^ b</code></td>
+<td><code>Num.pow a b</code></td>
+</tr>
+<tr>
+<td><code>a % b</code></td>
+<td><code>Num.rem a b</code></td>
+</tr>
+<tr>
+<td><code>a &gt;&gt; b</code></td>
+<td><code>Num.shr a b</code></td>
+</tr>
+<tr>
+<td><code>a &lt;&lt; b</code></td>
+<td><code>Num.shl a b</code></td>
+</tr>
+<tr>
+<td><code>-a</code></td>
+<td><code>Num.neg a</code></td>
+</tr>
+<tr>
+<td><code>-f x y</code></td>
+<td><code>Num.neg (f x y)</code></td>
+</tr>
+<tr>
+<td><code>a == b</code></td>
+<td><code>Bool.isEq a b</code></td>
+</tr>
+<tr>
+<td><code>a != b</code></td>
+<td><code>Bool.isNotEq a b</code></td>
+</tr>
+<tr>
+<td><code>a &amp;&amp; b</code></td>
+<td><code>Bool.and a b</code></td>
+</tr>
+<tr>
+<td>`a \</td>
+<td>\</td>
+<td>b`</td>
+<td><code>Bool.or a b</code></td>
+</tr>
+<tr>
+<td><code>!a</code></td>
+<td><code>Bool.not a</code></td>
+</tr>
+<tr>
+<td><code>!f x y</code></td>
+<td><code>Bool.not (f x y)</code></td>
+</tr>
+<tr>
+<td>`a \</td>
+<td>&gt; b`</td>
+<td><code>b a</code></td>
+</tr>
+<tr>
+<td>`a b c \</td>
+<td>&gt; f x y`</td>
+<td><code>f (a b c) x y</code></td>
+</tr>
+</tbody>
+</table>
+<footer>
+<p>Made by people who like to make nice things.</p>
+<p>© 2022</p>
+</footer>
+</body>
+</html>

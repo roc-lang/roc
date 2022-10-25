@@ -1,0 +1,58 @@
+html {
+    font-family: sans-serif;
+    line-height: 145%;
+}
+
+li {
+    margin-bottom: 0.5rem;
+}
+
+@media only screen and (min-device-width: 900px) {
+    body {
+        width: 900px;
+        margin: 24px auto;
+    }
+}
+
+aside {
+    background-color: #eee;
+    padding: 2px 20px;
+}
+
+code.snippet, samp {
+    display: block;
+    white-space: pre;
+    padding: 10px 16px;
+    background-color: #eee;
+}
+
+code .ann, samp .ann {
+    /* type annotation - purple in the repl */
+    color: rebeccapurple;
+}
+
+/* Used on on the different-names page. */
+
+th, td {
+    text-align: left;
+    padding-right: 24px;
+}
+
+#different-names-body a, #different-names-body li {
+    font-family: monospace;
+    font-size: 16px;
+}
+
+#different-names-body li {
+    display: inline;
+}
+
+#different-names-body li:not(:last-of-type)::after {
+    /* This is injected via CSS for accessibility, so to a screen reader it's a normal <li> */
+    content: ",";
+}
+
+#different-names-body ul {
+    padding: 0;
+    list-style-type: none;
+}
