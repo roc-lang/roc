@@ -3143,13 +3143,16 @@ fn diff_tag_union<'b>(
     fields2: &SendMap<TagName, Vec<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let gen_usages = {
+    let gen_usages1 = {
         let mut usages = VecMap::default();
-        count_generated_name_usages(
-            &mut usages,
-            (fields1.values().flatten()).chain(fields2.values().flatten()),
-        );
-        count_generated_name_usages_in_exts(&mut usages, [&ext1, &ext2]);
+        count_generated_name_usages(&mut usages, fields1.values().flatten());
+        count_generated_name_usages_in_exts(&mut usages, [&ext1]);
+        usages
+    };
+    let gen_usages2 = {
+        let mut usages = VecMap::default();
+        count_generated_name_usages(&mut usages, fields2.values().flatten());
+        count_generated_name_usages_in_exts(&mut usages, [&ext2]);
         usages
     };
 
@@ -3224,7 +3227,7 @@ fn diff_tag_union<'b>(
         (false, false) => Status::Similar,
     };
 
-    let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages);
+    let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages1, &gen_usages2);
 
     let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         left: vec![],
@@ -3287,11 +3290,12 @@ fn tag_ext_to_diff<'b>(
     pol: Polarity,
     ext1: TypeExt,
     ext2: TypeExt,
-    gen_usages: &VecMap<Lowercase, usize>,
+    gen_usages1: &VecMap<Lowercase, usize>,
+    gen_usages2: &VecMap<Lowercase, usize>,
 ) -> Diff<Option<RocDocBuilder<'b>>> {
     let status = ext_to_status(&ext1, &ext2);
-    let ext_doc_1 = tag_ext_to_doc(alloc, pol, gen_usages, ext1);
-    let ext_doc_2 = tag_ext_to_doc(alloc, pol, gen_usages, ext2);
+    let ext_doc_1 = tag_ext_to_doc(alloc, pol, gen_usages1, ext1);
+    let ext_doc_2 = tag_ext_to_doc(alloc, pol, gen_usages2, ext2);
 
     match &status {
         Status::Similar => Diff {
