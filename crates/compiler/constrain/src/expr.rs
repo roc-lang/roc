@@ -1692,8 +1692,7 @@ fn constrain_function_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                // TODO coalesce with other ret_type index
-                constraints.push_type(ret_type.clone()),
+                ret_type_index,
             );
 
             let ret_constraint = constrain_expr(
