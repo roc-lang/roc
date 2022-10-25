@@ -3134,14 +3134,14 @@ fn constraint_recursive_function(
 
             let signature_index = constraints.push_type(signature.clone());
 
-            let annotation_expected = FromAnnotation(
+            let annotation_expected = constraints.push_expected_type(FromAnnotation(
                 loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 signature_index,
-            );
+            ));
 
             let (arg_types, _signature_closure_type, ret_type) = match &signature {
                 Type::Function(arg_types, signature_closure_type, ret_type) => {
@@ -3150,7 +3150,6 @@ fn constraint_recursive_function(
                 _ => todo!("TODO {:?}", (loc_symbol, &signature)),
             };
 
-            let expected = annotation_expected;
             let region = loc_function_def.region;
 
             let loc_body_expr = loc_expr;
@@ -3163,8 +3162,7 @@ fn constraint_recursive_function(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
-            let ret_type = *ret_type.clone();
-            let ret_type_index = constraints.push_type(ret_type.clone());
+            let ret_type_index = constraints.push_type(*ret_type.clone());
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -3175,7 +3173,10 @@ fn constraint_recursive_function(
                 loc_symbol.value,
                 Loc {
                     region,
-                    // TODO coalesce with other signature_index
+                    // TODO coalesce with other `signature_index`.
+                    // This doesn't yet work; needs investigation as to why.
+                    // My guess is that when types SoA lands, this might just resolve itself, since
+                    // types will be composed from variables to begin with.
                     value: constraints.push_type(signature.clone()),
                 },
             );
@@ -3206,15 +3207,13 @@ fn constraint_recursive_function(
                 &mut vars,
             );
 
-            let fn_type = Type::Function(
+            let fn_type = constraints.push_type(Type::Function(
                 pattern_types,
                 Box::new(Type::Variable(closure_var)),
-                Box::new(ret_type.clone()),
-            );
+                Box::new(*ret_type.clone()),
+            ));
 
             let expr_con = {
-                // TODO coalesce with other ret_type_index
-                let ret_type_index = constraints.push_type(ret_type.clone());
                 constrain_expr(
                     constraints,
                     env,
@@ -3236,11 +3235,7 @@ fn constraint_recursive_function(
                     state_constraints,
                     expr_con,
                 ),
-                {
-                    let type_index = constraints.push_type(fn_type);
-                    let expected_index = constraints.push_expected_type(expected);
-                    constraints.equal_types(type_index, expected_index, Category::Lambda, region)
-                },
+                constraints.equal_types(fn_type, annotation_expected, Category::Lambda, region),
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
