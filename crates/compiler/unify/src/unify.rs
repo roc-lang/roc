@@ -13,7 +13,9 @@ use roc_types::subs::{
     OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
     UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField, Uls};
+use roc_types::types::{
+    AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
+};
 
 macro_rules! mismatch {
     () => {{
@@ -340,9 +342,21 @@ impl<'a> Env<'a> {
     }
 }
 
+/// Unifies two types.
+/// The [mode][Mode] enables or disables certain extensional features of unification.
+///
+/// `observed_pol` describes the [polarity][Polarity] of the type observed to be under unification.
+/// This is only relevant for producing error types, and is not material to the unification
+/// algorithm.
 #[inline(always)]
-pub fn unify(env: &mut Env, var1: Variable, var2: Variable, mode: Mode) -> Unified {
-    unify_help(env, var1, var2, mode)
+pub fn unify(
+    env: &mut Env,
+    var1: Variable,
+    var2: Variable,
+    mode: Mode,
+    observed_pol: Polarity,
+) -> Unified {
+    unify_help(env, var1, var2, mode, observed_pol)
 }
 
 #[inline(always)]
@@ -353,7 +367,13 @@ pub fn unify_introduced_ability_specialization(
     specialization_var: Variable,
     mode: Mode,
 ) -> Unified<SpecializationLsetCollector> {
-    unify_help(env, ability_member_signature, specialization_var, mode)
+    unify_help(
+        env,
+        ability_member_signature,
+        specialization_var,
+        mode,
+        Polarity::OF_VALUE,
+    )
 }
 
 #[inline(always)]
@@ -363,8 +383,9 @@ pub fn unify_with_collector<M: MetaCollector>(
     var1: Variable,
     var2: Variable,
     mode: Mode,
+    observed_pol: Polarity,
 ) -> Unified<M> {
-    unify_help(env, var1, var2, mode)
+    unify_help(env, var1, var2, mode, observed_pol)
 }
 
 #[inline(always)]
@@ -374,6 +395,7 @@ fn unify_help<M: MetaCollector>(
     var1: Variable,
     var2: Variable,
     mode: Mode,
+    observed_pol: Polarity,
 ) -> Unified<M> {
     let mut vars = Vec::new();
     let Outcome {
@@ -397,8 +419,12 @@ fn unify_help<M: MetaCollector>(
             ErrorTypeContext::None
         };
 
-        let (type1, mut problems) = env.subs.var_to_error_type_contextual(var1, error_context);
-        let (type2, problems2) = env.subs.var_to_error_type_contextual(var2, error_context);
+        let (type1, mut problems) =
+            env.subs
+                .var_to_error_type_contextual(var1, error_context, observed_pol);
+        let (type2, problems2) =
+            env.subs
+                .var_to_error_type_contextual(var2, error_context, observed_pol);
 
         problems.extend(problems2);
 
@@ -412,7 +438,8 @@ fn unify_help<M: MetaCollector>(
                 .filter_map(|mismatch| match mismatch {
                     Mismatch::DoesNotImplementAbiity(var, ab) => {
                         let (err_type, _new_problems) =
-                            env.subs.var_to_error_type_contextual(var, error_context);
+                            env.subs
+                                .var_to_error_type_contextual(var, error_context, observed_pol);
                         Some((err_type, ab))
                     }
                     _ => None,

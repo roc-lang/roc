@@ -334,7 +334,7 @@ impl OptAbleType {
 }
 
 /// Polarity of a type, or roughly, what side of an arrow it appears on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Polarity {
     /// A type that appears in negative/input position
     Neg,
@@ -354,6 +354,10 @@ impl std::ops::Neg for Polarity {
 }
 
 impl Polarity {
+    pub const OF_VALUE: Polarity = Polarity::Pos;
+
+    pub const OF_PATTERN: Polarity = Polarity::Neg;
+
     pub fn is_neg(&self) -> bool {
         matches!(self, Self::Neg)
     }
@@ -2301,8 +2305,13 @@ pub enum ErrorType {
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
-    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt, Polarity),
+    RecursiveTagUnion(
+        Box<ErrorType>,
+        SendMap<TagName, Vec<ErrorType>>,
+        TypeExt,
+        Polarity,
+    ),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Vec<ErrorType>),
@@ -2339,12 +2348,12 @@ impl ErrorType {
                     .for_each(|(_, t)| t.as_inner().add_names(taken));
                 ext.add_names(taken);
             }
-            TagUnion(tags, ext) => {
+            TagUnion(tags, ext, _) => {
                 tags.iter()
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
                 ext.add_names(taken);
             }
-            RecursiveTagUnion(t, tags, ext) => {
+            RecursiveTagUnion(t, tags, ext, _) => {
                 t.add_names(taken);
                 tags.iter()
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
@@ -2636,7 +2645,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push('}');
             write_type_ext(ext, buf);
         }
-        TagUnion(tags, ext) => {
+        TagUnion(tags, ext, _pol) => {
             buf.push('[');
 
             let mut it = tags.into_iter().peekable();
@@ -2656,7 +2665,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push(']');
             write_type_ext(ext, buf);
         }
-        RecursiveTagUnion(rec, tags, ext) => {
+        RecursiveTagUnion(rec, tags, ext, _pol) => {
             buf.push('[');
 
             let mut it = tags.into_iter().peekable();

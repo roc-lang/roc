@@ -16,7 +16,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Polarity, Reason, RecordField,
+    TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -2202,6 +2203,7 @@ pub struct Diff<T> {
 
 fn tag_ext_to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
     gen_usages: &VecMap<Lowercase, usize>,
     ext: TypeExt,
 ) -> Option<RocDocBuilder<'b>> {
@@ -2214,12 +2216,17 @@ fn tag_ext_to_doc<'b>(
                 .get(&lowercase)
                 .expect("flex var appears, but not captured here");
 
-            let doc = if usages > 1 {
-                alloc.type_variable(display_generated_name(&lowercase).into())
+            if usages > 1 {
+                Some(alloc.type_variable(display_generated_name(&lowercase).into()))
             } else {
-                alloc.type_variable(WILDCARD.into())
-            };
-            Some(doc)
+                match pol {
+                    Polarity::Neg => Some(alloc.type_variable(lowercase)),
+                    Polarity::Pos => {
+                        // Wildcard in output position is irrelevant and is elided.
+                        None
+                    }
+                }
+            }
         }
         FlexOpen(lowercase) | RigidOpen(lowercase) => Some(alloc.type_variable(lowercase)),
     }
@@ -2394,7 +2401,7 @@ fn to_doc_help<'b>(
             )
         }
 
-        TagUnion(tags_map, ext) => {
+        TagUnion(tags_map, ext, pol) => {
             let mut tags = tags_map
                 .into_iter()
                 .map(|(name, args)| {
@@ -2415,11 +2422,11 @@ fn to_doc_help<'b>(
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
-                tag_ext_to_doc(alloc, gen_usages, ext),
+                tag_ext_to_doc(alloc, pol, gen_usages, ext),
             )
         }
 
-        RecursiveTagUnion(rec_var, tags_map, ext) => {
+        RecursiveTagUnion(rec_var, tags_map, ext, pol) => {
             let mut tags = tags_map
                 .into_iter()
                 .map(|(name, args)| {
@@ -2441,7 +2448,7 @@ fn to_doc_help<'b>(
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
-                tag_ext_to_doc(alloc, gen_usages, ext),
+                tag_ext_to_doc(alloc, pol, gen_usages, ext),
             )
         }
 
@@ -2482,11 +2489,11 @@ fn count_generated_name_usages<'a>(
                 stack.extend(fields.values().map(|f| f.as_inner()));
                 ext_stack.push(ext);
             }
-            TagUnion(tags, ext) => {
+            TagUnion(tags, ext, _) => {
                 stack.extend(tags.values().flatten());
                 ext_stack.push(ext);
             }
-            RecursiveTagUnion(rec, tags, ext) => {
+            RecursiveTagUnion(rec, tags, ext, _) => {
                 stack.push(rec);
                 stack.extend(tags.values().flatten());
                 ext_stack.push(ext);
@@ -2739,7 +2746,7 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _)) | (TagUnion(tags, _), Alias(Symbol::BOOL_BOOL, _, _, _))
+        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _, _)) | (TagUnion(tags, _, _), Alias(Symbol::BOOL_BOOL, _, _, _))
             if tags.len() == 1
                 && tags.keys().all(|t| t.0.as_str() == "True" || t.0.as_str() == "False") =>
         {
@@ -2791,11 +2798,11 @@ fn to_diff<'b>(
             diff_record(alloc, fields1, ext1, fields2, ext2)
         }
 
-        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            diff_tag_union(alloc, &tags1, ext1, &tags2, ext2)
+        (TagUnion(tags1, ext1, pol), TagUnion(tags2, ext2, _)) => {
+            diff_tag_union(alloc, pol, &tags1, ext1, &tags2, ext2)
         }
 
-        (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
+        (RecursiveTagUnion(_rec1, _tags1, _ext1, _), RecursiveTagUnion(_rec2, _tags2, _ext2, _)) => {
             // TODO do a better job here
             let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
             let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
@@ -3130,6 +3137,7 @@ fn same_tag_name_overlap_diff<'b>(
 
 fn diff_tag_union<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
     fields1: &SendMap<TagName, Vec<ErrorType>>,
     ext1: TypeExt,
     fields2: &SendMap<TagName, Vec<ErrorType>>,
@@ -3216,7 +3224,7 @@ fn diff_tag_union<'b>(
         (false, false) => Status::Similar,
     };
 
-    let ext_diff = tag_ext_to_diff(alloc, ext1, ext2, &gen_usages);
+    let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages);
 
     let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         left: vec![],
@@ -3276,13 +3284,14 @@ fn diff_tag_union<'b>(
 
 fn tag_ext_to_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
     ext1: TypeExt,
     ext2: TypeExt,
     gen_usages: &VecMap<Lowercase, usize>,
 ) -> Diff<Option<RocDocBuilder<'b>>> {
     let status = ext_to_status(&ext1, &ext2);
-    let ext_doc_1 = tag_ext_to_doc(alloc, gen_usages, ext1);
-    let ext_doc_2 = tag_ext_to_doc(alloc, gen_usages, ext2);
+    let ext_doc_1 = tag_ext_to_doc(alloc, pol, gen_usages, ext1);
+    let ext_doc_2 = tag_ext_to_doc(alloc, pol, gen_usages, ext2);
 
     match &status {
         Status::Similar => Diff {
@@ -3858,7 +3867,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
-                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     rigid_able_vs_concrete(x, alloc.reflow("a tag value"))
                 }
                 Alias(symbol, _, _, _) | Type(symbol, _) => rigid_able_vs_concrete(
@@ -3946,7 +3955,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
-                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))
                 }
                 Alias(symbol, _, _, _) | Type(symbol, _) => bad_rigid_var(

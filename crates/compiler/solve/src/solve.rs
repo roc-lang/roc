@@ -33,8 +33,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar, Reason,
-    RecordField, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar,
+    Polarity, Reason, RecordField, TypeExtension, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -922,7 +922,13 @@ fn solve(
                     expectation.get_type_ref(),
                 );
 
-                match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    expected,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1034,7 +1040,13 @@ fn solve(
                             expectation.get_type_ref(),
                         );
 
-                        match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+                        match unify(
+                            &mut UEnv::new(subs),
+                            actual,
+                            expected,
+                            Mode::EQ,
+                            Polarity::OF_VALUE,
+                        ) {
                             Success {
                                 vars,
                                 must_implement_ability,
@@ -1146,7 +1158,13 @@ fn solve(
                     _ => Mode::EQ,
                 };
 
-                match unify(&mut UEnv::new(subs), actual, expected, mode) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    expected,
+                    mode,
+                    Polarity::OF_PATTERN,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1357,7 +1375,13 @@ fn solve(
                     &tag_ty,
                 );
 
-                match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    includes,
+                    Mode::PRESENT,
+                    Polarity::OF_PATTERN,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1493,8 +1517,13 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                let unify_cond_and_patterns_outcome =
-                    unify(&mut UEnv::new(subs), branches_var, real_var, Mode::EQ);
+                let unify_cond_and_patterns_outcome = unify(
+                    &mut UEnv::new(subs),
+                    branches_var,
+                    real_var,
+                    Mode::EQ,
+                    Polarity::OF_PATTERN,
+                );
 
                 let should_check_exhaustiveness;
                 match unify_cond_and_patterns_outcome {
@@ -1539,7 +1568,13 @@ fn solve(
                         // open_tag_union(subs, real_var);
                         open_tag_union(subs, branches_var);
                         let almost_eq = matches!(
-                            unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ),
+                            unify(
+                                &mut UEnv::new(subs),
+                                real_var,
+                                branches_var,
+                                Mode::EQ,
+                                Polarity::OF_PATTERN
+                            ),
                             Success { .. }
                         );
 
@@ -1551,7 +1586,13 @@ fn solve(
                         } else {
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
-                            match unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ) {
+                            match unify(
+                                &mut UEnv::new(subs),
+                                real_var,
+                                branches_var,
+                                Mode::EQ,
+                                Polarity::OF_PATTERN,
+                            ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
                                     introduce(subs, rank, pools, &vars);
 
@@ -1868,7 +1909,8 @@ fn check_ability_specialization(
                             // Commit so that the bad signature and its error persists in subs.
                             subs.commit_snapshot(snapshot);
 
-                            let (_typ, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+                            let (_typ, _problems) =
+                                subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                             let problem = TypeError::WrongSpecialization {
                                 region: symbol_loc_var.region,
@@ -1888,7 +1930,7 @@ fn check_ability_specialization(
                         // Commit so that `var` persists in subs.
                         subs.commit_snapshot(snapshot);
 
-                        let (typ, _problems) = subs.var_to_error_type(var);
+                        let (typ, _problems) = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
                         let problem = TypeError::StructuralSpecialization {
                             region: symbol_loc_var.region,
@@ -1910,8 +1952,10 @@ fn check_ability_specialization(
                         // so we can have two separate error types.
                         subs.rollback_to(snapshot);
 
-                        let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
-                        let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+                        let (expected_type, _problems) =
+                            subs.var_to_error_type(root_signature_var, Polarity::OF_VALUE);
+                        let (actual_type, _problems) =
+                            subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
                             member_name: ability_member,
@@ -2772,7 +2816,13 @@ fn type_to_variable<'a>(
                 });
 
                 let category = Category::OpaqueArg;
-                match unify(&mut UEnv::new(subs), var, flex_ability, Mode::EQ) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    var,
+                    flex_ability,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
                     Success {
                         vars: _,
                         must_implement_ability,
@@ -3212,7 +3262,7 @@ fn circular_error(
     loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
-    let (error_type, _) = subs.var_to_error_type(var);
+    let (error_type, _) = subs.var_to_error_type(var, Polarity::OF_VALUE);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);

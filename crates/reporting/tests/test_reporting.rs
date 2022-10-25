@@ -1351,7 +1351,7 @@ mod test_reporting {
 
     This `Blue` tag has the type:
 
-        [Blue]*
+        [Blue]
 
     But `f` needs its 1st argument to be:
 
@@ -1385,7 +1385,7 @@ mod test_reporting {
 
     This `Blue` tag application has the type:
 
-        [Blue (Frac a)]*
+        [Blue (Frac a)]
 
     But `f` needs its 1st argument to be:
 
@@ -2025,7 +2025,7 @@ mod test_reporting {
 
     This `Foo` tag has the type:
 
-        [Foo]*
+        [Foo]
 
     But the type annotation on `f` says it should be:
 
@@ -2140,7 +2140,7 @@ mod test_reporting {
 
     This `Ok` tag has the type:
 
-        [Ok]*
+        [Ok]
 
     But the type annotation on `f` says it should be:
 
@@ -2389,7 +2389,7 @@ mod test_reporting {
 
     This `True` tag has the type:
 
-        [True]*
+        [True]
 
     But `add` needs its 2nd argument to be:
 
@@ -3678,7 +3678,7 @@ mod test_reporting {
 
     This `y` value is a:
 
-        [True]*
+        [True]
 
     But `add` needs its 2nd argument to be:
 
@@ -6477,7 +6477,7 @@ All branches in an `if` must have the same type!
 
     This `Name` tag application has the type:
 
-        [Name Str]*
+        [Name Str]
 
     But `isEmpty` needs its 1st argument to be:
 
@@ -8587,7 +8587,7 @@ All branches in an `if` must have the same type!
 
     This value is a declared specialization of type:
 
-        You, AndI -> [False]*
+        You, AndI -> [False]
 
     But the type annotation on `eq` says it must match:
 
@@ -8678,7 +8678,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `MHash` ability for
 
-        [A (Num a)]*
+        [A (Num a)]
 
     Only builtin abilities can have generated implementations!
 
@@ -10808,7 +10808,7 @@ All branches in an `if` must have the same type!
 
     This `True` tag has the type:
 
-        [True]*
+        [True]
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10834,7 +10834,7 @@ All branches in an `if` must have the same type!
 
     This `False` tag has the type:
 
-        [False]*
+        [False]
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10996,7 +10996,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Hash` ability for
 
-        [A (a -> a) [B]a]*
+        [A (a -> a) [B]a]
 
     In particular, an implementation for
 
@@ -11332,7 +11332,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Eq` ability for
 
-        [A (a -> a) [B]a]*
+        [A (a -> a) [B]a]
 
     In particular, an implementation for
 
