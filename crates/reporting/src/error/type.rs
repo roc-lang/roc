@@ -3191,7 +3191,8 @@ fn diff_tag_union<'b>(
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
-        (true, true) => match (left.peek(), right.peek()) {
+        (false, false) => Status::Similar,
+        _ => match (left.peek(), right.peek()) {
             (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
@@ -3210,21 +3211,6 @@ fn diff_tag_union<'b>(
             }
             (None, None) => Status::Similar,
         },
-        (false, true) => match left.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
-                f.clone(),
-                fields2.keys().cloned().collect(),
-            )]),
-            None => Status::Similar,
-        },
-        (true, false) => match right.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
-                f.clone(),
-                fields1.keys().cloned().collect(),
-            )]),
-            None => Status::Similar,
-        },
-        (false, false) => Status::Similar,
     };
 
     let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages1, &gen_usages2);
