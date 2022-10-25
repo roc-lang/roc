@@ -96,6 +96,10 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         }
     };
 
+    if module.total_problems() > 0 {
+        panic!("Problems were found! Refusing to build cached subs.\nTry building with ROC_SKIP_SUBS_CACH=1 to see them.");
+    }
+
     let subs = module.solved.into_inner();
     let exposed_vars_by_symbol: Vec<_> = module.exposed_to_host.into_iter().collect();
     let abilities = module.abilities_store;
