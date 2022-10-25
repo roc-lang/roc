@@ -13,6 +13,7 @@ use roc_types::types::{Category, PatternCategory, Type};
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub types: Vec<Cell<Type>>,
+    pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
@@ -33,6 +34,7 @@ impl std::fmt::Debug for Constraints {
         f.debug_struct("Constraints")
             .field("constraints", &self.constraints)
             .field("types", &"<types>")
+            .field("type_slices", &self.type_slices)
             .field("variables", &self.variables)
             .field("loc_symbols", &self.loc_symbols)
             .field("let_constraints", &self.let_constraints)
@@ -65,6 +67,7 @@ impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
         let mut types = Vec::new();
+        let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
         let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
@@ -119,6 +122,7 @@ impl Constraints {
         Self {
             constraints,
             types,
+            type_slices,
             variables,
             loc_symbols,
             let_constraints,
@@ -372,24 +376,24 @@ impl Constraints {
 
     fn def_types_slice<I>(&mut self, it: I) -> DefTypes
     where
-        I: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I::IntoIter: ExactSizeIterator,
     {
         let it = it.into_iter();
 
-        let types_start = self.types.len();
+        let types_start = self.type_slices.len();
         let loc_symbols_start = self.loc_symbols.len();
 
         // because we have an ExactSizeIterator, we can reserve space here
         let length = it.len();
 
-        self.types.reserve(length);
+        self.type_slices.reserve(length);
         self.loc_symbols.reserve(length);
 
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
 
-            self.types.push(Cell::new(value));
+            self.type_slices.push(value);
             self.loc_symbols.push((symbol, region));
         }
 
@@ -469,10 +473,27 @@ impl Constraints {
         self.constraints.push(defs_constraint);
         self.constraints.push(ret_constraint);
 
+        let def_types = {
+            let types = def_types
+                .into_iter()
+                .map(|(sym, Loc { region, value })| {
+                    let type_index = self.push_type(value);
+                    (
+                        sym,
+                        Loc {
+                            region,
+                            value: type_index,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.def_types_slice(types)
+        };
+
         let let_constraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
             flex_vars: self.variable_slice(flex_vars),
-            def_types: self.def_types_slice(def_types),
+            def_types,
             defs_and_ret_constraint,
         };
 
@@ -515,10 +536,27 @@ impl Constraints {
         self.constraints.push(Constraint::True);
         self.constraints.push(module_constraint);
 
+        let def_types = {
+            let types = def_types
+                .into_iter()
+                .map(|(sym, Loc { region, value })| {
+                    let type_index = self.push_type(value);
+                    (
+                        sym,
+                        Loc {
+                            region,
+                            value: type_index,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.def_types_slice(types)
+        };
+
         let let_contraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
             flex_vars: Slice::default(),
-            def_types: self.def_types_slice(def_types),
+            def_types,
             defs_and_ret_constraint,
         };
 
@@ -756,7 +794,7 @@ pub enum Constraint {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefTypes {
-    pub types: Slice<Type>,
+    pub types: Slice<TypeOrVar>,
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 

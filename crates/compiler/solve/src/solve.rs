@@ -2247,21 +2247,22 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
-        let types_slice = &constraints.types[def_types_slice.types.indices()];
+        let type_indices_slice = &constraints.type_slices[def_types_slice.types.indices()];
         let loc_symbols_slice = &constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
 
-        let mut local_def_vars = Self::with_length(types_slice.len());
+        let mut local_def_vars = Self::with_length(type_indices_slice.len());
 
-        for (&(symbol, region), typ_cell) in (loc_symbols_slice.iter()).zip(types_slice) {
-            let var = type_cell_to_var(
+        for (&(symbol, region), typ_index) in (loc_symbols_slice.iter()).zip(type_indices_slice) {
+            let var = either_type_index_to_var(
+                constraints,
                 subs,
                 rank,
+                pools,
                 problems,
                 abilities_store,
                 obligation_cache,
-                pools,
                 aliases,
-                typ_cell,
+                *typ_index,
             );
 
             local_def_vars.push((symbol, Loc { value: var, region }));
