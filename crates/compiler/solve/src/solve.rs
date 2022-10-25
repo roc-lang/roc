@@ -1866,6 +1866,12 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
     }
 }
 
+/// Optimistically closes the positive type of a value matched in a `when` statement, to produce
+/// better exhaustiveness error messages.
+///
+/// This should only be applied if it's already known that a `when` expression is not exhaustive.
+///
+/// See [Constraint::Exhaustive].
 fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
@@ -1884,11 +1890,20 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
                             subs.set_content_unchecked(ext, Structure(FlatType::EmptyTagUnion));
                             break;
                         }
+                        RigidVar(..) | RigidAbleVar(..) => {
+                            // Don't touch rigids, they tell us more information than the heuristic
+                            // of closing tag unions does for better exhaustiveness checking does.
+                            break;
+                        }
                         Structure(FlatType::TagUnion(_, deep_ext))
-                        | Structure(FlatType::RecursiveTagUnion(_, _, deep_ext)) => {
+                        | Structure(FlatType::RecursiveTagUnion(_, _, deep_ext))
+                        | Structure(FlatType::FunctionOrTagUnion(_, _, deep_ext)) => {
                             ext = *deep_ext;
                         }
-                        _ => internal_error!("not a tag union"),
+                        other => internal_error!(
+                            "not a tag union: {:?}",
+                            roc_types::subs::SubsFmtContent(other, subs)
+                        ),
                     }
                 }
 
