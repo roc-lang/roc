@@ -1,8 +1,8 @@
 # Tutorial
 
-This is a tutorial for how to build Roc applications. It covers the REPL, basic
-types (strings, lists, tags, and functions), syntax (`when`, `if then else`)
-and more!
+This is a tutorial for how to build Roc applications. 
+
+It covers the REPL, basic types (strings, lists, tags, and functions), syntax (`when`, `if then else`) and more!
 
 Enjoy!
 
@@ -10,7 +10,7 @@ Enjoy!
 
 Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
-## Strings and Numbers
+# REPL (Read - Eval - Print - Loop)
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
 short. Run this in a terminal:
@@ -24,6 +24,7 @@ You should see this:
 ```sh
 The rockin’ roc repl
 ```
+>If you haven't installed roc yet and would like to try it first, you can use the online [REPL](https://www.roc-lang.org/repl).
 
 Try typing this in and pressing enter:
 
@@ -33,6 +34,9 @@ Try typing this in and pressing enter:
 ```
 
 Congratulations! You've just written your first Roc code!
+
+## Strings and Numbers
+
 
 Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
@@ -111,7 +115,7 @@ to use them for more than that anyway!
 
 Let's move out of the REPL and create our first Roc application.
 
-Create a new file called `Hello.roc` and put this inside it:
+Create a new file called `Hello.roc` and put the following lines of code inside it:
 
 ```coffee
 app "hello"
@@ -195,7 +199,7 @@ you like, and everything will still work the same way!
 This works because Roc expressions don't have *side effects*. We'll talk more
 about side effects later.
 
-## Functions and `if`
+## Functions
 
 So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`.
 Next let's try defining a function of our own.
@@ -219,6 +223,9 @@ defines a function's arguments, and the expression after the `->` is the body
 of the function. The expression at the end of the body (`Num.toStr (num1 + num2)`
 in this case) is returned automatically.
 
+Infact, this is the only way to define functions in Roc. Anonymous or named.
+
+## IF (branching)
 Let's modify the function to return an empty string if the numbers add to zero.
 
 ```coffee
@@ -236,6 +243,7 @@ We did two things here:
 - We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
 - We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
+*def scope*
 Of note, we couldn't have done `total = num1 + num2` because that would be
 redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
 `sum` for a def in a different function, because then they'd be in completely
@@ -348,6 +356,7 @@ a function that takes a record and returns its `x` field. You can do this with a
 For example:
 
 ```elm
+# function returnFoo takes a Record and returns the 'foo' field of that record.
 returnFoo = .foo
 
 returnFoo { foo: "hi!", bar: "blah" }
@@ -447,6 +456,7 @@ stoplightStr =
         "yellow"
 ```
 
+#### When - Is (matching)
 We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
 
 ```elm
@@ -465,7 +475,7 @@ conditions are specified; here, we specify between `when` and `is` that we're ma
 Besides being more concise, there are other advantages to using `when` here.
 
 1. We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
+2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition we made earlier.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing "else", we write
 "_ ->" like so:
@@ -575,6 +585,8 @@ to suggest how booleans are intended be used in Roc: for
 to for data modeling. Tags are the preferred choice for data modeling, and having tag values be
 more concise than boolean values helps make this preference clear.
 
+#### Tags for modelling data
+
 As an example of why tags are encouraged for data modeling, in many languages it would be common
 to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable
 to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only
@@ -653,7 +665,7 @@ This wouldn't work either:
 List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 ```
 
-In fact, this wouldn't work for a more fundamental reason: every element in a Roc list has to share the same type.
+In fact, this wouldn't work for a more fundamental reason: every element in a Roc list has to share the same type (Homogeneous).
 For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like
 `[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]` -
 that would be a compile-time error.
@@ -778,7 +790,7 @@ List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
 
 `List.walk` walks through each element of the list, building up a state as it goes. At the end,
 it returns the final state - whatever it ended up being after processing the last element. The `\state, elem ->`
-function it takes as its last argument accepts both the current state as well as the current list element
+function that 'List.walk' takes as its last argument accepts both the current state as well as the current list element
 it's looking at, and then returns the new state based on whatever it decides to do with that element.
 
 In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds`
@@ -801,7 +813,7 @@ the initial state gets returned immediately.)
 > **Note:** Other languages give this operation different names, such as "fold," "reduce," "accumulate,"
 > "aggregate," "compress," and "inject."
 
-### Getting an individual element from a list
+### Result
 
 Another thing we can do with a list is to get an individual element out of it. `List.get` is a common way to do this;
 it takes a list and an index, and then returns the element at that index...if there is one. But what if there isn't?
@@ -940,6 +952,7 @@ accuracy. If the annotation ever doesn't fit with the implementation, we'll get 
 The annotation `fullName : Str, Str -> Str` says "`fullName` is a function that takes two strings as
 arguments and returns a string."
 
+**Strings**
 We can give type annotations to any value, not just functions. For example:
 
 ```coffee
@@ -952,6 +965,7 @@ lastName = "Lee"
 
 These annotations say that both `firstName` and `lastName` have the type `Str`.
 
+**Records**
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
 ```coffee
@@ -962,6 +976,7 @@ jen : { firstName : Str, lastName : Str }
 jen = { firstName: "Jen", lastName: "Majura" }
 ```
 
+**Type Aliasing**
 When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
 so:
 
@@ -980,6 +995,7 @@ instead of to a value. Just like how you can read `name : Str` as "`name` has th
 you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type
 `{ firstName : Str, lastName : Str }`."
 
+**Tag Unions**
 We can also give type annotations to tag unions:
 
 ```coffee
@@ -993,6 +1009,7 @@ colorFromStr = \string ->
 
 You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
 
+**Lists**
 When we annotate a list type, we have to specify the type of its elements:
 
 ```coffee
@@ -1005,6 +1022,7 @@ You can read `List Str` as "a list of strings." Here, `Str` is a *type parameter
 parameter; there's no way to give something a type of `List` without a type parameter - you have to specify
 what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
 
+**Wildcard type**
 There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty`
 has this type:
 
@@ -1039,6 +1057,12 @@ We saw that `List.isEmpty` has the type `List * -> Bool`, so we might think the 
 `reverse : List * -> List *`. However, remember that we also saw that the type of the empty list is `List *`?
 `List * -> List *` is actually the type of a function that always returns empty lists! That's not what we want.
 
+>**NOTE** - As a general distinction the wildcard type annotation '*' means any when a function is expecting a parameterized type where the containing parameter is of no consequence to the result.
+>But when a function is returning a type of ' List * ' its actually returning an empty list. 
+>In this case, if your function doesn't return an empty list use type variables explained below.
+
+
+**Type Variables**
 What we want is something like one of these:
 
 ```coffee
@@ -1128,6 +1152,7 @@ Here are the different fixed-size integer types that Roc supports:
 |  `-170_141_183_460_469_231_731_687_303_715_884_105_728`<br/>`170_141_183_460_469_231_731_687_303_715_884_105_727`  | `I128` | 16 Bytes |
 | `0`<br/>(over 340 undecillion) `340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` | 16 Bytes |
 
+**Nat**
 Roc also has one variable-size integer type: `Nat` (short for "natural number").
 The size of `Nat` is equal to the size of a memory address, which varies by system.
 For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`.
@@ -1310,9 +1335,21 @@ An age-old debugging technique is printing out a variable to the terminal. In Ro
 The failure output will include both the value of `x` as well as the comment immediately above it,
 which lets you use that comment for extra context in your output.
 
-## Interface modules
+[This section will be replaced with the roc compiler output for the above example]
 
-[This part of the tutorial has not been written yet. Coming soon!]
+## Roc Modules
+
+Modules in Roc are primary form of encapsulation and modularization. 
+Every `.roc` file is a *module*, and there are different types of modules. 
+
+To begin with, there are 3 types of modules one should know of when working with Roc. 
+
+    - Builtin modules
+    - Application module or 'app module'
+    - Interface modules
+
+Note that App module is singular. Each Roc app shall have one 'App module' and one or more 'Interface Modules'.
+There are other types of modules, we will discuss them later.
 
 ## Builtin modules
 
@@ -1349,7 +1386,7 @@ app "hello"
     provides main to pf
 ```
 
-This is known as a *module header*. Every `.roc` file is a *module*, and there
+This is known as a *module header*. As eluded to earlier, every `.roc` file is a *module*, and there
 are different types of modules. We know this particular one is an *application module*
 (or *app module* for short) because it begins with the `app` keyword.
 
@@ -1397,6 +1434,8 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/cli/cli-platform/main.roc` package.
 
+## Interface modules
+
 If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
 
 ```coffee
@@ -1404,6 +1443,44 @@ packages { pf: "examples/cli/cli-platform/main.roc" }
 imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
 provides main to pf
 ```
+Lets take a look at the following module header:
+
+```coffee
+interface Parser.Core
+    exposes [
+        Parser,
+        ParseResult,
+        ...
+        buildPrimitiveParser,
+        flatten,
+    ]
+    imports []
+```
+This in particular is from the parser example in the examples section.
+
+This says that the current .roc file is an *interface module* as it begins with 'interface' keyword.
+The 'Parser.core' means that this file is in a package 'Parser' and the module is 'core'
+The next line lists the defs being exposed to other modules to use.
+The final line is where we import defs from other modules
+
+Now lets import this in an *app module*:
+
+```coffee
+app 'interface-example'
+packages { pf: "examples/cli/cli-platform/main.roc" }
+imports [pf.Stdout, pf.Program, Parser.Core.{ Parser, parse, sepBy1, between, ignore, flatten, sepBy }]
+provides main to pf
+```
+We are import Parse, parse unqualified, meaning we can use this defs in our app module directly.
+If we had imported just the module 'import [Parser.Core]' we would have to use the fully qualified name of def from 
+the interface module.
+
+It is not recommended to make unqualified imports unless it is a commonly used function/def, such as Task.await. 
+It becomes difficult to know where a particular function is from in a large codebase. 
+It is a Roc convention to import a module and use fully qualified calls to defs.
+
+You can group your interface modules in to packages or directories as can be seen above. 
+Core is an interface module within the Package 'Parser'
 
 ## Comments
 
@@ -1471,6 +1548,8 @@ our program does!
 errors that might happen when running it. `Stdout.line` has the type `Task {} *` because it doesn't
 produce any values when it finishes (hence the `{}`) and there aren't any errors that can happen
 when it runs (hence the `*`).
+
+>**Note**: The '*' here represents No expected error tags
 
 In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)). That `Str` is reflected in its type:
 
@@ -1556,6 +1635,8 @@ It's most common in Roc to call functions from other modules in a *qualified* wa
 (`Task.await`) rather than unqualified (`await`) like this, but it can be nice
 for a function with an uncommon name (like "await") which often gets called repeatedly
 across a small number of lines of code.
+
+### Backpassing
 
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this
 code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we
@@ -1658,6 +1739,46 @@ Some important things to note about backpassing and `await`:
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
+## summary
+
+To summarize, we have covered:
+
+    - The Roc REPL
+    - Strings and numbers
+    - defs and immutability - You cannot reassign a def
+    - using the functions from builtin modules (Str.concat, Num.isNegative, etc,.)
+    - Building and running an application with Roc (Roc main.roc, Roc test)
+    - Named functions, Anonymous function
+    - Branching and matching with 'if-then-else' and 'When-is'
+    - Records
+      - Record shorthand
+      - Destructuring Records
+      - Building records from other records (& operator)
+    - Lists
+    - Tags
+      - Tags can have payloads
+      - A Tag payload may contain another tag, function, list, record, string etc,.
+      - Bool in Roc is just a tag union [Bool.true, Bool.false]
+    - Result
+      - Handle Results with the Result module (Result.withDefault etc,.)
+    - Type annotations
+      - wild card notation *
+      - Type variables for parameterized types 
+    - Pipe operator
+      - Expression result will be passed as the first argument to the next function in the pipe chain
+    - Numeric Types (Nat, Int, Frac)
+    - Tests - global and inline expects
+    - Modules - Builtin, App and Interface modules
+    - App and Platform distinction
+    - Task type provided by platforms
+    - Backpassing
+
+Thats it!
+You can start writing Roc apps now. 
+You may use the available platforms from the examples directory. 
+Many have started tackling 'Advent of Code' problems with Roc too.
+
+You can continue reading to go through some of the more advanced concepts next.
 ## Appendix: Advanced Concepts
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
