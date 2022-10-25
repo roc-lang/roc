@@ -255,9 +255,6 @@ fn check_if_bench_executables_changed() -> bool {
             if let Some(main_hash_val) = main_bench_hashes.get(key) {
                 if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
                     if !main_hash_val.eq(branch_hash_val) {
-                        dbg!(main_hash_val);
-                        dbg!(branch_hash_val);
-                        dbg!(key);
                         return true;
                     }
                 } else {

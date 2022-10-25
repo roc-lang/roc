@@ -2,7 +2,7 @@ use crate::helpers::{file_path_from_root, run_cmd, run_roc};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use std::{path::Path, thread};
 
-const CFOLD_STACK_SIZE: usize = 16384 * 100000;
+const CFOLD_STACK_SIZE: usize = 8192 * 100000;
 
 const OPTIMIZE_FLAG: &str = "--optimize";
 
