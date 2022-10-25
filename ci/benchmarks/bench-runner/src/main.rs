@@ -33,7 +33,7 @@ fn main() {
 
             if check_if_bench_executables_changed() {
                 println!(
-                    "Comparison of sha256 of executables reveals changes, doing full benchmarks..."
+                    "\n\nComparison of sha256 of executables reveals changes, doing full benchmarks...\n\n"
                 );
 
                 let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
@@ -85,6 +85,8 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
         return HashSet::new();
     }
 
+    println!("\n\nDoing benchmarks {:?} times to reduce flukes.\n\n", nr_repeat_benchmarks);
+
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
         do_benchmark("main");
@@ -112,7 +114,7 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
     ))
     .args(&["--bench", "--noplot"])
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
+    .stderr(Stdio::inherit())
     .spawn()
     .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
 
@@ -133,14 +135,14 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
                 "Failed to get line that contains benchmark name from last_three_lines_queue.",
             );
 
-            let regex_match = bench_name_regex.find(regressed_bench_name_line).expect("This line should hoave the benchmark name between double quotes but I could not match it");
+            let regex_match = bench_name_regex.find(regressed_bench_name_line).expect("This line should have the benchmark name between double quotes but I could not match it");
 
             regressed_benches.insert(regex_match.as_str().to_string().replace("\"", ""));
         }
 
         last_three_lines_queue.push_front(line_str.clone());
 
-        println!("bench {:?}: {:?}", branch_name, line_str);
+        println!(">>bench {:?}: {:?}", branch_name, line_str);
     }
 
     regressed_benches
@@ -186,8 +188,20 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, io::Error> {
 }
 
 fn sha_file(file_path: &Path) -> Result<String, io::Error> {
-    let input = File::open(file_path)?;
-    let reader = BufReader::new(input);
+    // Debug info is dependent on the dir in which executable was created,
+    // so we need to strip that to be able to compare binaries.
+    let no_debug_info_file_path = file_path.to_str().unwrap().to_string() + ("_no_debug_info");
+    std::fs::copy(file_path, &no_debug_info_file_path)?;
+
+    let strip_output = Command::new("strip")
+            .args(["--strip-debug", &no_debug_info_file_path])
+            .output()
+            .expect("failed to execute process");
+
+    assert!(strip_output.status.success());
+
+    let no_debug_info_file = File::open(no_debug_info_file_path)?;
+    let reader = BufReader::new(no_debug_info_file);
     let digest = sha256_digest(reader)?;
 
     Ok(HEXUPPER.encode(digest.as_ref()))
@@ -241,6 +255,9 @@ fn check_if_bench_executables_changed() -> bool {
             if let Some(main_hash_val) = main_bench_hashes.get(key) {
                 if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
                     if !main_hash_val.eq(branch_hash_val) {
+                        dbg!(main_hash_val);
+                        dbg!(branch_hash_val);
+                        dbg!(key);
                         return true;
                     }
                 } else {

@@ -33,12 +33,8 @@ jobs:
       - name: on current branch; prepare a self-contained benchmark folder
         run: nix develop -c ./ci/benchmarks/prep_folder.sh branch
 
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-
       - name: build benchmark runner
-        run: nix develop -c `cd ci/benchmarks/bench-runner && cargo build --release && cd ../../..`
+        run: nix develop -c bash -c "cd ci/benchmarks/bench-runner && cargo build --release && cd ../../.."
 
       - name: run benchmarks with regression check
         run: nix develop -c ./ci/benchmarks/bench-runner/target/release/bench-runner --check-executables-changed

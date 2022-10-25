@@ -143,7 +143,7 @@ pub fn build_zig_host_native(
 
     command.args(&[
         zig_host_src,
-        emit_bin,
+        &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
         "str",
         zig_str_path,
@@ -211,7 +211,7 @@ pub fn build_zig_host_native(
 
     command.args(&[
         zig_host_src,
-        emit_bin,
+        &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
         "str",
         zig_str_path,
@@ -308,7 +308,7 @@ pub fn build_zig_host_native(
     }
     command.args(&[
         zig_host_src,
-        emit_bin,
+        &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
         "str",
         zig_str_path,
@@ -583,8 +583,6 @@ pub fn rebuild_host(
                 )
             }
             Architecture::X86_64 => {
-                let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
-
                 let target = match target.operating_system {
                     OperatingSystem::Windows => "x86_64-windows-gnu",
                     _ => "native",
@@ -593,7 +591,7 @@ pub fn rebuild_host(
                 build_zig_host_native(
                     &env_path,
                     &env_home,
-                    &emit_bin,
+                    host_dest.to_str().unwrap(),
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     target,
@@ -601,33 +599,27 @@ pub fn rebuild_host(
                     shared_lib_path,
                 )
             }
-            Architecture::X86_32(_) => {
-                let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
-                build_zig_host_native(
-                    &env_path,
-                    &env_home,
-                    &emit_bin,
-                    zig_host_src.to_str().unwrap(),
-                    zig_str_path.to_str().unwrap(),
-                    "i386-linux-musl",
-                    opt_level,
-                    shared_lib_path,
-                )
-            }
+            Architecture::X86_32(_) => build_zig_host_native(
+                &env_path,
+                &env_home,
+                host_dest.to_str().unwrap(),
+                zig_host_src.to_str().unwrap(),
+                zig_str_path.to_str().unwrap(),
+                "i386-linux-musl",
+                opt_level,
+                shared_lib_path,
+            ),
 
-            Architecture::Aarch64(_) => {
-                let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
-                build_zig_host_native(
-                    &env_path,
-                    &env_home,
-                    &emit_bin,
-                    zig_host_src.to_str().unwrap(),
-                    zig_str_path.to_str().unwrap(),
-                    target_zig_str(target),
-                    opt_level,
-                    shared_lib_path,
-                )
-            }
+            Architecture::Aarch64(_) => build_zig_host_native(
+                &env_path,
+                &env_home,
+                host_dest.to_str().unwrap(),
+                zig_host_src.to_str().unwrap(),
+                zig_str_path.to_str().unwrap(),
+                target_zig_str(target),
+                opt_level,
+                shared_lib_path,
+            ),
             _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
