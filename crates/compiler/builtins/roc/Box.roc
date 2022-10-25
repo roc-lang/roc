@@ -2,14 +2,15 @@ interface Box
     exposes [box, unbox]
     imports []
 
-## Allocate a value on the heap. Boxing is an expensive processes as it copies
-## the value from the stack to the heap.
+## Allocate a value on the heap. Boxing is an expensive process as it copies
+## the value from the stack to the heap. This may provide a performance 
+## optimization for advanced use cases with large values. A platform may require
+## that some values are boxed.
 ##
 ## expect Box.unbox(Box.box "Stack Faster") == "Stack Faster"
 box : a -> Box a
 
-## Return a value to the stack. Unboxing is an expensive processes as it copies
-## the value from the heap to the stack.
+## Returns a boxed value.
 ##
 ## expect Box.unbox(Box.box "Stack Faster") == "Stack Faster"
 unbox : Box a -> a
