@@ -50,8 +50,9 @@ fn constrain_symbols_from_requires(
                 };
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
+                let type_index = constraints.push_type(loc_type.value);
                 let def_pattern_state =
-                    constrain_def_pattern(constraints, &mut env, &pattern, loc_type.value);
+                    constrain_def_pattern(constraints, &mut env, &pattern, type_index);
 
                 debug_assert!(env.resolutions_to_make.is_empty());
 
@@ -108,12 +109,11 @@ pub fn frontload_ability_constraints(
             };
             let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
-            let mut def_pattern_state = constrain_def_pattern(
-                constraints,
-                &mut env,
-                &pattern,
-                Type::Variable(signature_var),
-            );
+            // TODO coalesce
+            let signature_index = constraints.push_type(signature.clone());
+
+            let mut def_pattern_state =
+                constrain_def_pattern(constraints, &mut env, &pattern, signature_index);
 
             debug_assert!(env.resolutions_to_make.is_empty());
 

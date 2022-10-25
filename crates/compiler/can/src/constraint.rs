@@ -20,7 +20,7 @@ pub struct Constraints {
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
     pub expectations: Vec<Expected<TypeOrVar>>,
-    pub pattern_expectations: Vec<PExpected<Cell<Type>>>,
+    pub pattern_expectations: Vec<PExpected<TypeOrVar>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
     pub sketched_rows: Vec<SketchedRows>,
@@ -58,9 +58,8 @@ impl Default for Constraints {
     }
 }
 
-pub type TypeIndex = Index<Cell<Type>>;
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
-pub type PExpectedTypeIndex = Index<PExpected<Cell<Type>>>;
+pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
 pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
 
 impl Constraints {
@@ -219,8 +218,8 @@ impl Constraints {
         Index::push_new(&mut self.expectations, expected)
     }
 
-    pub fn push_pat_expected_type(&mut self, expected: PExpected<Type>) -> PExpectedTypeIndex {
-        Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new))
+    pub fn push_pat_expected_type(&mut self, expected: PExpected<TypeOrVar>) -> PExpectedTypeIndex {
+        Index::push_new(&mut self.pattern_expectations, expected)
     }
 
     #[inline(always)]

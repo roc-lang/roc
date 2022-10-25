@@ -187,7 +187,7 @@ pub fn constrain_pattern(
     env: &mut Env,
     pattern: &Pattern,
     region: Region,
-    expected: PExpected<Type>,
+    expected: PExpected<TypeOrVar>,
     state: &mut PatternState,
 ) {
     match pattern {
@@ -198,8 +198,8 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            if could_be_a_tag_union(expected.get_type_ref()) {
-                let type_index = constraints.push_type(expected.get_type());
+            if could_be_a_tag_union(constraints, *expected.get_type_ref()) {
+                let type_index = expected.get_type();
 
                 state
                     .delayed_is_open_constraints
@@ -211,9 +211,9 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            let type_index = constraints.push_type(expected.get_type_ref().clone());
+            let type_index = *expected.get_type_ref();
 
-            if could_be_a_tag_union(expected.get_type_ref()) {
+            if could_be_a_tag_union(constraints, type_index) {
                 state
                     .delayed_is_open_constraints
                     .push(constraints.is_open_type(type_index));
@@ -232,9 +232,9 @@ pub fn constrain_pattern(
             ident: symbol,
             specializes: _,
         } => {
-            let type_index = constraints.push_type(expected.get_type_ref().clone());
+            let type_index = *expected.get_type_ref();
 
-            if could_be_a_tag_union(expected.get_type_ref()) {
+            if could_be_a_tag_union(constraints, type_index) {
                 state.constraints.push(constraints.is_open_type(type_index));
             }
 
@@ -412,7 +412,7 @@ pub fn constrain_pattern(
             {
                 let pat_type = Type::Variable(*var);
                 let pat_type_index = constraints.push_type(pat_type.clone());
-                let expected = PExpected::NoExpectation(pat_type.clone());
+                let expected = PExpected::NoExpectation(pat_type_index);
 
                 if !state.headers.contains_key(symbol) {
                     state
@@ -426,7 +426,7 @@ pub fn constrain_pattern(
                         let expected_pat =
                             constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::PatternGuard,
-                                pat_type.clone(),
+                                pat_type_index,
                                 loc_guard.region,
                             ));
 
@@ -454,7 +454,7 @@ pub fn constrain_pattern(
                         let expected_pat =
                             constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::OptionalField,
-                                pat_type.clone(),
+                                pat_type_index,
                                 loc_expr.region,
                             ));
 
@@ -582,7 +582,7 @@ pub fn constrain_pattern(
             for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
 
-                let pattern_type = Type::Variable(*pattern_var);
+                let pattern_type = constraints.push_type(Type::Variable(*pattern_var));
 
                 let expected = PExpected::ForReason(
                     PReason::TagArg {
@@ -603,7 +603,7 @@ pub fn constrain_pattern(
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
-            let expected_type = constraints.push_type(expected.get_type_ref().clone());
+            let expected_type = *expected.get_type_ref();
 
             let whole_con = constraints.includes_tag(
                 expected_type,
@@ -635,6 +635,7 @@ pub fn constrain_pattern(
             // Suppose we are constraining the pattern \@Id who, where Id n := [Id U64 n]
             let (arg_pattern_var, loc_arg_pattern) = &**argument;
             let arg_pattern_type = Type::Variable(*arg_pattern_var);
+            let arg_pattern_type_index = constraints.push_type(Type::Variable(*arg_pattern_var));
 
             let opaque_type = constraints.push_type(Type::Alias {
                 symbol: *opaque,
@@ -652,7 +653,7 @@ pub fn constrain_pattern(
             });
 
             // First, add a constraint for the argument "who"
-            let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type.clone());
+            let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type_index);
             constrain_pattern(
                 constraints,
                 env,
@@ -687,11 +688,13 @@ pub fn constrain_pattern(
             // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
             let arg_pattern_type = constraints.push_type(arg_pattern_type);
-            let specialized_type = constraints
-                .push_pat_expected_type(PExpected::NoExpectation((**specialized_def_type).clone()));
+            let specialized_type_index = constraints.push_type((**specialized_def_type).clone());
+            let specialized_type_expected = constraints
+                .push_pat_expected_type(PExpected::NoExpectation(specialized_type_index));
+
             let link_type_variables_con = constraints.pattern_presence(
                 arg_pattern_type,
-                specialized_type,
+                specialized_type_expected,
                 PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
@@ -724,6 +727,18 @@ pub fn constrain_pattern(
     }
 }
 
-fn could_be_a_tag_union(typ: &Type) -> bool {
-    !matches!(typ, Type::Apply(..) | Type::Function(..) | Type::Record(..))
+fn could_be_a_tag_union(constraints: &mut Constraints, typ: TypeOrVar) -> bool {
+    match typ.split() {
+        Ok(typ_index) => {
+            let typ_cell = &mut constraints.types[typ_index.index()];
+            !matches!(
+                typ_cell.get_mut(),
+                Type::Apply(..) | Type::Function(..) | Type::Record(..)
+            )
+        }
+        Err(_) => {
+            // Variables are opaque at this point, assume yes
+            true
+        }
+    }
 }

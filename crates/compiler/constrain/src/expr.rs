@@ -72,8 +72,9 @@ fn constrain_untyped_args(
         // Untyped args don't need exhaustiveness checking because they are the source of truth!
         let _ = annotated_mark;
 
-        let pattern_type = Type::Variable(*pattern_var);
-        let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
+        let pattern_type = Variable(*pattern_var);
+        let pattern_type_index = constraints.push_type(Variable(*pattern_var));
+        let pattern_expected = PExpected::NoExpectation(pattern_type_index);
 
         pattern_types.push(pattern_type);
 
@@ -774,7 +775,6 @@ pub fn constrain_expr(
             ..
         } => {
             let branches_cond_var = *branches_cond_var;
-            let branches_cond_type = Variable(branches_cond_var);
             let branches_cond_index = constraints.push_type(Variable(branches_cond_var));
 
             let body_var = *expr_var;
@@ -840,7 +840,7 @@ pub fn constrain_expr(
                             index: HumanIndex::zero_based(index),
                             sub_pattern,
                         },
-                        branches_cond_type.clone(),
+                        branches_cond_index,
                         sub_region,
                     )
                 };
@@ -1790,13 +1790,14 @@ fn constrain_destructure_def(
 ) -> Constraint {
     let loc_expr = &declarations.expressions[index];
     let expr_var = declarations.variables[index];
+    let expr_var_index = constraints.push_type(Variable(expr_var));
     let opt_annotation = &declarations.annotations[index];
 
     let destructure_def = &declarations.destructs[destructure_def_index.index()];
     let loc_pattern = &destructure_def.loc_pattern;
 
     let mut def_pattern_state =
-        constrain_def_pattern(constraints, env, loc_pattern, Type::Variable(expr_var));
+        constrain_def_pattern(constraints, env, loc_pattern, expr_var_index);
 
     def_pattern_state.vars.push(expr_var);
 
@@ -1898,8 +1899,6 @@ fn constrain_value_def(
     let loc_symbol = declarations.symbols[index];
     let expr_var = declarations.variables[index];
     let opt_annotation = &declarations.annotations[index];
-
-    dbg!(&opt_annotation);
 
     match opt_annotation {
         Some(annotation) => {
@@ -2012,7 +2011,7 @@ fn constrain_when_branch_help(
     env: &mut Env,
     region: Region,
     when_branch: &WhenBranch,
-    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
+    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<TypeOrVar>,
     expr_expected: Expected<TypeOrVar>,
 ) -> ConstrainedBranch {
     let ret_constraint = constrain_expr(
@@ -2275,7 +2274,7 @@ pub(crate) fn constrain_def_pattern(
     constraints: &mut Constraints,
     env: &mut Env,
     loc_pattern: &Loc<Pattern>,
-    expr_type: Type,
+    expr_type: TypeOrVar,
 ) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
@@ -2311,7 +2310,7 @@ fn constrain_typed_def(
     let expr_type_index = constraints.push_type(Variable(expr_var));
 
     let mut def_pattern_state =
-        constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type.clone());
+        constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type_index);
 
     def_pattern_state.vars.push(expr_var);
 
@@ -2536,7 +2535,12 @@ fn constrain_typed_function_arguments(
 
     let it = arguments.iter().zip(arg_types.iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
+        let pattern_var_index = constraints.push_type(Variable(*pattern_var));
+
         if loc_pattern.value.surely_exhaustive() {
+            // TODO coalesce with ann_index below
+            let ann_index = constraints.push_type(ann.clone());
+
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
             let pattern_expected = PExpected::ForReason(
@@ -2544,7 +2548,7 @@ fn constrain_typed_function_arguments(
                     index: HumanIndex::zero_based(index),
                     opt_name: opt_label,
                 },
-                ann.clone(),
+                ann_index,
                 loc_pattern.region,
             );
 
@@ -2588,7 +2592,7 @@ fn constrain_typed_function_arguments(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(Type::Variable(*pattern_var));
+                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
                 constrain_pattern(
                     constraints,
                     env,
@@ -2633,7 +2637,7 @@ fn constrain_typed_function_arguments(
                         index: HumanIndex::zero_based(index),
                         opt_name: opt_label,
                     },
-                    Type::Variable(*pattern_var),
+                    pattern_var_index,
                     loc_pattern.region,
                 ));
                 let exhaustive_constraint = constraints.exhaustive(
@@ -2663,7 +2667,12 @@ fn constrain_typed_function_arguments_simple(
 ) {
     let it = arguments.iter().zip(arg_types.iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
+        let pattern_var_index = constraints.push_type(Variable(*pattern_var));
+
         if loc_pattern.value.surely_exhaustive() {
+            // TODO coalesce
+            let ann_index = constraints.push_type(ann.clone());
+
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
             let pattern_expected = PExpected::ForReason(
@@ -2671,7 +2680,7 @@ fn constrain_typed_function_arguments_simple(
                     index: HumanIndex::zero_based(index),
                     opt_name: Some(symbol),
                 },
-                ann.clone(),
+                ann_index,
                 loc_pattern.region,
             );
 
@@ -2714,7 +2723,7 @@ fn constrain_typed_function_arguments_simple(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(Type::Variable(*pattern_var));
+                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
                 constrain_pattern(
                     constraints,
                     env,
@@ -2750,7 +2759,7 @@ fn constrain_typed_function_arguments_simple(
                         index: HumanIndex::zero_based(index),
                         opt_name: Some(symbol),
                     },
-                    Type::Variable(*pattern_var),
+                    pattern_var_index,
                     loc_pattern.region,
                 ));
                 let exhaustive_constraint = constraints.exhaustive(
@@ -2790,11 +2799,10 @@ fn constrain_def(
         Some(annotation) => constrain_typed_def(constraints, env, def, body_con, annotation),
         None => {
             let expr_var = def.expr_var;
-            let expr_type = Type::Variable(expr_var);
             let expr_type_index = constraints.push_type(Variable(expr_var));
 
             let mut def_pattern_state =
-                constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type.clone());
+                constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type_index);
 
             def_pattern_state.vars.push(expr_var);
             // no annotation, so no extra work with rigids
@@ -3516,11 +3524,10 @@ fn rec_defs_help(
 
     for def in defs {
         let expr_var = def.expr_var;
-        let expr_type = Type::Variable(expr_var);
         let expr_type_index = constraints.push_type(Variable(expr_var));
 
         let mut def_pattern_state =
-            constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type.clone());
+            constrain_def_pattern(constraints, env, &def.loc_pattern, expr_type_index);
 
         def_pattern_state.vars.push(expr_var);
 
