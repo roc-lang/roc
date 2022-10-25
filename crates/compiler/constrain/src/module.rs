@@ -109,7 +109,6 @@ pub fn frontload_ability_constraints(
             };
             let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
-            // TODO coalesce
             let signature_index = constraints.push_type(signature.clone());
 
             let mut def_pattern_state =
@@ -122,7 +121,6 @@ pub fn frontload_ability_constraints(
             let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
             let infer_variables = vars.flex_vars.iter().copied();
 
-            let signature_index = constraints.push_type(signature.clone());
             let signature_expectation =
                 constraints.push_expected_type(Expected::NoExpectation(signature_index));
 
