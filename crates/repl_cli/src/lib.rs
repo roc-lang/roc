@@ -20,7 +20,7 @@ use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
-use roc_parse::parser::{EClosure, EExpr, SyntaxError};
+use roc_parse::parser::{EClosure, EExpr, Parser, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
@@ -135,16 +135,31 @@ impl Validator for InputValidator {
         } else {
             let arena = bumpalo::Bump::new();
             let state = roc_parse::state::State::new(ctx.input().trim().as_bytes());
-
-            match roc_parse::expr::parse_loc_expr(0, &arena, state) {
+            let answer = match roc_parse::expr::toplevel_defs(0).parse(&arena, state) {
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::DefMissingFinalExpr(_), _))
                 | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
                 | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
                     Ok(ValidationResult::Incomplete)
                 }
-                _ => Ok(ValidationResult::Valid(None)),
-            }
+                Err((_, _, state)) => {
+                    // It wasn't a valid top-level decl, so continue parsing it as an expr.
+                    match roc_parse::expr::parse_loc_expr(0, &arena, state) {
+                        // Special case some syntax errors to allow for multi-line inputs
+                        Err((_, EExpr::DefMissingFinalExpr(_), _))
+                        | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
+                        | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
+                            Ok(ValidationResult::Incomplete)
+                        }
+                        _ => Ok(ValidationResult::Valid(None)),
+                    }
+                }
+                Ok(_) => Ok(ValidationResult::Valid(None)),
+            };
+
+            // This is necessary to extend the lifetime of `arena`; without it,
+            // we get a borrow checker error!
+            answer
         }
     }
 }
