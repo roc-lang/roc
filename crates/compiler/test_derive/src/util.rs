@@ -375,6 +375,7 @@ fn check_derived_typechecks_and_golden(
     let mut rigid_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
         test_module,
+        &mut constraints,
         &mut test_subs,
         pending_abilities,
         &exposed_for_module,
