@@ -2530,11 +2530,9 @@ fn constrain_typed_function_arguments(
     let it = arguments.iter().zip(arg_types.iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_type(Variable(*pattern_var));
+        let ann_index = constraints.push_type(ann.clone());
 
         if loc_pattern.value.surely_exhaustive() {
-            // TODO coalesce with ann_index below
-            let ann_index = constraints.push_type(ann.clone());
-
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
             let pattern_expected = PExpected::ForReason(
@@ -2559,8 +2557,6 @@ fn constrain_typed_function_arguments(
                 // NOTE: because we perform an equality with part of the signature
                 // this constraint must be to the def_pattern_state's constraints
                 def_pattern_state.vars.push(*pattern_var);
-
-                let ann_index = constraints.push_type(ann.clone());
 
                 let ann_expected =
                     constraints.push_expected_type(Expected::NoExpectation(ann_index));
@@ -2599,7 +2595,6 @@ fn constrain_typed_function_arguments(
 
             {
                 // Store the actual type in a variable.
-                let ann_index = constraints.push_type(ann.clone());
                 let ann_expected =
                     constraints.push_expected_type(Expected::NoExpectation(ann_index));
                 argument_pattern_state
