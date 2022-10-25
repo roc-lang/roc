@@ -3597,6 +3597,9 @@ fn rec_defs_help(
                         let def_con = constraints.exists(vars, and_constraint);
 
                         if is_hybrid {
+                            // TODO this is not quite right, types that are purely rigid should not
+                            // be stored as hybrid!
+                            // However it might not be possible to fix this before types SoA lands.
                             hybrid_and_flex_info.vars.extend(&new_rigid_variables);
                             hybrid_and_flex_info.constraints.push(def_con);
                             hybrid_and_flex_info
