@@ -69,13 +69,15 @@ fn constrain_symbols_from_requires(
                 // Otherwise, this symbol comes from an app module - we want to check that the type
                 // provided by the app is in fact what the package module requires.
                 let arity = loc_type.value.arity();
+                let typ = loc_type.value;
+                let type_index = constraints.push_type(typ);
                 let expected = constraints.push_expected_type(Expected::FromAnnotation(
                     loc_symbol.map(|&s| Pattern::Identifier(s)),
                     arity,
                     AnnotationSource::RequiredSymbol {
                         region: loc_type.region,
                     },
-                    loc_type.value,
+                    type_index,
                 ));
                 let provided_eq_requires_constr =
                     constraints.lookup(loc_symbol.value, expected, loc_type.region);
@@ -120,8 +122,9 @@ pub fn frontload_ability_constraints(
             let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
             let infer_variables = vars.flex_vars.iter().copied();
 
+            let signature_index = constraints.push_type(signature.clone());
             let signature_expectation =
-                constraints.push_expected_type(Expected::NoExpectation(signature.clone()));
+                constraints.push_expected_type(Expected::NoExpectation(signature_index));
 
             def_pattern_state
                 .constraints

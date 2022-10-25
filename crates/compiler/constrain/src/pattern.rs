@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::expr::{constrain_expr, Env};
-use roc_can::constraint::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints, TypeOrVar};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct};
@@ -17,7 +17,7 @@ use roc_types::types::{
 
 #[derive(Default, Debug)]
 pub struct PatternState {
-    pub headers: VecMap<Symbol, Loc<Type>>,
+    pub headers: VecMap<Symbol, Loc<TypeOrVar>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
     pub delayed_is_open_constraints: Vec<Constraint>,
@@ -31,14 +31,16 @@ pub struct PatternState {
 /// Would add `x => <42>` to the headers (i.e., symbol points to a type variable). If the
 /// definition has an annotation, we instead now add `x => Int`.
 pub fn headers_from_annotation(
+    constraints: &mut Constraints,
     pattern: &Pattern,
     annotation: &Loc<&Type>,
-) -> Option<VecMap<Symbol, Loc<Type>>> {
+) -> Option<VecMap<Symbol, Loc<TypeOrVar>>> {
     let mut headers = VecMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
     // in such incorrect cases we don't put the full annotation in headers, just a variable, and let
     // inference generate a proper error.
-    let is_structurally_valid = headers_from_annotation_help(pattern, annotation, &mut headers);
+    let is_structurally_valid =
+        headers_from_annotation_help(constraints, pattern, annotation, &mut headers);
 
     if is_structurally_valid {
         Some(headers)
@@ -48,9 +50,10 @@ pub fn headers_from_annotation(
 }
 
 fn headers_from_annotation_help(
+    constraints: &mut Constraints,
     pattern: &Pattern,
     annotation: &Loc<&Type>,
-    headers: &mut VecMap<Symbol, Loc<Type>>,
+    headers: &mut VecMap<Symbol, Loc<TypeOrVar>>,
 ) -> bool {
     match pattern {
         Identifier(symbol)
@@ -60,7 +63,8 @@ fn headers_from_annotation_help(
             ident: symbol,
             specializes: _,
         } => {
-            let typ = Loc::at(annotation.region, annotation.value.clone());
+            let annotation_index = constraints.push_type(annotation.value.clone());
+            let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
         }
@@ -87,9 +91,10 @@ fn headers_from_annotation_help(
                     // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
                     // the type of `x` within the binding itself is the same.
                     if let Some(field_type) = fields.get(&destruct.label) {
+                        let field_type_index = constraints.push_type(field_type.as_inner().clone());
                         headers.insert(
                             destruct.symbol,
-                            Loc::at(annotation.region, field_type.clone().into_inner()),
+                            Loc::at(annotation.region, field_type_index),
                         );
                     } else {
                         return false;
@@ -125,6 +130,7 @@ fn headers_from_annotation_help(
                         .zip(arg_types.iter())
                         .all(|(arg_pattern, arg_type)| {
                             headers_from_annotation_help(
+                                constraints,
                                 &arg_pattern.1.value,
                                 &Loc::at(annotation.region, arg_type),
                                 headers,
@@ -156,11 +162,13 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                let typ = Loc::at(annotation.region, annotation.value.clone());
+                let annotation_index = constraints.push_type(annotation.value.clone());
+                let typ = Loc::at(annotation.region, annotation_index);
                 headers.insert(*opaque, typ);
 
                 let (_, argument_pat) = &**argument;
                 headers_from_annotation_help(
+                                constraints,
                     &argument_pat.value,
                     &Loc::at(annotation.region, actual),
                     headers,
@@ -203,9 +211,9 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            if could_be_a_tag_union(expected.get_type_ref()) {
-                let type_index = constraints.push_type(expected.get_type_ref().clone());
+            let type_index = constraints.push_type(expected.get_type_ref().clone());
 
+            if could_be_a_tag_union(expected.get_type_ref()) {
                 state
                     .delayed_is_open_constraints
                     .push(constraints.is_open_type(type_index));
@@ -215,7 +223,7 @@ pub fn constrain_pattern(
                 *symbol,
                 Loc {
                     region,
-                    value: expected.get_type(),
+                    value: type_index,
                 },
             );
         }
@@ -224,9 +232,9 @@ pub fn constrain_pattern(
             ident: symbol,
             specializes: _,
         } => {
-            if could_be_a_tag_union(expected.get_type_ref()) {
-                let type_index = constraints.push_type(expected.get_type_ref().clone());
+            let type_index = constraints.push_type(expected.get_type_ref().clone());
 
+            if could_be_a_tag_union(expected.get_type_ref()) {
                 state.constraints.push(constraints.is_open_type(type_index));
             }
 
@@ -234,7 +242,7 @@ pub fn constrain_pattern(
                 *symbol,
                 Loc {
                     region,
-                    value: expected.get_type(),
+                    value: type_index,
                 },
             );
         }
@@ -278,7 +286,7 @@ pub fn constrain_pattern(
             let num_type = constraints.push_type(num_type);
 
             // Link the free num var with the int var and our expectation.
-            let int_type = builtins::num_int(Type::Variable(precision_var));
+            let int_type = constraints.push_type(builtins::num_int(Type::Variable(precision_var)));
 
             state.constraints.push({
                 let expected_index =
@@ -308,10 +316,11 @@ pub fn constrain_pattern(
                 region,
                 Category::Frac,
             );
+            let num_type_index = constraints.push_type(num_type); // TODO check me if something breaks!
 
             // Link the free num var with the float var and our expectation.
-            let float_type = builtins::num_float(Type::Variable(precision_var));
-            let num_type_index = constraints.push_type(num_type); // TODO check me if something breaks!
+            let float_type =
+                constraints.push_type(builtins::num_float(Type::Variable(precision_var)));
 
             state.constraints.push({
                 let expected_index =
@@ -353,10 +362,10 @@ pub fn constrain_pattern(
                 Category::Int,
             );
 
-            // Link the free num var with the int var and our expectation.
-            let int_type = builtins::num_int(Type::Variable(precision_var));
-
             let num_type_index = constraints.push_type(num_type);
+
+            // Link the free num var with the int var and our expectation.
+            let int_type = constraints.push_type(builtins::num_int(Type::Variable(precision_var)));
 
             state.constraints.push({
                 let expected_index =
@@ -402,12 +411,13 @@ pub fn constrain_pattern(
             } in destructs
             {
                 let pat_type = Type::Variable(*var);
+                let pat_type_index = constraints.push_type(pat_type.clone());
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(symbol) {
                     state
                         .headers
-                        .insert(*symbol, Loc::at(region, pat_type.clone()));
+                        .insert(*symbol, Loc::at(region, pat_type_index));
                 }
 
                 let field_type = match typ {
@@ -459,7 +469,7 @@ pub fn constrain_pattern(
 
                         let expr_expected = Expected::ForReason(
                             Reason::RecordDefaultField(label.clone()),
-                            pat_type.clone(),
+                            pat_type_index,
                             loc_expr.region,
                         );
 
@@ -485,7 +495,10 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
+            let record_type = constraints.push_type(Type::Record(
+                field_types,
+                TypeExtension::from_type(ext_type),
+            ));
 
             let whole_var_index = constraints.push_type(Type::Variable(*whole_var));
             let expected_record =
@@ -623,7 +636,7 @@ pub fn constrain_pattern(
             let (arg_pattern_var, loc_arg_pattern) = &**argument;
             let arg_pattern_type = Type::Variable(*arg_pattern_var);
 
-            let opaque_type = Type::Alias {
+            let opaque_type = constraints.push_type(Type::Alias {
                 symbol: *opaque,
                 type_arguments: type_arguments
                     .iter()
@@ -636,7 +649,7 @@ pub fn constrain_pattern(
                 infer_ext_in_output_types: vec![],
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
-            };
+            });
 
             // First, add a constraint for the argument "who"
             let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type.clone());

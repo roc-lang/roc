@@ -19,7 +19,7 @@ pub struct Constraints {
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
-    pub expectations: Vec<Expected<Cell<Type>>>,
+    pub expectations: Vec<Expected<TypeOrVar>>,
     pub pattern_expectations: Vec<PExpected<Cell<Type>>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
@@ -59,7 +59,7 @@ impl Default for Constraints {
 }
 
 pub type TypeIndex = Index<Cell<Type>>;
-pub type ExpectedTypeIndex = Index<Expected<Cell<Type>>>;
+pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<Cell<Type>>>;
 pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
 
@@ -215,8 +215,8 @@ impl Constraints {
         EitherIndex::from_right(index)
     }
 
-    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> ExpectedTypeIndex {
-        Index::push_new(&mut self.expectations, expected.map(Cell::new))
+    pub fn push_expected_type(&mut self, expected: Expected<TypeOrVar>) -> ExpectedTypeIndex {
+        Index::push_new(&mut self.expectations, expected)
     }
 
     pub fn push_pat_expected_type(&mut self, expected: PExpected<Type>) -> PExpectedTypeIndex {
@@ -464,7 +464,7 @@ impl Constraints {
     where
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
-        I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
@@ -473,27 +473,10 @@ impl Constraints {
         self.constraints.push(defs_constraint);
         self.constraints.push(ret_constraint);
 
-        let def_types = {
-            let types = def_types
-                .into_iter()
-                .map(|(sym, Loc { region, value })| {
-                    let type_index = self.push_type(value);
-                    (
-                        sym,
-                        Loc {
-                            region,
-                            value: type_index,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            self.def_types_slice(types)
-        };
-
         let let_constraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
             flex_vars: self.variable_slice(flex_vars),
-            def_types,
+            def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
         };
 
@@ -714,7 +697,7 @@ roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
     pub TypeOrVar,
-    pub Index<Expected<Cell<Type>>>,
+    pub ExpectedTypeIndex,
     pub Index<Category>,
     pub Region,
 );
