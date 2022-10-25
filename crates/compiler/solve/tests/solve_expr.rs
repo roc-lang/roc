@@ -8149,4 +8149,22 @@ mod solve_expr {
             "x -> x | x has Hash & Encoding & Decoding",
         );
     }
+
+    #[test]
+    fn extend_uninhabited_without_opening_union() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                walkHelp : {} -> [Continue {}, Break []]
+
+                main = when walkHelp {} is
+                #           ^^^^^^^^^^^
+                    Continue {} -> {}
+                "#
+            ),
+            @"walkHelp {} : [Break [], Continue {}]"
+        );
+    }
 }
