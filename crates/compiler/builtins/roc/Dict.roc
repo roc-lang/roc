@@ -98,13 +98,13 @@ withCapacity = \n -> @Dict (List.withCapacity n)
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
 ##
-##     expect
-##         dictionary =
-##             Dict.empty
-##             |> Dict.insert 1 "Apple"
-##             |> Dict.insert 2 "Orange"
-##         Dict.get dictionary 1 == Ok "Apple" &&
-##         Dict.get dictionary 2000 == Err KeyNotFound
+##     dictionary =
+##         Dict.empty
+##         |> Dict.insert 1 "Apple"
+##         |> Dict.insert 2 "Orange"
+##
+##     expect Dict.get dictionary 1 == Ok "Apple"
+##     expect Dict.get dictionary 2000 == Err KeyNotFound
 get : Dict k v, k -> Result v [KeyNotFound]* | k has Eq
 get = \@Dict list, needle ->
     when List.findFirst list (\Pair key _ -> key == needle) is
@@ -313,12 +313,13 @@ insertAll = \xs, @Dict ys ->
 ##         |> Dict.insert 2 "And Me"
 ##         |> Dict.insert 3 "But Not Me"
 ##         |> Dict.insert 4 "Or Me"
+##
+##     expect Dict.keepShared first second == first
 keepShared : Dict k v, Dict k v -> Dict k v | k has Eq
 keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
     |> @Dict
 
-expect Dict.keepShared first second == first
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those pairs that
