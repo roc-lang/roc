@@ -3132,14 +3132,15 @@ fn constraint_recursive_function(
 
             flex_info.vars.extend(new_infer_variables);
 
+            let signature_index = constraints.push_type(signature.clone());
+
             let annotation_expected = FromAnnotation(
                 loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                // TODO coalesce with other signature_index
-                constraints.push_type(signature.clone()),
+                signature_index,
             );
 
             let (arg_types, _signature_closure_type, ret_type) = match &signature {
@@ -3225,8 +3226,6 @@ fn constraint_recursive_function(
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             vars.push(expr_var);
-
-            let signature_index = constraints.push_type(signature.clone());
 
             let state_constraints = constraints.and_constraint(argument_pattern_state.constraints);
             let cons = [
