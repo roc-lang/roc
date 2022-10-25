@@ -2340,7 +2340,6 @@ fn constrain_typed_def(
         rigids: ftv,
     };
 
-    // TODO there is a signature_index below, can we coalesce it here?
     let signature_index = constraints.push_type(signature.clone());
 
     let annotation_expected = FromAnnotation(
@@ -2456,7 +2455,6 @@ fn constrain_typed_def(
                     signature_closure_type_index,
                 ))
             };
-            let signature_index = constraints.push_type(signature);
             let cons = [
                 constraints.let_constraint(
                     [],
