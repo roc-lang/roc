@@ -3597,8 +3597,7 @@ fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let ret_type = *ret_type.clone();
-                        let ret_type_index = constraints.push_type(ret_type.clone());
+                        let ret_type_index = constraints.push_type(*ret_type.clone());
 
                         vars.push(ret_var);
                         vars.push(closure_var);
@@ -3627,7 +3626,7 @@ fn rec_defs_help(
                         let fn_type_index = constraints.push_type(Type::Function(
                             pattern_types,
                             Box::new(Type::Variable(closure_var)),
-                            Box::new(ret_type.clone()),
+                            Box::new(*ret_type.clone()),
                         ));
                         let body_type = NoExpectation(ret_type_index);
                         let expr_con = constrain_expr(
