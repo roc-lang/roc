@@ -421,10 +421,6 @@ fn eval_and_format<'a>(src: &str) -> Result<String, SyntaxError<'a>> {
     gen_and_eval_llvm(src, Triple::host(), OptLevel::Normal).map(format_output)
 }
 
-fn report_parse_error(fail: SyntaxError) {
-    println!("TODO Gracefully report parse error in repl: {:?}", fail);
-}
-
 pub fn main() -> io::Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
@@ -463,8 +459,9 @@ pub fn main() -> io::Result<()> {
                                 Ok(output) => {
                                     println!("{}", output);
                                 }
-                                Err(fail) => {
-                                    report_parse_error(fail);
+                                Err(_) => {
+                                    // This seems to be unreachable in practice.
+                                    unreachable!();
                                 }
                             }
 
@@ -498,13 +495,9 @@ pub fn main() -> io::Result<()> {
                                 println!("{}", output);
                                 pending_src.clear();
                             }
-                            //                            Err(Fail {
-                            //                                reason: FailReason::Eof(_),
-                            //                                ..
-                            //                            }) => {}
-                            Err(fail) => {
-                                report_parse_error(fail);
-                                pending_src.clear();
+                            Err(_) => {
+                                // This seems to be unreachable in practice.
+                                unreachable!();
                             }
                         }
                     }
