@@ -3710,7 +3710,7 @@ fn content_to_err_type(
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -3732,7 +3732,7 @@ fn content_to_err_type(
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -3758,7 +3758,7 @@ fn content_to_err_type(
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -4014,7 +4014,12 @@ fn union_tags_to_err_tags(
     err_tags
 }
 
-fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
+fn get_fresh_error_var_name(state: &mut ErrorTypeState) -> Lowercase {
+    // Auto-generated unbound variable names in error types start with `#`, so we can see later
+    // that they are auto-generated, and decide whether they should become wildcards contextually.
+    //
+    // We want to claim both the "#name" and "name" forms, because if "#name" appears multiple
+    // times during error type reporting, we'll use "name" for display.
     let (name, new_index) =
         name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
             var.as_str() == str
@@ -4022,9 +4027,15 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
 
     state.letters_used = new_index;
 
-    state.taken.insert(name.clone());
+    let mut gen_name = String::with_capacity(name.as_str().len() + 1);
+    gen_name.push('#');
+    gen_name.push_str(name.as_str());
+    let gen_name = Lowercase::from(gen_name);
 
-    name
+    state.taken.insert(name);
+    state.taken.insert(gen_name.clone());
+
+    gen_name
 }
 
 /// Exposed types in a module, captured in a storage subs. Includes

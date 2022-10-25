@@ -2294,8 +2294,10 @@ pub type DoesNotImplementAbility = Vec<(ErrorType, Symbol)>;
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
+    /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    /// If the name was auto-generated, it will start with a `#`.
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),

@@ -1038,7 +1038,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
     "###
     );
 
@@ -1064,7 +1064,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
 
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -1077,7 +1077,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
     "###
     );
 
@@ -1162,20 +1162,20 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> f [x]
-                ^
+    5│      f = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> a
-        "#
+        List ∞ -> *
+    "###
     );
 
     test_report!(
@@ -1189,19 +1189,19 @@ mod test_reporting {
             "#
         ),
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> f [x]
-                ^
+    5│      f = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1227,32 +1227,32 @@ mod test_reporting {
         // against that extra variable, rather than possibly having to translate a `Type`
         // again.
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> g x
-                ^
+    5│      f = \x -> g x
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
+        List ∞ -> List *
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `g`:
 
-        6│      g = \x -> f [x]
-                ^
+    6│      g = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1267,32 +1267,32 @@ mod test_reporting {
             "#
         ),
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        4│      f = \x -> g x
-                ^
+    4│      f = \x -> g x
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
+        List ∞ -> List *
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `g`:
 
-        6│      g = \x -> f [x]
-                ^
+    6│      g = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1351,7 +1351,7 @@ mod test_reporting {
 
     This `Blue` tag has the type:
 
-        [Blue]a
+        [Blue]*
 
     But `f` needs its 1st argument to be:
 
@@ -1385,7 +1385,7 @@ mod test_reporting {
 
     This `Blue` tag application has the type:
 
-        [Blue (Frac a)]b
+        [Blue (Frac a)]*
 
     But `f` needs its 1st argument to be:
 
@@ -1783,7 +1783,7 @@ mod test_reporting {
 
     But you are trying to use it as:
 
-        [Foo a]
+        [Foo *]
     "###
     );
 
@@ -1945,7 +1945,7 @@ mod test_reporting {
 
     The body is a record of type:
 
-        { b : Frac a }
+        { b : Frac * }
 
     But the type annotation on `x` says it should be:
 
@@ -2025,7 +2025,7 @@ mod test_reporting {
 
     This `Foo` tag has the type:
 
-        [Foo]a
+        [Foo]*
 
     But the type annotation on `f` says it should be:
 
@@ -2140,7 +2140,7 @@ mod test_reporting {
 
     This `Ok` tag has the type:
 
-        [Ok]a
+        [Ok]*
 
     But the type annotation on `f` says it should be:
 
@@ -2389,7 +2389,7 @@ mod test_reporting {
 
     This `True` tag has the type:
 
-        [True]a
+        [True]*
 
     But `add` needs its 2nd argument to be:
 
@@ -2525,7 +2525,7 @@ mod test_reporting {
 
     But you are trying to use it as:
 
-        [Left a]
+        [Left *]
 
     Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -3678,7 +3678,7 @@ mod test_reporting {
 
     This `y` value is a:
 
-        [True]a
+        [True]*
 
     But `add` needs its 2nd argument to be:
 
@@ -6064,11 +6064,11 @@ All branches in an `if` must have the same type!
 
     The argument is an anonymous function of type:
 
-        Num a -> Num a
+        Num a -> Num *
 
     But `map` needs its 2nd argument to be:
 
-        Str -> Num a
+        Str -> Num *
     "###
     );
 
@@ -6477,7 +6477,7 @@ All branches in an `if` must have the same type!
 
     This `Name` tag application has the type:
 
-        [Name Str]a
+        [Name Str]*
 
     But `isEmpty` needs its 1st argument to be:
 
@@ -7713,7 +7713,7 @@ All branches in an `if` must have the same type!
 
     The argument is a pattern that matches a `Age` tag of type:
 
-        [Age a]
+        [Age *]
 
     But the annotation on `f` says the 1st argument should be:
 
@@ -8516,7 +8516,7 @@ All branches in an `if` must have the same type!
 
     This value is a declared specialization of type:
 
-        a -> U64
+        * -> U64
 
     But the type annotation on `hash` says it must match:
 
@@ -8587,7 +8587,7 @@ All branches in an `if` must have the same type!
 
     This value is a declared specialization of type:
 
-        You, AndI -> [False]a
+        You, AndI -> [False]*
 
     But the type annotation on `eq` says it must match:
 
@@ -8678,7 +8678,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `MHash` ability for
 
-        [A (Num a)]b
+        [A (Num a)]*
 
     Only builtin abilities can have generated implementations!
 
@@ -9671,7 +9671,7 @@ All branches in an `if` must have the same type!
 
     But you are trying to use it as:
 
-        a -> Str
+        * -> Str
     "###
     );
 
@@ -10390,7 +10390,7 @@ All branches in an `if` must have the same type!
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) a]
+        [Bad [DecodeProblem], Good (List U8) *]
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -10501,7 +10501,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        a -> b
+        * -> *
 
     Note: `Decoding` cannot be generated for functions.
     "###
@@ -10808,7 +10808,7 @@ All branches in an `if` must have the same type!
 
     This `True` tag has the type:
 
-        [True]a
+        [True]*
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10834,7 +10834,7 @@ All branches in an `if` must have the same type!
 
     This `False` tag has the type:
 
-        [False]a
+        [False]*
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10996,7 +10996,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Hash` ability for
 
-        [A (a -> a) [B]a]b
+        [A (a -> a) [B]a]*
 
     In particular, an implementation for
 
@@ -11332,7 +11332,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Eq` ability for
 
-        [A (a -> a) [B]a]b
+        [A (a -> a) [B]a]*
 
     In particular, an implementation for
 
