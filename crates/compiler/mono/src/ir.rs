@@ -6368,10 +6368,13 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
-                lookups.push(symbol);
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
                 let layout = return_on_layout_error!(env, res_layout, "Expect");
-                layouts.push(layout);
+                if !matches!(layout, Layout::LambdaSet(..)) {
+                    // Exclude functions from lookups
+                    lookups.push(symbol);
+                    layouts.push(layout);
+                }
             }
 
             let mut stmt = Stmt::Expect {
@@ -6421,10 +6424,13 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
-                lookups.push(symbol);
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
                 let layout = return_on_layout_error!(env, res_layout, "Expect");
-                layouts.push(layout);
+                if !matches!(layout, Layout::LambdaSet(..)) {
+                    // Exclude functions from lookups
+                    lookups.push(symbol);
+                    layouts.push(layout);
+                }
             }
 
             let mut stmt = Stmt::ExpectFx {

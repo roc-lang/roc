@@ -83,9 +83,7 @@ interface Dict
 ## means that when `dict1 == dict2` the expression `fn dict1 == fn dict2` will
 ## also evaluate to `Bool.true`. The function `fn` can count on the ordering of
 ## values in the dictionary to also match.
-Dict k v := List [Pair k v] has [Eq { isEq: dictEq }]
-
-dictEq = \@Dict l1, @Dict l2 -> l1 == l2
+Dict k v := List [Pair k v] has [Eq]
 
 ## Return an empty dictionary.
 empty : Dict k v
@@ -187,6 +185,16 @@ remove = \@Dict list, key ->
 ## performance optimisation for the use case of providing a default when a value
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
+##
+##     alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+##     alterValue = \possibleValue ->
+##         when possibleValue is
+##             Missing -> Present Bool.false
+##             Present value -> if value then Missing else Present Bool.true
+##
+##     expect Dict.update Dict.empty "a" alterValue == Dict.single "a" Bool.false
+##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
+##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
@@ -203,8 +211,7 @@ alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
 alterValue = \possibleValue ->
     when possibleValue is
         Missing -> Present Bool.false
-        Present value if Bool.not value -> Present Bool.true
-        Present _ -> Missing
+        Present value -> if value then Missing else Present Bool.true
 
 expect update empty "a" alterValue == single "a" Bool.false
 expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true

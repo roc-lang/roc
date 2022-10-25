@@ -638,7 +638,7 @@ fn make_specialization_decision<P: Phase>(
                             // Doesn't specialize; an error will already be reported for this.
                             SpecializeDecision::Drop
                         }
-                        Some(MemberImpl::Error | MemberImpl::Derived) => {
+                        Some(MemberImpl::Error) => {
                             // TODO: probably not right, we may want to choose a derive decision!
                             SpecializeDecision::Specialize(Opaque(*opaque))
                         }
@@ -743,7 +743,6 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                                     .expect("lambda set region not resolved");
                                 Ok(specialized_lambda_set)
                             }
-                            MemberImpl::Derived => todo_abilities!(),
                             MemberImpl::Error => todo_abilities!(),
                         },
                     }

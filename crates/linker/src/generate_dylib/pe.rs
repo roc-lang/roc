@@ -1,7 +1,7 @@
 use object::pe;
 use object::LittleEndian as LE;
 
-pub(crate) const APP_DLL: &str = "roc-cheaty-lib.dll";
+pub(crate) const APP_DLL: &str = "libapp.dll";
 
 fn synthetic_image_export_directory(
     name: &str,

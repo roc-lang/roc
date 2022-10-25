@@ -923,11 +923,32 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                forcer : Str -> U8
-                forcer = <function>
-
                 case : Str
                 case = ""
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn issue_i4389() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    totalCount = \{} -> 1u8
+                    totalCount {} == 96u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      totalCount = \{} -> 1u8
+                5│>      totalCount {} == 96u8
                 "#
             ),
         );

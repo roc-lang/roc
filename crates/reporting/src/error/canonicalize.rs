@@ -677,6 +677,24 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
 
+        Problem::DuplicateHasAbility { ability, region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I already saw that this type variable is bound to the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability once before:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Abilities only need to bound to a type variable once in a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause!"),
+                ]),
+            ]);
+            title = "DUPLICATE BOUND ABILITY".to_string();
+            severity = Severity::Warning;
+        }
+
         Problem::AbilityMemberMissingHasClause {
             member,
             ability,

@@ -1518,6 +1518,7 @@ define_builtins! {
         24 DECODE_DECODE_WITH: "decodeWith"
         25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
         26 DECODE_FROM_BYTES: "fromBytes"
+        27 DECODE_MAP_RESULT: "mapResult"
     }
     13 HASH: "Hash" => {
         0 HASH_HASH_ABILITY: "Hash" exposed_type=true

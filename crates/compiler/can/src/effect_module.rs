@@ -1552,7 +1552,7 @@ fn build_fresh_opaque_variables(
     );
     let type_arguments = vec![OptAbleVar {
         var: a_var,
-        opt_ability: None,
+        opt_abilities: None,
     }];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 

@@ -1,6 +1,9 @@
 {
     "ignorePatterns": [
         {
+            "pattern": "generated-docs"
+        },
+        {
             "pattern": "http://127.0.0.1"
         },
         {

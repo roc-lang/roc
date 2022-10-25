@@ -384,7 +384,7 @@ mod solve_expr {
                     );
                     Some((impl_key, specialization.clone()))
                 }
-                MemberImpl::Derived | MemberImpl::Error => None,
+                MemberImpl::Error => None,
             },
         );
 
@@ -8042,6 +8042,113 @@ mod solve_expr {
                 "#
             ),
             "{} -> {}",
+        );
+    }
+
+    #[test]
+    fn derive_to_encoder_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Encoding]
+
+                main = Encode.toEncoder (@N 15)
+                #      ^^^^^^^^^^^^^^^^
+                "#
+            ),
+            @"N#Encode.toEncoder(3) : N -[[#N_toEncoder(3)]]-> Encoder fmt | fmt has EncoderFormatting"
+        );
+    }
+
+    #[test]
+    fn derive_decoder_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Decoding]
+
+                main : Decoder N _
+                main = Decode.custom \bytes, fmt ->
+                    Decode.decodeWith bytes Decode.decoder fmt
+                #                           ^^^^^^^^^^^^^^
+                "#
+            ),
+            @"N#Decode.decoder(3) : List U8, fmt -[[7(7)]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn derive_hash_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Hash]
+
+                main = \hasher, @N n -> Hash.hash hasher (@N n)
+                #                       ^^^^^^^^^
+                "#
+            ),
+            @"N#Hash.hash(3) : a, N -[[#N_hash(3)]]-> a | a has Hasher"
+        );
+    }
+
+    #[test]
+    fn derive_eq_for_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                N := U8 has [Eq]
+
+                main = Bool.isEq (@N 15) (@N 23)
+                #      ^^^^^^^^^
+                "#
+            ),
+            @"N#Bool.isEq(3) : N, N -[[#N_isEq(3)]]-> Bool"
+        );
+    }
+
+    #[test]
+    fn multiple_variables_bound_to_an_ability_from_type_def() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                F a : a | a has Hash & Eq & Decoding
+
+                main : F a -> F a
+                #^^^^{-1}
+                "#
+            ),
+            @"main : a -[[main(0)]]-> a | a has Hash & Decoding & Eq"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn rigid_able_bounds_are_superset_of_flex_bounds_admitted() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                f : x -> x | x has Hash
+                g : x -> x | x has Decoding & Encoding
+
+                main : x -> x | x has Hash & Decoding & Encoding
+                main = \x -> x |> f |> g
+                "#
+            ),
+            "x -> x | x has Hash & Encoding & Decoding",
         );
     }
 }

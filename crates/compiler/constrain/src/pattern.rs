@@ -541,7 +541,7 @@ pub fn constrain_pattern(
                     .iter()
                     .map(|v| OptAbleType {
                         typ: Type::Variable(v.var),
-                        opt_ability: v.opt_ability,
+                        opt_abilities: v.opt_abilities.clone(),
                     })
                     .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),

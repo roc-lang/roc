@@ -795,7 +795,7 @@ impl<'a> RemoveSpaces<'a> for HasClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         HasClause {
             var: self.var.remove_spaces(arena),
-            ability: self.ability.remove_spaces(arena),
+            abilities: self.abilities.remove_spaces(arena),
         }
     }
 }

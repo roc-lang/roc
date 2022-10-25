@@ -293,6 +293,7 @@ mod test_parse {
         pass/when_with_numbers.expr,
         pass/when_with_records.expr,
         pass/where_clause_function.expr,
+        pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has_across_newlines.expr,
         pass/where_clause_multiple_has.expr,
         pass/where_clause_non_function.expr,
