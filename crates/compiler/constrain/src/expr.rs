@@ -1585,8 +1585,6 @@ fn constrain_function_def(
                     let ret_constraint =
                         attach_resolution_constraints(constraints, env, ret_constraint);
 
-                    let signature_index = constraints.push_type(signature.clone());
-
                     let cons = [
                         ret_constraint,
                         // Store type into AST vars. We use Store so errors aren't reported twice
