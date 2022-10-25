@@ -55,7 +55,7 @@ struct PeMetadata {
     thunks_start_offset_in_section: usize,
 
     /// Virtual address of the .rdata section
-    rdata_virtual_address: u32,
+    dummy_dll_thunk_section_virtual_address: u32,
 
     /// The offset into the file of the .reloc section
     reloc_offset_in_file: usize,
@@ -108,18 +108,16 @@ impl PeMetadata {
             .unwrap();
 
         let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
-        let thunks_start_offset_in_file =
-            find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
 
-        let rdata_section = dynhost_obj
-            .sections()
-            .find(|s| s.name() == Ok(".rdata"))
-            .unwrap();
+        let dummy_dll_thunks = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+        let thunks_start_offset_in_file = dummy_dll_thunks.offset_in_file as usize;
 
-        let thunks_start_offset_in_section =
-            thunks_start_offset_in_file - rdata_section.file_range().unwrap().0 as usize;
+        let dummy_dll_thunk_section_virtual_address =
+            dummy_dll_thunks.section.virtual_address.get(LE);
 
-        let rdata_virtual_address = rdata_section.address() as u32;
+        let thunks_start_offset_in_section = (dummy_dll_thunks.offset_in_file
+            - dummy_dll_thunks.section.pointer_to_raw_data.get(LE) as u64)
+            as usize;
 
         let (reloc_section_index, reloc_section) = dynhost_obj
             .sections()
@@ -175,7 +173,7 @@ impl PeMetadata {
             dynamic_relocations,
             thunks_start_offset_in_file,
             thunks_start_offset_in_section,
-            rdata_virtual_address,
+            dummy_dll_thunk_section_virtual_address,
             reloc_offset_in_file,
             reloc_section_index,
         }
@@ -191,6 +189,7 @@ pub(crate) fn preprocess_windows(
     _time: bool,
 ) -> object::read::Result<()> {
     let data = open_mmap(host_exe_filename);
+
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut preprocessed = Preprocessor::preprocess(
         preprocessed_filename,
@@ -214,21 +213,40 @@ pub(crate) fn preprocess_windows(
         dir.size.set(LE, new);
     }
 
-    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let start = md.dynamic_relocations.imports_offset_in_file as usize
-            + W * md.dynamic_relocations.dummy_import_index as usize;
-
-        for b in preprocessed[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
+    remove_dummy_dll_import_table_entry(&mut preprocessed, &md);
 
     md.write_to_file(metadata_filename);
 
     Ok(())
+}
+
+fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
+    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+    let dr = &md.dynamic_relocations;
+
+    // there is one zeroed-out descriptor at the back
+    let count = dr.import_directory_size as usize / W - 1;
+
+    let descriptors = load_structs_inplace_mut::<ImageImportDescriptor>(
+        executable,
+        dr.import_directory_offset_in_file as usize,
+        count,
+    );
+
+    // move the dummy to the final position
+    descriptors.swap(dr.dummy_import_index as usize, count - 1);
+
+    // make this the new zeroed-out descriptor
+    if let Some(d) = descriptors.last_mut() {
+        *d = ImageImportDescriptor {
+            original_first_thunk: Default::default(),
+            time_date_stamp: Default::default(),
+            forwarder_chain: Default::default(),
+            name: Default::default(),
+            first_thunk: Default::default(),
+        }
+    }
 }
 
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
@@ -431,7 +449,10 @@ struct DynamicRelocationsPe {
     section_offset_in_file: u32,
 
     /// Offset in the file of the imports directory
-    imports_offset_in_file: u32,
+    import_directory_offset_in_file: u32,
+
+    /// Size in the file of the imports directory
+    import_directory_size: u32,
 
     /// Offset in the file of the data directories
     data_directories_offset_in_file: u32,
@@ -536,8 +557,9 @@ impl DynamicRelocationsPe {
 
         let import_table = ImportTable::new(section_data, section_va, import_va);
 
-        let imports_offset_in_section = import_va.wrapping_sub(section_va);
-        let imports_offset_in_file = offset_in_file + imports_offset_in_section;
+        let (import_directory_offset_in_file, import_directory_size) = data_dir
+            .file_range(&sections)
+            .expect("import directory exists");
 
         let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?.unwrap();
 
@@ -546,10 +568,11 @@ impl DynamicRelocationsPe {
             address_and_offset: Default::default(),
             section_virtual_address: section_va,
             section_offset_in_file: offset_in_file,
-            imports_offset_in_file,
+            import_directory_offset_in_file,
             data_directories_offset_in_file,
             dummy_import_index,
             section_headers_offset_in_file,
+            import_directory_size,
         };
 
         this.append_roc_imports(&import_table, &descriptor)?;
@@ -820,12 +843,16 @@ impl Preprocessor {
         }
     }
 }
+struct DummyDllThunks<'a> {
+    section: &'a object::pe::ImageSectionHeader,
+    offset_in_file: u64,
+}
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
-fn find_thunks_start_offset(
-    executable: &[u8],
+fn find_thunks_start_offset<'a>(
+    executable: &'a [u8],
     dynamic_relocations: &DynamicRelocationsPe,
-) -> usize {
+) -> DummyDllThunks<'a> {
     // The host executable contains indirect calls to functions that the host should provide
     //
     //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
@@ -854,7 +881,7 @@ fn find_thunks_start_offset(
     // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
-    let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
+    let dummy_import_desc_start = dynamic_relocations.import_directory_offset_in_file as usize
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
@@ -880,19 +907,21 @@ fn find_thunks_start_offset(
     let sections = nt_headers.sections(executable, offset).unwrap();
 
     // find the section the virtual address is in
-    let (section_va, offset_in_file) = sections
+    let (section_virtual_address, section) = sections
         .iter()
         .find_map(|section| {
             section
                 .pe_data_containing(executable, dummy_thunks_address)
-                .map(|(_section_data, section_va)| {
-                    (section_va, section.pointer_to_raw_data.get(LE))
-                })
+                .map(|(_section_data, section_va)| (section_va, section))
         })
         .expect("Invalid thunk virtual address");
 
-    // and get the offset in the file of 0x1400037f0
-    (dummy_thunks_address - section_va + offset_in_file) as usize
+    DummyDllThunks {
+        section,
+        // and get the offset in the file of 0x1400037f0
+        offset_in_file: dummy_thunks_address as u64 - section_virtual_address as u64
+            + section.pointer_to_raw_data.get(LE) as u64,
+    }
 }
 
 /// Make the thunks point to our actual roc application functions
@@ -903,9 +932,10 @@ fn redirect_dummy_dll_functions(
     thunks_start_offset: usize,
 ) {
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
-    let mut targets = function_definition_vas.iter();
+    // this is an O(n^2) loop, hopefully that does not become a problem. If it does we can sort
+    // both vectors to get linear complexity in the loop.
     'outer: for (i, host_name) in imports.iter().enumerate() {
-        for (roc_app_target_name, roc_app_target_va) in targets.by_ref() {
+        for (roc_app_target_name, roc_app_target_va) in function_definition_vas {
             if host_name == roc_app_target_name {
                 // addresses are 64-bit values
                 let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
@@ -1309,8 +1339,8 @@ fn write_image_base_relocation(
 /// in a table to find the actual address of the app function. This table must be relocated,
 /// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    let thunks_start_va = (md.rdata_virtual_address - md.image_base as u32)
-        + md.thunks_start_offset_in_section as u32;
+    let thunks_start_va =
+        md.dummy_dll_thunk_section_virtual_address + md.thunks_start_offset_in_section as u32;
 
     // relocations are defined per 4kb page
     const BLOCK_SIZE: u32 = 4096;
@@ -1354,17 +1384,20 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         "new .reloc section is too big, and runs into the next section!",
     );
 
-    //    // in the data directories, update the length of the base relocations
-    //    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
-    //        executable,
-    //        md.dynamic_relocations.data_directories_offset_in_file as usize
-    //            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
-    //                * std::mem::size_of::<pe::ImageDataDirectory>(),
-    //    );
-    //
-    //    let old_dir_size = dir.size.get(LE);
-    //    debug_assert_eq!(old_section_size, old_dir_size);
-    //    dir.size.set(LE, new_virtual_size);
+    // in the data directories, update the length of the base relocations
+    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
+        executable,
+        md.dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
+                * std::mem::size_of::<pe::ImageDataDirectory>(),
+    );
+
+    // it is crucial that the directory size is rounded up to a multiple of 8!
+    let old = dir.size.get(LE);
+    let new = new_virtual_size;
+    let delta = next_multiple_of((new - old) as usize, 8);
+
+    dir.size.set(LE, old + delta as u32);
 }
 
 #[cfg(test)]
@@ -1554,7 +1587,7 @@ mod test {
         remove_dummy_dll_import_table_test(
             &mut data,
             dynamic_relocations.data_directories_offset_in_file,
-            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.import_directory_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
 
@@ -1696,14 +1729,14 @@ mod test {
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
         let dylib_bytes = crate::generate_dylib::synthetic_dll(&names);
-        std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
+        std::fs::write(dir.join("libapp.dll"), dylib_bytes).unwrap();
 
-        // now we can compile the host (it uses libapp.obj, hence the order here)
+        // now we can compile the host (it uses libapp.dll, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
                 "build-exe",
-                "libapp.obj",
+                "libapp.dll",
                 "host.zig",
                 "-lc",
                 "-target",
