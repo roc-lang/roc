@@ -1513,6 +1513,8 @@ fn constrain_function_def(
                 &mut ftv,
             );
 
+            let signature_index = constraints.push_type(signature.clone());
+
             let (arg_types, signature_closure_type, ret_type) = match &signature {
                 Type::Function(arg_types, signature_closure_type, ret_type) => {
                     (arg_types, signature_closure_type, ret_type)
@@ -1528,8 +1530,7 @@ fn constrain_function_def(
                             Loc {
                                 region: loc_function_def.region,
                                 // todo can we use Type::Variable(expr_var) here?
-                                // TODO coalesce with other signatures
-                                value: constraints.push_type(signature.clone()),
+                                value: signature_index,
                             },
                         );
 
@@ -1541,8 +1542,7 @@ fn constrain_function_def(
                             AnnotationSource::TypedBody {
                                 region: annotation.region,
                             },
-                            // TODO coalesce with other signatures
-                            constraints.push_type(signature.clone()),
+                            signature_index,
                         );
 
                         {
@@ -1565,8 +1565,7 @@ fn constrain_function_def(
                         AnnotationSource::TypedBody {
                             region: annotation.region,
                         },
-                        // TODO coalesce with other signature indeces
-                        constraints.push_type(signature.clone()),
+                        signature_index,
                     );
 
                     let ret_constraint = constrain_untyped_closure(
@@ -1653,8 +1652,7 @@ fn constrain_function_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                // TODO coalesce with other signature indices
-                constraints.push_type(signature.clone()),
+                signature_index,
             );
 
             {
