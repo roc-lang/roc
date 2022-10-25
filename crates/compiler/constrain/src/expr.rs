@@ -902,13 +902,15 @@ pub fn constrain_expr(
 
             // Now check the condition against the type expected by the branches.
             let sketched_rows = sketch_when_branches(branches_region, branches);
+            let expected_by_branches = constraints.push_expected_type(Expected::ForReason(
+                Reason::WhenBranches,
+                branches_cond_type,
+                branches_region,
+            ));
             let cond_matches_branches_constraint = constraints.exhaustive(
                 real_cond_var,
                 loc_cond.region,
-                Ok((
-                    loc_cond.value.category(),
-                    Expected::ForReason(Reason::WhenBranches, branches_cond_type, branches_region),
-                )),
+                Ok((loc_cond.value.category(), expected_by_branches)),
                 sketched_rows,
                 ExhaustiveContext::BadCase,
                 *exhaustive,
@@ -2562,14 +2564,14 @@ fn constrain_typed_function_arguments(
                 // annotation wants.
                 let sketched_rows = sketch_pattern_to_rows(loc_pattern.region, &loc_pattern.value);
                 let category = loc_pattern.value.category();
-                let expected = PExpected::ForReason(
+                let expected = constraints.push_pat_expected_type(PExpected::ForReason(
                     PReason::TypedArg {
                         index: HumanIndex::zero_based(index),
                         opt_name: opt_label,
                     },
                     Type::Variable(*pattern_var),
                     loc_pattern.region,
-                );
+                ));
                 let exhaustive_constraint = constraints.exhaustive(
                     annotation_var,
                     loc_pattern.region,
@@ -2677,14 +2679,14 @@ fn constrain_typed_function_arguments_simple(
                 // annotation wants.
                 let sketched_rows = sketch_pattern_to_rows(loc_pattern.region, &loc_pattern.value);
                 let category = loc_pattern.value.category();
-                let expected = PExpected::ForReason(
+                let expected = constraints.push_pat_expected_type(PExpected::ForReason(
                     PReason::TypedArg {
                         index: HumanIndex::zero_based(index),
                         opt_name: Some(symbol),
                     },
                     Type::Variable(*pattern_var),
                     loc_pattern.region,
-                );
+                ));
                 let exhaustive_constraint = constraints.exhaustive(
                     annotation_var,
                     loc_pattern.region,

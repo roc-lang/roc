@@ -615,8 +615,8 @@ impl Constraints {
         real_var: Variable,
         real_region: Region,
         category_and_expectation: Result<
-            (Category, Expected<Type>),
-            (PatternCategory, PExpected<Type>),
+            (Category, ExpectedTypeIndex),
+            (PatternCategory, PExpectedTypeIndex),
         >,
         sketched_rows: SketchedRows,
         context: ExhaustiveContext,
@@ -628,15 +628,12 @@ impl Constraints {
         let equality = match category_and_expectation {
             Ok((category, expected)) => {
                 let category = Index::push_new(&mut self.categories, category);
-                let expected = Index::push_new(&mut self.expectations, expected.map(Cell::new));
                 let equality = Eq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.eq, equality);
                 Ok(equality)
             }
             Err((category, expected)) => {
                 let category = Index::push_new(&mut self.pattern_categories, category);
-                let expected =
-                    Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
                 let equality = PatternEq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.pattern_eq, equality);
                 Err(equality)
