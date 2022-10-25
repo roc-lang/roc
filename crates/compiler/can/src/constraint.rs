@@ -510,7 +510,7 @@ impl Constraints {
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I2: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I2::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
@@ -519,27 +519,10 @@ impl Constraints {
         self.constraints.push(Constraint::True);
         self.constraints.push(module_constraint);
 
-        let def_types = {
-            let types = def_types
-                .into_iter()
-                .map(|(sym, Loc { region, value })| {
-                    let type_index = self.push_type(value);
-                    (
-                        sym,
-                        Loc {
-                            region,
-                            value: type_index,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            self.def_types_slice(types)
-        };
-
         let let_contraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
             flex_vars: Slice::default(),
-            def_types,
+            def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
         };
 
