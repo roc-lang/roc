@@ -2280,6 +2280,8 @@ fn gen_quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                app "test" provides [main] to "./platform"
+
                 quicksort : List (Num a) -> List (Num a)
                 quicksort = \list ->
                     n = List.len list
@@ -2336,7 +2338,7 @@ fn gen_quicksort() {
                     else
                         Pair i list
 
-                quicksort [7, 4, 21, 19]
+                main = quicksort [7, 4, 21, 19]
             "#
             ),
             RocList::from_slice(&[4, 7, 19, 21]),
@@ -2352,6 +2354,8 @@ fn quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2410,7 +2414,7 @@ fn quicksort() {
 
 
 
-                   quicksort [7, 4, 21, 19]
+                   main = quicksort [7, 4, 21, 19]
                "#
             ),
             RocList::from_slice(&[19, 7, 4, 21]),
@@ -2426,6 +2430,8 @@ fn quicksort_singleton() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2483,8 +2489,9 @@ fn quicksort_singleton() {
 
 
 
-                   when List.first (quicksort [0x1]) is
-                       _ -> 4
+                   main =
+                       when List.first (quicksort [0x1]) is
+                           _ -> 4
                "#
             ),
             4,
