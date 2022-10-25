@@ -2220,7 +2220,7 @@ fn tag_ext_to_doc<'b>(
                 Some(alloc.type_variable(display_generated_name(&lowercase).into()))
             } else {
                 match pol {
-                    Polarity::Neg => Some(alloc.type_variable(lowercase)),
+                    Polarity::Neg => Some(alloc.type_variable(WILDCARD.into())),
                     Polarity::Pos => {
                         // Wildcard in output position is irrelevant and is elided.
                         None
