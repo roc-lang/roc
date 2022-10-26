@@ -502,7 +502,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "#
             ),
-            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*",
+            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]",
         );
     }
 
@@ -3330,7 +3330,7 @@ mod solve_expr {
                     List.get ["a"] 0
                 "#
             ),
-            "Result Str [OutOfBounds]*",
+            "Result Str [OutOfBounds]",
         );
     }
 
@@ -3432,7 +3432,7 @@ mod solve_expr {
                     List.get [10, 9, 8, 7] 1
                 "#
             ),
-            "Result (Num *) [OutOfBounds]*",
+            "Result (Num *) [OutOfBounds]",
         );
 
         infer_eq_without_problem(
@@ -3441,7 +3441,7 @@ mod solve_expr {
                     List.get
                 "#
             ),
-            "List a, Nat -> Result a [OutOfBounds]*",
+            "List a, Nat -> Result a [OutOfBounds]",
         );
     }
 
@@ -3543,7 +3543,7 @@ mod solve_expr {
                 Num.divChecked
                 "#
             ),
-            "Float a, Float a -> Result (Float a) [DivByZero]*",
+            "Float a, Float a -> Result (Float a) [DivByZero]",
         )
     }
 
@@ -3567,7 +3567,7 @@ mod solve_expr {
                 Num.divCeilChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [DivByZero]*",
+            "Int a, Int a -> Result (Int a) [DivByZero]",
         );
     }
 
@@ -3591,7 +3591,7 @@ mod solve_expr {
                 Num.divTruncChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [DivByZero]*",
+            "Int a, Int a -> Result (Int a) [DivByZero]",
         );
     }
 
@@ -3779,7 +3779,7 @@ mod solve_expr {
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound]* | position has Eq
+                cheapestOpen : Model position -> Result position [KeyNotFound] | position has Eq
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3794,14 +3794,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound]* | position has Eq
+                astar : Model position -> Result position [KeyNotFound] | position has Eq
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound]* | position has Eq",
+            "Model position -> Result position [KeyNotFound] | position has Eq",
         );
     }
 
@@ -7498,7 +7498,7 @@ mod solve_expr {
                 r#"
                 OList := [Nil, Cons {} OList]
 
-                lst : [Cons {} OList]*
+                lst : [Cons {} OList]
 
                 olist : OList
                 olist = (\l -> @OList l) lst
@@ -7517,7 +7517,7 @@ mod solve_expr {
                 r#"
                 OList := [Nil, Cons {} OList]
 
-                lst : [Cons {} OList]*
+                lst : [Cons {} OList]
 
                 olist : OList
                 olist = @OList lst

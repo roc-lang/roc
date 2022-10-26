@@ -11731,4 +11731,26 @@ All branches in an `if` must have the same type!
     denoted with .. - is that what you meant?
     "###
     );
+
+    test_report!(
+        unnecessary_extension_variable,
+        indoc!(
+            r#"
+            f : {} -> [A, B]*
+            f
+            "#
+        ),
+    @r###"
+    ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
+
+    I see you annotated a wildcard in a place where it's not needed:
+
+    4│      f : {} -> [A, B]*
+                            ^
+
+    Tag unions that are constants, or the return values of functions, are
+    always inferred to be open by default! You can remove this annotation
+    safely.
+    "###
+    );
 }

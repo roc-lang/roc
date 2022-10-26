@@ -334,7 +334,7 @@ pub(crate) fn canonicalize_annotation(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CanPolarity {
     /// Polarity should be disregarded for now; relevant in aliaes + opaques.
     Disregard,
@@ -1081,6 +1081,17 @@ fn can_extension_type<'a>(
                 references,
             );
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
+                if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
+                    && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
+                    && pol == CanPolarity::Pos
+                {
+                    // Wildcards are redundant in positive positions, since they will always be
+                    // inferred as necessary there!
+                    env.problem(roc_problem::can::Problem::UnnecessaryOutputWildcard {
+                        region: loc_ann.region,
+                    })
+                }
+
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred

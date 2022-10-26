@@ -70,7 +70,7 @@ fn num_floor_division() {
 fn num_floor_checked_division_success() {
     expect_success(
         "Num.divTruncChecked 4 3",
-        "Ok 1 : Result (Int *) [DivByZero]*",
+        "Ok 1 : Result (Int *) [DivByZero]",
     );
 }
 
@@ -79,7 +79,7 @@ fn num_floor_checked_division_success() {
 fn num_floor_checked_division_divby_zero() {
     expect_success(
         "Num.divTruncChecked 4 0",
-        "Err DivByZero : Result (Int *) [DivByZero]*",
+        "Err DivByZero : Result (Int *) [DivByZero]",
     );
 }
 
@@ -94,7 +94,7 @@ fn num_ceil_division() {
 fn num_ceil_checked_division_success() {
     expect_success(
         "Num.divCeilChecked 4 3",
-        "Ok 2 : Result (Int *) [DivByZero]*",
+        "Ok 2 : Result (Int *) [DivByZero]",
     )
 }
 
@@ -380,30 +380,30 @@ fn num_mul_saturated() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
-    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]*");
+    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]");
     expect_success(
         "Num.addChecked Num.maxI64 1",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
-    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]*");
+    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]");
     expect_success(
         "Num.subChecked Num.minI64 1",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
-    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]*");
+    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]");
     expect_success(
         "Num.mulChecked Num.maxI64 2",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
@@ -437,11 +437,11 @@ fn list_sum() {
 fn list_first() {
     expect_success(
         "List.first [12, 9, 6, 3]",
-        "Ok 12 : Result (Num *) [ListWasEmpty]*",
+        "Ok 12 : Result (Num *) [ListWasEmpty]",
     );
     expect_success(
         "List.first []",
-        "Err ListWasEmpty : Result a [ListWasEmpty]*",
+        "Err ListWasEmpty : Result a [ListWasEmpty]",
     );
 }
 
@@ -450,12 +450,12 @@ fn list_first() {
 fn list_last() {
     expect_success(
         "List.last [12, 9, 6, 3]",
-        "Ok 3 : Result (Num *) [ListWasEmpty]*",
+        "Ok 3 : Result (Num *) [ListWasEmpty]",
     );
 
     expect_success(
         "List.last []",
-        "Err ListWasEmpty : Result a [ListWasEmpty]*",
+        "Err ListWasEmpty : Result a [ListWasEmpty]",
     );
 }
 
@@ -654,18 +654,18 @@ fn type_problem() {
 
 #[test]
 fn issue_2149() {
-    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]*");
+    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
     expect_success(
         r#"Str.toI8 "128""#,
-        "Err InvalidNumStr : Result I8 [InvalidNumStr]*",
+        "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
     expect_success(
         r#"Str.toI16 "32767""#,
-        "Ok 32767 : Result I16 [InvalidNumStr]*",
+        "Ok 32767 : Result I16 [InvalidNumStr]",
     );
     expect_success(
         r#"Str.toI16 "32768""#,
-        "Err InvalidNumStr : Result I16 [InvalidNumStr]*",
+        "Err InvalidNumStr : Result I16 [InvalidNumStr]",
     );
 }
 
@@ -1155,7 +1155,7 @@ fn box_box_type_alias() {
 fn issue_2582_specialize_result_value() {
     expect_success(
         r#"\x, list -> if x > 0 then List.first list else Ok """#,
-        r"<function> : Num *, List Str -> Result Str [ListWasEmpty]*",
+        r"<function> : Num *, List Str -> Result Str [ListWasEmpty]",
     )
 }
 
@@ -1236,7 +1236,7 @@ fn dict_get_single() {
             Dict.single 0 {a: 1, c: 2} |> Dict.get 0
             "#
         ),
-        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
+        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]"#,
     )
 }
 

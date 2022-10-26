@@ -1015,6 +1015,15 @@ pub fn can_problem<'b>(
             title = "OVERLOADED SPECIALIZATION".to_string();
             severity = Severity::Warning;
         }
+        Problem::UnnecessaryOutputWildcard { region } => {
+            doc = alloc.stack([
+                alloc.reflow("I see you annotated a wildcard in a place where it's not needed:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Tag unions that are constants, or the return values of functions, are always inferred to be open by default! You can remove this annotation safely."),
+            ]);
+            title = "UNNECESSARY WILDCARD".to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {
