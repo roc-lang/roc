@@ -1046,6 +1046,15 @@ fn parse_defs_end<'a>(
 
 pub enum Next<'a> {
     Continue(SingleDef<'a>, State<'a>),
+    /// When we encounter a Body def, we have to check to see if there was an
+    /// Annotation def right before it. If so, we merge the two into an AnnotatedBody.
+    ///
+    /// So when parse_single_def returns a Fixup, it means that:
+    /// 1. This is a Body def.
+    /// 2. If we're parsing multiple things, we should check whether an Annotation def preceded it.
+    /// 3. If so, we should merge them into an AnnotatedBody.
+    ///
+    /// This needs to store the raw Loc<Pattern> and Loc<Expr>.
     Fixup(
         Loc<Pattern<'a>>,
         Loc<Expr<'a>>,
