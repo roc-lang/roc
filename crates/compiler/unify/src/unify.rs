@@ -743,7 +743,7 @@ fn wrap_range_var(
 ) -> Variable {
     let range_desc = env.subs.get(range_var);
     let new_range_var = env.subs.fresh(range_desc);
-    let var_slice = AliasVariables::insert_into_subs(env.subs, [new_range_var], []);
+    let var_slice = AliasVariables::insert_into_subs(env.subs, [new_range_var], [], []);
     env.subs.set_content(
         range_var,
         Alias(symbol, var_slice, new_range_var, alias_kind),
@@ -778,11 +778,18 @@ fn unify_two_aliases<M: MetaCollector>(
             .into_iter()
             .zip(other_args.lambda_set_variables().into_iter());
 
+        let infer_ext_in_output_vars_it = (args.infer_ext_in_output_variables().into_iter())
+            .zip(other_args.infer_ext_in_output_variables().into_iter());
+
         let mut merged_args = Vec::with_capacity(args.type_variables().len());
         let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
+        let mut merged_infer_ext_in_output_vars =
+            Vec::with_capacity(args.infer_ext_in_output_variables().len());
         debug_assert_eq!(
-            merged_args.capacity() + merged_lambda_set_args.capacity(),
-            args.all_variables_len as _
+            merged_args.capacity()
+                + merged_lambda_set_args.capacity()
+                + merged_infer_ext_in_output_vars.capacity(),
+            args.all_variables_len as _,
         );
 
         for (l, r) in args_it {
@@ -801,6 +808,15 @@ fn unify_two_aliases<M: MetaCollector>(
 
             let merged_var = choose_merged_var(env.subs, l_var, r_var);
             merged_lambda_set_args.push(merged_var);
+        }
+
+        for (l, r) in infer_ext_in_output_vars_it {
+            let l_var = env.subs[l];
+            let r_var = env.subs[r];
+            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_infer_ext_in_output_vars.push(merged_var);
         }
 
         if outcome.mismatches.is_empty() {
@@ -837,8 +853,12 @@ fn unify_two_aliases<M: MetaCollector>(
             // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
             // the merged vars are all left, avoid re-insertion. Is checking for argument slice
             // equality faster than re-inserting?
-            let merged_variables =
-                AliasVariables::insert_into_subs(env.subs, merged_args, merged_lambda_set_args);
+            let merged_variables = AliasVariables::insert_into_subs(
+                env.subs,
+                merged_args,
+                merged_lambda_set_args,
+                merged_infer_ext_in_output_vars,
+            );
             let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
 
             outcome.union(merge(env, ctx, merged_content));

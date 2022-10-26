@@ -63,6 +63,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
             "a".into(),
             Variable::EMPTY_RECORD,
         ))],
+        vec![],
         Type::EmptyRec,
         roc_types::types::AliasKind::Structural,
     );

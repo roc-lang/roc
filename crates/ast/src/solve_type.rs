@@ -958,7 +958,7 @@ fn type_to_variable<'a>(
                 arg_vars.push(arg_var);
             }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, [], []);
 
             let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
 

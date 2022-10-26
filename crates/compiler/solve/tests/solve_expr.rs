@@ -6955,7 +6955,7 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            foo : [Named Str (List a)] as a
+            foo : [Named Str (List a)]* as a
             Named name outerList : [Named Str (List a)] as a
             name : Str
             outerList : List ([Named Str (List a)] as a)

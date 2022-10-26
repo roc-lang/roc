@@ -991,11 +991,11 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]a]b ?
+                    Task.Task {} * [Write [Stdout]]
 
                 But the type annotation on main says it should be:
 
-                    InternalProgram.InternalProgram ?
+                    InternalProgram.InternalProgram
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque
@@ -1012,11 +1012,11 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]a]b ?
+                    Task.Task {} * [Write [Stdout]]
 
                 But toEffect needs its 1st argument to be:
 
-                    InternalProgram.InternalProgram ?
+                    InternalProgram.InternalProgram
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque

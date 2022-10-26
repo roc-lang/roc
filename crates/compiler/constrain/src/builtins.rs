@@ -260,6 +260,7 @@ fn builtin_num_alias(
         type_arguments,
         actual,
         lambda_set_variables: vec![],
+        infer_ext_in_output_types: vec![],
         kind,
     }
 }

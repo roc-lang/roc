@@ -802,12 +802,12 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             };
             write!(f, "Flex({})", name)
         }
-        Content::FlexAbleVar(name, symbol) => {
+        Content::FlexAbleVar(name, symbols) => {
             let name = match name {
                 Some(index) => subs[*index].as_str(),
                 None => "_",
             };
-            write!(f, "FlexAble({}, {:?})", name, symbol)
+            write!(f, "FlexAble({}, {:?})", name, subs.get_subs_slice(*symbols))
         }
         Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
         Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
@@ -1437,7 +1437,7 @@ fn integer_type(
 
     // define the type `Num.Integer Num.Signed64 := Num.Signed64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [signed64], [], []);
         subs.set_content(integer_signed64, {
             Content::Alias(Symbol::NUM_INTEGER, vars, signed64, AliasKind::Opaque)
         });
@@ -1445,7 +1445,7 @@ fn integer_type(
 
     // define the type `Num.Num (Num.Integer Num.Signed64) := Num.Integer Num.Signed64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], [], []);
         subs.set_content(num_integer_signed64, {
             Content::Alias(Symbol::NUM_NUM, vars, integer_signed64, AliasKind::Opaque)
         });
@@ -1605,7 +1605,7 @@ fn float_type(
 
     // define the type `Num.Float Num.Binary64 := Num.Binary64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [binary64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [binary64], [], []);
         subs.set_content(float_binary64, {
             Content::Alias(Symbol::NUM_FLOATINGPOINT, vars, binary64, AliasKind::Opaque)
         });
@@ -1613,7 +1613,7 @@ fn float_type(
 
     // define the type `Num.Num (Num.Float Num.Binary64) := Num.Float Num.Binary64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [float_binary64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [float_binary64], [], []);
         subs.set_content(num_float_binary64, {
             Content::Alias(Symbol::NUM_NUM, vars, float_binary64, AliasKind::Opaque)
         });
@@ -2269,8 +2269,8 @@ impl From<Content> for Descriptor {
 }
 
 roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
-roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 2 * 8 + 4);
-roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
+roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 8 + 12 + 4);
+roc_error_macros::assert_sizeof_all!(AliasVariables, 12);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(LambdaSet, 3 * 8 + 4);
 
@@ -2358,8 +2358,11 @@ pub struct LambdaSet {
 pub struct AliasVariables {
     pub variables_start: u32,
     pub all_variables_len: u16,
+    pub lambda_set_variables_len: u16,
 
-    /// an alias has type variables and lambda set variables
+    /// an alias has type variables, lambda set variables, and infer-ext-in-output-position variables.
+    /// They are arranged as
+    /// [ type variables  |  lambda set variables  |  infer ext variables ]
     pub type_variables_len: u16,
 }
 
@@ -2373,10 +2376,16 @@ impl AliasVariables {
     }
 
     pub const fn lambda_set_variables(&self) -> VariableSubsSlice {
-        SubsSlice::new(
-            self.variables_start + self.type_variables_len as u32,
-            self.all_variables_len - self.type_variables_len,
-        )
+        let start = self.variables_start + self.type_variables_len as u32;
+        SubsSlice::new(start, self.lambda_set_variables_len)
+    }
+
+    pub const fn infer_ext_in_output_variables(&self) -> VariableSubsSlice {
+        let infer_ext_vars_offset =
+            self.type_variables_len as u32 + self.lambda_set_variables_len as u32;
+        let start = self.variables_start + infer_ext_vars_offset;
+        let infer_ext_vars_len = self.all_variables_len - infer_ext_vars_offset as u16;
+        SubsSlice::new(start, infer_ext_vars_len)
     }
 
     pub const fn len(&self) -> usize {
@@ -2407,20 +2416,23 @@ impl AliasVariables {
             .take(self.type_variables_len as usize)
     }
 
-    pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+    pub fn iter_lambda_set_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
         self.all_variables()
             .into_iter()
             .skip(self.type_variables_len as usize)
+            .take(self.lambda_set_variables_len as _)
     }
 
-    pub fn insert_into_subs<I1, I2>(
+    pub fn insert_into_subs<I1, I2, I3>(
         subs: &mut Subs,
         type_arguments: I1,
-        unnamed_arguments: I2,
+        lambda_set_vars: I2,
+        infer_ext_in_output_vars: I3,
     ) -> Self
     where
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
+        I3: IntoIterator<Item = Variable>,
     {
         let variables_start = subs.variables.len() as u32;
 
@@ -2428,13 +2440,33 @@ impl AliasVariables {
 
         let type_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
 
-        subs.variables.extend(unnamed_arguments);
+        let lambda_set_variables_len = {
+            let start = subs.variables.len() as u32;
+
+            subs.variables.extend(lambda_set_vars);
+
+            (subs.variables.len() as u32 - start) as u16
+        };
+
+        let _infer_ext_in_output_vars_len = {
+            let start = subs.variables.len() as u32;
+
+            subs.variables.extend(infer_ext_in_output_vars);
+
+            (subs.variables.len() as u32 - start) as u16
+        };
 
         let all_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
+
+        debug_assert_eq!(
+            type_variables_len + lambda_set_variables_len + _infer_ext_in_output_vars_len,
+            all_variables_len
+        );
 
         Self {
             variables_start,
             type_variables_len,
+            lambda_set_variables_len,
             all_variables_len,
         }
     }
@@ -3800,7 +3832,7 @@ fn content_to_err_type(
 
             let mut err_args = Vec::with_capacity(args.len());
 
-            for var_index in args.into_iter() {
+            for var_index in args.type_variables() {
                 let var = subs[var_index];
 
                 let arg = var_to_err_type(subs, state, var, pol);

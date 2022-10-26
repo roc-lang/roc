@@ -5,9 +5,9 @@ use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
+use crate::annotation::AnnotationFor;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
-use crate::annotation::ValueAnnotation;
 use crate::derive;
 use crate::env::Env;
 use crate::expr::AccessorData;
@@ -321,6 +321,10 @@ fn canonicalize_alias<'a>(
     kind: AliasKind,
 ) -> Result<Alias, ()> {
     let symbol = name.value;
+    let annotation_for = match kind {
+        AliasKind::Structural => AnnotationFor::Alias,
+        AliasKind::Opaque => AnnotationFor::Opaque,
+    };
     let can_ann = canonicalize_annotation(
         env,
         scope,
@@ -328,7 +332,7 @@ fn canonicalize_alias<'a>(
         ann.region,
         var_store,
         pending_abilities_in_scope,
-        ValueAnnotation(false),
+        annotation_for,
     );
 
     // Record all the annotation's references in output.references.lookups
@@ -344,7 +348,7 @@ fn canonicalize_alias<'a>(
         able,
         wildcards,
         inferred,
-        inferred_in_output: _, // TODO handle these
+        infer_ext_in_output,
         ..
     } = can_ann.introduced_variables;
 
@@ -429,6 +433,7 @@ fn canonicalize_alias<'a>(
         symbol,
         name.region,
         can_vars.clone(),
+        infer_ext_in_output,
         can_ann.typ,
         kind,
     ))
@@ -872,6 +877,11 @@ fn canonicalize_opaque<'a>(
                     .iter()
                     .map(|_| LambdaSet(Type::Variable(var_store.fresh())))
                     .collect(),
+                infer_ext_in_output_types: alias
+                    .infer_ext_in_output_variables
+                    .iter()
+                    .map(|_| Type::Variable(var_store.fresh()))
+                    .collect(),
             });
 
             let old = output
@@ -1281,6 +1291,7 @@ fn canonicalize_type_defs<'a>(
             *symbol,
             alias.region,
             alias.type_variables.clone(),
+            alias.infer_ext_in_output_variables.clone(),
             alias.typ.clone(),
             alias.kind,
         );
@@ -1332,7 +1343,7 @@ fn resolve_abilities<'a>(
                 typ.region,
                 var_store,
                 pending_abilities_in_scope,
-                ValueAnnotation(true),
+                AnnotationFor::Value,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -2000,7 +2011,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
-                ValueAnnotation(true),
+                AnnotationFor::Value,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -2100,7 +2111,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
-                ValueAnnotation(true),
+                AnnotationFor::Value,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -2778,11 +2789,13 @@ fn correct_mutual_recursive_type_alias<'a>(
             };
 
             let mut new_lambda_sets = ImSet::default();
+            let mut new_infer_ext_vars = ImSet::default();
             alias_type.instantiate_aliases(
                 alias_region,
                 &can_instantiate_symbol,
                 var_store,
                 &mut new_lambda_sets,
+                &mut new_infer_ext_vars,
             );
 
             let alias = if cycle.count_ones() > 1 {
@@ -2803,6 +2816,11 @@ fn correct_mutual_recursive_type_alias<'a>(
                     .iter()
                     .map(|var| LambdaSet(Type::Variable(*var))),
             );
+
+            // add any new infer-in-output extension variables that the instantiation created to the current alias
+            alias
+                .infer_ext_in_output_variables
+                .extend(new_infer_ext_vars);
 
             // Now mark the alias recursive, if it needs to be.
             let rec = symbols_introduced[index];
@@ -2882,6 +2900,10 @@ fn make_tag_union_of_alias_recursive<'a>(
     });
 
     let lambda_set_vars = alias.lambda_set_variables.iter();
+    let infer_ext_in_output_variables = alias
+        .infer_ext_in_output_variables
+        .iter()
+        .map(|v| Type::Variable(*v));
 
     let made_recursive = make_tag_union_recursive_help(
         env,
@@ -2889,6 +2911,7 @@ fn make_tag_union_of_alias_recursive<'a>(
         alias_args,
         alias_opt_able_vars,
         lambda_set_vars,
+        infer_ext_in_output_variables,
         alias.kind,
         alias.region,
         others,
@@ -2943,6 +2966,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
     alias_args: impl Iterator<Item = Type>,
     alias_opt_able_vars: impl Iterator<Item = OptAbleType>,
     lambda_set_variables: impl Iterator<Item = &'b LambdaSet>,
+    infer_ext_in_output_variables: impl Iterator<Item = Type>,
     alias_kind: AliasKind,
     region: Region,
     others: Vec<Symbol>,
@@ -2972,6 +2996,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
                     symbol,
                     type_arguments: alias_opt_able_vars.collect(),
                     lambda_set_variables: lambda_set_variables.cloned().collect(),
+                    infer_ext_in_output_types: infer_ext_in_output_variables.collect(),
                     actual: Box::new(Type::Variable(recursion_variable)),
                     kind: AliasKind::Opaque,
                 },
@@ -3004,6 +3029,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
             actual,
             type_arguments,
             lambda_set_variables,
+            infer_ext_in_output_types,
             kind,
             ..
         } => {
@@ -3021,6 +3047,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
                 alias_args.into_iter(),
                 type_arguments.iter().cloned(),
                 lambda_set_variables.iter(),
+                infer_ext_in_output_types.iter().cloned(),
                 *kind,
                 region,
                 others,

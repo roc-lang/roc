@@ -3270,7 +3270,7 @@ mod test_reporting {
 
     This `Cons` tag application has the type:
 
-        [Cons {} [Cons Str [Cons {} a, Nil] as a, Nil], Nil]
+        [Cons {} [Cons Str [Cons {} a, Nil]b as a, Nil]b, Nil]b
 
     But the type annotation on `x` says it should be:
 
@@ -3308,7 +3308,7 @@ mod test_reporting {
     This `ACons` tag application has the type:
 
         [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-        ANil] as ∞, BNil], ANil], BNil], ANil]
+        ANil]b as ∞, BNil]c, ANil]b, BNil]c, ANil]b
 
     But the type annotation on `x` says it should be:
 
@@ -6657,7 +6657,7 @@ All branches in an `if` must have the same type!
 
     But the type annotation on `job` says it should be:
 
-        [Job { inputs : List a }] as a
+        [Job { inputs : List a }]a as a
     "###
     );
 

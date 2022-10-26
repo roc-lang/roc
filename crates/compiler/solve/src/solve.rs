@@ -99,6 +99,7 @@ struct DelayedAliasVariables {
     type_variables_len: u8,
     lambda_set_variables_len: u8,
     recursion_variables_len: u8,
+    infer_ext_in_output_variables_len: u8,
 }
 
 impl DelayedAliasVariables {
@@ -120,6 +121,16 @@ impl DelayedAliasVariables {
     fn type_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize;
         let length = self.type_variables_len as usize;
+
+        &mut variables[start..][..length]
+    }
+
+    fn infer_ext_in_output_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
+        let start = self.start as usize
+            + (self.type_variables_len
+                + self.lambda_set_variables_len
+                + self.recursion_variables_len) as usize;
+        let length = self.infer_ext_in_output_variables_len as usize;
 
         &mut variables[start..][..length]
     }
@@ -160,11 +171,20 @@ impl Aliases {
                         .map(OptAbleVar::unbound),
                 );
 
+                self.variables.extend(
+                    alias
+                        .infer_ext_in_output_variables
+                        .iter()
+                        .map(|v| OptAbleVar::unbound(*v)),
+                );
+
                 DelayedAliasVariables {
                     start,
                     type_variables_len: alias.type_variables.len() as _,
                     lambda_set_variables_len: alias.lambda_set_variables.len() as _,
                     recursion_variables_len,
+                    infer_ext_in_output_variables_len: alias.infer_ext_in_output_variables.len()
+                        as _,
                 }
             };
 
@@ -204,7 +224,7 @@ impl Aliases {
     ) -> Variable {
         let content = Content::Alias(
             symbol,
-            AliasVariables::insert_into_subs(subs, [range_var], []),
+            AliasVariables::insert_into_subs(subs, [range_var], [], []),
             range_var,
             AliasKind::Opaque,
         );
@@ -367,6 +387,22 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
+            debug_assert!(old.opt_abilities.is_none());
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
+
+                if can_reuse_old_definition {
+                    old.var = *new;
+                }
+            }
+        }
+
+        let old_infer_ext_vars =
+            delayed_variables.infer_ext_in_output_variables(&mut self.variables);
+        let new_infer_ext_vars =
+            &subs.variables[alias_variables.infer_ext_in_output_variables().indices()];
+
+        for (old, new) in old_infer_ext_vars.iter_mut().zip(new_infer_ext_vars) {
             debug_assert!(old.opt_abilities.is_none());
             if old.var != *new {
                 substitutions.insert(old.var, *new);
@@ -2717,12 +2753,21 @@ fn type_to_variable<'a>(
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types,
             }) => {
                 let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+                    let all_vars_length = type_arguments.len()
+                        + lambda_set_variables.len()
+                        + infer_ext_in_output_types.len();
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
-                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
+                    let type_arguments_offset = 0;
+                    let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
+                    let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
+
+                    for (target_index, arg_type) in
+                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
+                    {
                         let copy_var = helper!(&arg_type.value.typ);
                         subs.variables[target_index] = copy_var;
                         if let Some(abilities) = arg_type.value.opt_abilities.as_ref() {
@@ -2730,7 +2775,7 @@ fn type_to_variable<'a>(
                         }
                     }
 
-                    let it = (new_variables.indices().skip(type_arguments.len()))
+                    let it = (new_variables.indices().skip(lambda_set_vars_offset))
                         .zip(lambda_set_variables);
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
@@ -2750,10 +2795,18 @@ fn type_to_variable<'a>(
                         subs.variables[target_index] = copy_var;
                     }
 
+                    let it = (new_variables.indices().skip(infer_ext_vars_offset))
+                        .zip(infer_ext_in_output_types);
+                    for (target_index, ext_typ) in it {
+                        let copy_var = helper!(ext_typ);
+                        subs.variables[target_index] = copy_var;
+                    }
+
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
-                        all_variables_len: length as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
+                        all_variables_len: all_vars_length as _,
                     }
                 };
 
@@ -2779,16 +2832,24 @@ fn type_to_variable<'a>(
                 type_arguments,
                 actual,
                 lambda_set_variables,
+                infer_ext_in_output_types,
                 kind,
             } => {
                 debug_assert!(Variable::get_reserved(*symbol).is_none());
 
                 let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+                    let all_vars_length = type_arguments.len()
+                        + lambda_set_variables.len()
+                        + infer_ext_in_output_types.len();
+
+                    let type_arguments_offset = 0;
+                    let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
+                    let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
+
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
                     for (target_index, OptAbleType { typ, opt_abilities }) in
-                        (new_variables.indices()).zip(type_arguments)
+                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
                     {
                         let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
@@ -2800,17 +2861,25 @@ fn type_to_variable<'a>(
                         }
                     }
 
-                    let it = (new_variables.indices().skip(type_arguments.len()))
+                    let it = (new_variables.indices().skip(lambda_set_vars_offset))
                         .zip(lambda_set_variables);
                     for (target_index, ls) in it {
                         let copy_var = helper!(&ls.0);
                         subs.variables[target_index] = copy_var;
                     }
 
+                    let it = (new_variables.indices().skip(infer_ext_vars_offset))
+                        .zip(infer_ext_in_output_types);
+                    for (target_index, ext_typ) in it {
+                        let copy_var = helper!(ext_typ);
+                        subs.variables[target_index] = copy_var;
+                    }
+
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
-                        all_variables_len: length as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
+                        all_variables_len: all_vars_length as _,
                     }
                 };
 
@@ -2862,6 +2931,7 @@ fn type_to_variable<'a>(
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
                         all_variables_len: length as _,
                     }
                 };

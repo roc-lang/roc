@@ -2212,9 +2212,7 @@ fn tag_ext_to_doc<'b>(
     match ext {
         Closed => None,
         FlexOpen(lowercase) if is_generated_name(&lowercase) => {
-            let &usages = gen_usages
-                .get(&lowercase)
-                .expect("flex var appears, but not captured here");
+            let &usages = gen_usages.get(&lowercase).unwrap_or(&1);
 
             if usages > 1 {
                 Some(alloc.type_variable(display_generated_name(&lowercase).into()))

@@ -1080,6 +1080,7 @@ fn build_effect_loop(
                 lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(
                     closure_var,
                 ))],
+                infer_ext_in_output_types: vec![],
                 actual: Box::new(actual),
                 kind: AliasKind::Opaque,
             }
@@ -1531,6 +1532,7 @@ fn build_effect_opaque(
         symbol: effect_symbol,
         type_arguments: vec![OptAbleType::unbound(Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
+        infer_ext_in_output_types: vec![],
         actual: Box::new(actual),
         kind: AliasKind::Opaque,
     }

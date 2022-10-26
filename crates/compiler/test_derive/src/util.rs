@@ -143,7 +143,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Structural))
          }
@@ -154,7 +154,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Opaque))
          }
