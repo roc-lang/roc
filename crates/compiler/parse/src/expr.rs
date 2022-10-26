@@ -619,7 +619,7 @@ pub fn parse_single_def<'a>(
     min_indent: u32,
     arena: &'a Bump,
     state: State<'a>,
-) -> Next<'a> {
+) -> ParseResult<'a, Option<SingleDef<'a>>, EExpr<'a>> {
     let initial = state.clone();
 
     let mut spaces_before_current = &[] as &[_];
@@ -627,7 +627,7 @@ pub fn parse_single_def<'a>(
 
     let state = match space0_e(min_indent, EExpr::IndentStart).parse(arena, state) {
         Err((MadeProgress, _, s)) => {
-            return Next::Break(MadeProgress, Err(EExpr::DefMissingFinalExpr(s.pos())), s);
+            return Err((MadeProgress, EExpr::DefMissingFinalExpr(s.pos()), s));
         }
         Ok((_, spaces, state)) => {
             spaces_before_current = spaces;
@@ -653,7 +653,7 @@ pub fn parse_single_def<'a>(
             match parse_expect.parse(arena, state) {
                 Err((_, _, _)) => {
                     // a hacky way to get expression-based error messages. TODO fix this
-                    Next::Break(NoProgress, Ok(()), initial)
+                    Ok((NoProgress, None, initial))
                 }
                 Ok((_, expect_flavor, state)) => {
                     let parse_def_expr = space0_before_e(
@@ -662,13 +662,7 @@ pub fn parse_single_def<'a>(
                         EExpr::IndentEnd,
                     );
 
-                    let (loc_def_expr, state) = match parse_def_expr.parse(arena, state) {
-                        Ok((_, loc_def_expr, state)) => (loc_def_expr, state),
-                        Err((progress, eexpr, state)) => {
-                            return Next::Break(progress, Err(eexpr), state);
-                        }
-                    };
-
+                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
                     let end = loc_def_expr.region.end();
                     let region = Region::new(start, end);
 
@@ -699,20 +693,21 @@ pub fn parse_single_def<'a>(
                         },
                     };
 
-                    Next::Continue(
-                        SingleDef {
+                    Ok((
+                        MadeProgress,
+                        Some(SingleDef {
                             type_or_value: Either::Second(value_def),
                             region,
                             spaces_before: spaces_before_current,
-                        },
+                        }),
                         state,
-                    )
+                    ))
                 }
             }
         }
         Err((MadeProgress, _, _)) => {
             // a hacky way to get expression-based error messages. TODO fix this
-            Next::Break(NoProgress, Ok(()), initial)
+            Ok((NoProgress, None, initial))
         }
         Ok((_, loc_pattern, state)) => {
             // First let's check whether this is an ability definition.
@@ -733,24 +728,24 @@ pub fn parse_single_def<'a>(
                 if let Ok((_, loc_has, state)) =
                     loc_has_parser(min_indent).parse(arena, state.clone())
                 {
-                    return match finish_parsing_ability_def_help(
+                    let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                         min_indent,
                         Loc::at(name_region, name),
                         args,
                         loc_has,
                         arena,
                         state,
-                    ) {
-                        Ok((_, (type_def, def_region), state)) => Next::Continue(
-                            SingleDef {
-                                type_or_value: Either::First(type_def),
-                                region: def_region,
-                                spaces_before: spaces_before_current,
-                            },
-                            state,
-                        ),
-                        Err((progress, eexpr, state)) => Next::Break(progress, Err(eexpr), state),
-                    };
+                    )?;
+
+                    return Ok((
+                        MadeProgress,
+                        Some(SingleDef {
+                            type_or_value: Either::First(type_def),
+                            region: def_region,
+                            spaces_before: spaces_before_current,
+                        }),
+                        state,
+                    ));
                 }
             }
 
@@ -763,35 +758,24 @@ pub fn parse_single_def<'a>(
                         EExpr::IndentEnd,
                     );
 
-                    let (loc_def_expr, state) = match parse_def_expr.parse(arena, state) {
-                        Ok((_, loc_def_expr, state)) => (loc_def_expr, state),
-                        Err((progress, eexpr, state)) => {
-                            return Next::Break(progress, Err(eexpr), state)
-                        }
-                    };
+                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
                     let value_def =
                         ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
                     let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
-                    Next::Continue(
-                        SingleDef {
+                    Ok((
+                        MadeProgress,
+                        Some(SingleDef {
                             type_or_value: Either::Second(value_def),
                             region,
                             spaces_before: spaces_before_current,
-                        },
+                        }),
                         state,
-                    )
+                    ))
                 }
                 Ok((_, BinOp::IsAliasType, state)) => {
-                    let (ann_type, state) = match alias_signature_with_space_before(min_indent + 1)
-                        .parse(arena, state)
-                    {
-                        Ok((_, ann_type, state)) => (ann_type, state),
-                        Err((progress, eexpr, state)) => {
-                            return Next::Break(progress, Err(eexpr), state);
-                        }
-                    };
-
+                    let (_, ann_type, state) =
+                        alias_signature_with_space_before(min_indent + 1).parse(arena, state)?;
                     let region = Region::span_across(&loc_pattern.region, &ann_type.region);
 
                     match &loc_pattern.value {
@@ -813,14 +797,15 @@ pub fn parse_single_def<'a>(
                                 ann: ann_type,
                             };
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::First(type_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                         Pattern::Tag(name) => {
                             let name = Loc::at(loc_pattern.region, *name);
@@ -835,39 +820,34 @@ pub fn parse_single_def<'a>(
                                 ann: ann_type,
                             };
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::First(type_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                         _ => {
                             let value_def = ValueDef::Annotation(loc_pattern, ann_type);
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::Second(value_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                     }
                 }
                 Ok((_, BinOp::IsOpaqueType, state)) => {
-                    let result =
-                        opaque_signature_with_space_before(min_indent + 1).parse(arena, state);
-                    let (signature, derived, state) = match result {
-                        Ok((_, (signature, derived), state)) => (signature, derived, state),
-                        Err((progress, eexpr, state)) => {
-                            return Next::Break(progress, Err(eexpr), state);
-                        }
-                    };
-
+                    let (_, (signature, derived), state) =
+                        opaque_signature_with_space_before(min_indent + 1).parse(arena, state)?;
                     let region = Region::span_across(&loc_pattern.region, &signature.region);
 
                     match &loc_pattern.value {
@@ -890,14 +870,15 @@ pub fn parse_single_def<'a>(
                                 derived,
                             };
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::First(type_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                         Pattern::Tag(name) => {
                             let name = Loc::at(loc_pattern.region, *name);
@@ -913,30 +894,32 @@ pub fn parse_single_def<'a>(
                                 derived,
                             };
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::First(type_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                         _ => {
                             let value_def = ValueDef::Annotation(loc_pattern, signature);
 
-                            Next::Continue(
-                                SingleDef {
+                            Ok((
+                                MadeProgress,
+                                Some(SingleDef {
                                     type_or_value: Either::Second(value_def),
                                     region,
                                     spaces_before: spaces_before_current,
-                                },
+                                }),
                                 state,
-                            )
+                            ))
                         }
                     }
                 }
-                _ => Next::Break(MadeProgress, Ok(()), initial),
+                _ => Ok((MadeProgress, None, initial)),
             }
         }
     }
@@ -955,7 +938,7 @@ fn parse_defs_end<'a>(
         let state = global_state;
 
         global_state = match parse_single_def(_options, min_indent, arena, state) {
-            Next::Continue(single_def, next_state) => {
+            Ok((_, Some(single_def), next_state)) => {
                 match single_def.type_or_value {
                     Either::First(type_def) => {
                         defs.push_type_def(
@@ -1069,17 +1052,10 @@ fn parse_defs_end<'a>(
 
                 next_state
             }
-            Next::Break(progress, Ok(()), s) => return Ok((progress, defs, s)),
-            Next::Break(progress, Err(err), s) => return Err((progress, err, s)),
+            Ok((progress, None, s)) => return Ok((progress, defs, s)),
+            Err((progress, err, s)) => return Err((progress, err, s)),
         };
     }
-}
-
-/// This is what parse_single_def returns. It's a combination of ParseResult and
-/// whether to continue looping (when we're parsing multiple defs).
-pub enum Next<'a> {
-    Continue(SingleDef<'a>, State<'a>),
-    Break(Progress, Result<(), EExpr<'a>>, State<'a>),
 }
 
 pub struct SingleDef<'a> {
