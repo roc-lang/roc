@@ -11665,4 +11665,70 @@ All branches in an `if` must have the same type!
     clause of `x`.
     "###
     );
+
+    test_report!(
+        list_pattern_not_terminated,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2, -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ────────── tmp/list_pattern_not_terminated/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2, -> ""
+                       ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_indent,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2,
+            3] -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ──────────── tmp/list_pattern_weird_indent/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2,
+    6│      3] -> ""
+            ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_rest_pattern,
+        indoc!(
+            r#"
+            when [] is 
+                [...] -> ""
+            "#
+        ),
+    @r###"
+    ── INCORRECT REST PATTERN ─────── tmp/list_pattern_weird_rest_pattern/Test.roc ─
+
+    It looks like you may trying to write a list rest pattern, but it's
+    not the form I expect:
+
+    5│          [...] -> ""
+                 ^
+
+    List rest patterns, which match zero or more elements in a list, are
+    denoted with .. - is that what you meant?
+    "###
+    );
 }

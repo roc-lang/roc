@@ -566,8 +566,6 @@ pub enum PList<'a> {
     Space(BadInputError, Position),
 
     IndentOpen(Position),
-    IndentColon(Position),
-    IndentOptional(Position),
     IndentEnd(Position),
 }
 
