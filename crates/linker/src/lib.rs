@@ -377,6 +377,16 @@ fn surgery(
     }
 }
 
+/// Redirect `memcpy` and similar libc functions to their roc equivalents
+pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
+    match name {
+        "memcpy" => Some("roc_memcpy"),
+        "memset" => Some("roc_memset"),
+        "memmove" => Some("roc_memmove"),
+        _ => None,
+    }
+}
+
 pub(crate) fn align_by_constraint(offset: usize, constraint: usize) -> usize {
     if offset % constraint == 0 {
         offset

@@ -18,7 +18,7 @@ use target_lexicon::Triple;
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
-    open_mmap_mut,
+    open_mmap_mut, redirect_libc_functions,
 };
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -70,10 +70,8 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
         let address = sym.address() as u64;
 
         // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            vaddresses.insert("memcpy".to_string(), address);
-        } else if name == "roc_memset" {
-            vaddresses.insert("memset".to_string(), address);
+        if let Some(name) = redirect_libc_functions(name) {
+            vaddresses.insert(name.to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
