@@ -25,47 +25,47 @@ Roc's very own [markup language](https://en.wikipedia.org/wiki/Markup_language).
 
 ## `compile/`
 
-Compiles `.roc` files and combine them with their platform into an executable binary. See [compiler/README.md](./compiler/README.md) for more information.
+Compiles `.roc` files and combines them with their platform into an executable binary. See [compiler/README.md](./compiler/README.md) for more information.
 
 TODO explain what "compiler frontend" is
 TODO explain what "compiler backend" is
 
 The compiler includes the following sub-crates;
-- `roc_alias_analysis` TODO - Need assistance
-- `arena-pool` TODO - Need assistance
-- `roc_build` TODO - Need assistance
-- `roc_builtins` provdes the Roc functions and modules that are implicitly imported into every module. See [README.md](./compiler/builtins/README.md) for more information.
-- `roc_can` TODO - Need assistance
-- `roc_collections` TODO - Need assistance
-- `roc_constrain` TODO - Need assistance
-- `roc_debug_flags` TODO - Need assistance
-- `roc_derive` provides auto-derivers?
+- `roc_alias_analysis` Performs analysis and optimizations to remove unneeded reference counts at runtime, and supports in-place mutation.
+- `arena-pool` An implementation of an arena allocator designed for the compiler's workloads.
+- `roc_build` Responsible for coordinating building and linking of a Roc app with its host.
+- `roc_builtins` provides the Roc functions and modules that are implicitly imported into every module. See [README.md](./compiler/builtins/README.md) for more information.
+- `roc_can` Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference.
+- `roc_collections` Domain-specific collections created for the needs of the compiler.
+- `roc_constrain` Responsible for building the set of constraints that are used during type inference of a program, and for gathering context needed for pleasant error messages when a type error occurs.
+- `roc_debug_flags` Environment variables that can be toggled to aid debugging of the compiler itself.
+- `roc_derive` provides auto-derivers for builtin abilities like `Hash` and `Decode`.
 - `roc_exhaustive` provides exhaustiveness checking for Roc 
-- `roc_fmt` TODO - Need assistance
+- `roc_fmt` The roc code formatter.
 - `roc_gen_dev` provides the compiler backend to generate Roc binaries fast, for a nice developer experience. See [README.md](./compiler/gen_dev/README.md) for more information.
 - `roc_gen_llvm` provides the LLVM backend to generate Roc binaries. Used to generate a binary with the fastest possible execution speed.
 - `roc_gen_wasm` provides the WASM backend to generate Roc binaries. See [README.md](./compiler/gen_wasm/README.md) for more information.
-- `roc_ident` provides identifiers
+- `roc_ident` Implements data structures used for efficiently representing small strings, like identifiers.
 - `roc_intern` provides generic interners for concurrent and single-thread use cases.
 - `roc_late_solve` provides type unification and solving primitives from the perspective of the compiler backend.
-- `roc_load` used to load a `.roc` file and typecheck it.
-- `roc_load_internal` TODO - Need assistance
-- `roc_module` TODO - Need assistance
-- `roc_mono` TODO - Need assistance
-- `roc_parse` TODO - Need assistance
+- `roc_load` Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and code generation.
+- `roc_load_internal` The internal implementation of roc_load, separate from roc_load to support caching.
+- `roc_module` Implements data structures used for efficiently representing unique modules and identifiers in Roc programs.
+- `roc_mono` Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend.
+- `roc_parse` Implements the Roc parser, which transforms a textual representation of a Roc program to an abstract syntax tree.
 - `roc_problem` provides types to describe problems that can occur when compiling `.roc` code.
-- `roc_region` TODO - Need assistance
+- `roc_region` Data structures for storing source-code-location information, used heavily for contextual error messages.
 - `roc_target` provides types and helpers for compiler targets such as `default_x86_64`.
 - `roc_serialize` provides helpers for serializing and deserializing to/from bytes.
-- `roc_solve` see [Ambient Lambda Set Specialization](./compiler/solve/docs/ambient_lambda_set_specialization.md) for more information on how polymorphic lambda sets are specialized and resolved in the compiler's type solver. 
+- `roc_solve` The entry point of Roc's type inference system. Implements type inference and specialization of abilities.
 - `roc_solve_problem` provides types to describe problems that can occur during solving.
 - `roc_str` provides `Roc` styled collection reference counting. See [README.md](./compiler/str/README.md) for more information.
-- `test_derive` TODO - Need assistance
+- `test_derive` Tests Roc's auto-derivers.
 - `test_gen` contains all of Roc's code generation tests. See [README.md](./compiler/test_gen/README.md) for more information.
-- `test_mono` TODO - Need assistance
-- `test_mono_macros` TODO - Need assistance
-- `roc_types` TODO - Need assistance
-- `roc_unify` TODO - Need assistance
+- `test_mono` Tests Roc's generation of the mono intermediate representation.
+- `test_mono_macros` Macros for use in test_mono
+- `roc_types` Various representations and utilities for dealing with types in the Roc compiler.
+- `roc_unify` Implements Roc's unification algorithm, the heartstone of Roc's type inference.
 
 ## `docs/` - `roc_docs`
 
@@ -108,11 +108,11 @@ Provides the functionality for the REPL to evaluate Roc expressions.
 
 ## `repl_expect/` - `roc_repl_expect`
 
-TODO - Need assistance
+Supports evaluating `expect` and printing contextual information when they fail.
 
 ## `repl_test/` - `repl_test`
 
-TODO - Need assistance
+Tests the roc REPL.
 
 ## `repl_wasm/` - `roc_repl_wasm`
 
@@ -120,7 +120,7 @@ Provides a build of the REPL for the Roc website using WebAssembly. See [README.
 
 ## `reporting/` - `roc_reporting`
 
-TODO - Need assistance
+Responsible for generating warning and error messages.
 
 ## `roc_std/` - `roc_std`
 
