@@ -64,7 +64,7 @@ pub struct ExprParseOptions {
     /// Check for the `->` token, and raise an error if found
     /// This is usually true, but false in if-guards
     ///
-    /// > just foo if foo == 2 -> ...
+    /// > Just foo if foo == 2 -> ...
     check_for_arrow: bool,
 }
 
