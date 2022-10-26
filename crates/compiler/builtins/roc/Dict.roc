@@ -96,7 +96,9 @@ Dict k v := {
     dataIndices : List Nat,
     data : List (T k v),
     size : Nat,
-} | k has Hash & Eq
+}
+# TODO: re-add type definition one #4408 is fixed
+# | k has Hash & Eq
 
 ## Return an empty dictionary.
 empty : Dict k v | k has Hash & Eq
@@ -486,8 +488,7 @@ removeAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-# TODO: re-add type definition one #4408 is fixed
-# updateDataIndex : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
+updateDataIndex : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
 updateDataIndex = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
         createLowLevelHasher {}
@@ -514,8 +515,8 @@ insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
 insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value, h1Key, h2Key ->
     probe = newProbe h1Key (div8 (List.len metadata))
     index = nextEmptyOrDeletedHelper metadata probe 0
+    dataIndex = List.len data
     nextData = List.append data (T key value)
-    dataIndex = List.len data - 1
 
     @Dict {
         metadata: List.set metadata index h2Key,
