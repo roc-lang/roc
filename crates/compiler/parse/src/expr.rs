@@ -939,18 +939,14 @@ fn parse_defs_end<'a>(
 
         global_state = match parse_single_def(_options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
+                let region = single_def.region;
+                let spaces_before_current = single_def.spaces_before;
+
                 match single_def.type_or_value {
                     Either::First(type_def) => {
-                        defs.push_type_def(
-                            type_def,
-                            single_def.region,
-                            single_def.spaces_before,
-                            &[],
-                        );
+                        defs.push_type_def(type_def, region, spaces_before_current, &[]);
                     }
                     Either::Second(value_def) => {
-                        let spaces_before_current = single_def.spaces_before;
-
                         // If we got a ValueDef::Body, check if a type annotation preceded it.
                         // If so, we may need to combine them into an AnnotatedBody.
                         match value_def {
@@ -1039,12 +1035,7 @@ fn parse_defs_end<'a>(
                             }
                             _ => {
                                 // the previous and current def can't be joined up
-                                defs.push_value_def(
-                                    value_def,
-                                    single_def.region,
-                                    single_def.spaces_before,
-                                    &[],
-                                );
+                                defs.push_value_def(value_def, region, spaces_before_current, &[]);
                             }
                         }
                     }
