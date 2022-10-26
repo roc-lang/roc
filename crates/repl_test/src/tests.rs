@@ -453,10 +453,7 @@ fn list_last() {
         "Ok 3 : Result (Num *) [ListWasEmpty]",
     );
 
-    expect_success(
-        "List.last []",
-        "Err ListWasEmpty : Result a [ListWasEmpty]",
-    );
+    expect_success("List.last []", "Err ListWasEmpty : Result a [ListWasEmpty]");
 }
 
 #[test]
