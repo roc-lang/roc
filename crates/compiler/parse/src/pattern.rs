@@ -3,8 +3,8 @@ use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_ref, then, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser,
+    backtrackable, optional, specialize, specialize_ref, then, word1, word2, EPattern, PInParens,
+    PList, PRecord, ParseResult, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::string::String;
@@ -62,6 +62,7 @@ pub fn loc_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
         loc!(number_pattern_help()),
         loc!(string_pattern_help()),
         loc!(single_quote_pattern_help()),
+        loc!(specialize(EPattern::List, list_pattern_help(min_indent))),
     )
 }
 
@@ -200,6 +201,41 @@ fn single_quote_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>>
             Pattern::SingleQuote
         ),
     )
+}
+
+fn list_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PList<'a>> {
+    move |arena, state| {
+        let (_, pats, state) = collection_trailing_sep_e!(
+            // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
+            word1(b'[', PList::Open),
+            list_element_pattern(min_indent),
+            word1(b',', PList::End),
+            // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
+            word1(b']', PList::End),
+            min_indent,
+            PList::Open,
+            PList::IndentEnd,
+            Pattern::SpaceBefore
+        )
+        .parse(arena, state)?;
+
+        let result = Pattern::List(pats);
+
+        Ok((MadeProgress, result, state))
+    }
+}
+
+fn list_element_pattern<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
+    one_of!(
+        list_rest_pattern(),
+        specialize_ref(PList::Pattern, loc_pattern_help(min_indent)),
+    )
+}
+
+fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
+    map!(loc!(word2(b'.', b'.', PList::Rest)), |loc_word: Loc<_>| {
+        loc_word.map(|_| Pattern::ListRest)
+    })
 }
 
 fn loc_ident_pattern_help<'a>(
@@ -354,11 +390,9 @@ fn lowercase_ident_pattern<'a>(
 fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
     move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
             word1(b'{', PRecord::Open),
             record_pattern_field(min_indent),
             word1(b',', PRecord::End),
-            // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
             word1(b'}', PRecord::End),
             min_indent,
             PRecord::Open,

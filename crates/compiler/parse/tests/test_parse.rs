@@ -175,6 +175,7 @@ mod test_parse {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,

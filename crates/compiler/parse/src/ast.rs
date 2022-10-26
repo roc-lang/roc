@@ -653,6 +653,13 @@ pub enum Pattern<'a> {
     Underscore(&'a str),
     SingleQuote(&'a str),
 
+    /// A list pattern like [_, x, ..]
+    List(Collection<'a, Loc<Pattern<'a>>>),
+
+    /// A list-rest pattern ".."
+    /// Can only occur inside of a [Pattern::List]
+    ListRest,
+
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),

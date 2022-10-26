@@ -40,7 +40,10 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
-            | Pattern::QualifiedIdentifier { .. } => false,
+            | Pattern::QualifiedIdentifier { .. }
+            | Pattern::ListRest => false,
+
+            Pattern::List(patterns) => patterns.iter().any(|p| p.is_multiline()),
         }
     }
 
@@ -158,6 +161,8 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.push('_');
                 buf.push_str(name);
             }
+            List(..) => todo!(),
+            ListRest => todo!(),
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
