@@ -1,7 +1,8 @@
-//! Provides AST library for Roc
+//! Library to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree).
 //!  
-//! AST is used by roc_editor and (soon) roc_docs. In contrast to the compiler, 
-//! these types do not keep track of a location in a file.
+//! Used by roc_editor. In contrast to the compiler, 
+//! In contrast to the compiler, the types in this
+//! AST do not keep track of the location of the matching code in the source file.
 pub mod ast_error;
 mod builtin_aliases;
 mod canonicalization;
