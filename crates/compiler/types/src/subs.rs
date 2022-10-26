@@ -2476,7 +2476,7 @@ impl AliasVariables {
         subs.get_subs_slice(self.infer_ext_in_output_variables())
             .iter()
             .any(|v| {
-                matches!(
+                !matches!(
                     subs.get_content_unchecked(*v),
                     Content::FlexVar(None) | Content::Structure(FlatType::EmptyTagUnion)
                 )
