@@ -643,7 +643,7 @@ fn type_problem() {
 
                 But add needs its 2nd argument to be:
 
-                    Num a
+                    Num *
                 "#
         ),
     );
