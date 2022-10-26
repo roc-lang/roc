@@ -6,6 +6,8 @@ use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 
+mod glue;
+
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(_: &mut RocStr);

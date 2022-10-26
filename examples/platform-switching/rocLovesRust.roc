@@ -3,7 +3,12 @@ app "rocLovesRust"
     imports []
     provides [main] to pf
 
-main : { a : U64, b : U128 }
-main = { a: 0, b: 1, doStuff: \str -> "Roc <3 \(str)!\n" }
-# main : Str -> Str
-# main =
+main = 
+    x = "4"
+    doStuff =
+        if Bool.true then
+            \str -> "Roc <3 \(str)\(x)!\n"
+        else
+            \str -> "Roc does not like \(str)\(x)!\n"
+        
+    { a: 0, b: 1, doStuff }

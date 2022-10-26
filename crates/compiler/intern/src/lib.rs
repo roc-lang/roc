@@ -21,6 +21,12 @@ impl<T> Clone for Interned<T> {
     }
 }
 
+impl<T> Interned<T> {
+    pub fn index(&self) -> usize {
+        self.0
+    }
+}
+
 impl<T> Copy for Interned<T> {}
 
 /// A concurrent interner, suitable for usage between threads.

@@ -1,5 +1,6 @@
 use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
+use indoc::indoc;
 use roc_target::{Architecture, TargetInfo};
 use std::fmt::{Display, Write};
 
@@ -294,8 +295,57 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
-        RocType::Function { .. } => {
-            // TODO actually generate glue functions!
+        RocType::Function {
+            name,
+            args,
+            ret,
+            runtime_representation,
+        } => {
+            let fields = [("runtime_representation", *runtime_representation)];
+
+            // impl RocFunction_0 {
+            //     fn call(self, arg1: RocStr) -> RocStr {
+            //         extern "C" fn roc_closure_caller_0(arg1: RocStr, lambda_set: Self) -> RocStr;
+            //
+            //         roc_closure_caller_0(arg1, self)
+            //     }
+            // }
+
+            let opt_impl = Some(format!("impl {name}"));
+
+            let return_type = type_name(*ret, types);
+
+            let argument_types: Vec<_> = args
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| format!("arg{i}: {}", type_name(*arg, types)))
+                .collect();
+
+            let argument_names: Vec<_> = (0..args.len()).map(|i| format!("arg{i}")).collect();
+
+            add_decl(
+                impls,
+                opt_impl,
+                target_info,
+                format!(
+                    indoc!(
+                        r#"
+                        fn call(self, {arguments}) -> {return_type} {{
+                            extern "C" {{
+                                fn roc_closure_caller_0({arguments}, lambda_set: Self) -> {return_type};
+                            }}
+                
+                            roc_closure_caller_0({argument_names}, self)
+                        }}
+                        "#
+                    ),
+                    return_type = return_type,
+                    arguments = argument_types.join(", "),
+                    argument_names = argument_names.join(", "),
+                ),
+            );
+
+            add_struct(name, target_info, &fields, id, types, impls, true)
         }
     }
 }

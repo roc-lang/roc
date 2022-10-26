@@ -1835,6 +1835,10 @@ impl<'a> LambdaSet<'a> {
             .get(self.representation)
             .alignment_bytes(interner, target_info)
     }
+
+    pub fn identifier(&self) -> usize {
+        self.representation.index()
+    }
 }
 
 enum ResolvedLambdaSet {
