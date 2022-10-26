@@ -1400,26 +1400,29 @@ define_builtins! {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
-        3 DICT_GET: "get"
-        4 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
-        5 DICT_WALK: "walk"
-        6 DICT_INSERT: "insert"
-        7 DICT_LEN: "len"
+        3 DICT_CLEAR: "clear"
+        4 DICT_LEN: "len"
+        5 DICT_GET: "get"
+        6 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
+        7 DICT_CONTAINS: "contains"
+        8 DICT_INSERT: "insert"
+        9 DICT_REMOVE: "remove"
 
-        8 DICT_REMOVE: "remove"
-        9 DICT_CONTAINS: "contains"
-        10 DICT_KEYS: "keys"
-        11 DICT_VALUES: "values"
+        10 DICT_WALK: "walk"
+        11 DICT_FROM_LIST: "fromList"
+        12 DICT_TO_LIST: "toList"
+        13 DICT_KEYS: "keys"
+        14 DICT_VALUES: "values"
 
-        12 DICT_INSERT_ALL: "insertAll" // union
-        13 DICT_KEEP_SHARED: "keepShared" // intersection
-        14 DICT_REMOVE_ALL: "removeAll" // difference
+        15 DICT_INSERT_ALL: "insertAll" // union
+        16 DICT_KEEP_SHARED: "keepShared" // intersection
+        17 DICT_REMOVE_ALL: "removeAll" // difference
 
-        15 DICT_WITH_CAPACITY: "withCapacity"
-        16 DICT_CAPACITY: "capacity"
-        17 DICT_UPDATE: "update"
+        18 DICT_WITH_CAPACITY: "withCapacity"
+        19 DICT_CAPACITY: "capacity"
+        20 DICT_UPDATE: "update"
 
-        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        21 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
