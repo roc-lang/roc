@@ -23,8 +23,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             let (_actual, state) =
                 module::parse_header(&arena, State::new(src.as_bytes())).unwrap();
 
+            let min_indent = 0;
             let res = module_defs()
-                .parse(&arena, state)
+                .parse(&arena, state, min_indent)
                 .map(|tuple| tuple.1)
                 .unwrap();
 

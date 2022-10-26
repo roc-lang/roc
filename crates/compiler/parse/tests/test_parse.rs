@@ -37,7 +37,7 @@ mod test_parse {
         };
         (module => $arena:expr, $input:expr) => {
             module_defs()
-                .parse($arena, State::new($input.as_bytes()))
+                .parse($arena, State::new($input.as_bytes()), 0)
                 .map(|tuple| tuple.1)
         };
     }
@@ -802,7 +802,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()), 0)
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -828,7 +828,7 @@ mod test_parse {
 
         let state = State::new(src.as_bytes());
         let parser = module_defs();
-        let parsed = parser.parse(arena, state);
+        let parsed = parser.parse(arena, state, 0);
         match parsed {
             Ok((_, _, _state)) => {
                 // dbg!(_state);

@@ -137,7 +137,7 @@ impl Validator for InputValidator {
             let arena = bumpalo::Bump::new();
             let state = roc_parse::state::State::new(ctx.input().trim().as_bytes());
 
-            match roc_parse::expr::parse_loc_expr(0, &arena, state) {
+            match roc_parse::expr::parse_loc_expr(&arena, state, 0) {
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::DefMissingFinalExpr(_), _))
                 | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))

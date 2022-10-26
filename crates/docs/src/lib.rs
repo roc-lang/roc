@@ -870,7 +870,7 @@ fn markdown_to_html(
                 // more memory as we iterate through these.
                 arena.reset();
 
-                match parse_ident(&arena, state) {
+                match parse_ident(&arena, state, 0) {
                     Ok((_, Ident::Access { module_name, parts }, _)) => {
                         let mut iter = parts.iter();
 

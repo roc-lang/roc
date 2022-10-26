@@ -270,24 +270,23 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    move |arena, state| {
+    move |arena, state, min_indent| {
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
         // (Indirect dependencies don't have a shorthand.)
-        let min_indent = 1;
-
         let (_, opt_shorthand, state) = maybe!(and!(
             skip_second!(
                 specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                 word1(b':', EPackageEntry::Colon)
             ),
-            space0_e(min_indent, EPackageEntry::IndentPackage)
+            space0_e(EPackageEntry::IndentPackage)
         ))
-        .parse(arena, state)?;
+        .parse(arena, state, min_indent)?;
 
         let (_, package_or_path, state) =
-            loc!(specialize(EPackageEntry::BadPackage, package_name())).parse(arena, state)?;
+            loc!(specialize(EPackageEntry::BadPackage, package_name()))
+                .parse(arena, state, min_indent)?;
 
         let entry = match opt_shorthand {
             Some((shorthand, spaces_after_shorthand)) => PackageEntry {
@@ -307,10 +306,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 }
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
-    move |arena, state: State<'a>| {
+    move |arena, state: State<'a>, min_indent: u32| {
         let pos = state.pos();
         specialize(EPackageName::BadPath, string_literal::parse())
-            .parse(arena, state)
+            .parse(arena, state, min_indent)
             .and_then(|(progress, text, next_state)| match text {
                 StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), next_state)),
                 StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(pos), next_state)),
