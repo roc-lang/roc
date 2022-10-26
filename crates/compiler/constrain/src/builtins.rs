@@ -32,8 +32,10 @@ pub fn add_numeric_bound_constr(
         NumericBound::FloatExact(width) => {
             let actual_type = Variable(float_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let type_index = constraints.push_type(Variable(num_var));
+            let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
-                constraints.equal_types(Variable(num_var), expected, category, region);
+                constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
 
@@ -42,8 +44,10 @@ pub fn add_numeric_bound_constr(
         NumericBound::IntExact(width) => {
             let actual_type = Variable(int_lit_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let type_index = constraints.push_type(Variable(num_var));
+            let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
-                constraints.equal_types(Variable(num_var), expected, category, region);
+                constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
 
@@ -52,7 +56,9 @@ pub fn add_numeric_bound_constr(
         NumericBound::Range(range) => {
             let actual_type = Variable(precision_var);
             let expected = Expected::NoExpectation(RangedNumber(range));
-            let constr = constraints.equal_types(actual_type, expected, category, region);
+            let type_index = constraints.push_type(actual_type);
+            let expected_index = constraints.push_expected_type(expected);
+            let constr = constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([constr]);
 
@@ -84,14 +90,19 @@ pub fn int_literal(
         Category::Num,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let expect_precision_var = constraints.push_expected_type(ForReason(
+        reason,
+        num_int(Type::Variable(precision_var)),
+        region,
+    ));
+
     constrs.extend([
-        constraints.equal_types(
-            num_type.clone(),
-            ForReason(reason, num_int(Type::Variable(precision_var)), region),
-            Category::Int,
-            region,
-        ),
-        constraints.equal_types(num_type, expected, Category::Int, region),
+        constraints.equal_types(num_type_index, expect_precision_var, Category::Int, region),
+        {
+            let expected_index = constraints.push_expected_type(expected);
+            constraints.equal_types(num_type_index, expected_index, Category::Int, region)
+        },
     ]);
 
     // TODO the precision_var is not part of the exists here; for float it is. Which is correct?
@@ -121,14 +132,24 @@ pub fn single_quote_literal(
         Category::Character,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let expect_precision_var = constraints.push_expected_type(ForReason(
+        reason,
+        num_int(Type::Variable(precision_var)),
+        region,
+    ));
+
     constrs.extend([
         constraints.equal_types(
-            num_type.clone(),
-            ForReason(reason, num_int(Type::Variable(precision_var)), region),
+            num_type_index,
+            expect_precision_var,
             Category::Character,
             region,
         ),
-        constraints.equal_types(num_type, expected, Category::Character, region),
+        {
+            let expected_index = constraints.push_expected_type(expected);
+            constraints.equal_types(num_type_index, expected_index, Category::Character, region)
+        },
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);
@@ -157,14 +178,19 @@ pub fn float_literal(
         Category::Frac,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let expect_precision_var = constraints.push_expected_type(ForReason(
+        reason,
+        num_float(Type::Variable(precision_var)),
+        region,
+    ));
+
     constrs.extend([
-        constraints.equal_types(
-            num_type.clone(),
-            ForReason(reason, num_float(Type::Variable(precision_var)), region),
-            Category::Frac,
-            region,
-        ),
-        constraints.equal_types(num_type, expected, Category::Frac, region),
+        constraints.equal_types(num_type_index, expect_precision_var, Category::Frac, region),
+        {
+            let expected_index = constraints.push_expected_type(expected);
+            constraints.equal_types(num_type_index, expected_index, Category::Frac, region)
+        },
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);
@@ -190,7 +216,9 @@ pub fn num_literal(
         Category::Num,
     );
 
-    constrs.extend([constraints.equal_types(num_type, expected, Category::Num, region)]);
+    let type_index = constraints.push_type(num_type);
+    let expected_index = constraints.push_expected_type(expected);
+    constrs.extend([constraints.equal_types(type_index, expected_index, Category::Num, region)]);
 
     let and_constraint = constraints.and_constraint(constrs);
     constraints.exists([num_var], and_constraint)

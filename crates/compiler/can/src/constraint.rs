@@ -211,8 +211,12 @@ impl Constraints {
         EitherIndex::from_right(index)
     }
 
-    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> Index<Expected<Cell<Type>>> {
+    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> ExpectedTypeIndex {
         Index::push_new(&mut self.expectations, expected.map(Cell::new))
+    }
+
+    pub fn push_pat_expected_type(&mut self, expected: PExpected<Type>) -> PExpectedTypeIndex {
+        Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new))
     }
 
     #[inline(always)]
@@ -256,13 +260,11 @@ impl Constraints {
 
     pub fn equal_types(
         &mut self,
-        typ: Type,
-        expected: Expected<Type>,
+        type_index: TypeOrVar,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))
@@ -271,12 +273,11 @@ impl Constraints {
     pub fn equal_types_var(
         &mut self,
         var: Variable,
-        expected: Expected<Type>,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
     ) -> Constraint {
         let type_index = Self::push_type_variable(var);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         Constraint::Eq(Eq(type_index, expected_index, category_index, region))
@@ -284,14 +285,12 @@ impl Constraints {
 
     pub fn equal_types_with_storage(
         &mut self,
-        typ: Type,
-        expected: Expected<Type>,
+        type_index: TypeOrVar,
+        expected_index: ExpectedTypeIndex,
         category: Category,
         region: Region,
         storage_var: Variable,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index = Index::push_new(&mut self.expectations, expected.map(Cell::new));
         let category_index = Self::push_category(self, category);
 
         let equal = Constraint::Eq(Eq(type_index, expected_index, category_index, region));
@@ -311,14 +310,11 @@ impl Constraints {
 
     pub fn equal_pattern_types(
         &mut self,
-        typ: Type,
-        expected: PExpected<Type>,
+        type_index: TypeOrVar,
+        expected_index: PExpectedTypeIndex,
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index =
-            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Self::push_pattern_category(self, category);
 
         Constraint::Pattern(type_index, expected_index, category_index, region)
@@ -326,44 +322,34 @@ impl Constraints {
 
     pub fn pattern_presence(
         &mut self,
-        typ: Type,
-        expected: PExpected<Type>,
+        type_index: TypeOrVar,
+        expected_index: PExpectedTypeIndex,
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let expected_index =
-            Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
         let category_index = Index::push_new(&mut self.pattern_categories, category);
 
         Constraint::PatternPresence(type_index, expected_index, category_index, region)
     }
 
-    pub fn is_open_type(&mut self, typ: Type) -> Constraint {
-        let type_index = self.push_type(typ);
-
+    pub fn is_open_type(&mut self, type_index: TypeOrVar) -> Constraint {
         Constraint::IsOpenType(type_index)
     }
 
-    pub fn includes_tag<I>(
+    pub fn includes_tag(
         &mut self,
-        typ: Type,
+        type_index: TypeOrVar,
         tag_name: TagName,
-        types: I,
+        payloads: Slice<Variable>,
         category: PatternCategory,
         region: Region,
-    ) -> Constraint
-    where
-        I: IntoIterator<Item = Type>,
-    {
-        let type_index = Index::push_new(&mut self.types, Cell::new(typ));
+    ) -> Constraint {
         let category_index = Index::push_new(&mut self.pattern_categories, category);
-        let types_slice = Slice::extend_new(&mut self.types, types.into_iter().map(Cell::new));
 
         let includes_tag = IncludesTag {
             type_index,
             tag_name,
-            types: types_slice,
+            types: payloads,
             pattern_category: category_index,
             region,
         };
@@ -373,7 +359,7 @@ impl Constraints {
         Constraint::IncludesTag(includes_tag_index)
     }
 
-    fn variable_slice<I>(&mut self, it: I) -> Slice<Variable>
+    pub fn variable_slice<I>(&mut self, it: I) -> Slice<Variable>
     where
         I: IntoIterator<Item = Variable>,
     {
@@ -572,14 +558,10 @@ impl Constraints {
     pub fn lookup(
         &mut self,
         symbol: Symbol,
-        expected: Expected<Type>,
+        expected_index: ExpectedTypeIndex,
         region: Region,
     ) -> Constraint {
-        Constraint::Lookup(
-            symbol,
-            Index::push_new(&mut self.expectations, expected.map(Cell::new)),
-            region,
-        )
+        Constraint::Lookup(symbol, expected_index, region)
     }
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
@@ -617,19 +599,6 @@ impl Constraints {
     }
 
     pub fn store(
-        &mut self,
-        typ: Type,
-        variable: Variable,
-        filename: &'static str,
-        line_number: u32,
-    ) -> Constraint {
-        let type_index = self.push_type(typ);
-        let string_index = Index::push_new(&mut self.strings, filename);
-
-        Constraint::Store(type_index, variable, string_index, line_number)
-    }
-
-    pub fn store_index(
         &mut self,
         type_index: TypeOrVar,
         variable: Variable,
@@ -804,9 +773,9 @@ pub struct LetConstraint {
 
 #[derive(Debug, Clone)]
 pub struct IncludesTag {
-    pub type_index: TypeIndex,
+    pub type_index: TypeOrVar,
     pub tag_name: TagName,
-    pub types: Slice<Cell<Type>>,
+    pub types: Slice<Variable>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
 }
