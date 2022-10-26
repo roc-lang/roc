@@ -2502,8 +2502,10 @@ fn count_generated_name_usages<'a>(
                 stack.extend(args);
                 stack.push(ret);
             }
-            Alias(_, args, real, _) => {
-                stack.extend(args);
+            Alias(_, _args, real, _) => {
+                // Since the arguments should always be captured in the real type,
+                // only look at the real type. Otherwise we might think a variable appears twice
+                // when it doesn't.
                 stack.push(real);
             }
             Infinite | Error => {}

@@ -811,7 +811,7 @@ mod test_reporting {
 
     Right now it’s a number of type:
 
-        Num a
+        Num *
 
     But I need every `if` guard condition to evaluate to a Bool—either
     `Bool.true` or `Bool.false`.
@@ -839,7 +839,7 @@ mod test_reporting {
 
     but the `then` branch has the type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -866,7 +866,7 @@ mod test_reporting {
 
     But all the previous branches have type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -925,7 +925,7 @@ mod test_reporting {
 
     However, the preceding elements in the list all have the type:
 
-        Num a
+        Num *
 
     Every element in a list must have the same type!
     "###
@@ -948,11 +948,11 @@ mod test_reporting {
 
     Its 3rd element is an integer of type:
 
-        Int a
+        Int *
 
     However, the preceding elements in the list all have the type:
 
-        Frac a
+        Frac *
 
     Every element in a list must have the same type!
 
@@ -1317,7 +1317,7 @@ mod test_reporting {
 
     This `bar` value is a:
 
-        { bar : Int a }
+        { bar : Int * }
 
     But `f` needs its 1st argument to be:
 
@@ -1385,7 +1385,7 @@ mod test_reporting {
 
     This `Blue` tag application has the type:
 
-        [Blue (Frac a)]
+        [Blue (Frac *)]
 
     But `f` needs its 1st argument to be:
 
@@ -1420,7 +1420,7 @@ mod test_reporting {
 
     The 1st branch is a fraction of type:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1455,7 +1455,7 @@ mod test_reporting {
 
     This `when` expression produces:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1487,7 +1487,7 @@ mod test_reporting {
 
     The body is a fraction of type:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1583,7 +1583,7 @@ mod test_reporting {
 
     The `when` condition is a number of type:
 
-        Num a
+        Num *
 
     But the branch patterns have type:
 
@@ -1616,7 +1616,7 @@ mod test_reporting {
 
     But all the previous branches match:
 
-        Num a
+        Num *
     "###
     );
 
@@ -1638,7 +1638,7 @@ mod test_reporting {
 
     The `when` condition is a record of type:
 
-        { foo : Num a }
+        { foo : Num * }
 
     But the branch patterns have type:
 
@@ -1751,7 +1751,7 @@ mod test_reporting {
 
     The 2nd pattern is trying to match numbers:
 
-        Num a
+        Num *
 
     But all the previous branches match:
 
@@ -1779,7 +1779,7 @@ mod test_reporting {
 
     It is a number of type:
 
-        Num a
+        Num *
 
     But you are trying to use it as:
 
@@ -1808,7 +1808,7 @@ mod test_reporting {
 
     The body is a record of type:
 
-        { x : Frac a }
+        { x : Frac * }
 
     But the type annotation says it should be:
 
@@ -2060,7 +2060,7 @@ mod test_reporting {
 
     The body is an integer of type:
 
-        Int a
+        Int *
 
     But the type annotation on `f` says it should be:
 
@@ -2246,8 +2246,8 @@ mod test_reporting {
     There may be a typo. These `x` fields are the most similar:
 
         {
-            fo : Num b,
-            bar : Num a,
+            fo : Num *,
+            bar : Num *,
         }
 
     Maybe `foo:` should be `fo:` instead?
@@ -2307,10 +2307,10 @@ mod test_reporting {
     There may be a typo. These `x` fields are the most similar:
 
         {
-            fo : Num c,
-            foobar : Num d,
-            bar : Num a,
-            baz : Num b,
+            fo : Num *,
+            foobar : Num *,
+            bar : Num *,
+            baz : Num *,
             …
         }
 
@@ -2340,7 +2340,7 @@ mod test_reporting {
 
     But `add` needs its 2nd argument to be:
 
-        Int a
+        Int *
     "###
     );
 
@@ -2361,11 +2361,11 @@ mod test_reporting {
 
     The argument is a fraction of type:
 
-        Frac a
+        Frac *
 
     But `add` needs its 2nd argument to be:
 
-        Int a
+        Int *
 
     Tip: You can convert between Int and Frac using functions like
     `Num.toFrac` and `Num.round`.
@@ -2393,7 +2393,7 @@ mod test_reporting {
 
     But `add` needs its 2nd argument to be:
 
-        Num a
+        Num *
     "###
     );
 
@@ -2775,7 +2775,7 @@ mod test_reporting {
 
     The argument is a record of type:
 
-        { y : Frac a }
+        { y : Frac * }
 
     But `f` needs its 1st argument to be:
 
@@ -4730,7 +4730,7 @@ mod test_reporting {
 
     This `insert` call produces:
 
-        Dict Str (Num a)
+        Dict Str (Num *)
 
     But the type annotation on `myDict` says it should be:
 
@@ -5299,7 +5299,7 @@ mod test_reporting {
 
     but the `then` branch has the type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -5897,7 +5897,7 @@ All branches in an `if` must have the same type!
 
     This `map` call produces:
 
-        List [Foo (Num a)]
+        List [Foo (Num *)]
 
     But the type annotation on `x` says it should be:
 
@@ -6064,7 +6064,7 @@ All branches in an `if` must have the same type!
 
     The argument is an anonymous function of type:
 
-        Num a -> Num *
+        Num * -> Num *
 
     But `map` needs its 2nd argument to be:
 
@@ -6513,7 +6513,7 @@ All branches in an `if` must have the same type!
 
     The argument is a number of type:
 
-        Num a
+        Num *
 
     But `c` needs its 1st argument to be:
 
@@ -8678,7 +8678,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `MHash` ability for
 
-        [A (Num a)]
+        [A (Num *)]
 
     Only builtin abilities can have generated implementations!
 
