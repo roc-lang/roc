@@ -161,8 +161,26 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.push('_');
                 buf.push_str(name);
             }
-            List(..) => todo!(),
-            ListRest => todo!(),
+            List(loc_patterns) => {
+                buf.indent(indent);
+                buf.push_str("[");
+
+                let mut it = loc_patterns.iter().peekable();
+                while let Some(loc_pattern) = it.next() {
+                    loc_pattern.format(buf, indent);
+
+                    if it.peek().is_some() {
+                        buf.push_str(",");
+                        buf.spaces(1);
+                    }
+                }
+
+                buf.push_str("]");
+            }
+            ListRest => {
+                buf.indent(indent);
+                buf.push_str("..");
+            }
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
