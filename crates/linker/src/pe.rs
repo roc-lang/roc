@@ -1226,12 +1226,17 @@ fn write_section_header(
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
+struct BaseRelocations {
+    new_size: u32,
+    delta: u32,
+}
+
 fn write_image_base_relocation(
     mmap: &mut [u8],
     reloc_section_start: usize,
     new_block_va: u32,
     relocations: &[u16],
-) -> usize {
+) -> BaseRelocations {
     // first, collect the blocks of relocations (each relocation block covers a 4K page)
     // we will be moving stuff around, and have to work from the back to the front. However, the
     // relocations are encoded in such a way that we can only decode them from front to back.
@@ -1255,6 +1260,8 @@ fn write_image_base_relocation(
 
         next_block_start += header.size_of_block.get(LE);
     }
+
+    let old_size = next_block_start - reloc_section_start as u32;
 
     // this is 8 in practice
     const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
@@ -1307,7 +1314,10 @@ fn write_image_base_relocation(
             }
         }
 
-        shift_amount
+        BaseRelocations {
+            new_size: old_size + shift_amount as u32,
+            delta: shift_amount as u32,
+        }
     } else {
         let header =
             load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
@@ -1329,7 +1339,10 @@ fn write_image_base_relocation(
         // sort by VA. Upper 4 bits store the relocation type
         entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
 
-        size_of_block
+        BaseRelocations {
+            new_size: old_size + size_of_block as u32,
+            delta: size_of_block as u32,
+        }
     }
 }
 
@@ -1350,7 +1363,7 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
 
-    let added_reloc_bytes = write_image_base_relocation(
+    let base_relocations = write_image_base_relocation(
         executable,
         md.reloc_offset_in_file,
         thunks_relocation_block_va,
@@ -1371,13 +1384,14 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let reloc_section =
         load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
     let old_section_size = reloc_section.virtual_size.get(LE);
-    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
+    let new_virtual_size = old_section_size + base_relocations.delta;
+    let new_virtual_size = next_multiple_of(new_virtual_size as usize, 8) as u32;
     reloc_section.virtual_size.set(LE, new_virtual_size);
 
     assert!(
         reloc_section.pointer_to_raw_data.get(LE)
             + reloc_section.virtual_size.get(LE)
-            + (added_reloc_bytes as u32)
+            + base_relocations.delta
             < next_section_pointer_to_raw_data,
         "new .reloc section is too big, and runs into the next section!",
     );
@@ -1391,11 +1405,9 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     );
 
     // it is crucial that the directory size is rounded up to a multiple of 8!
-    let old = dir.size.get(LE);
-    let new = new_virtual_size;
-    let delta = next_multiple_of((new - old) as usize, 8);
-
-    dir.size.set(LE, old + delta as u32);
+    // the value is already rounded, so to be correct we can't rely on `dir.size.get(LE)`
+    let new_reloc_directory_size = next_multiple_of(base_relocations.new_size as usize, 8);
+    dir.size.set(LE, new_reloc_directory_size as u32);
 }
 
 #[cfg(test)]
