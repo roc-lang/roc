@@ -344,6 +344,7 @@ fn canonicalize_alias<'a>(
         able,
         wildcards,
         inferred,
+        inferred_in_output: _, // TODO handle these
         ..
     } = can_ann.introduced_variables;
 

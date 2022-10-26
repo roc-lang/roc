@@ -136,9 +136,14 @@ pub struct AbleVariable {
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
+    /// Explicit inference variables, i.e. `_`
     pub inferred: Vec<Loc<Variable>>,
+    /// Named type variables
     pub named: VecSet<NamedVariable>,
+    /// Named type variables bound to an ability
     pub able: VecSet<AbleVariable>,
+    /// Extension variables which should be inferred in output position.
+    pub inferred_in_output: Vec<Variable>,
     pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
@@ -150,6 +155,7 @@ impl IntroducedVariables {
             .chain(self.inferred.iter().map(|v| &v.value))
             .chain(self.named.iter().map(|nv| &nv.variable))
             .chain(self.able.iter().map(|av| &av.variable))
+            .chain(self.inferred_in_output.iter())
             .chain(self.host_exposed_aliases.values())
             .all(|&v| v != var));
     }
@@ -189,6 +195,11 @@ impl IntroducedVariables {
         self.inferred.push(var);
     }
 
+    pub fn insert_inferred_in_output(&mut self, var: Variable) {
+        self.debug_assert_not_already_present(var);
+        self.inferred_in_output.push(var);
+    }
+
     pub fn insert_lambda_set(&mut self, var: Variable) {
         self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
@@ -208,6 +219,8 @@ impl IntroducedVariables {
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());
+        self.inferred_in_output
+            .extend(other.inferred_in_output.iter().cloned());
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -217,7 +230,8 @@ impl IntroducedVariables {
         self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
-        self.able.extend(other.able.iter().cloned());
+        self.able.extend(other.able);
+        self.inferred_in_output.extend(other.inferred_in_output);
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
@@ -1120,7 +1134,7 @@ fn can_extension_type<'a>(
                     CanPolarity::Neg | CanPolarity::Disregard => Type::EmptyTagUnion,
                     CanPolarity::Pos => {
                         let var = var_store.fresh();
-                        introduced_variables.insert_inferred(Loc::at_zero(var));
+                        introduced_variables.insert_inferred_in_output(var);
 
                         Type::Variable(var)
                     }
