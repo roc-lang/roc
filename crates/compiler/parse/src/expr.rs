@@ -769,8 +769,18 @@ pub fn parse_single_def<'a>(
                             return Next::Break(progress, Err(eexpr), state)
                         }
                     };
+                    let value_def =
+                        ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
+                    let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
-                    Next::Fixup(loc_pattern, loc_def_expr, spaces_before_current, state)
+                    Next::Continue(
+                        SingleDef {
+                            type_or_value: Either::Second(value_def),
+                            region,
+                            spaces_before: spaces_before_current,
+                        },
+                        state,
+                    )
                 }
                 Ok((_, BinOp::IsAliasType, state)) => {
                     let (ann_type, state) = match alias_signature_with_space_before(min_indent + 1)
@@ -956,12 +966,104 @@ fn parse_defs_end<'a>(
                         );
                     }
                     Either::Second(value_def) => {
-                        defs.push_value_def(
-                            value_def,
-                            single_def.region,
-                            single_def.spaces_before,
-                            &[],
-                        );
+                        let spaces_before_current = single_def.spaces_before;
+
+                        // If we got a ValueDef::Body, check if a type annotation preceded it.
+                        // If so, we may need to combine them into an AnnotatedBody.
+                        match value_def {
+                            ValueDef::Body(loc_pattern, loc_def_expr)
+                                if spaces_before_current.len() <= 1 =>
+                            {
+                                let region =
+                                    Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+
+                                let comment = match spaces_before_current.get(0) {
+                                    Some(CommentOrNewline::LineComment(s)) => Some(*s),
+                                    Some(CommentOrNewline::DocComment(s)) => Some(*s),
+                                    _ => None,
+                                };
+
+                                match defs.last() {
+                                    Some(Err(ValueDef::Annotation(ann_pattern, ann_type))) => {
+                                        // join this body with the preceding annotation
+
+                                        let value_def = ValueDef::AnnotatedBody {
+                                            ann_pattern: arena.alloc(*ann_pattern),
+                                            ann_type: arena.alloc(*ann_type),
+                                            comment,
+                                            body_pattern: arena.alloc(loc_pattern),
+                                            body_expr: &*arena.alloc(loc_def_expr),
+                                        };
+
+                                        let region =
+                                            Region::span_across(&ann_pattern.region, &region);
+
+                                        defs.replace_with_value_def(
+                                            defs.tags.len() - 1,
+                                            value_def,
+                                            region,
+                                        )
+                                    }
+                                    Some(Ok(TypeDef::Alias {
+                                        header,
+                                        ann: ann_type,
+                                    })) => {
+                                        // This is a case like
+                                        //   UserId x : [UserId Int]
+                                        //   UserId x = UserId 42
+                                        // We optimistically parsed the first line as an alias; we now turn it
+                                        // into an annotation.
+
+                                        let loc_name =
+                                            arena.alloc(header.name.map(|x| Pattern::Tag(x)));
+                                        let ann_pattern = Pattern::Apply(loc_name, header.vars);
+
+                                        let vars_region = Region::across_all(
+                                            header.vars.iter().map(|v| &v.region),
+                                        );
+                                        let region_ann_pattern =
+                                            Region::span_across(&loc_name.region, &vars_region);
+                                        let loc_ann_pattern =
+                                            Loc::at(region_ann_pattern, ann_pattern);
+
+                                        let value_def = ValueDef::AnnotatedBody {
+                                            ann_pattern: arena.alloc(loc_ann_pattern),
+                                            ann_type: arena.alloc(*ann_type),
+                                            comment,
+                                            body_pattern: arena.alloc(loc_pattern),
+                                            body_expr: &*arena.alloc(loc_def_expr),
+                                        };
+
+                                        let region =
+                                            Region::span_across(&header.name.region, &region);
+
+                                        defs.replace_with_value_def(
+                                            defs.tags.len() - 1,
+                                            value_def,
+                                            region,
+                                        )
+                                    }
+                                    _ => {
+                                        // the previous and current def can't be joined up
+                                        defs.push_value_def(
+                                            value_def,
+                                            region,
+                                            spaces_before_current,
+                                            &[],
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {
+                                // the previous and current def can't be joined up
+                                defs.push_value_def(
+                                    value_def,
+                                    single_def.region,
+                                    single_def.spaces_before,
+                                    &[],
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -969,98 +1071,14 @@ fn parse_defs_end<'a>(
             }
             Next::Break(progress, Ok(()), s) => return Ok((progress, defs, s)),
             Next::Break(progress, Err(err), s) => return Err((progress, err, s)),
-            Next::Fixup(loc_pattern, loc_def_expr, spaces_before_current, next_state) => {
-                let value_def =
-                    ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
-                let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
-
-                if spaces_before_current.len() <= 1 {
-                    let comment = match spaces_before_current.get(0) {
-                        Some(CommentOrNewline::LineComment(s)) => Some(*s),
-                        Some(CommentOrNewline::DocComment(s)) => Some(*s),
-                        _ => None,
-                    };
-
-                    match defs.last() {
-                        Some(Err(ValueDef::Annotation(ann_pattern, ann_type))) => {
-                            // join this body with the preceding annotation
-
-                            let value_def = ValueDef::AnnotatedBody {
-                                ann_pattern: arena.alloc(*ann_pattern),
-                                ann_type: arena.alloc(*ann_type),
-                                comment,
-                                body_pattern: arena.alloc(loc_pattern),
-                                body_expr: &*arena.alloc(loc_def_expr),
-                            };
-
-                            let region = Region::span_across(&ann_pattern.region, &region);
-
-                            defs.replace_with_value_def(defs.tags.len() - 1, value_def, region)
-                        }
-                        Some(Ok(TypeDef::Alias {
-                            header,
-                            ann: ann_type,
-                        })) => {
-                            // This is a case like
-                            //   UserId x : [UserId Int]
-                            //   UserId x = UserId 42
-                            // We optimistically parsed the first line as an alias; we now turn it
-                            // into an annotation.
-
-                            let loc_name = arena.alloc(header.name.map(|x| Pattern::Tag(x)));
-                            let ann_pattern = Pattern::Apply(loc_name, header.vars);
-
-                            let vars_region =
-                                Region::across_all(header.vars.iter().map(|v| &v.region));
-                            let region_ann_pattern =
-                                Region::span_across(&loc_name.region, &vars_region);
-                            let loc_ann_pattern = Loc::at(region_ann_pattern, ann_pattern);
-
-                            let value_def = ValueDef::AnnotatedBody {
-                                ann_pattern: arena.alloc(loc_ann_pattern),
-                                ann_type: arena.alloc(*ann_type),
-                                comment,
-                                body_pattern: arena.alloc(loc_pattern),
-                                body_expr: &*arena.alloc(loc_def_expr),
-                            };
-
-                            let region = Region::span_across(&header.name.region, &region);
-
-                            defs.replace_with_value_def(defs.tags.len() - 1, value_def, region)
-                        }
-                        _ => {
-                            // the previous and current def can't be joined up
-                            defs.push_value_def(value_def, region, spaces_before_current, &[]);
-                        }
-                    }
-                } else {
-                    // the previous and current def can't be joined up
-                    defs.push_value_def(value_def, region, spaces_before_current, &[])
-                }
-
-                next_state
-            }
         };
     }
 }
 
+/// This is what parse_single_def returns. It's a combination of ParseResult and
+/// whether to continue looping (when we're parsing multiple defs).
 pub enum Next<'a> {
     Continue(SingleDef<'a>, State<'a>),
-    /// When we encounter a Body def, we have to check to see if there was an
-    /// Annotation def right before it. If so, we merge the two into an AnnotatedBody.
-    ///
-    /// So when parse_single_def returns a Fixup, it means that:
-    /// 1. This is a Body def.
-    /// 2. If we're parsing multiple things, we should check whether an Annotation def preceded it.
-    /// 3. If so, we should merge them into an AnnotatedBody.
-    ///
-    /// This needs to store the raw Loc<Pattern> and Loc<Expr>.
-    Fixup(
-        Loc<Pattern<'a>>,
-        Loc<Expr<'a>>,
-        &'a [CommentOrNewline<'a>],
-        State<'a>,
-    ),
     Break(Progress, Result<(), EExpr<'a>>, State<'a>),
 }
 
