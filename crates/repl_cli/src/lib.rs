@@ -1,18 +1,18 @@
+mod colors;
+mod repl_state;
+
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
+use repl_state::ReplState;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_intern::SingleThreadedInterner;
 use roc_mono::layout::Layout;
 use roc_types::subs::Subs;
-use rustyline::highlight::{Highlighter, PromptInfo};
-use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
-use rustyline_derive::{Completer, Helper, Hinter};
-use std::borrow::Cow;
-use std::io;
 use target_lexicon::Triple;
 
+use colors::{BLUE, END_COL, PINK};
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -20,18 +20,9 @@ use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
-use roc_parse::parser::{EClosure, EExpr, Parser, SyntaxError};
-use roc_repl_eval::eval::jit_to_ast;
-use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
-use roc_reporting::report::DEFAULT_PALETTE;
 use roc_std::RocStr;
 use roc_target::TargetInfo;
-use roc_types::pretty_print::{name_and_print_var, DebugPrint};
-
-const BLUE: &str = "\u{001b}[36m";
-const PINK: &str = "\u{001b}[35m";
-const END_COL: &str = "\u{001b}[0m";
 
 pub const WELCOME_MESSAGE: &str = concatcp!(
     "\n  The rockin’ ",
@@ -49,120 +40,8 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 // TODO add link to repl tutorial(does not yet exist).
 pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
 
-// TODO add link to repl tutorial(does not yet exist).
-pub const TIPS: &str = concatcp!(
-    BLUE,
-    "  - ",
-    END_COL,
-    PINK,
-    "ctrl-v",
-    END_COL,
-    " + ",
-    PINK,
-    "ctrl-j",
-    END_COL,
-    " makes a newline\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":q to quit\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":help\n"
-);
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
-
-#[derive(Completer, Helper, Hinter)]
-struct ReplHelper {
-    validator: InputValidator,
-    pending_src: String,
-}
-
-impl ReplHelper {
-    pub(crate) fn new() -> ReplHelper {
-        ReplHelper {
-            validator: InputValidator::new(),
-            pending_src: String::new(),
-        }
-    }
-}
-
-impl Highlighter for ReplHelper {
-    fn has_continuation_prompt(&self) -> bool {
-        true
-    }
-
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-        &'s self,
-        prompt: &'p str,
-        info: PromptInfo<'_>,
-    ) -> Cow<'b, str> {
-        if info.line_no() > 0 {
-            CONT_PROMPT.into()
-        } else {
-            prompt.into()
-        }
-    }
-}
-
-impl Validator for ReplHelper {
-    fn validate(
-        &self,
-        ctx: &mut validate::ValidationContext,
-    ) -> rustyline::Result<validate::ValidationResult> {
-        self.validator.validate(ctx)
-    }
-
-    fn validate_while_typing(&self) -> bool {
-        self.validator.validate_while_typing()
-    }
-}
-
-struct InputValidator {}
-
-impl InputValidator {
-    pub(crate) fn new() -> InputValidator {
-        InputValidator {}
-    }
-}
-
-impl Validator for InputValidator {
-    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        if ctx.input().is_empty() {
-            Ok(ValidationResult::Incomplete)
-        } else {
-            let arena = bumpalo::Bump::new();
-            let state = roc_parse::state::State::new(ctx.input().trim().as_bytes());
-            let answer = match roc_parse::expr::toplevel_defs(0).parse(&arena, state) {
-                // Special case some syntax errors to allow for multi-line inputs
-                Err((_, EExpr::DefMissingFinalExpr(_), _))
-                | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
-                | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
-                    Ok(ValidationResult::Incomplete)
-                }
-                Err((_, _, state)) => {
-                    // It wasn't a valid top-level decl, so continue parsing it as an expr.
-                    match roc_parse::expr::parse_loc_expr(0, &arena, state) {
-                        // Special case some syntax errors to allow for multi-line inputs
-                        Err((_, EExpr::DefMissingFinalExpr(_), _))
-                        | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
-                        | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
-                            Ok(ValidationResult::Incomplete)
-                        }
-                        _ => Ok(ValidationResult::Valid(None)),
-                    }
-                }
-                Ok(_) => Ok(ValidationResult::Valid(None)),
-            };
-
-            // This is necessary to extend the lifetime of `arena`; without it,
-            // we get a borrow checker error!
-            answer
-        }
-    }
-}
 
 struct CliApp {
     lib: Library,
@@ -348,80 +227,7 @@ pub fn mono_module_to_dylib<'a>(
         .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }
 
-fn gen_and_eval_llvm<'a>(
-    src: &str,
-    target: Triple,
-    opt_level: OptLevel,
-) -> Result<ReplOutput, SyntaxError<'a>> {
-    let arena = Bump::new();
-    let target_info = TargetInfo::from(&target);
-
-    let mut loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
-        Ok(x) => x,
-        Err(prob_strings) => {
-            return Ok(ReplOutput::Problems(prob_strings));
-        }
-    };
-
-    debug_assert_eq!(loaded.exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = loaded.exposed_to_host.values.iter().next().unwrap();
-    let main_fn_symbol = *main_fn_symbol;
-    let main_fn_var = *main_fn_var;
-
-    // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(
-        main_fn_var,
-        &mut loaded.subs,
-        loaded.module_id,
-        &loaded.interns,
-        DebugPrint::NOTHING,
-    );
-
-    let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => {
-            return Ok(ReplOutput::NoProblems {
-                expr: "<function>".to_string(),
-                expr_type: expr_type_str,
-            });
-        }
-    };
-
-    let interns = loaded.interns.clone();
-
-    let (lib, main_fn_name, subs, layout_interner) =
-        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
-
-    let mut app = CliApp { lib };
-
-    let res_answer = jit_to_ast(
-        &arena,
-        &mut app,
-        main_fn_name,
-        main_fn_layout,
-        main_fn_var,
-        &subs,
-        &interns,
-        layout_interner.into_global().fork(),
-        target_info,
-    );
-
-    let formatted = format_answer(&arena, res_answer, expr_type_str);
-    Ok(formatted)
-}
-
-fn eval_and_format<'a>(src: &str) -> Result<String, SyntaxError<'a>> {
-    let format_output = |output| match output {
-        ReplOutput::NoProblems { expr, expr_type } => {
-            format!("\n{} {}:{} {}", expr, PINK, END_COL, expr_type)
-        }
-        ReplOutput::Problems(lines) => format!("\n{}\n", lines.join("\n\n")),
-    };
-
-    gen_and_eval_llvm(src, Triple::host(), OptLevel::Normal).map(format_output)
-}
-
-pub fn main() -> io::Result<()> {
+pub fn main() -> i32 {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
 
@@ -430,9 +236,8 @@ pub fn main() -> io::Result<()> {
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
     print!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
 
-    let mut prev_line_blank = false;
-    let mut editor = Editor::<ReplHelper>::new();
-    let repl_helper = ReplHelper::new();
+    let mut editor = Editor::<ReplState>::new();
+    let repl_helper = ReplState::new();
     editor.set_helper(Some(repl_helper));
 
     loop {
@@ -443,93 +248,33 @@ pub fn main() -> io::Result<()> {
                 let trim_line = line.trim();
                 editor.add_history_entry(trim_line);
 
-                let pending_src = &mut editor
-                    .helper_mut()
-                    .expect("Editor helper was not set")
-                    .pending_src;
+                let repl_helper = editor.helper_mut().expect("Editor helper was not set");
 
-                match trim_line.to_lowercase().as_str() {
-                    "" => {
-                        if pending_src.is_empty() {
-                            print!("\n{}", TIPS);
-                        } else if prev_line_blank {
-                            // After two blank lines in a row, give up and try parsing it
-                            // even though it's going to fail. This way you don't get stuck.
-                            match eval_and_format(pending_src.as_str()) {
-                                Ok(output) => {
-                                    println!("{}", output);
-                                }
-                                Err(_) => {
-                                    // This seems to be unreachable in practice.
-                                    unreachable!();
-                                }
-                            }
+                dbg!(&editor);
 
-                            pending_src.clear();
-                        } else {
-                            pending_src.push('\n');
-
-                            prev_line_blank = true;
-                            continue; // Skip the part where we reset prev_line_blank to false
-                        }
+                match step_repl_state(repl_helper, trim_line) {
+                    Ok(output) => {
+                        print!("{}", output);
                     }
-                    ":help" => {
-                        // TODO add link to repl tutorial(does not yet exist).
-                        print!("\n{}", TIPS);
-                    }
-                    ":exit" | ":quit" | ":q" => {
-                        break;
-                    }
-                    _ => {
-                        let result = if pending_src.is_empty() {
-                            eval_and_format(trim_line)
-                        } else {
-                            pending_src.push('\n');
-                            pending_src.push_str(trim_line);
-
-                            eval_and_format(pending_src.as_str())
-                        };
-
-                        match result {
-                            Ok(output) => {
-                                println!("{}", output);
-                                pending_src.clear();
-                            }
-                            Err(_) => {
-                                // This seems to be unreachable in practice.
-                                unreachable!();
-                            }
-                        }
-                    }
-                }
+                    Err(exit_code) => return exit_code,
+                };
             }
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
+            #[cfg(windows)]
+            Err(Readline::WindowResize) => {
+                // This is fine; just ignore it.
             }
             Err(ReadlineError::Eof) => {
-                // If we hit an eof, and we're allowed to keep going,
-                // append the str to the src we're building up and continue.
-                // (We only need to append it here if it was empty before;
-                // otherwise, we already appended it before calling eval_and_format.)
-                let pending_src = &mut editor
-                    .helper_mut()
-                    .expect("Editor helper was not set")
-                    .pending_src;
-
-                if pending_src.is_empty() {
-                    pending_src.push_str("");
-                }
-                break;
+                // End of input; we're done!
+                return 0;
+            }
+            Err(ReadlineError::Interrupted) => {
+                eprintln!("CTRL-C");
+                return 1;
             }
             Err(err) => {
                 eprintln!("REPL error: {:?}", err);
-                break;
+                return 1;
             }
         }
-
-        prev_line_blank = false;
     }
-
-    Ok(())
 }

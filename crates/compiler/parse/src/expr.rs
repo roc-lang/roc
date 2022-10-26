@@ -59,13 +59,13 @@ pub struct ExprParseOptions {
     /// This is usually true, but false within list/record literals
     /// because the comma separating backpassing arguments conflicts
     /// with the comma separating literal elements
-    accept_multi_backpassing: bool,
+    pub accept_multi_backpassing: bool,
 
     /// Check for the `->` token, and raise an error if found
     /// This is usually true, but false in if-guards
     ///
     /// > Just foo if foo == 2 -> ...
-    check_for_arrow: bool,
+    pub check_for_arrow: bool,
 }
 
 impl Default for ExprParseOptions {
@@ -1050,9 +1050,9 @@ fn parse_defs_end<'a>(
 }
 
 pub struct SingleDef<'a> {
-    type_or_value: Either<TypeDef<'a>, ValueDef<'a>>,
-    region: Region,
-    spaces_before: &'a [CommentOrNewline<'a>],
+    pub type_or_value: Either<TypeDef<'a>, ValueDef<'a>>,
+    pub region: Region,
+    pub spaces_before: &'a [CommentOrNewline<'a>],
 }
 
 fn parse_defs_expr<'a>(

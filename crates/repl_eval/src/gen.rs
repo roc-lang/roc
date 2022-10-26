@@ -15,13 +15,18 @@ use crate::eval::ToAstProblem;
 
 pub enum ReplOutput {
     Problems(Vec<String>),
-    NoProblems { expr: String, expr_type: String },
+    NoProblems {
+        expr: String,
+        expr_type: String,
+        val_name: String,
+    },
 }
 
 pub fn format_answer(
     arena: &Bump,
     res_answer: Result<Expr, ToAstProblem>,
     expr_type_str: String,
+    val_name: String,
 ) -> ReplOutput {
     let mut expr = roc_fmt::Buf::new_in(arena);
 
@@ -39,6 +44,7 @@ pub fn format_answer(
     ReplOutput::NoProblems {
         expr: expr.into_bump_str().to_string(),
         expr_type: expr_type_str,
+        val_name,
     }
 }
 
