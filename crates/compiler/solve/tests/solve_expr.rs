@@ -8167,4 +8167,33 @@ mod solve_expr {
             @"walkHelp {} : [Break [], Continue {}]"
         );
     }
+
+    #[test]
+    fn contextual_openness_for_type_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [accum] to "./platform"
+
+                Q : [Green, Blue]
+
+                f : Q -> Q
+                f = \q -> when q is
+                #^{-1}
+                    Green -> Green
+                    Blue -> Blue
+
+                accum = \q -> when q is
+                #^^^^^{-1}
+                    A -> f Green
+                    B -> Yellow
+                    C -> Orange
+                "#
+            ),
+        @r###"
+        f : Q -[[f(2)]]-> Q
+        accum : [A, B, C] -[[accum(0)]]-> [Blue, Green, Orange, Yellow]*
+        "###
+        );
+    }
 }

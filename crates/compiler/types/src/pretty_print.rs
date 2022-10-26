@@ -757,10 +757,16 @@ fn write_content<'a>(
                     pol,
                 ),
 
-                _ if env.debug.print_only_under_alias => write_parens!(write_parens, buf, {
-                    let content = subs.get_content_without_compacting(*actual);
-                    write_content(env, ctx, content, subs, buf, parens, pol)
-                }),
+                _ if env.debug.print_only_under_alias
+                    // If any infer-open-in-output-position extension variable is now material, we
+                    // cannot keep the alias as-is - we have to print its underlying type!
+                    || args.any_infer_ext_var_is_material(subs) =>
+                {
+                    write_parens!(write_parens, buf, {
+                        let content = subs.get_content_without_compacting(*actual);
+                        write_content(env, ctx, content, subs, buf, parens, pol)
+                    })
+                }
 
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);

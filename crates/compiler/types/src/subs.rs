@@ -2470,6 +2470,16 @@ impl AliasVariables {
             all_variables_len,
         }
     }
+
+    /// Checks whether any inferred ext var in this alias has been resolved to a material type.
+    pub fn any_infer_ext_var_is_material(&self, subs: &Subs) -> bool {
+        subs.get_subs_slice(self.infer_ext_in_output_variables())
+            .iter()
+            .any(|v| match subs.get_content_unchecked(*v) {
+                Content::FlexVar(None) | Content::Structure(FlatType::EmptyTagUnion) => false,
+                _ => true,
+            })
+    }
 }
 
 impl IntoIterator for AliasVariables {
