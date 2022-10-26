@@ -1,4 +1,4 @@
-//! Builds the `roc` binary
+//! the `roc` binary
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
