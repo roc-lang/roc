@@ -1473,17 +1473,13 @@ Now lets import this in an *app module*:
 ```coffee
 app 'interface-example'
 packages { pf: "examples/cli/cli-platform/main.roc" }
-imports [pf.Stdout, pf.Program, Parser.Core]
+imports [pf.Stdout, pf.Program, Parser.Core.{ Parser, parse, sepBy1, between, ignore, flatten, sepBy }]
 provides main to pf
 ```
 Here we are importing the 'Core' module from the package 'Parser'. Now we can use functions from
-the Core module by using their fully qualified names, like 'Core.flatten'.
+the Core module by using their fully qualified names, like 'Parser.Core.flatten'.
 This makes it clear where a certain function is from when reading through the code.
 It is a convention in Roc to use fully qualified names, when using functions from other modules.
-
-But there might be few functions/defs that are so common that they are used throughout a code base. 
-In such cases, we can use them with their unqualified names, by importing them as 
-'import [package.Module.{func1, func2}]'
 
 ## Comments
 
