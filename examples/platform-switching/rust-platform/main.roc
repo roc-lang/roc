@@ -1,9 +1,11 @@
 platform "echo-in-rust"
-    requires {} { main : Str }
+    requires {} { main : _ }
     exposes []
     packages {}
     imports []
     provides [mainForHost]
 
-mainForHost : Str
+MyRcd : { a : U64, b : U128, doStuff: Str -> Str }
+
+mainForHost : MyRcd
 mainForHost = main

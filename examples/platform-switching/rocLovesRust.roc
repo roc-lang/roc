@@ -3,4 +3,7 @@ app "rocLovesRust"
     imports []
     provides [main] to pf
 
-main = "Roc <3 Rust!\n"
+main : { a : U64, b : U128 }
+main = { a: 0, b: 1, doStuff: \str -> "Roc <3 \(str)!\n" }
+# main : Str -> Str
+# main =
