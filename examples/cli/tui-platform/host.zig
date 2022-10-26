@@ -179,10 +179,9 @@ fn call_the_closure(program: Program) void {
 
     var model = init(&allocator);
 
-    const init_viewed = view(model);
-    print_output(init_viewed);
-
     while (true) {
+        print_output(view(model));
+
         const line = (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch unreachable) orelse return;
 
         if (line.len == 1 and line[0] == 'q') {
@@ -192,9 +191,6 @@ fn call_the_closure(program: Program) void {
         const to_append = RocStr.init(line.ptr, line.len);
 
         model = update(&allocator, model, to_append);
-
-        const viewed = view(model);
-        print_output(viewed);
     }
 
     // The closure returns result, nothing interesting to do with it
