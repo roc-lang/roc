@@ -986,7 +986,9 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         env.module,
         fn_name,
         FunctionSpec::known_fastcc(fn_type),
-        Linkage::Private,
+        // this should be `Linkage::Private`, but that will remove all of the code for the inc/dec
+        // functions on windows. LLVM just does not emit the assembly for them. Investigate why this is
+        Linkage::External,
     );
 
     let subprogram = env.new_subprogram(fn_name);
