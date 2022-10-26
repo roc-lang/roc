@@ -444,11 +444,15 @@ fn iface_quicksort() {
 #[test]
 fn quicksort_one_def() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
+    let loaded_module = load_fixture("app_with_deps", "QuicksortMultiDef", subs_by_module);
 
     expect_types(
         loaded_module,
         hashmap! {
+            "swap" => "Nat, Nat, List a -> List a",
+            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
+            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
+            "quicksortHelp" => "List (Num a), Nat, Nat -> List (Num a)",
             "quicksort" => "List (Num a) -> List (Num a)",
         },
     );
