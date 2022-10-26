@@ -364,7 +364,6 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 } = app_relocation;
 
                 if let Some(destination) = md.exports.get(name) {
-                    dbg!(name);
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
