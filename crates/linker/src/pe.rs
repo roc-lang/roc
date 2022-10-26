@@ -1065,15 +1065,13 @@ impl AppSections {
 
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
                         let name = symbol.and_then(|s| s.name()).unwrap_or_default();
+                        let name = redirect_libc_functions(name).unwrap_or(name).to_string();
 
-                        relocations
-                            .entry(name.to_string())
-                            .or_default()
-                            .push(AppRelocation {
-                                offset_in_section,
-                                address,
-                                relocation,
-                            });
+                        relocations.entry(name).or_default().push(AppRelocation {
+                            offset_in_section,
+                            address,
+                            relocation,
+                        });
                     }
                     _ => todo!(),
                 }
@@ -1413,6 +1411,16 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     // the value is already rounded, so to be correct we can't rely on `dir.size.get(LE)`
     let new_reloc_directory_size = next_multiple_of(base_relocations.new_size as usize, 8);
     dir.size.set(LE, new_reloc_directory_size as u32);
+}
+
+/// Redirect `memcpy` and similar libc functions to their roc equivalents
+pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
+    match name {
+        "memcpy" => Some("roc_memcpy"),
+        "memset" => Some("roc_memset"),
+        "memmove" => Some("roc_memmove"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
