@@ -10,7 +10,7 @@ Enjoy!
 
 Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
-# REPL (Read - Eval - Print - Loop)
+## REPL (Read - Eval - Print - Loop)
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
 short. Run this in a terminal:
@@ -36,7 +36,6 @@ Try typing this in and pressing enter:
 Congratulations! You've just written your first Roc code!
 
 ## Strings and Numbers
-
 
 Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
@@ -223,7 +222,10 @@ defines a function's arguments, and the expression after the `->` is the body
 of the function. The expression at the end of the body (`Num.toStr (num1 + num2)`
 in this case) is returned automatically.
 
-Infact, this is the only way to define functions in Roc. Anonymous or named.
+>Infact, this is the only way to define functions in Roc. Anonymous or named.
+>addAndStringify is a named function, you can call it and pass two arguments. 
+>Then there are anonymous functions, where you directly pass in the body of a function without 
+>ever defining it earlier.
 
 ## IF (branching)
 Let's modify the function to return an empty string if the numbers add to zero.
@@ -243,7 +245,7 @@ We did two things here:
 - We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
 - We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
-*def scope*
+*local and global scopes*
 Of note, we couldn't have done `total = num1 + num2` because that would be
 redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
 `sum` for a def in a different function, because then they'd be in completely
@@ -456,7 +458,7 @@ stoplightStr =
         "yellow"
 ```
 
-#### When - Is (matching)
+### When - Is (pattern matching)
 We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
 
 ```elm
@@ -1339,8 +1341,8 @@ which lets you use that comment for extra context in your output.
 
 ## Roc Modules
 
-Modules in Roc are primary form of encapsulation and modularization. 
-Every `.roc` file is a *module*, and there are different types of modules. 
+Modules in Roc are the primary form of encapsulation and modularization. 
+Every `.roc` file is a *module*, and there are different types of them. 
 
 To begin with, there are 3 types of modules one should know of when working with Roc. 
 
@@ -1348,7 +1350,7 @@ To begin with, there are 3 types of modules one should know of when working with
     - Application module or 'app module'
     - Interface modules
 
-Note that App module is singular. Each Roc app shall have one 'App module' and one or more 'Interface Modules'.
+Note that 'app module' is singular. Each Roc app shall have one 'app module' and one or more 'interface Modules'.
 There are other types of modules, we will discuss them later.
 
 ## Builtin modules
@@ -1436,13 +1438,15 @@ should look for that `line` function in the `Stdout` module of the
 
 ## Interface modules
 
-If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+If we would like to include other modules in our application, say `AdditionalModule.roc` 
+and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
 
 ```coffee
 packages { pf: "examples/cli/cli-platform/main.roc" }
 imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
 provides main to pf
 ```
+
 Lets take a look at the following module header:
 
 ```coffee
@@ -1456,11 +1460,12 @@ interface Parser.Core
     ]
     imports []
 ```
-This in particular is from the parser example in the examples section.
 
-This says that the current .roc file is an *interface module* as it begins with 'interface' keyword.
-The 'Parser.core' means that this file is in a package 'Parser' and the module is 'core'
-The next line lists the defs being exposed to other modules to use.
+This says that the current .roc file is an *interface module* as it begins with the 'interface' keyword.
+We are naming this *interface* module, when we write 'interface Parser.Core'. It means that this file is in 
+a package 'Parser' and the module is 'core'.
+When we write `exposes [Parser, ParseResult, ....]`, it specifies the definitions, functions we
+want to *"expose"* or make them importable from other modules.
 The final line is where we import defs from other modules
 
 Now lets import this in an *app module*:
@@ -1468,19 +1473,17 @@ Now lets import this in an *app module*:
 ```coffee
 app 'interface-example'
 packages { pf: "examples/cli/cli-platform/main.roc" }
-imports [pf.Stdout, pf.Program, Parser.Core.{ Parser, parse, sepBy1, between, ignore, flatten, sepBy }]
+imports [pf.Stdout, pf.Program, Parser.Core]
 provides main to pf
 ```
-We are import Parse, parse unqualified, meaning we can use this defs in our app module directly.
-If we had imported just the module 'import [Parser.Core]' we would have to use the fully qualified name of def from 
-the interface module.
+Here we are importing the 'Core' module from the package 'Parser'. Now we can use functions from
+the Core module by using their fully qualified names, like 'Core.flatten'.
+This makes it clear where a certain function is from when reading through the code.
+It is a convention in Roc to use fully qualified names, when using functions from other modules.
 
-It is not recommended to make unqualified imports unless it is a commonly used function/def, such as Task.await. 
-It becomes difficult to know where a particular function is from in a large codebase. 
-It is a Roc convention to import a module and use fully qualified calls to defs.
-
-You can group your interface modules in to packages or directories as can be seen above. 
-Core is an interface module within the Package 'Parser'
+But there might be few functions/defs that are so common that they are used throughout a code base. 
+In such cases, we can use them with their unqualified names, by importing them as 
+'import [package.Module.{func1, func2}]'
 
 ## Comments
 
@@ -1502,6 +1505,15 @@ myFunction = \bit -> bit % 2 # this is an inline comment
 ```
 
 Roc does not have multiline comment syntax.
+
+## Platforms
+
+When writing applications in Roc, you import a Platform as a package in the *app module*.
+Platforms are a new edge that Roc creates in application development. All your I/O is defined
+by the platform. As an application author, this doesn't change much for you. 
+You learn the APIs a platform provides and write an application on top of it, much like a framework.
+
+You can find example tutorials in the example directory of the roc github [repo](https://github.com/roc-lang/roc)
 
 ## Tasks
 
@@ -1745,38 +1757,41 @@ To summarize, we have covered:
 
     - The Roc REPL
     - Strings and numbers
-    - defs and immutability - You cannot reassign a def
-    - using the functions from builtin modules (Str.concat, Num.isNegative, etc,.)
-    - Building and running an application with Roc (Roc main.roc, Roc test)
-    - Named functions, Anonymous function
-    - Branching and matching with 'if-then-else' and 'When-is'
+    - definitions and that they cannot be reassigned
+    - how to use functions from builtin modules (Str.concat, Num.isNegative, etc,.)
+    - building and running an application with Roc (Roc main.roc, Roc test)
+    - how to write functions in Roc and the distinction between Named and Anonymous functions
+    - branching and pattern matching with 'if-then-else' and 'When-is' keywords
     - Records
-      - Record shorthand
+      - Record shorthand 
       - Destructuring Records
-      - Building records from other records (& operator)
+      - Building records from other records using the & operator
     - Lists
+      - Lists can contain elements of the same data type
+      - how to append, map, filter contents of a list
     - Tags
-      - Tags can have payloads
-      - A Tag payload may contain another tag, function, list, record, string etc,.
+      - tags can have payloads
+      - a tag payload may contain another tag, function, list, record, string etc,.
       - Bool in Roc is just a tag union [Bool.true, Bool.false]
     - Result
       - Handle Results with the Result module (Result.withDefault etc,.)
     - Type annotations
-      - wild card notation *
-      - Type variables for parameterized types 
+      - Roc is 100% type inferrable, but you can choose to annotate your code.
+      - how to use wild card notation (*) and type variables for parameterized types 
     - Pipe operator
-      - Expression result will be passed as the first argument to the next function in the pipe chain
+      - how to chain functions using the pipe operator
+      - how the result from previous function is passed as the first argument to the next function in the chain
     - Numeric Types (Nat, Int, Frac)
     - Tests - global and inline expects
     - Modules - Builtin, App and Interface modules
-    - App and Platform distinction
-    - Task type provided by platforms
+    - Platforms
+    - Tasks
     - Backpassing
 
 Thats it!
 You can start writing Roc apps now. 
-You may use the available platforms from the examples directory. 
-Many have started tackling 'Advent of Code' problems with Roc too.
+Many have started tackling 'Advent of Code' problems with Roc. There are sample platforms available in 
+the github repo.
 
 You can continue reading to go through some of the more advanced concepts next.
 ## Appendix: Advanced Concepts
