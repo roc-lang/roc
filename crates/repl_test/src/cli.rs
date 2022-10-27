@@ -3,7 +3,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
-use roc_repl_cli::{TIPS, WELCOME_MESSAGE};
+use roc_repl_cli::repl_state::TIPS;
+use roc_repl_cli::WELCOME_MESSAGE;
 use roc_test_utils::assert_multiline_str_eq;
 
 const ERROR_MESSAGE_START: char = '─';

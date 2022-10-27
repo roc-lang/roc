@@ -15,6 +15,7 @@ lazy_static = "1.4.0"
 indoc = "1.0.7"
 strip-ansi-escapes = "0.1.1"
 wasmer-wasi = "2.2.1"
+rustyline = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
 
 roc_repl_cli = {path = "../repl_cli"}
 roc_test_utils = {path = "../test_utils"}

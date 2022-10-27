@@ -270,6 +270,8 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         target_info,
     );
 
+    let val_name = String::new(); // TODO
+
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
     match format_answer(arena, res_answer, expr_type_str, val_name) {

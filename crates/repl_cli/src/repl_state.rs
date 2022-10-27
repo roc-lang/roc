@@ -1,20 +1,23 @@
-use crate::colors::{BLUE, END_COL, PINK};
+use crate::cli_gen::gen_and_eval_llvm;
+use crate::colors::{BLUE, END_COL, GREEN, PINK};
 use bumpalo::Bump;
 use const_format::concatcp;
-use roc_parse::ast::ValueDef;
-use roc_parse::expr::{parse_single_def, ExprParseOptions};
-use roc_parse::parser::{EClosure, EExpr, Parser};
+use roc_mono::ir::OptLevel;
+use roc_parse::ast::{Expr, TypeDef, ValueDef};
+use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
+use roc_parse::parser::{EClosure, EExpr};
 use roc_parse::parser::{Either, SyntaxError};
 use roc_parse::state::State;
-use roc_repl_eval::eval::jit_to_ast;
-use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
-use roc_reporting::report::DEFAULT_PALETTE;
-use roc_types::pretty_print::{name_and_print_var, DebugPrint};
+use roc_repl_eval::gen::ReplOutput;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
 use std::collections::LinkedList;
+use target_lexicon::Triple;
+
+pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
+pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
@@ -39,17 +42,17 @@ pub const TIPS: &str = concatcp!(
     ":help\n"
 );
 
-pub struct PastDef {
-    ident: String,
-    src: String,
+struct PastDef {
+    _ident: String,
+    _src: String,
 }
 
 #[derive(Completer, Helper, Hinter)]
-pub(crate) struct ReplState {
+pub struct ReplState {
     validator: InputValidator,
     prev_line_blank: bool,
     pending_src: String,
-    past_defs: LinkedList<PastDef>,
+    _past_defs: LinkedList<PastDef>,
 }
 
 impl ReplState {
@@ -58,11 +61,11 @@ impl ReplState {
             validator: InputValidator::new(),
             prev_line_blank: false,
             pending_src: String::new(),
-            past_defs: Default::default(),
+            _past_defs: Default::default(),
         }
     }
 
-    fn step(&mut self, trim_line: &str) -> Result<String, i32> {
+    pub fn step(&mut self, trim_line: &str) -> Result<String, i32> {
         match trim_line.to_lowercase().as_str() {
             "" => {
                 if self.pending_src.is_empty() {
@@ -114,24 +117,12 @@ impl ReplState {
             self.pending_src.as_str()
         };
 
-        dbg!(&src);
+        let arena = Bump::new();
 
-        // First, try to parse it as a Def. If that succeeds, record it in self and continue.
-        let src = match parse_single_def(
-            ExprParseOptions {
-                accept_multi_backpassing: true,
-                check_for_arrow: true,
-            },
-            0,
-            &Bump::new(),
-            State::new(src.as_bytes()),
-        ) {
-            Ok((_, Some(single_def), _)) => match single_def.type_or_value {
-                Either::First(type_def) => {
-                    // Alias, Opaque, or Ability
-                    todo!("handle Alias, Opaque, or Ability")
-                }
-                Either::Second(value_def) => match value_def {
+        let src = match parse_src(&arena, src) {
+            ParseOutcome::Expr(_) => src,
+            ParseOutcome::ValueDef(value_def) => {
+                match value_def {
                     ValueDef::Annotation(_, _) => {
                         // Needed to avoid a borrow error.
                         let src = src.to_string();
@@ -145,13 +136,13 @@ impl ReplState {
                         self.pending_src.push_str(src.as_str());
                         self.pending_src.push('\n');
 
-                        // Return without clearing pending_src.
+                        // Return without running eval or clearing pending_src.
                         return Ok(String::new());
                     }
-                    ValueDef::Body(loc_pattern, loc_expr)
+                    ValueDef::Body(_loc_pattern, _loc_expr)
                     | ValueDef::AnnotatedBody {
-                        body_pattern: loc_pattern,
-                        body_expr: loc_expr,
+                        body_pattern: _loc_pattern,
+                        body_expr: _loc_expr,
                         ..
                     } => todo!("handle receiving a toplevel def of a value/function"),
                     ValueDef::Expect { .. } => {
@@ -160,12 +151,13 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
-                },
-            },
-            Ok(_) => src,
-            Err((_, eexpr, _)) => {
-                return Err(fail);
+                }
             }
+            ParseOutcome::TypeDef(_) => {
+                // Alias, Opaque, or Ability
+                todo!("handle Alias, Opaque, or Ability")
+            }
+            ParseOutcome::Incomplete => todo!(),
         };
 
         let answer = gen_and_eval_llvm(
@@ -182,17 +174,69 @@ impl ReplState {
     }
 
     /// Wrap the given expresssion in the appropriate past defs
-    fn wrapped_expr_src(&self, src: &str) -> String {
+    fn _wrapped_expr_src(&self, src: &str) -> String {
         let mut buf = String::new();
 
-        for past_def in self.past_defs.iter() {
-            buf.push_str(past_def.src.as_str());
+        for past_def in self._past_defs.iter() {
+            buf.push_str(past_def._src.as_str());
             buf.push('\n');
         }
 
         buf.push_str(src);
 
         buf
+    }
+}
+
+enum ParseOutcome<'a> {
+    ValueDef(ValueDef<'a>),
+    TypeDef(TypeDef<'a>),
+    Expr(Expr<'a>),
+    Incomplete,
+}
+
+fn parse_src<'a>(arena: &'a Bump, src: &'a str) -> ParseOutcome<'a> {
+    let src_bytes = src.trim().as_bytes();
+
+    match roc_parse::expr::parse_loc_expr(0, &arena, State::new(src_bytes)) {
+        Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
+        // Special case some syntax errors to allow for multi-line inputs
+        Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => ParseOutcome::Incomplete,
+        Err((_, EExpr::DefMissingFinalExpr(_), _))
+        | Err((_, EExpr::DefMissingFinalExpr2(_, _), _)) => {
+            // This indicates that we had an attempted def; re-parse it as a single-line def.
+            match parse_single_def(
+                ExprParseOptions {
+                    accept_multi_backpassing: true,
+                    check_for_arrow: true,
+                },
+                0,
+                &arena,
+                State::new(src_bytes),
+            ) {
+                Ok((
+                    _,
+                    Some(SingleDef {
+                        type_or_value: Either::First(type_def),
+                        ..
+                    }),
+                    _,
+                )) => ParseOutcome::TypeDef(type_def),
+                Ok((
+                    _,
+                    Some(SingleDef {
+                        type_or_value: Either::Second(value_def),
+                        ..
+                    }),
+                    _,
+                )) => ParseOutcome::ValueDef(value_def),
+                Ok((_, None, _)) => {
+                    todo!("TODO determine appropriate ParseOutcome for Ok(None)")
+                }
+                Err(_) => ParseOutcome::Incomplete,
+            }
+        }
+        Err(_) => ParseOutcome::Incomplete,
     }
 }
 
@@ -206,36 +250,26 @@ impl InputValidator {
 
 impl Validator for InputValidator {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        if ctx.input().is_empty() {
-            Ok(ValidationResult::Incomplete)
-        } else {
-            let arena = bumpalo::Bump::new();
-            let state = roc_parse::state::State::new(ctx.input().trim().as_bytes());
-            let answer = match roc_parse::expr::toplevel_defs(0).parse(&arena, state) {
-                // Special case some syntax errors to allow for multi-line inputs
-                Err((_, EExpr::DefMissingFinalExpr(_), _))
-                | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
-                | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
-                    Ok(ValidationResult::Incomplete)
-                }
-                Err((_, _, state)) => {
-                    // It wasn't a valid top-level decl, so continue parsing it as an expr.
-                    match roc_parse::expr::parse_loc_expr(0, &arena, state) {
-                        // Special case some syntax errors to allow for multi-line inputs
-                        Err((_, EExpr::DefMissingFinalExpr(_), _))
-                        | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
-                        | Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => {
-                            Ok(ValidationResult::Incomplete)
-                        }
-                        _ => Ok(ValidationResult::Valid(None)),
-                    }
-                }
-                Ok(_) => Ok(ValidationResult::Valid(None)),
-            };
+        validate(ctx.input())
+    }
+}
 
-            // This is necessary to extend the lifetime of `arena`; without it,
-            // we get a borrow checker error!
-            answer
+pub fn validate(input: &str) -> rustyline::Result<ValidationResult> {
+    if input.is_empty() {
+        Ok(ValidationResult::Incomplete)
+    } else {
+        let arena = Bump::new();
+
+        match parse_src(&arena, input) {
+            // Standalone annotations are default incomplete, because we can't know
+            // whether they're about to annotate a body on the next line
+            // (or if not, meaning they stay standalone) until you press Enter again!
+            ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) | ParseOutcome::Incomplete => {
+                Ok(ValidationResult::Incomplete)
+            }
+            ParseOutcome::ValueDef(_) | ParseOutcome::TypeDef(_) | ParseOutcome::Expr(_) => {
+                Ok(ValidationResult::Valid(None))
+            }
         }
     }
 }
@@ -288,67 +322,4 @@ fn format_output(output: ReplOutput) -> String {
         }
         ReplOutput::Problems(lines) => format!("\n{}\n", lines.join("\n\n")),
     }
-}
-
-fn gen_and_eval_llvm<'a>(
-    src: &str,
-    target: Triple,
-    opt_level: OptLevel,
-    val_name: String,
-) -> Result<ReplOutput, SyntaxError<'a>> {
-    let arena = Bump::new();
-    let target_info = TargetInfo::from(&target);
-
-    let mut loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
-        Ok(x) => x,
-        Err(prob_strings) => {
-            return Ok(ReplOutput::Problems(prob_strings));
-        }
-    };
-
-    debug_assert_eq!(loaded.exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = loaded.exposed_to_host.values.iter().next().unwrap();
-    let main_fn_symbol = *main_fn_symbol;
-    let main_fn_var = *main_fn_var;
-
-    // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(
-        main_fn_var,
-        &mut loaded.subs,
-        loaded.module_id,
-        &loaded.interns,
-        DebugPrint::NOTHING,
-    );
-
-    let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => {
-            return Ok(ReplOutput::NoProblems {
-                expr: "<function>".to_string(),
-                expr_type: expr_type_str,
-                val_name,
-            });
-        }
-    };
-
-    let interns = loaded.interns.clone();
-
-    let (lib, main_fn_name, subs, layout_interner) =
-        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
-
-    let mut app = CliApp { lib };
-
-    let res_answer = jit_to_ast(
-        &arena,
-        &mut app,
-        main_fn_name,
-        main_fn_layout,
-        main_fn_var,
-        &subs,
-        &interns,
-        layout_interner.into_global().fork(),
-        target_info,
-    );
-
-    Ok(format_answer(&arena, res_answer, expr_type_str, val_name))
 }
