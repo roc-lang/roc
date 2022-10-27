@@ -38,9 +38,7 @@ pub fn main() -> i32 {
     editor.set_helper(Some(repl_helper));
 
     loop {
-        let readline = editor.readline(PROMPT);
-
-        match readline {
+        match editor.readline(PROMPT) {
             Ok(line) => {
                 let trim_line = line.trim();
                 editor.add_history_entry(trim_line);

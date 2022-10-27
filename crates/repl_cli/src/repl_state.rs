@@ -49,7 +49,6 @@ struct PastDef {
 
 #[derive(Completer, Helper, Hinter)]
 pub struct ReplState {
-    pub prev_line_blank: bool,
     pub pending_src: String,
     validator: InputValidator,
     _past_defs: LinkedList<PastDef>,
@@ -59,10 +58,13 @@ impl ReplState {
     pub fn new() -> Self {
         Self {
             validator: InputValidator::new(),
-            prev_line_blank: false,
             pending_src: String::new(),
             _past_defs: Default::default(),
         }
+    }
+
+    fn prev_line_blank(&self) -> bool {
+        self.pending_src == "\n" || self.pending_src.ends_with("\n\n")
     }
 
     pub fn step(&mut self, trim_line: &str) -> Result<String, i32> {
@@ -70,27 +72,26 @@ impl ReplState {
 
         match parse_src(&arena, trim_line) {
             ParseOutcome::Empty => {
-                if self.pending_src.is_empty() {
-                    self.prev_line_blank = false;
-
+                if dbg!(&self.pending_src).is_empty() {
                     return Ok(format!("\n{}\n", TIPS));
-                } else if self.prev_line_blank {
+                } else if dbg!(self.prev_line_blank()) {
                     // After two blank lines in a row, give up and try parsing it
-                    // even though it's going to fail. This way you don't get stuck.
-                    let src = self.pending_src.clone();
+                    // even though it's going to fail. This way you don't get stuck
+                    // in a perpetual Incomplete state due to a syntax error.
+                    let answer = self.eval_and_format(&dbg!(self.pending_src.clone()));
 
                     self.pending_src.clear();
 
-                    Ok(self.eval_and_format(&src))
+                    Ok(answer)
                 } else {
                     // The previous line wasn't blank, but there's some pending source.
                     // This could mean that, for example, you're writing a multiline `when`
                     // and want to add a blank line. No problem! Print a blank line and
                     // continue waiting for input.
                     //
-                    // If the user presses enter again, next time prev_line_blank will be true
+                    // If the user presses enter again, next time prev_line_blank() will be true
                     //  and we'll try parsing the source as-is.
-                    self.prev_line_blank = true;
+                    self.pending_src.push('\n');
 
                     Ok("\n".to_string())
                 }
@@ -98,7 +99,18 @@ impl ReplState {
             ParseOutcome::Expr(_)
             | ParseOutcome::ValueDef(_)
             | ParseOutcome::TypeDef(_)
-            | ParseOutcome::Incomplete => Ok(self.eval_and_format(trim_line)),
+            | ParseOutcome::Incomplete => {
+                let outcome = if self.pending_src.is_empty() {
+                    self.eval_and_format(trim_line)
+                } else {
+                    self.pending_src.push('\n');
+                    self.pending_src.push_str(trim_line);
+
+                    self.eval_and_format(self.pending_src.clone().as_str())
+                };
+
+                Ok(outcome)
+            }
             ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
                 Ok(format!("\n{}\n", TIPS))
@@ -108,15 +120,6 @@ impl ReplState {
     }
 
     pub fn eval_and_format<'a>(&mut self, src: &str) -> String {
-        let src = if self.pending_src.is_empty() {
-            src
-        } else {
-            self.pending_src.push('\n');
-            self.pending_src.push_str(src);
-
-            self.pending_src.as_str()
-        };
-
         let arena = Bump::new();
 
         let src = match parse_src(&arena, src) {
@@ -124,20 +127,28 @@ impl ReplState {
             ParseOutcome::ValueDef(value_def) => {
                 match value_def {
                     ValueDef::Annotation(_, _) => {
-                        // Needed to avoid a borrow error.
-                        let src = src.to_string();
+                        if &self.pending_src.ends_with("\n\n") {
+                            // Since pending_src ended in a blank line
+                            // (and was therefore nonempty), this must
+                            // have been an annotation followed by a blank line.
+                            // Record it as standaline!
+                            self.pending_src.clear();
 
-                        dbg!(&src);
+                            todo!("record a STANDALONE annotation!");
+                        } else {
+                            // Needed to avoid a borrow error.
+                            let src = src.to_string();
 
-                        // We received a type annotation, like `x : Str`
-                        //
-                        // This might be the beginning of an AnnotatedBody, or it might be
-                        // a standalone annotation. To find out, we need more input from the user.
-                        self.pending_src.push_str(src.as_str());
-                        self.pending_src.push('\n');
+                            // We received a type annotation, like `x : Str`
+                            //
+                            // This might be the beginning of an AnnotatedBody, or it might be
+                            // a standalone annotation. To find out, we need more input from the user.
+                            self.pending_src.push_str(src.as_str());
+                            self.pending_src.push('\n');
 
-                        // Return without running eval or clearing pending_src.
-                        return String::new();
+                            // Return without running eval or clearing pending_src.
+                            return String::new();
+                        }
                     }
                     ValueDef::Body(_loc_pattern, _loc_expr)
                     | ValueDef::AnnotatedBody {
@@ -157,7 +168,13 @@ impl ReplState {
                 // Alias, Opaque, or Ability
                 todo!("handle Alias, Opaque, or Ability")
             }
-            ParseOutcome::Incomplete => todo!("handle Incomplete parse"),
+            ParseOutcome::Incomplete => {
+                if dbg!(&self.pending_src).ends_with("\n\n") {
+                    todo!("handle SYNTAX ERROR");
+                } else {
+                    todo!("handle Incomplete parse");
+                }
+            }
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
@@ -188,6 +205,7 @@ impl ReplState {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum ParseOutcome<'a> {
     ValueDef(ValueDef<'a>),
     TypeDef(TypeDef<'a>),
@@ -273,9 +291,12 @@ pub fn validate(input: &str) -> rustyline::Result<ValidationResult> {
         // Standalone annotations are default incomplete, because we can't know
         // whether they're about to annotate a body on the next line
         // (or if not, meaning they stay standalone) until you press Enter again!
-        ParseOutcome::ValueDef(ValueDef::Annotation(_, _))
-        | ParseOutcome::Empty
-        | ParseOutcome::Incomplete => Ok(ValidationResult::Incomplete),
+        //
+        // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
+        ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with("\n") => {
+            Ok(ValidationResult::Incomplete)
+        }
+        ParseOutcome::Empty | ParseOutcome::Incomplete => Ok(ValidationResult::Incomplete),
         ParseOutcome::Help
         | ParseOutcome::Exit
         | ParseOutcome::ValueDef(_)
