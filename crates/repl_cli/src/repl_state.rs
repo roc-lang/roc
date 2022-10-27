@@ -250,29 +250,31 @@ impl InputValidator {
 
 impl Validator for InputValidator {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        validate(ctx.input())
+        if is_incomplete(ctx.input()) {
+            Ok(ValidationResult::Incomplete)
+        } else {
+            Ok(ValidationResult::Valid(None))
+        }
     }
 }
 
-pub fn validate(input: &str) -> rustyline::Result<ValidationResult> {
+pub fn is_incomplete(input: &str) -> bool {
     let arena = Bump::new();
 
     match parse_src(&arena, input) {
+        ParseOutcome::Incomplete => true,
         // Standalone annotations are default incomplete, because we can't know
         // whether they're about to annotate a body on the next line
         // (or if not, meaning they stay standalone) until you press Enter again!
         //
         // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
-        ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with('\n') => {
-            Ok(ValidationResult::Incomplete)
-        }
-        ParseOutcome::Incomplete => Ok(ValidationResult::Incomplete),
+        ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with('\n') => true,
         ParseOutcome::Empty
         | ParseOutcome::Help
         | ParseOutcome::Exit
         | ParseOutcome::ValueDef(_)
         | ParseOutcome::TypeDef(_)
-        | ParseOutcome::Expr(_) => Ok(ValidationResult::Valid(None)),
+        | ParseOutcome::Expr(_) => false,
     }
 }
 

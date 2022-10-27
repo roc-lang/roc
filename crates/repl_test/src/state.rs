@@ -1,22 +1,14 @@
-use roc_repl_cli::repl_state::{validate, ReplState, TIPS};
-use rustyline::validate::ValidationResult;
+use roc_repl_cli::repl_state::{is_incomplete, ReplState, TIPS};
 
 #[test]
 fn one_plus_one() {
-    let mut state = ReplState::new();
-    let input = "1 + 1";
-
-    assert_valid(input);
-    assert_step(input, &mut state, Ok("2 : Num *   # TODOval1"));
+    complete("1 + 1", &mut ReplState::new(), Ok("2 : Num *   # TODOval1"));
 }
 
 #[test]
 fn tips() {
-    let mut state = ReplState::new();
-    let input = "";
-
-    assert_valid(input);
-    assert_eq!(state.step(input), Ok(format!("\n{TIPS}\n")));
+    assert!(!is_incomplete(""));
+    assert_eq!(ReplState::new().step(""), Ok(format!("\n{TIPS}\n")));
 }
 
 #[test]
@@ -24,24 +16,15 @@ fn standalone_annotation() {
     let mut state = ReplState::new();
     let mut input = "x : Str".to_string();
 
-    assert_incomplete(&input); // Since this was incomplete, rustyline won't step the state.
-
-    input.push('\n');
-
-    assert_valid(&input);
-    assert_step(&input, &mut state, Ok(""));
+    incomplete(&mut input);
+    complete(&input, &mut state, Ok(""));
 }
 
-fn assert_valid(input: &str) {
-    assert!(matches!(validate(input), Ok(ValidationResult::Valid(None))));
-}
+/// validate and step the given input, then check the Result vs the input
+/// with ANSI escape codes stripped.
+fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<&str, i32>) {
+    assert!(!is_incomplete(input));
 
-fn assert_incomplete(input: &str) {
-    assert!(matches!(validate(input), Ok(ValidationResult::Incomplete)));
-}
-
-/// step the given input, then check the Result vs the trimmed input with ANSI escape codes stripped.
-fn assert_step(input: &str, state: &mut ReplState, expected_step_result: Result<&str, i32>) {
     match state.step(input) {
         Ok(string) => {
             let escaped = std::string::String::from_utf8(
@@ -55,4 +38,12 @@ fn assert_step(input: &str, state: &mut ReplState, expected_step_result: Result<
             assert_eq!(expected_step_result, Err(err));
         }
     }
+}
+
+fn incomplete(input: &mut String) {
+    assert!(is_incomplete(input));
+
+    // Since this was incomplete, rustyline won't step the state. Instead, it will
+    // remember the input (with a newline appended) for next time.
+    input.push('\n');
 }
