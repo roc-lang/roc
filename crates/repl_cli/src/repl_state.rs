@@ -49,9 +49,9 @@ struct PastDef {
 
 #[derive(Completer, Helper, Hinter)]
 pub struct ReplState {
+    pub prev_line_blank: bool,
+    pub pending_src: String,
     validator: InputValidator,
-    prev_line_blank: bool,
-    pending_src: String,
     _past_defs: LinkedList<PastDef>,
 }
 
@@ -66,8 +66,10 @@ impl ReplState {
     }
 
     pub fn step(&mut self, trim_line: &str) -> Result<String, i32> {
-        match trim_line.to_lowercase().as_str() {
-            "" => {
+        let arena = Bump::new();
+
+        match parse_src(&arena, trim_line) {
+            ParseOutcome::Empty => {
                 if self.pending_src.is_empty() {
                     self.prev_line_blank = false;
 
@@ -96,14 +98,17 @@ impl ReplState {
                     Ok("\n".to_string())
                 }
             }
-            ":help" => {
+            ParseOutcome::Expr(_)
+            | ParseOutcome::ValueDef(_)
+            | ParseOutcome::TypeDef(_)
+            | ParseOutcome::Incomplete => self.eval_and_format(trim_line).map_err(|fail| {
+                todo!("gracefully report parse error in repl: {:?}", fail);
+            }),
+            ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
                 Ok(format!("\n{}\n", TIPS))
             }
-            ":exit" | ":quit" | ":q" => Err(0),
-            _ => self.eval_and_format(trim_line).map_err(|fail| {
-                todo!("gracefully report parse error in repl: {:?}", fail);
-            }),
+            ParseOutcome::Exit => Err(0),
         }
     }
 
@@ -157,7 +162,8 @@ impl ReplState {
                 // Alias, Opaque, or Ability
                 todo!("handle Alias, Opaque, or Ability")
             }
-            ParseOutcome::Incomplete => todo!(),
+            ParseOutcome::Incomplete => todo!("handle Incomplete parse"),
+            ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
         let answer = gen_and_eval_llvm(
@@ -193,50 +199,62 @@ enum ParseOutcome<'a> {
     TypeDef(TypeDef<'a>),
     Expr(Expr<'a>),
     Incomplete,
+    Empty,
+    Help,
+    Exit,
 }
 
-fn parse_src<'a>(arena: &'a Bump, src: &'a str) -> ParseOutcome<'a> {
-    let src_bytes = src.trim().as_bytes();
+fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
+    let trim_line = line.trim();
 
-    match roc_parse::expr::parse_loc_expr(0, &arena, State::new(src_bytes)) {
-        Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
-        // Special case some syntax errors to allow for multi-line inputs
-        Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => ParseOutcome::Incomplete,
-        Err((_, EExpr::DefMissingFinalExpr(_), _))
-        | Err((_, EExpr::DefMissingFinalExpr2(_, _), _)) => {
-            // This indicates that we had an attempted def; re-parse it as a single-line def.
-            match parse_single_def(
-                ExprParseOptions {
-                    accept_multi_backpassing: true,
-                    check_for_arrow: true,
-                },
-                0,
-                &arena,
-                State::new(src_bytes),
-            ) {
-                Ok((
-                    _,
-                    Some(SingleDef {
-                        type_or_value: Either::First(type_def),
-                        ..
-                    }),
-                    _,
-                )) => ParseOutcome::TypeDef(type_def),
-                Ok((
-                    _,
-                    Some(SingleDef {
-                        type_or_value: Either::Second(value_def),
-                        ..
-                    }),
-                    _,
-                )) => ParseOutcome::ValueDef(value_def),
-                Ok((_, None, _)) => {
-                    todo!("TODO determine appropriate ParseOutcome for Ok(None)")
+    match trim_line.to_lowercase().as_str() {
+        "" => ParseOutcome::Empty,
+        ":help" => ParseOutcome::Help,
+        ":exit" | ":quit" | ":q" => ParseOutcome::Exit,
+        _ => {
+            let src_bytes = trim_line.as_bytes();
+
+            match roc_parse::expr::parse_loc_expr(0, &arena, State::new(src_bytes)) {
+                Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
+                // Special case some syntax errors to allow for multi-line inputs
+                Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => ParseOutcome::Incomplete,
+                Err((_, EExpr::DefMissingFinalExpr(_), _))
+                | Err((_, EExpr::DefMissingFinalExpr2(_, _), _)) => {
+                    // This indicates that we had an attempted def; re-parse it as a single-line def.
+                    match parse_single_def(
+                        ExprParseOptions {
+                            accept_multi_backpassing: true,
+                            check_for_arrow: true,
+                        },
+                        0,
+                        &arena,
+                        State::new(src_bytes),
+                    ) {
+                        Ok((
+                            _,
+                            Some(SingleDef {
+                                type_or_value: Either::First(type_def),
+                                ..
+                            }),
+                            _,
+                        )) => ParseOutcome::TypeDef(type_def),
+                        Ok((
+                            _,
+                            Some(SingleDef {
+                                type_or_value: Either::Second(value_def),
+                                ..
+                            }),
+                            _,
+                        )) => ParseOutcome::ValueDef(value_def),
+                        Ok((_, None, _)) => {
+                            todo!("TODO determine appropriate ParseOutcome for Ok(None)")
+                        }
+                        Err(_) => ParseOutcome::Incomplete,
+                    }
                 }
                 Err(_) => ParseOutcome::Incomplete,
             }
         }
-        Err(_) => ParseOutcome::Incomplete,
     }
 }
 
@@ -255,22 +273,20 @@ impl Validator for InputValidator {
 }
 
 pub fn validate(input: &str) -> rustyline::Result<ValidationResult> {
-    if input.is_empty() {
-        Ok(ValidationResult::Incomplete)
-    } else {
-        let arena = Bump::new();
+    let arena = Bump::new();
 
-        match parse_src(&arena, input) {
-            // Standalone annotations are default incomplete, because we can't know
-            // whether they're about to annotate a body on the next line
-            // (or if not, meaning they stay standalone) until you press Enter again!
-            ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) | ParseOutcome::Incomplete => {
-                Ok(ValidationResult::Incomplete)
-            }
-            ParseOutcome::ValueDef(_) | ParseOutcome::TypeDef(_) | ParseOutcome::Expr(_) => {
-                Ok(ValidationResult::Valid(None))
-            }
-        }
+    match parse_src(&arena, input) {
+        // Standalone annotations are default incomplete, because we can't know
+        // whether they're about to annotate a body on the next line
+        // (or if not, meaning they stay standalone) until you press Enter again!
+        ParseOutcome::ValueDef(ValueDef::Annotation(_, _))
+        | ParseOutcome::Empty
+        | ParseOutcome::Incomplete => Ok(ValidationResult::Incomplete),
+        ParseOutcome::Help
+        | ParseOutcome::Exit
+        | ParseOutcome::ValueDef(_)
+        | ParseOutcome::TypeDef(_)
+        | ParseOutcome::Expr(_) => Ok(ValidationResult::Valid(None)),
     }
 }
 
