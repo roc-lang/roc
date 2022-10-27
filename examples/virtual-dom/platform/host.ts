@@ -25,9 +25,9 @@ const utf8Encoder = new TextEncoder();
 
 export const init = async (wasmFilename: string) => {
   const effects = {
-    // createElement : TagId -> Effect NodeId
-    createElement: (tagId: number): number => {
-      const tagName = tagNames[tagId];
+    // createElement : Str -> Effect NodeId
+    createElement: (tagAddr: number): number => {
+      const tagName = decodeRocStr(tagAddr);
       const node = document.createElement(tagName);
       return insertNode(node);
     },
@@ -41,8 +41,8 @@ export const init = async (wasmFilename: string) => {
 
     // appendChild : NodeId, NodeId -> Effect {}
     appendChild: (parentId: number, childId: number): void => {
-      const parent = findElement(parentId);
-      const child = findNode(childId);
+      const parent = nodes[parentId] as Element;
+      const child = nodes[childId] as Node;
       parent.appendChild(child);
     },
 
@@ -53,18 +53,22 @@ export const init = async (wasmFilename: string) => {
       node?.parentElement?.removeChild(node);
     },
 
-    // setAttribute : NodeId, AttrTypeId, Str -> Effect {}
-    setAttribute: (nodeId: number, typeId: number, valueAddr: number): void => {
+    // setAttribute : NodeId, Str, Str -> Effect {}
+    setAttribute: (
+      nodeId: number,
+      typeAddr: number,
+      valueAddr: number
+    ): void => {
       const node = nodes[nodeId] as Element;
-      const name = attrTypeNames[typeId];
+      const name = decodeRocStr(typeAddr);
       const value = decodeRocStr(valueAddr);
       node.setAttribute(name, value);
     },
 
-    // removeAttribute : NodeId, AttrTypeId -> Effect {}
-    removeAttribute: (nodeId: number, typeId: number): void => {
+    // removeAttribute : NodeId, Str -> Effect {}
+    removeAttribute: (nodeId: number, typeAddr: number): void => {
       const node = nodes[nodeId] as Element;
-      const name = attrTypeNames[typeId];
+      const name = decodeRocStr(typeAddr);
       node.removeAttribute(name);
     },
 
@@ -95,7 +99,7 @@ export const init = async (wasmFilename: string) => {
       accessorsJsonAddr: number,
       handlerId: number
     ): void => {
-      const element = findElement(nodeId);
+      const element = nodes[nodeId] as Element;
       const eventType = decodeRocStr(eventTypeAddr);
       const accessorsJson = decodeRocStr(accessorsJsonAddr);
       const accessors: CyclicStructureAccessor[] = JSON.parse(accessorsJson);
@@ -143,7 +147,7 @@ export const init = async (wasmFilename: string) => {
 
     // removeListener : NodeId, EventHandlerId -> Effect {}
     removeListener: (nodeId: number, handlerId: number): void => {
-      const element = findElement(nodeId);
+      const element = nodes[nodeId] as Element;
       const [eventType, dispatchEvent] = findListener(element, handlerId);
       listeners[handlerId] = null;
       element.removeAttribute("data-roc-event-handler-id");
@@ -192,28 +196,6 @@ export const init = async (wasmFilename: string) => {
   }
 };
 
-const findNode = (id: number): Node => {
-  const node = nodes[id];
-  if (node) {
-    return node;
-  } else {
-    throw new Error(
-      `Virtual DOM Node #${id} not found. This is a bug in virtual-dom, not your app!`
-    );
-  }
-};
-
-const findElement = (id: number): HTMLElement => {
-  const node = nodes[id];
-  if (node && node instanceof HTMLElement) {
-    return node;
-  } else {
-    throw new Error(
-      `Virtual DOM Element #${id} not found. This is a bug in virtual-dom, not your app!`
-    );
-  }
-};
-
 const insertNode = (node: Node): number => {
   let i = 0;
   for (; i < nodes.length; i++) {
@@ -255,253 +237,3 @@ const findListener = (element: Element, handlerId: number) => {
     );
   }
 };
-
-const tagNames = [
-  "a",
-  "abbr",
-  "address",
-  "area",
-  "article",
-  "aside",
-  "audio",
-  "b",
-  "base",
-  "bdi",
-  "bdo",
-  "blockquote",
-  "body",
-  "br",
-  "button",
-  "canvas",
-  "caption",
-  "cite",
-  "code",
-  "col",
-  "colgroup",
-  "data",
-  "datalist",
-  "dd",
-  "del",
-  "details",
-  "dfn",
-  "dialog",
-  "div",
-  "dl",
-  "dt",
-  "em",
-  "embed",
-  "fieldset",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "head",
-  "header",
-  "hr",
-  "html",
-  "i",
-  "iframe",
-  "img",
-  "input",
-  "ins",
-  "kbd",
-  "label",
-  "legend",
-  "li",
-  "link",
-  "main",
-  "map",
-  "mark",
-  "math",
-  "menu",
-  "meta",
-  "meter",
-  "nav",
-  "noscript",
-  "object",
-  "ol",
-  "optgroup",
-  "option",
-  "output",
-  "p",
-  "picture",
-  "portal",
-  "pre",
-  "progress",
-  "q",
-  "rp",
-  "rt",
-  "ruby",
-  "s",
-  "samp",
-  "script",
-  "section",
-  "select",
-  "slot",
-  "small",
-  "source",
-  "span",
-  "strong",
-  "style",
-  "sub",
-  "summary",
-  "sup",
-  "svg",
-  "table",
-  "tbody",
-  "td",
-  "template",
-  "textarea",
-  "tfoot",
-  "th",
-  "thead",
-  "time",
-  "title",
-  "tr",
-  "track",
-  "u",
-  "ul",
-  "var",
-  "video",
-  "wbr",
-];
-
-const attrTypeNames = [
-  "accept",
-  "accept-charset",
-  "accesskey",
-  "action",
-  "align",
-  "allow",
-  "alt",
-  "async",
-  "autocapitalize",
-  "autocomplete",
-  "autofocus",
-  "autoplay",
-  "background",
-  "bgcolor",
-  "border",
-  "buffered",
-  "capture",
-  "challenge",
-  "charset",
-  "checked",
-  "cite",
-  "class",
-  "code",
-  "codebase",
-  "color",
-  "cols",
-  "colspan",
-  "content",
-  "contenteditable",
-  "contextmenu",
-  "controls",
-  "coords",
-  "crossorigin",
-  "csp",
-  "data",
-  "datetime",
-  "decoding",
-  "default",
-  "defer",
-  "dir",
-  "dirname",
-  "disabled",
-  "download",
-  "draggable",
-  "enctype",
-  "enterkeyhint",
-  "for",
-  "form",
-  "formaction",
-  "formenctype",
-  "formmethod",
-  "formnovalidate",
-  "formtarget",
-  "headers",
-  "height",
-  "hidden",
-  "high",
-  "href",
-  "hreflang",
-  "http-equiv",
-  "icon",
-  "id",
-  "importance",
-  "integrity",
-  "intrinsicsize",
-  "inputmode",
-  "ismap",
-  "itemprop",
-  "keytype",
-  "kind",
-  "label",
-  "lang",
-  "language",
-  "loading",
-  "list",
-  "loop",
-  "low",
-  "manifest",
-  "max",
-  "maxlength",
-  "minlength",
-  "media",
-  "method",
-  "min",
-  "multiple",
-  "muted",
-  "name",
-  "novalidate",
-  "open",
-  "optimum",
-  "pattern",
-  "ping",
-  "placeholder",
-  "poster",
-  "preload",
-  "radiogroup",
-  "readonly",
-  "referrerpolicy",
-  "rel",
-  "required",
-  "reversed",
-  "role",
-  "rows",
-  "rowspan",
-  "sandbox",
-  "scope",
-  "scoped",
-  "selected",
-  "shape",
-  "size",
-  "sizes",
-  "slot",
-  "span",
-  "spellcheck",
-  "src",
-  "srcdoc",
-  "srclang",
-  "srcset",
-  "start",
-  "step",
-  "style",
-  "summary",
-  "tabindex",
-  "target",
-  "title",
-  "translate",
-  "type",
-  "usemap",
-  "value",
-  "width",
-  "wrap",
-];
