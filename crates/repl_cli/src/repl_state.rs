@@ -2,12 +2,15 @@ use crate::cli_gen::gen_and_eval_llvm;
 use crate::colors::{BLUE, END_COL, GREEN, PINK};
 use bumpalo::Bump;
 use const_format::concatcp;
+use roc_collections::linked_list_extra::drain_filter;
+use roc_collections::MutSet;
 use roc_mono::ir::OptLevel;
-use roc_parse::ast::{Expr, TypeDef, ValueDef};
+use roc_parse::ast::{Expr, Pattern, TypeDef, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
 use roc_parse::parser::Either;
 use roc_parse::parser::{EClosure, EExpr};
 use roc_parse::state::State;
+use roc_region::all::Loc;
 use roc_repl_eval::gen::ReplOutput;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -18,6 +21,10 @@ use target_lexicon::Triple;
 
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+
+/// The prefix we use for the automatic variable names we assign to each expr,
+/// e.g. if the prefix is "val" then the first expr you enter will be named "val1"
+pub const AUTO_VAR_PREFIX: &str = "val";
 
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
@@ -42,29 +49,34 @@ pub const TIPS: &str = concatcp!(
     ":help\n"
 );
 
+#[derive(Debug, Clone, PartialEq)]
 struct PastDef {
-    _ident: String,
-    _src: String,
+    ident: String,
+    src: String,
 }
 
 #[derive(Completer, Helper, Hinter)]
 pub struct ReplState {
     validator: InputValidator,
-    _past_defs: LinkedList<PastDef>,
+    past_defs: LinkedList<PastDef>,
+    past_def_idents: MutSet<String>,
+    last_auto_ident: u64,
 }
 
 impl ReplState {
     pub fn new() -> Self {
         Self {
             validator: InputValidator::new(),
-            _past_defs: Default::default(),
+            past_defs: Default::default(),
+            past_def_idents: Default::default(),
+            last_auto_ident: 0,
         }
     }
 
     pub fn step(&mut self, line: &str) -> Result<String, i32> {
         let arena = Bump::new();
 
-        match dbg!(parse_src(&arena, dbg!(line))) {
+        match parse_src(&arena, line) {
             ParseOutcome::Empty => {
                 if line.is_empty() {
                     return Ok(tips());
@@ -72,7 +84,7 @@ impl ReplState {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck
                     // in a perpetual Incomplete state due to a syntax error.
-                    Ok(dbg!(self.eval_and_format(line)))
+                    Ok(self.eval_and_format(line))
                 } else {
                     // The previous line wasn't blank, but the line isn't empty either.
                     // This could mean that, for example, you're writing a multiline `when`
@@ -103,29 +115,56 @@ impl ReplState {
             ParseOutcome::Expr(_) => src,
             ParseOutcome::ValueDef(value_def) => {
                 match value_def {
-                    ValueDef::Annotation(_, _) => {
+                    ValueDef::Annotation(
+                        Loc {
+                            value: Pattern::Identifier(ident),
+                            ..
+                        },
+                        _,
+                    ) => {
+                        // We received a type annotation, like `x : Str`
+                        //
+                        // This might be the beginning of an AnnotatedBody, or it might be
+                        // a standalone annotation.
+                        //
+                        // If the input ends in a newline, that means the user pressed Enter
+                        // twice after the annotation, indicating this is not an AnnotatedBody,
+                        // but rather a standalone Annotation. As such, record it as a PastDef!
                         if src.ends_with('\n') {
-                            // Since pending_src ended in a blank line
-                            // (and was therefore nonempty), this must
-                            // have been an annotation followed by a blank line.
-                            // Record it as standaline!
-                            todo!("record a STANDALONE annotation!");
-                        } else {
-                            // We received a type annotation, like `x : Str`
-                            //
-                            // This might be the beginning of an AnnotatedBody, or it might be
-                            // a standalone annotation. To find out, we need more input from the user.
-
-                            // Return without running eval or clearing pending_src.
-                            return String::new();
+                            // Record the standalone type annotation for future use
+                            self.add_past_def(ident.trim_end().to_string(), src.to_string());
                         }
+
+                        // Return early without running eval, since neither standalone annotations
+                        // nor pending potential AnnotatedBody exprs can be evaluated as expressions.
+                        return String::new();
                     }
-                    ValueDef::Body(_loc_pattern, _loc_expr)
+                    ValueDef::Body(
+                        Loc {
+                            value: Pattern::Identifier(ident),
+                            ..
+                        },
+                        _,
+                    )
                     | ValueDef::AnnotatedBody {
-                        body_pattern: _loc_pattern,
-                        body_expr: _loc_expr,
+                        body_pattern:
+                            Loc {
+                                value: Pattern::Identifier(ident),
+                                ..
+                            },
                         ..
-                    } => todo!("handle receiving a toplevel def of a value/function"),
+                    } => {
+                        self.add_past_def(ident.to_string(), src.to_string());
+
+                        // Return early without running eval, since neither standalone annotations
+                        // nor pending potential AnnotatedBody exprs can be evaluated as expressions.
+                        return String::new();
+                    }
+                    ValueDef::Annotation(_, _)
+                    | ValueDef::Body(_, _)
+                    | ValueDef::AnnotatedBody { .. } => {
+                        todo!("handle pattern other than identifier (which repl doesn't support)")
+                    }
                     ValueDef::Expect { .. } => {
                         todo!("handle receiving an `expect` - what should the repl do for that?")
                     }
@@ -148,22 +187,66 @@ impl ReplState {
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
+        let var_name;
+
+        // Record e.g. "val1" as a past def, unless our input was exactly the name of
+        // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
+        // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
+        match self.past_def_idents.get(src.trim()) {
+            Some(existing_ident) => {
+                var_name = existing_ident.to_string();
+            }
+            None => {
+                var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+
+                self.add_past_def(var_name.clone(), format!("{var_name} = {}", src.trim_end()));
+            }
+        };
+
         let output = format_output(gen_and_eval_llvm(
-            src,
+            &self.with_past_defs(src),
             Triple::host(),
             OptLevel::Normal,
-            "TODOval1".to_string(),
+            var_name,
         ));
 
         output
     }
 
+    fn next_auto_ident(&mut self) -> u64 {
+        self.last_auto_ident += 1;
+        self.last_auto_ident
+    }
+
+    fn add_past_def(&mut self, ident: String, src: String) {
+        let existing_idents = &mut self.past_def_idents;
+
+        existing_idents.insert(ident.clone());
+
+        // Override any defs that would be shadowed
+        if !self.past_defs.is_empty() {
+            drain_filter(&mut self.past_defs, |PastDef { ident, .. }| {
+                if existing_idents.contains(ident) {
+                    // We already have a newer def for this ident, so drop the old one.
+                    false
+                } else {
+                    // We've never seen this def, so record it!
+                    existing_idents.insert(ident.clone());
+
+                    true
+                }
+            });
+        }
+
+        self.past_defs.push_front(PastDef { ident, src });
+    }
+
     /// Wrap the given expresssion in the appropriate past defs
-    fn _wrapped_expr_src(&self, src: &str) -> String {
+    pub fn with_past_defs(&self, src: &str) -> String {
         let mut buf = String::new();
 
-        for past_def in self._past_defs.iter() {
-            buf.push_str(past_def._src.as_str());
+        for past_def in self.past_defs.iter() {
+            buf.push_str(past_def.src.as_str());
             buf.push('\n');
         }
 
