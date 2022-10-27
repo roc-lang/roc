@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
-use roc_reporting::report::Palette;
+use roc_reporting::report::{Palette, Severity};
 use std::path::PathBuf;
 
 use roc_fmt::annotation::Formattable;
@@ -11,40 +11,47 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_target::TargetInfo;
 
-use crate::eval::ToAstProblem;
-
-pub enum ReplOutput {
-    Problems(Vec<String>),
-    NoProblems {
-        expr: String,
-        expr_type: String,
-        val_name: String,
-    },
+pub struct ReplOutput {
+    pub expr: String,
+    pub expr_type: String,
+    pub var_name: String,
 }
 
 pub fn format_answer(
     arena: &Bump,
-    res_answer: Result<Expr, ToAstProblem>,
-    expr_type_str: String,
-    val_name: String,
+    answer: Expr<'_>,
+    expr_type: String,
+    var_name: String,
 ) -> ReplOutput {
     let mut expr = roc_fmt::Buf::new_in(arena);
 
-    use ToAstProblem::*;
-    match res_answer {
-        Ok(answer) => {
-            answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
-        }
-        Err(FunctionLayout) => {
-            expr.indent(0);
-            expr.push_str("<function>");
-        }
-    }
+    // match answer {
+    // There's nothing to eval when the expression is a function, so just print "<function>"
+    // Expr::Closure(_, _) => {
+    //     expr.indent(0);
+    //     expr.push_str("<function>");
+    // }
+    // _ => {
+    answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+    // }
+    // }
 
-    ReplOutput::NoProblems {
+    ReplOutput {
         expr: expr.into_bump_str().to_string(),
-        expr_type: expr_type_str,
-        val_name,
+        expr_type,
+        var_name,
+    }
+}
+
+#[derive(Default)]
+pub struct Problems {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl Problems {
+    pub fn is_empty(&self) -> bool {
+        self.errors.is_empty() && self.warnings.is_empty()
     }
 }
 
@@ -53,7 +60,7 @@ pub fn compile_to_mono<'a>(
     src: &str,
     target_info: TargetInfo,
     palette: Palette,
-) -> Result<MonomorphizedModule<'a>, Vec<String>> {
+) -> (Option<MonomorphizedModule<'a>>, Problems) {
     let filename = PathBuf::from("");
     let src_dir = PathBuf::from("fake/test/path");
 
@@ -77,10 +84,16 @@ pub fn compile_to_mono<'a>(
     let mut loaded = match loaded {
         Ok(v) => v,
         Err(LoadingProblem::FormattedReport(report)) => {
-            return Err(vec![report]);
+            return (
+                None,
+                Problems {
+                    errors: vec![report],
+                    warnings: Vec::new(),
+                },
+            );
         }
         Err(e) => {
-            panic!("error while loading module: {:?}", e)
+            todo!("error while loading module: {:?}", e)
         }
     };
 
@@ -92,7 +105,10 @@ pub fn compile_to_mono<'a>(
         ..
     } = &mut loaded;
 
-    let mut lines = Vec::new();
+    let mut problems = Problems::default();
+
+    let errors = &mut problems.errors;
+    let warnings = &mut problems.warnings;
 
     for (home, (module_path, src)) in sources.iter() {
         let can_probs = can_problems.remove(home).unwrap_or_default();
@@ -112,29 +128,41 @@ pub fn compile_to_mono<'a>(
 
         for problem in can_probs.into_iter() {
             let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
+            let severity = report.severity;
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            lines.push(buf);
+            match severity {
+                Severity::Warning => {
+                    warnings.push(buf);
+                }
+                Severity::RuntimeError => {
+                    errors.push(buf);
+                }
+            }
         }
 
         for problem in type_probs {
             if let Some(report) = type_problem(&alloc, &line_info, module_path.clone(), problem) {
+                let severity = report.severity;
                 let mut buf = String::new();
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
 
-                lines.push(buf);
+                match severity {
+                    Severity::Warning => {
+                        warnings.push(buf);
+                    }
+                    Severity::RuntimeError => {
+                        errors.push(buf);
+                    }
+                }
             }
         }
     }
 
-    if !lines.is_empty() {
-        Err(lines)
-    } else {
-        Ok(loaded)
-    }
+    (Some(loaded), problems)
 }
 
 fn promote_expr_to_module(src: &str) -> String {

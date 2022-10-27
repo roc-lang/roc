@@ -12,7 +12,7 @@ use roc_mono::ir::OptLevel;
 use roc_mono::layout::Layout;
 use roc_parse::ast::Expr;
 use roc_repl_eval::eval::jit_to_ast;
-use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
+use roc_repl_eval::gen::{compile_to_mono, format_answer, Problems, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_reporting::report::DEFAULT_PALETTE;
 use roc_std::RocStr;
@@ -25,15 +25,21 @@ pub fn gen_and_eval_llvm<'a>(
     src: &str,
     target: Triple,
     opt_level: OptLevel,
-    val_name: String,
-) -> ReplOutput {
+    var_name: String,
+) -> (Option<ReplOutput>, Problems) {
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
 
-    let mut loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
-        Ok(x) => x,
-        Err(prob_strings) => {
-            return ReplOutput::Problems(prob_strings);
+    let mut loaded;
+    let problems;
+
+    match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
+        (Some(mono), probs) => {
+            loaded = mono;
+            problems = probs;
+        }
+        (None, probs) => {
+            return (None, probs);
         }
     };
 
@@ -54,11 +60,14 @@ pub fn gen_and_eval_llvm<'a>(
     let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
         None => {
-            return ReplOutput::NoProblems {
-                expr: "<function>".to_string(),
-                expr_type: expr_type_str,
-                val_name,
-            };
+            return (
+                Some(ReplOutput {
+                    expr: "<function>".to_string(),
+                    expr_type: expr_type_str,
+                    var_name,
+                }),
+                problems,
+            );
         }
     };
 
@@ -69,7 +78,7 @@ pub fn gen_and_eval_llvm<'a>(
 
     let mut app = CliApp { lib };
 
-    let res_answer = jit_to_ast(
+    let expr = jit_to_ast(
         &arena,
         &mut app,
         main_fn_name,
@@ -81,7 +90,10 @@ pub fn gen_and_eval_llvm<'a>(
         target_info,
     );
 
-    format_answer(&arena, res_answer, expr_type_str, val_name)
+    (
+        Some(format_answer(&arena, expr, expr_type_str, var_name)),
+        problems,
+    )
 }
 
 struct CliApp {

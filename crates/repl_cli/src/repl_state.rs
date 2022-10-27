@@ -11,7 +11,7 @@ use roc_parse::parser::Either;
 use roc_parse::parser::{EClosure, EExpr};
 use roc_parse::state::State;
 use roc_region::all::Loc;
-use roc_repl_eval::gen::ReplOutput;
+use roc_repl_eval::gen::{Problems, ReplOutput};
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
@@ -187,30 +187,36 @@ impl ReplState {
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
-        let var_name;
-
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
-        match self.past_def_idents.get(src.trim()) {
-            Some(existing_ident) => {
-                var_name = existing_ident.to_string();
-            }
+        let (output, problems) = match self.past_def_idents.get(src.trim()) {
+            Some(existing_ident) => gen_and_eval_llvm(
+                &self.with_past_defs(src),
+                Triple::host(),
+                OptLevel::Normal,
+                existing_ident.to_string(),
+            ),
             None => {
-                var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+                let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+                let answer = gen_and_eval_llvm(
+                    &self.with_past_defs(src),
+                    Triple::host(),
+                    OptLevel::Normal,
+                    var_name.clone(),
+                );
 
-                self.add_past_def(var_name.clone(), format!("{var_name} = {}", src.trim_end()));
+                let src = format!("{var_name} = {}", src.trim_end());
+
+                self.add_past_def(var_name, src);
+
+                answer
             }
         };
 
-        let output = format_output(gen_and_eval_llvm(
-            &self.with_past_defs(src),
-            Triple::host(),
-            OptLevel::Normal,
-            var_name,
-        ));
-
-        output
+        // TODO filter out UNUSED warnings for all past_def_ident entries
+        // TODO allow turning off printing of warnings
+        format_output(output, problems)
     }
 
     fn next_auto_ident(&mut self) -> u64 {
@@ -392,21 +398,34 @@ impl Validator for ReplState {
     }
 }
 
-fn format_output(output: ReplOutput) -> String {
-    match output {
-        ReplOutput::NoProblems {
-            expr,
-            expr_type,
-            val_name,
-        } => {
-            if expr.is_empty() {
-                // This means it was a type annotation or ability declaration;
-                // don't print anything!
-                String::new()
-            } else {
-                format!("\n{expr} {PINK}:{END_COL} {expr_type}  {GREEN} # {val_name}")
-            }
+fn format_output(opt_output: Option<ReplOutput>, problems: Problems) -> String {
+    let mut buf = String::new();
+
+    // Join all the warnings and errors together with blank lines.
+    for message in problems.warnings.iter().chain(problems.errors.iter()) {
+        if !buf.is_empty() {
+            buf.push_str("\n\n");
         }
-        ReplOutput::Problems(lines) => format!("\n{}\n", lines.join("\n\n")),
+
+        buf.push('\n');
+        buf.push_str(message);
+        buf.push('\n');
     }
+
+    if let Some(ReplOutput {
+        expr,
+        expr_type,
+        var_name,
+    }) = opt_output
+    {
+        // If expr was empty, it was a type annotation or ability declaration;
+        // don't print anything!
+        if !expr.is_empty() {
+            buf.push_str(&format!(
+                "\n{expr} {PINK}:{END_COL} {expr_type}  {GREEN} # {var_name}"
+            ))
+        }
+    }
+
+    buf
 }

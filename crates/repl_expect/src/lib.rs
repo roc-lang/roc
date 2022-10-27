@@ -7,10 +7,7 @@ use {
         layout::{CapturesNiche, Layout, LayoutCache},
     },
     roc_parse::ast::Expr,
-    roc_repl_eval::{
-        eval::{jit_to_ast, ToAstProblem},
-        ReplAppMemory,
-    },
+    roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},
     std::sync::Arc,
@@ -35,7 +32,7 @@ pub fn get_values<'a>(
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
-) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
+) -> (usize, Vec<Expr<'a>>) {
     let mut result = Vec::with_capacity(variables.len());
 
     let memory = ExpectMemory { start };
@@ -74,13 +71,13 @@ pub fn get_values<'a>(
                 interns,
                 layout_interner.fork(),
                 target_info,
-            )?
+            )
         };
 
         result.push(expr);
     }
 
-    Ok((app.offset, result))
+    (app.offset, result)
 }
 
 #[cfg(not(windows))]

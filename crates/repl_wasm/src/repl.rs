@@ -176,8 +176,22 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
     let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
-        Ok(m) => m,
-        Err(messages) => return Err(messages.join("\n\n")),
+        (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
+        (_, problems) => {
+            // TODO always report these, but continue if possible with the MonomorphizedModule if we have one.
+            let mut buf = String::new();
+
+            // Join all the errors and warnings together with blank lines.
+            for message in problems.errors.iter().chain(problems.warnings.iter()) {
+                if !buf.is_empty() {
+                    buf.push_str("\n\n");
+                }
+
+                buf.push_str(message);
+            }
+
+            return Err(buf);
+        }
     };
 
     let MonomorphizedModule {
@@ -274,12 +288,12 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
-    match format_answer(arena, res_answer, expr_type_str, val_name) {
-        ReplOutput::NoProblems {
-            expr,
-            expr_type,
-            val_name,
-        } => Ok(format!("{expr} : {expr_type}  # {val_name}")),
-        ReplOutput::Problems(lines) => Err(format!("\n{}\n", lines.join("\n\n"))),
-    }
+
+    let ReplOutput {
+        expr,
+        expr_type,
+        var_name,
+    } = format_answer(arena, res_answer, expr_type_str, val_name);
+
+    Ok(format!("{expr} : {expr_type}  # {var_name}"))
 }
