@@ -206,11 +206,9 @@ fn single_quote_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>>
 fn list_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PList<'a>> {
     move |arena, state| {
         let (_, pats, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
             word1(b'[', PList::Open),
             list_element_pattern(min_indent),
             word1(b',', PList::End),
-            // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
             word1(b']', PList::End),
             min_indent,
             PList::Open,
