@@ -5,8 +5,8 @@ use const_format::concatcp;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::{Expr, TypeDef, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
+use roc_parse::parser::Either;
 use roc_parse::parser::{EClosure, EExpr};
-use roc_parse::parser::{Either, SyntaxError};
 use roc_parse::state::State;
 use roc_repl_eval::gen::ReplOutput;
 use rustyline::highlight::{Highlighter, PromptInfo};
@@ -81,10 +81,7 @@ impl ReplState {
 
                     self.pending_src.clear();
 
-                    self.eval_and_format(&src).map_err(|_| {
-                        // This seems to be unreachable in practice.
-                        unreachable!();
-                    })
+                    Ok(self.eval_and_format(&src))
                 } else {
                     // The previous line wasn't blank, but there's some pending source.
                     // This could mean that, for example, you're writing a multiline `when`
@@ -101,9 +98,7 @@ impl ReplState {
             ParseOutcome::Expr(_)
             | ParseOutcome::ValueDef(_)
             | ParseOutcome::TypeDef(_)
-            | ParseOutcome::Incomplete => self.eval_and_format(trim_line).map_err(|fail| {
-                todo!("gracefully report parse error in repl: {:?}", fail);
-            }),
+            | ParseOutcome::Incomplete => Ok(self.eval_and_format(trim_line)),
             ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
                 Ok(format!("\n{}\n", TIPS))
@@ -112,7 +107,7 @@ impl ReplState {
         }
     }
 
-    pub fn eval_and_format<'a>(&mut self, src: &str) -> Result<String, SyntaxError<'a>> {
+    pub fn eval_and_format<'a>(&mut self, src: &str) -> String {
         let src = if self.pending_src.is_empty() {
             src
         } else {
@@ -142,7 +137,7 @@ impl ReplState {
                         self.pending_src.push('\n');
 
                         // Return without running eval or clearing pending_src.
-                        return Ok(String::new());
+                        return String::new();
                     }
                     ValueDef::Body(_loc_pattern, _loc_expr)
                     | ValueDef::AnnotatedBody {
@@ -166,17 +161,16 @@ impl ReplState {
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
-        let answer = gen_and_eval_llvm(
+        let output = format_output(gen_and_eval_llvm(
             src,
             Triple::host(),
             OptLevel::Normal,
             "TODOval1".to_string(),
-        )
-        .map(format_output);
+        ));
 
         self.pending_src.clear();
 
-        answer
+        output
     }
 
     /// Wrap the given expresssion in the appropriate past defs

@@ -11,7 +11,6 @@ use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_mono::layout::Layout;
 use roc_parse::ast::Expr;
-use roc_parse::parser::SyntaxError;
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
@@ -27,14 +26,14 @@ pub fn gen_and_eval_llvm<'a>(
     target: Triple,
     opt_level: OptLevel,
     val_name: String,
-) -> Result<ReplOutput, SyntaxError<'a>> {
+) -> ReplOutput {
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
 
     let mut loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
         Ok(x) => x,
         Err(prob_strings) => {
-            return Ok(ReplOutput::Problems(prob_strings));
+            return ReplOutput::Problems(prob_strings);
         }
     };
 
@@ -55,11 +54,11 @@ pub fn gen_and_eval_llvm<'a>(
     let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
         None => {
-            return Ok(ReplOutput::NoProblems {
+            return ReplOutput::NoProblems {
                 expr: "<function>".to_string(),
                 expr_type: expr_type_str,
                 val_name,
-            });
+            };
         }
     };
 
@@ -82,7 +81,7 @@ pub fn gen_and_eval_llvm<'a>(
         target_info,
     );
 
-    Ok(format_answer(&arena, res_answer, expr_type_str, val_name))
+    format_answer(&arena, res_answer, expr_type_str, val_name)
 }
 
 struct CliApp {
