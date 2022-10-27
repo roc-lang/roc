@@ -447,6 +447,9 @@ pub fn to_pattern2<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
+        List(..) => todo!(),
+        ListRest => todo!(),
+
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)

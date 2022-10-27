@@ -621,6 +621,9 @@ pub fn canonicalize_pattern<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
+        List(..) => todo!(),
+        ListRest => todo!(),
+
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)

@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, FileError, SyntaxError};
+use roc_parse::parser::{ENumber, FileError, PList, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
@@ -23,6 +23,10 @@ fn note_for_record_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocB
     alloc.note("I may be confused by indentation")
 }
 
+fn note_for_list_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.note("I may be confused by indentation")
+}
+
 fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.note("I may be confused by indentation")
 }
@@ -43,6 +47,15 @@ fn record_patterns_look_like<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilde
         alloc.reflow(r"Record pattern look like "),
         alloc.parser_suggestion("{ name, age: currentAge },"),
         alloc.reflow(" so I was expecting to see a field name next."),
+    ])
+}
+
+fn list_patterns_look_like<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    alloc.concat([
+        alloc.reflow(r"Record pattern look like "),
+        alloc.parser_suggestion("[1, 2, ..]"),
+        alloc.reflow(" or "),
+        alloc.parser_suggestion("[first, .., last]"),
     ])
 }
 
@@ -1595,6 +1608,7 @@ fn to_pattern_report<'a>(
             }
         }
         EPattern::Record(record, pos) => to_precord_report(alloc, lines, filename, record, *pos),
+        EPattern::List(list, pos) => to_plist_report(alloc, lines, filename, list, *pos),
         EPattern::PInParens(inparens, pos) => {
             to_pattern_in_parens_report(alloc, lines, filename, inparens, *pos)
         }
@@ -1855,6 +1869,155 @@ fn to_precord_report<'a>(
     }
 }
 
+fn to_plist_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &PList<'a>,
+    start: Position,
+) -> Report<'a> {
+    match *parse_problem {
+        PList::Open(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I just started parsing a list pattern, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                list_patterns_look_like(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED LIST PATTERN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        PList::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+            let doc = alloc.stack([
+                alloc.reflow("I am partway through parsing a list pattern, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(
+                        r"I was expecting to see a closing square brace before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion("]"),
+                    alloc.reflow(" and see if that helps?"),
+                ])]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED LIST PATTERN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        PList::Rest(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+            let doc = alloc.stack([
+                alloc.reflow("It looks like you may trying to write a list rest pattern, but it's not the form I expect:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(
+                        r"List rest patterns, which match zero or more elements in a list, are denoted with ",
+                    ),
+                    alloc.parser_suggestion(".."),
+                    alloc.reflow(" - is that what you meant?"),
+                ])]);
+
+            Report {
+                filename,
+                doc,
+                title: "INCORRECT REST PATTERN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        PList::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
+
+        PList::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I just started parsing a list pattern, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                record_patterns_look_like(alloc),
+                note_for_list_pattern_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED LIST PATTERN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        PList::IndentEnd(pos) => {
+            match next_line_starts_with_close_square_bracket(
+                alloc.src_lines,
+                lines.convert_pos(pos),
+            ) {
+                Some(curly_pos) => {
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                    let region = LineColumnRegion::from_pos(curly_pos);
+
+                    let doc = alloc.stack([
+                        alloc.reflow(
+                            "I am partway through parsing a list pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat([
+                            alloc.reflow("I need this square brace to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
+                    }
+                }
+                None => {
+                    let surroundings = Region::new(start, pos);
+                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+                    let doc = alloc.stack([
+                        alloc.reflow(
+                            r"I am partway through parsing a list pattern, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.concat([
+                            alloc.reflow("I was expecting to see a closing square "),
+                            alloc.reflow("brace before this, so try adding a "),
+                            alloc.parser_suggestion("]"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_list_pattern_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED LIST PATTERN".to_string(),
+                        severity: Severity::RuntimeError,
+                    }
+                }
+            }
+        }
+
+        PList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+    }
+}
+
 fn to_pattern_in_parens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
@@ -1941,9 +2104,9 @@ fn to_pattern_in_parens_report<'a>(
 
         PInParens::IndentEnd(pos) => {
             match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
-                Some(curly_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
-                    let region = LineColumnRegion::from_pos(curly_pos);
+                Some(close_pos) => {
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), close_pos);
+                    let region = LineColumnRegion::from_pos(close_pos);
 
                     let doc = alloc.stack([
                         alloc.reflow(

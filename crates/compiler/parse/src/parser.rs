@@ -107,7 +107,8 @@ impl_space_problem! {
     EWhen<'a>,
     EAbility<'a>,
     PInParens<'a>,
-    PRecord<'a>
+    PRecord<'a>,
+    PList<'a>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -519,6 +520,7 @@ pub enum EExpect<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPattern<'a> {
     Record(PRecord<'a>, Position),
+    List(PList<'a>, Position),
     Underscore(Position),
 
     Start(Position),
@@ -550,6 +552,20 @@ pub enum PRecord<'a> {
     IndentOpen(Position),
     IndentColon(Position),
     IndentOptional(Position),
+    IndentEnd(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PList<'a> {
+    End(Position),
+    Open(Position),
+
+    Rest(Position),
+    Pattern(&'a EPattern<'a>, Position),
+
+    Space(BadInputError, Position),
+
+    IndentOpen(Position),
     IndentEnd(Position),
 }
 
