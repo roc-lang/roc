@@ -1,9 +1,12 @@
-
 # Roc Internals
 
-Roc has different rust crates for various binaries and libraries. These are described below to help give you an overview. If you see something here that is out of date, please correct it or discuss it in the [Zulip chat](https://roc.zulipchat.com/).
+Roc has different rust crates for various binaries and libraries. Their roles are briefly described below. If you'd like to learn more, have any questions, or suspect something is out of date, please start a discussion on the [Roc Zulip](https://roc.zulipchat.com/)!
 
-Use `cargo doc` to generate docs; e.g. ```cargo doc --package roc_ast --open```.
+You can use `cargo doc` to generate docs for a specific package; e.g.
+
+```
+cargo doc --package roc_ast --open
+```
 
 ## `ast/` - `roc_ast`
 
@@ -21,9 +24,9 @@ Provides shared code for cli tests and benchmarks.
 
 ## `code_markup/` - `roc_code_markup`
 
-Roc's very own [markup language](https://en.wikipedia.org/wiki/Markup_language). This library is used by the editor to display good-looking roc code. 
+A [markup language](https://en.wikipedia.org/wiki/Markup_language) to display Roc code in the editor.
 
-## `compile/`
+## `compiler/`
 
 Compiles `.roc` files and combines them with their platform into an executable binary. See [compiler/README.md](./compiler/README.md) for more information.
 
@@ -40,7 +43,7 @@ The compiler includes the following sub-crates;
 - `roc_constrain` Responsible for building the set of constraints that are used during type inference of a program, and for gathering context needed for pleasant error messages when a type error occurs.
 - `roc_debug_flags` Environment variables that can be toggled to aid debugging of the compiler itself.
 - `roc_derive` provides auto-derivers for builtin abilities like `Hash` and `Decode`.
-- `roc_exhaustive` provides exhaustiveness checking for Roc 
+- `roc_exhaustive` provides exhaustiveness checking for Roc.
 - `roc_fmt` The roc code formatter.
 - `roc_gen_dev` provides the compiler backend to generate Roc binaries fast, for a nice developer experience. See [README.md](./compiler/gen_dev/README.md) for more information.
 - `roc_gen_llvm` provides the LLVM backend to generate Roc binaries. Used to generate a binary with the fastest possible execution speed.
@@ -63,7 +66,7 @@ The compiler includes the following sub-crates;
 - `test_derive` Tests Roc's auto-derivers.
 - `test_gen` contains all of Roc's code generation tests. See [README.md](./compiler/test_gen/README.md) for more information.
 - `test_mono` Tests Roc's generation of the mono intermediate representation.
-- `test_mono_macros` Macros for use in test_mono
+- `test_mono_macros` Macros for use in test_mono.
 - `roc_types` Various representations and utilities for dealing with types in the Roc compiler.
 - `roc_unify` Implements Roc's unification algorithm, the heartstone of Roc's type inference.
 
@@ -78,7 +81,7 @@ Provides a binary that is only used for static build servers.
 
 ## `editor/` - `roc_editor`
 
-For editing Roc files (Work In Progress). See [README.md](./editor/README.md) for more information.
+Roc's editor. See [README.md](./editor/README.md) for more information.
 
 ## `error_macros/` - `roc_error_macros`
 
@@ -86,7 +89,7 @@ Provides macros for consistent reporting of errors in Roc's rust code.
 
 ## `glue/` - `roc_glue`
 
-The `roc_glue` crate generates rust code to connect a Roc app with a rust platform. This tool is not necessary for writing a platform in another language, however, it's an added convenience for rust platform devs.
+The `roc_glue` crate generates code needed for platform hosts to communicate with Roc apps. This tool is not necessary for writing a platform in another language, however, it's a great convenience! Currently supports Rust platforms, and the plan is to support any language via a plugin model.
 
 ## `highlight/` - `roc_highlight`
 
@@ -94,9 +97,7 @@ Provides syntax highlighting for the editor by transforming a string to markup n
 
 ## `linker/` - `roc_linker`
 
-Surgical linker that links platforms to Roc applications.
-We created our own linker for speed and because regular linkers add a lot of problems and complexity. Because we want roc to manage the build system and final linking of the executable, it is significantly less practical to use a regular linker. This can be seen in how many arbitrary libraries we link with the legacy linker because we have no idea what libraries the application is actually using.
-See [README.md](./linker/README.md) for more information.
+Surgical linker that links platforms to Roc applications. We created our own linker for performance, since regular linkers add complexity that is not needed for linking Roc apps. Because we want `roc` to manage the build system and final linking of the executable, it is significantly less practical to use a regular linker. See [README.md](./linker/README.md) for more information.
 
 ## `repl_cli/` - `roc_repl_cli`
 
