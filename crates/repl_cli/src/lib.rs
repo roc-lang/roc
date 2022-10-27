@@ -40,12 +40,11 @@ pub fn main() -> i32 {
     loop {
         match editor.readline(PROMPT) {
             Ok(line) => {
-                let trim_line = line.trim();
-                editor.add_history_entry(trim_line);
+                editor.add_history_entry(line.trim());
 
                 let repl_helper = editor.helper_mut().expect("Editor helper was not set");
 
-                match repl_helper.step(trim_line) {
+                match repl_helper.step(&line) {
                     Ok(output) => {
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)

@@ -1,4 +1,4 @@
-use roc_repl_cli::repl_state::{validate, ReplState};
+use roc_repl_cli::repl_state::{validate, ReplState, TIPS};
 use rustyline::validate::ValidationResult;
 
 #[test]
@@ -8,13 +8,20 @@ fn one_plus_one() {
 
     assert_valid(input);
     assert_step(input, &mut state, Ok("2 : Num *   # TODOval1"));
-    assert_done(&state);
+}
+
+#[test]
+fn tips() {
+    let mut state = ReplState::new();
+    let input = "";
+
+    assert_valid(input);
+    assert_eq!(state.step(input), Ok(format!("\n{TIPS}\n")));
 }
 
 #[test]
 fn standalone_annotation() {
     let mut state = ReplState::new();
-
     let mut input = "x : Str".to_string();
 
     assert_incomplete(&input); // Since this was incomplete, rustyline won't step the state.
@@ -22,8 +29,7 @@ fn standalone_annotation() {
     input.push('\n');
 
     assert_valid(&input);
-    assert_step("", &mut state, Ok(""));
-    assert_done(&state);
+    assert_step(&input, &mut state, Ok(""));
 }
 
 fn assert_valid(input: &str) {
@@ -49,13 +55,4 @@ fn assert_step(input: &str, state: &mut ReplState, expected_step_result: Result<
             assert_eq!(expected_step_result, Err(err));
         }
     }
-}
-
-fn assert_done(state: &ReplState) {
-    assert_eq!(
-        state.pending_src,
-        String::new(),
-        "pending_src was not empty; it was {:?}",
-        state.pending_src
-    );
 }
