@@ -137,14 +137,18 @@ interface Html.Attributes
         width,
         wrap,
     ]
-    imports []
+    imports [Html.Event.{Handler, CyclicStructureAccessor}]
 
-# A single-tag union doesn't work with `roc glue` unless all of its tag union parameters are also single-tag
-Attribute : { type : AttrType, value : Str }
+Attribute state : [
+    EventListener Str (List CyclicStructureAccessor) (Result (Handler state) Nat),
+    HtmlAttr Str Str,
+    DomProp Str (List U8),
+    Style Str Str
+]
 
 attribute : AttrType -> (Str -> Attribute)
 attribute = \attrType ->
-    \attrValue -> { type: attrType, value: attrValue }
+    \attrValue -> HtmlAttr attrType attrValue
 
 # TODO: data attributes
 # dataAttr = \dataName, dataVal -> Attribute "data-\(dataName)" dataVal
