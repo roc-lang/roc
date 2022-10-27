@@ -52,17 +52,17 @@ insert = \@Set dict, key ->
 # Inserting a duplicate key has no effect.
 expect
     actual =
-        Set.empty
-        |> Set.insert "foo"
-        |> Set.insert "bar"
-        |> Set.insert "foo"
-        |> Set.insert "baz"
+        empty
+        |> insert "foo"
+        |> insert "bar"
+        |> insert "foo"
+        |> insert "baz"
 
     expected =
-        Set.empty
-        |> Set.insert "foo"
-        |> Set.insert "bar"
-        |> Set.insert "baz"
+        empty
+        |> insert "foo"
+        |> insert "bar"
+        |> insert "baz"
 
     expected == actual
 
@@ -73,12 +73,12 @@ len = \@Set dict ->
 # Inserting a duplicate key has no effect on length.
 expect
     actual =
-        Set.empty
-        |> Set.insert "foo"
-        |> Set.insert "bar"
-        |> Set.insert "foo"
-        |> Set.insert "baz"
-        |> Set.len
+        empty
+        |> insert "foo"
+        |> insert "bar"
+        |> insert "foo"
+        |> insert "baz"
+        |> len
 
     actual == 3
 

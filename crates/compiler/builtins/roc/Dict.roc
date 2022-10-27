@@ -122,7 +122,7 @@ capacity = \@Dict { dataIndices } ->
 ## inserted.
 withCapacity : Nat -> Dict k v | k has Hash & Eq
 withCapacity = \_ ->
-    # TODO power of 2 * 8 and actual implementation
+    # TODO: power of 2 * 8 and actual implementation
     empty
 
 ## Returns a dictionary containing the key and value provided as input.
@@ -133,6 +133,19 @@ withCapacity = \_ ->
 single : k, v -> Dict k v | k has Hash & Eq
 single = \k, v ->
     insert empty k v
+
+## Returns dictionary with the keys and values specified by the input [List].
+##
+##     expect
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+fromList : List (T k v) -> Dict k v | k has Hash & Eq
+fromList = \data ->
+    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
+    List.walk data empty (\dict, T k v -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
 ##
@@ -147,6 +160,7 @@ len : Dict k v -> Nat | k has Hash & Eq
 len = \@Dict { size } ->
     size
 
+## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 clear : Dict k v -> Dict k v | k has Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
@@ -188,7 +202,7 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ##     expect Dict.get dictionary 1 == Ok "Apple"
 ##     expect Dict.get dictionary 2000 == Err KeyNotFound
-get : Dict k v, k -> Result v [KeyNotFound]* | k has Hash & Eq
+get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
         createLowLevelHasher {}
@@ -354,19 +368,6 @@ update = \dict, key, alter ->
         Present value -> insert dict key value
         Missing -> remove dict key
 
-## Returns dictionary with the keys and values specified by the input [List].
-##
-##     expect
-##         Dict.single 1 "One"
-##         |> Dict.insert 2 "Two"
-##         |> Dict.insert 3 "Three"
-##         |> Dict.insert 4 "Four"
-##         |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
-fromList : List (T k v) -> Dict k v | k has Hash & Eq
-fromList = \data ->
-    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data empty (\dict, T k v -> insert dict k v)
-
 ## Returns the keys and values of a dictionary as a [List].
 ## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
 ##
@@ -382,7 +383,7 @@ toList = \@Dict { data } ->
     data
 
 ## Returns the keys of a dictionary as a [List].
-## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
+## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
 ##
 ##     expect
 ##         Dict.single 1 "One"
@@ -396,7 +397,7 @@ keys = \@Dict { data } ->
     List.map data (\T k _ -> k)
 
 ## Returns the values of a dictionary as a [List].
-## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
+## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
 ##
 ##     expect
 ##         Dict.single 1 "One"
@@ -589,7 +590,7 @@ maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
 # TODO: switch rehash to iterate data and eventually clear out tombstones as well.
 rehash : Dict k v -> Dict k v | k has Hash & Eq
 rehash = \@Dict { metadata, dataIndices, data, size } ->
-    newLen = 2 * List.len data
+    newLen = 2 * List.len dataIndices
     newDict =
         @Dict {
             metadata: List.repeat emptySlot newLen,
@@ -601,20 +602,25 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
     rehashHelper newDict metadata dataIndices data 0
 
 rehashHelper : Dict k v, List I8, List Nat, List (T k v), Nat -> Dict k v | k has Hash & Eq
-rehashHelper = \dict, metadata, dataIndices, data, index ->
-    md = listGetUnsafe metadata index
-    nextDict =
-        if md >= 0 then
-            # We have an actual element here
-            dataIndex = listGetUnsafe dataIndices index
-            (T k _) = listGetUnsafe data dataIndex
+rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
+    when List.get oldMetadata index is
+        Ok md ->
+            nextDict =
+                if md >= 0 then
+                    # We have an actual element here
+                    dataIndex = listGetUnsafe oldDataIndices index
+                    (T k _) = listGetUnsafe oldData dataIndex
 
-            insertForRehash dict k dataIndex
-        else
-            # Empty or deleted data
+                    insertForRehash dict k dataIndex
+                else
+                    # Empty or deleted data
+                    dict
+
+            rehashHelper nextDict oldMetadata oldDataIndices oldData (index + 1)
+
+        Err OutOfBounds ->
+            # Walked entire list, complete now.
             dict
-
-    rehashHelper nextDict metadata dataIndices data (index + 1)
 
 insertForRehash : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
@@ -670,6 +676,144 @@ h1 = \hashKey ->
 h2 : U64 -> I8
 h2 = \hashKey ->
     Num.toI8 (Num.bitwiseAnd hashKey 0b0111_1111)
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> get "foo"
+
+    val == Ok "bar"
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> insert "foo" "baz"
+        |> get "foo"
+
+    val == Ok "baz"
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> get "bar"
+
+    val == Err KeyNotFound
+
+expect
+    empty
+    |> insert "foo" {}
+    |> contains "foo"
+
+expect
+    dict =
+        empty
+        |> insert "foo" {}
+        |> insert "bar" {}
+        |> insert "baz" {}
+
+    contains dict "baz" && Bool.not (contains dict "other")
+
+# Reach capacity, no rehash.
+expect
+    val =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> capacity
+
+    val == 7
+
+expect
+    dict =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+
+    (get dict "a" == Ok 0)
+    && (get dict "b" == Ok 1)
+    && (get dict "c" == Ok 2)
+    && (get dict "d" == Ok 3)
+    && (get dict "e" == Ok 4)
+    && (get dict "f" == Ok 5)
+    && (get dict "g" == Ok 6)
+
+# Force rehash.
+expect
+    val =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> insert "h" 7
+        |> capacity
+
+    val == 14
+
+expect
+    dict =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> insert "h" 7
+
+    (get dict "a" == Ok 0)
+    && (get dict "b" == Ok 1)
+    && (get dict "c" == Ok 2)
+    && (get dict "d" == Ok 3)
+    && (get dict "e" == Ok 4)
+    && (get dict "f" == Ok 5)
+    && (get dict "g" == Ok 6)
+    && (get dict "h" == Ok 7)
+
+# These are equivalent to the Set tests that are panicking for some reason.
+expect
+    actual =
+        empty
+        |> insert "foo" {}
+        |> insert "bar" {}
+        |> insert "foo" {}
+        |> insert "baz" {}
+
+    expected =
+        empty
+        |> insert "foo" {}
+        |> insert "bar" {}
+        |> insert "baz" {}
+
+    toList expected == toList actual
+
+expect
+    actual =
+        empty
+        |> insert "foo" {}
+        |> insert "bar" {}
+        |> insert "foo" {}
+        |> insert "baz" {}
+        |> len
+
+    actual == 3
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
