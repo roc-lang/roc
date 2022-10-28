@@ -417,6 +417,20 @@ If we make an integrated terminal, we can automatically add executed commands to
 - knowledge gap exercise: walk through the process of someone using your product for the first time, and imagine that you're sat next to them as they do it.
 What do you feel the need to say to them? Which knowledge gaps are you filling with your voice? Most of these will feel intuitive—write them down.
 
+## Builtin docutorial
+
+- interactive code examples
+- [Notebook](https://jupyter.org/try-jupyter/retro/notebooks/?path=notebooks/Intro.ipynb) like format? Could support images, svg, sound, math... .
+- Should support those new to programming and experienced individuals. Probably need custom version for new programmers (need to go deep into simple things).
+- Support ability to explore both broadly (many topics) and deeply (extensive detail).
+- Write three versions of every "page" for "never programmed before", novice and pro?
+- Should be completely navigable with the keyboard:
+  - Down arrow to go deeper into topic. It may start with a simple overview and examples; it then expands with further detailed information such as links to reference material, explanations, examples, and quizzes.
+  - Right arrow to go to next topic.
+- Sort topics in order of importance to know.
+- Docutorial should educate users about roc and about using the editor.
+- At least some of this content should be bundled in the nightly so that it easily works offline.
+
 ## General Thoughts/Ideas
 
 - Nice backtraces that highlight important information
