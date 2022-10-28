@@ -119,7 +119,7 @@ interface Html
         slot,
         template,
     ]
-    imports [Html.Internal]
+    imports []
 
 Node state : Html.Internal.Node state
 Attribute state : Html.Internal.Attribute state
@@ -142,17 +142,10 @@ element = \tagName ->
 nodeSize : Node state -> Nat
 nodeSize = \node ->
     when node is
-        Text content ->
-            Str.countUtf8Bytes content
-
-        Element _ size _ _ ->
-            size
-
-        Lazy _ ->
-            0
-
-        None ->
-            0
+        Text content -> Str.countUtf8Bytes content
+        Element _ size _ _ -> size
+        Lazy _ -> 0 # Ignore Lazy for buffer size estimate. renderStatic might have to reallocate, but that's OK.
+        None -> 0
 
 # internal helper
 attrSize : Attribute state -> Nat
