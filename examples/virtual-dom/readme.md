@@ -30,6 +30,6 @@ We obviously want our UI library to go fast, and in my experience, this communic
 - [x] JS to load and initialize WebAssembly
 - [ ] Make the Wasm part of the host, for allocators and stuff (probably Zig?)
 - [ ] Prototype without virtual DOM. Just call the Effects directly.
-- [ ] Events in Roc, with CyclicStructureAccessor type, etc.
-- [ ] Do something about TypeScript (switch to JS permanently? make a build script?)
+- [x] Events in Roc, with CyclicStructureAccessor type, etc.
+- [x] Do something about TypeScript (switch to JS permanently? make a build script? No, use JSDoc)
 - [ ] Implement Vdom diff in Roc

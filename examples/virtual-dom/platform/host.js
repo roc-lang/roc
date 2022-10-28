@@ -1,117 +1,136 @@
-type JsEventDispatcher = (e: Event) => void;
-type Listener = [string, JsEventDispatcher];
-type RocWasmExports = {
-  roc_alloc: (size: number, alignment: number) => number;
-  roc_dispatch_event: (
-    jsonListAddr: number,
-    jsonListLength: number,
-    handlerId: number
-  ) => void;
-  main: () => number;
-};
-type CyclicStructureAccessor =
-  | { ObjectField: [string, CyclicStructureAccessor] }
-  | {
-      ArrayIndex: [number, CyclicStructureAccessor];
-    }
-  | {
-      SerializableValue: undefined;
-    };
+/** @typedef {(e: Event) => void} JsEventDispatcher */
 
-const nodes: Array<Node | null> = [];
-const listeners: Array<Listener | null> = [];
+/** @typedef {[string, JsEventDispatcher]} Listener */
+
+/**
+ * @typedef {Object} RocWasmExports
+ * @property {(size: number, alignment: number) => number} roc_alloc
+ * @property {(jsonListAddr: number, jsonListLength: number, handlerId: number) => void} roc_dispatch_event
+ * @property {() => number} main
+ */
+
+/**
+ * @typedef {Object} CyclicStructureAccessor
+ * @property {[string, CyclicStructureAccessor]} [ObjectField]
+ * @property {[number, CyclicStructureAccessor]} [ArrayIndex]
+ * @property {undefined} [SerializableValue]
+ */
+
+/** @type {Array<Node | null>} */
+const nodes = [];
+
+/** @type {Array<Listener | null>} */
+const listeners = [];
+
 const utf8Decoder = new TextDecoder();
 const utf8Encoder = new TextEncoder();
 
-export const init = async (wasmFilename: string) => {
+/**
+ * @param {string} wasmFilename
+ */
+export const init = async (wasmFilename) => {
   const effects = {
-    // createElement : Str -> Effect NodeId
-    createElement: (tagAddr: number): number => {
+    /**
+     * @param {number} tagAddr
+     */
+    createElement: (tagAddr) => {
       const tagName = decodeRocStr(tagAddr);
       const node = document.createElement(tagName);
       return insertNode(node);
     },
 
-    // createTextNode : Str -> Effect NodeId
-    createTextNode: (contentAddr: number): number => {
+    /**
+     * @param {number} contentAddr
+     */
+    createTextNode: (contentAddr) => {
       const content = decodeRocStr(contentAddr);
       const node = document.createTextNode(content);
       return insertNode(node);
     },
 
-    // appendChild : NodeId, NodeId -> Effect {}
-    appendChild: (parentId: number, childId: number): void => {
-      const parent = nodes[parentId] as Element;
-      const child = nodes[childId] as Node;
+    /**
+     * @param {number} parentId
+     * @param {number} childId
+     */
+    appendChild: (parentId, childId) => {
+      const parent = nodes[parentId];
+      const child = nodes[childId];
       parent.appendChild(child);
     },
 
-    // removeNode : NodeId -> Effect {}
-    removeNode: (id: number): void => {
+    /**
+     * @param {number} id
+     */
+    removeNode: (id) => {
+      var _a;
       const node = nodes[id];
       nodes[id] = null;
-      node?.parentElement?.removeChild(node);
+      node.parentElement.removeChild(node);
     },
 
-    // setAttribute : NodeId, Str, Str -> Effect {}
-    setAttribute: (
-      nodeId: number,
-      typeAddr: number,
-      valueAddr: number
-    ): void => {
-      const node = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} typeAddr
+     * @param {number} valueAddr
+     */
+    setAttribute: (nodeId, typeAddr, valueAddr) => {
+      const node = nodes[nodeId];
       const name = decodeRocStr(typeAddr);
       const value = decodeRocStr(valueAddr);
       node.setAttribute(name, value);
     },
 
-    // removeAttribute : NodeId, Str -> Effect {}
-    removeAttribute: (nodeId: number, typeAddr: number): void => {
-      const node = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} typeAddr
+     */
+    removeAttribute: (nodeId, typeAddr) => {
+      const node = nodes[nodeId];
       const name = decodeRocStr(typeAddr);
       node.removeAttribute(name);
     },
 
-    // setProperty : NodeId, Str, List U8 -> Effect {}
-    setProperty: (
-      nodeId: number,
-      propNameAddr: number,
-      jsonAddr: number
-    ): void => {
-      const node = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} propNameAddr
+     * @param {number} jsonAddr
+     */
+    setProperty: (nodeId, propNameAddr, jsonAddr) => {
+      const node = nodes[nodeId];
       const propName = decodeRocStr(propNameAddr);
       const json = decodeRocListUtf8(jsonAddr);
       const value = JSON.parse(json);
       node[propName] = value;
     },
 
-    // removeProperty : NodeId, Str -> Effect {}
-    removeProperty: (nodeId: number, propNameAddr: number): void => {
-      const node = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} propNameAddr
+     */
+    removeProperty: (nodeId, propNameAddr) => {
+      const node = nodes[nodeId];
       const propName = decodeRocStr(propNameAddr);
       node[propName] = null;
     },
 
-    // setListener : NodeId, Str, List Accessor, EventHandlerId -> Effect {}
-    setListener: (
-      nodeId: number,
-      eventTypeAddr: number,
-      accessorsJsonAddr: number,
-      handlerId: number
-    ): void => {
-      const element = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} eventTypeAddr
+     * @param {number} accessorsJsonAddr
+     * @param {number} handlerId
+     */
+    setListener: (nodeId, eventTypeAddr, accessorsJsonAddr, handlerId) => {
+      const element = nodes[nodeId];
       const eventType = decodeRocStr(eventTypeAddr);
       const accessorsJson = decodeRocStr(accessorsJsonAddr);
-      const accessors: CyclicStructureAccessor[] = JSON.parse(accessorsJson);
+      const accessors = JSON.parse(accessorsJson);
 
       // Dispatch a DOM event to the specified handler function in Roc
-      const dispatchEvent = (ev: Event) => {
-        const { roc_alloc, roc_dispatch_event } = app.exports as RocWasmExports;
-
+      const dispatchEvent = (ev) => {
+        const { roc_alloc, roc_dispatch_event } = app.exports;
         const outerListRcAddr = roc_alloc(4 + accessors.length * 12, 4);
         memory32[outerListRcAddr >> 2] = 1;
         const outerListBaseAddr = outerListRcAddr + 4;
-
         let outerListIndex32 = outerListBaseAddr >> 2;
         accessors.forEach((accessor) => {
           const json = accessCyclicStructure(accessor, ev);
@@ -145,9 +164,12 @@ export const init = async (wasmFilename: string) => {
       element.addEventListener(eventType, dispatchEvent);
     },
 
-    // removeListener : NodeId, EventHandlerId -> Effect {}
-    removeListener: (nodeId: number, handlerId: number): void => {
-      const element = nodes[nodeId] as Element;
+    /**
+     * @param {number} nodeId
+     * @param {number} handlerId
+     */
+    removeListener: (nodeId, handlerId) => {
+      const element = nodes[nodeId];
       const [eventType, dispatchEvent] = findListener(element, handlerId);
       listeners[handlerId] = null;
       element.removeAttribute("data-roc-event-handler-id");
@@ -155,11 +177,13 @@ export const init = async (wasmFilename: string) => {
     },
   };
 
-  // decode a Roc `Str` to a JavaScript string
-  const decodeRocStr = (strAddr8: number): string => {
+  /**
+   * decode a Roc `Str` to a JavaScript string
+   * @param {number} strAddr8
+   */
+  const decodeRocStr = (strAddr8) => {
     const lastByte = memory8[strAddr8 + 12];
     const isSmall = lastByte >= 0x80;
-
     if (isSmall) {
       const len = lastByte & 0x7f;
       const bytes = memory8.slice(strAddr8, strAddr8 + len);
@@ -169,8 +193,11 @@ export const init = async (wasmFilename: string) => {
     }
   };
 
-  // decode a Roc List of UTF-8 bytes to a JavaScript string
-  const decodeRocListUtf8 = (listAddr8: number): string => {
+  /**
+   * decode a Roc List of UTF-8 bytes to a JavaScript string
+   * @param {number} listAddr8
+   */
+  const decodeRocListUtf8 = (listAddr8) => {
     const listIndex32 = listAddr8 >> 2;
     const bytesAddr8 = memory32[listIndex32];
     const len = memory32[listIndex32 + 1];
@@ -185,18 +212,21 @@ export const init = async (wasmFilename: string) => {
     wasmImports
   );
   const app = instanceAndModule.instance;
-  const memory = app.exports.memory as WebAssembly.Memory;
+  const memory = app.exports.memory;
   const memory8 = new Uint8Array(memory.buffer);
   const memory32 = new Uint32Array(memory.buffer);
 
-  const { main } = app.exports as RocWasmExports;
+  const { main } = app.exports;
   const exitCode = main();
   if (exitCode) {
     throw new Error(`Roc exited with error code ${exitCode}`);
   }
 };
 
-const insertNode = (node: Node): number => {
+/**
+ * @param {Node} node
+ */
+const insertNode = (node) => {
   let i = 0;
   for (; i < nodes.length; i++) {
     if (!nodes[i]) break;
@@ -205,10 +235,11 @@ const insertNode = (node: Node): number => {
   return i;
 };
 
-const accessCyclicStructure = (
-  accessor: CyclicStructureAccessor,
-  structure: any
-): string => {
+/**
+ * @param {CyclicStructureAccessor} accessor
+ * @param {any} structure
+ */
+const accessCyclicStructure = (accessor, structure) => {
   while (true) {
     if ("SerializableValue" in accessor) {
       return JSON.stringify(structure);
@@ -225,7 +256,11 @@ const accessCyclicStructure = (
   }
 };
 
-const findListener = (element: Element, handlerId: number) => {
+/**
+ * @param {Element} element
+ * @param {number} handlerId
+ */
+const findListener = (element, handlerId) => {
   const listener = listeners[handlerId];
   if (listener) {
     return listener;
