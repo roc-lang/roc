@@ -480,6 +480,9 @@ fn begin_render_pass<'a>(
     })
 }
 
+const ROC_PROJECTS_FOLDER: &str = "roc-projects";
+const ROC_NEW_PROJECT_FOLDER: &str = "new-roc-project-1";
+
 fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) {
     if let Some(project_dir_path) = project_dir_path_opt {
         let mut ls_config = HashSet::new();
@@ -516,20 +519,22 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
             init_new_roc_project(project_dir_path)
         }
     } else {
-        init_new_roc_project(Path::new("./new-roc-project"))
+        init_new_roc_project(&Path::new(ROC_PROJECTS_FOLDER).join(ROC_NEW_PROJECT_FOLDER))
     }
 }
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
-    let orig_platform_path = Path::new("./crates/cli_testing_examples/platform-switching/").join(PLATFORM_DIR_NAME);
+    let orig_platform_path = Path::new("examples")
+        .join("platform-switching")
+        .join(PLATFORM_DIR_NAME);
 
-    let roc_file_path = Path::new("./new-roc-project/main.roc");
+    let roc_file_path = Path::new(project_dir_path).join("main.roc");
 
     let project_platform_path = project_dir_path.join(PLATFORM_DIR_NAME);
 
     if !project_dir_path.exists() {
-        fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
+        fs::create_dir_all(project_dir_path).expect("Failed to create dir for roc project.");
     }
 
     copy_roc_platform_if_not_exists(
@@ -538,9 +543,9 @@ fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
         project_dir_path,
     );
 
-    let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
+    let code_str = create_roc_file_if_not_exists(project_dir_path, &roc_file_path);
 
-    (roc_file_path.to_path_buf(), code_str)
+    (roc_file_path, code_str)
 }
 
 // returns contents of file

@@ -624,9 +624,11 @@ impl<'a> EdModel<'a> {
 
         let cmd_out = Command::new("cargo")
             .arg("run")
+            .arg("--release")
             .arg("check")
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .output()?;
 
         if !cmd_out.status.success() {
@@ -643,6 +645,7 @@ impl<'a> EdModel<'a> {
 
         Command::new("cargo")
             .arg("run")
+            .arg("--release")
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())

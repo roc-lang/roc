@@ -16,7 +16,7 @@ For convenience and consistency, there is only one way to format roc.
 "#;
 
 pub const HELLO_WORLD: &str = r#"
-app "test-app"
+app "untitled-app"
     packages { pf: "rust-platform/main.roc" }
     imports []
     provides [main] to pf
