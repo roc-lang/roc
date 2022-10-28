@@ -233,7 +233,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 if let Err(e) = input_outcome_res {
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
-                    println!("Input '{}' ignored!", ch);
+                    println!("\nInput '{}' ignored!", ch);
                 } else {
                     window.request_redraw()
                 }
