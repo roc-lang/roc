@@ -34,16 +34,16 @@ TODO explain what "compiler frontend" is
 TODO explain what "compiler backend" is
 
 The compiler includes the following sub-crates;
-- `roc_alias_analysis` Performs analysis and optimizations to remove unneeded reference counts at runtime, and supports in-place mutation.
-- `arena-pool` An implementation of an arena allocator designed for the compiler's workloads.
+- `roc_alias_analysis` Performs analysis and optimizations to remove unneeded [reference counts](https://en.wikipedia.org/wiki/Reference_counting) at runtime, and supports in-place mutation.
+- `arena-pool` An implementation of an [arena allocator](https://mgravell.github.io/Pipelines.Sockets.Unofficial/docs/arenas.html) designed for the compiler's workloads.
 - `roc_build` Responsible for coordinating building and linking of a Roc app with its host.
 - `roc_builtins` provides the Roc functions and modules that are implicitly imported into every module. See [README.md](./compiler/builtins/README.md) for more information.
-- `roc_can` Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference.
+- `roc_can` [Canonicalize](https://en.wikipedia.org/wiki/Canonicalization) a roc [abstract syntax tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree), [resolving symbols](https://stackoverflow.com/a/1175493/4200103), [re-ordering definitions](https://www.oreilly.com/library/view/c-high-performance/9781787120952/546b5677-9157-4333-bc90-16db696436ac.xhtml), and preparing a module for [type inference](https://en.wikipedia.org/wiki/Type_inference).
 - `roc_collections` Domain-specific collections created for the needs of the compiler.
-- `roc_constrain` Responsible for building the set of constraints that are used during type inference of a program, and for gathering context needed for pleasant error messages when a type error occurs.
+- `roc_constrain` Responsible for building the set of constraints that are used during [type inference](https://en.wikipedia.org/wiki/Type_inference) of a program, and for gathering context needed for pleasant error messages when a type error occurs.
 - `roc_debug_flags` Environment variables that can be toggled to aid debugging of the compiler itself.
 - `roc_derive` provides auto-derivers for builtin abilities like `Hash` and `Decode`.
-- `roc_exhaustive` provides exhaustiveness checking for Roc.
+- `roc_exhaustive` provides [exhaustiveness](https://dev.to/babak/exhaustive-type-checking-with-typescript-4l3f) checking for Roc.
 - `roc_fmt` The roc code formatter.
 - `roc_gen_dev` provides the compiler backend to generate Roc binaries fast, for a nice developer experience. See [README.md](./compiler/gen_dev/README.md) for more information.
 - `roc_gen_llvm` provides the LLVM backend to generate Roc binaries. Used to generate a binary with the fastest possible execution speed.
@@ -51,24 +51,24 @@ The compiler includes the following sub-crates;
 - `roc_ident` Implements data structures used for efficiently representing small strings, like identifiers.
 - `roc_intern` provides generic interners for concurrent and single-thread use cases.
 - `roc_late_solve` provides type unification and solving primitives from the perspective of the compiler backend.
-- `roc_load` Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and code generation.
+- `roc_load` Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)).
 - `roc_load_internal` The internal implementation of roc_load, separate from roc_load to support caching.
 - `roc_module` Implements data structures used for efficiently representing unique modules and identifiers in Roc programs.
-- `roc_mono` Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend.
-- `roc_parse` Implements the Roc parser, which transforms a textual representation of a Roc program to an abstract syntax tree.
+- `roc_mono` Roc's main intermediate representation (IR), which is responsible for [monomorphization](https://en.wikipedia.org/wiki/Monomorphization), defunctionalization, inserting [ref-count](https://en.wikipedia.org/wiki/Reference_counting) instructions, and transforming a Roc program into a form that is easy to consume by a backend.
+- `roc_parse` Implements the Roc parser, which transforms a textual representation of a Roc program to an [abstract syntax tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree).
 - `roc_problem` provides types to describe problems that can occur when compiling `.roc` code.
 - `roc_region` Data structures for storing source-code-location information, used heavily for contextual error messages.
 - `roc_target` provides types and helpers for compiler targets such as `default_x86_64`.
 - `roc_serialize` provides helpers for serializing and deserializing to/from bytes.
-- `roc_solve` The entry point of Roc's type inference system. Implements type inference and specialization of abilities.
+- `roc_solve` The entry point of Roc's [type inference](https://en.wikipedia.org/wiki/Type_inference) system. Implements type inference and specialization of abilities.
 - `roc_solve_problem` provides types to describe problems that can occur during solving.
-- `roc_str` provides `Roc` styled collection reference counting. See [README.md](./compiler/str/README.md) for more information.
+- `roc_str` provides `Roc` styled collection [reference counting](https://en.wikipedia.org/wiki/Reference_counting). See [README.md](./compiler/str/README.md) for more information.
 - `test_derive` Tests Roc's auto-derivers.
-- `test_gen` contains all of Roc's code generation tests. See [README.md](./compiler/test_gen/README.md) for more information.
+- `test_gen` contains all of Roc's [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)) tests. See [README.md](./compiler/test_gen/README.md) for more information.
 - `test_mono` Tests Roc's generation of the mono intermediate representation.
-- `test_mono_macros` Macros for use in test_mono.
+- `test_mono_macros` Macros for use in `test_mono`.
 - `roc_types` Various representations and utilities for dealing with types in the Roc compiler.
-- `roc_unify` Implements Roc's unification algorithm, the heartstone of Roc's type inference.
+- `roc_unify` Implements Roc's unification algorithm, the heartstone of Roc's [type inference](https://en.wikipedia.org/wiki/Type_inference).
 
 ## `docs/` - `roc_docs`
 

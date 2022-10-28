@@ -1,8 +1,8 @@
 //! Library to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree).
 //!  
-//! Used by roc_editor. In contrast to the compiler,
-//! In contrast to the compiler, the types in this
-//! AST do not keep track of the location of the matching code in the source file.
+//! Used by roc_editor.
+//! In contrast to the compiler, the types in this AST do not
+//! keep track of the location of the matching code in the source file.
 pub mod ast_error;
 mod builtin_aliases;
 mod canonicalization;
