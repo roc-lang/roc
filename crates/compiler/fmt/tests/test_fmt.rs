@@ -3864,6 +3864,19 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn when_with_single_quote_char() {
+        expr_formats_same(
+            indoc!(
+                r#"
+                when x is
+                    '0' -> 0
+                    '1' -> 1
+                "#
+            )
+        );
+    }
+
     // NEWLINES
 
     #[test]
