@@ -274,7 +274,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         ) as u64;
 
     let mut section_file_offset = md.dynhost_file_size;
-    let mut virtual_address = (app_code_section_va - image_base) as u32;
+    let mut section_virtual_address = (app_code_section_va - image_base) as u32;
 
     // find the location to write the section headers for our new sections
     let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
@@ -306,7 +306,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         // offset_in_section now becomes a proper virtual address
         for symbol in symbols.iter_mut() {
             if symbol.section_kind == kind {
-                symbol.offset_in_section += image_base as usize + virtual_address as usize;
+                symbol.offset_in_section += image_base as usize + section_virtual_address as usize;
             }
         }
 
@@ -325,7 +325,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     section_header_start,
                     section_file_offset,
                     virtual_size,
-                    virtual_address,
+                    section_virtual_address,
                     size_of_raw_data,
                 );
             }
@@ -339,7 +339,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     section_header_start,
                     section_file_offset,
                     virtual_size,
-                    virtual_address,
+                    section_virtual_address,
                     size_of_raw_data,
                 );
             }
@@ -369,9 +369,10 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                             // we implicitly only do 32-bit relocations
                             debug_assert_eq!(relocation.size(), 32);
 
-                            let delta =
-                                destination - virtual_address as i64 - *offset_in_section as i64
-                                    + relocation.addend();
+                            let delta = destination
+                                - section_virtual_address as i64
+                                - *offset_in_section as i64
+                                + relocation.addend();
 
                             executable[offset + *offset_in_section as usize..][..4]
                                 .copy_from_slice(&(delta as i32).to_le_bytes());
@@ -382,8 +383,9 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // we implicitly only do 32-bit relocations
                     debug_assert_eq!(relocation.size(), 32);
 
-                    let delta = destination - virtual_address as i64 - *offset_in_section as i64
-                        + relocation.addend();
+                    let delta =
+                        destination - section_virtual_address as i64 - *offset_in_section as i64
+                            + relocation.addend();
 
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
@@ -409,7 +411,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
         section_header_start += std::mem::size_of::<ImageSectionHeader>();
         section_file_offset += size_of_raw_data as usize;
-        virtual_address += next_multiple_of(length, section_alignment) as u32;
+        section_virtual_address += next_multiple_of(length, section_alignment) as u32;
         file_bytes_added += next_multiple_of(length, section_alignment) as u32;
     }
 
@@ -1062,15 +1064,13 @@ impl AppSections {
 
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
                         let name = symbol.and_then(|s| s.name()).unwrap_or_default();
+                        let name = redirect_libc_functions(name).unwrap_or(name).to_string();
 
-                        relocations
-                            .entry(name.to_string())
-                            .or_default()
-                            .push(AppRelocation {
-                                offset_in_section,
-                                address,
-                                relocation,
-                            });
+                        relocations.entry(name).or_default().push(AppRelocation {
+                            offset_in_section,
+                            address,
+                            relocation,
+                        });
                     }
                     _ => todo!(),
                 }
@@ -1228,12 +1228,17 @@ fn write_section_header(
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
+struct BaseRelocations {
+    new_size: u32,
+    delta: u32,
+}
+
 fn write_image_base_relocation(
     mmap: &mut [u8],
     reloc_section_start: usize,
     new_block_va: u32,
     relocations: &[u16],
-) -> usize {
+) -> BaseRelocations {
     // first, collect the blocks of relocations (each relocation block covers a 4K page)
     // we will be moving stuff around, and have to work from the back to the front. However, the
     // relocations are encoded in such a way that we can only decode them from front to back.
@@ -1257,6 +1262,8 @@ fn write_image_base_relocation(
 
         next_block_start += header.size_of_block.get(LE);
     }
+
+    let old_size = next_block_start - reloc_section_start as u32;
 
     // this is 8 in practice
     const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
@@ -1309,7 +1316,10 @@ fn write_image_base_relocation(
             }
         }
 
-        shift_amount
+        BaseRelocations {
+            new_size: old_size + shift_amount as u32,
+            delta: shift_amount as u32,
+        }
     } else {
         let header =
             load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
@@ -1331,7 +1341,10 @@ fn write_image_base_relocation(
         // sort by VA. Upper 4 bits store the relocation type
         entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
 
-        size_of_block
+        BaseRelocations {
+            new_size: old_size + size_of_block as u32,
+            delta: size_of_block as u32,
+        }
     }
 }
 
@@ -1352,7 +1365,7 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
         .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
         .collect();
 
-    let added_reloc_bytes = write_image_base_relocation(
+    let base_relocations = write_image_base_relocation(
         executable,
         md.reloc_offset_in_file,
         thunks_relocation_block_va,
@@ -1373,13 +1386,14 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let reloc_section =
         load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
     let old_section_size = reloc_section.virtual_size.get(LE);
-    let new_virtual_size = old_section_size + added_reloc_bytes as u32;
+    let new_virtual_size = old_section_size + base_relocations.delta;
+    let new_virtual_size = next_multiple_of(new_virtual_size as usize, 8) as u32;
     reloc_section.virtual_size.set(LE, new_virtual_size);
 
     assert!(
         reloc_section.pointer_to_raw_data.get(LE)
             + reloc_section.virtual_size.get(LE)
-            + (added_reloc_bytes as u32)
+            + base_relocations.delta
             < next_section_pointer_to_raw_data,
         "new .reloc section is too big, and runs into the next section!",
     );
@@ -1393,11 +1407,19 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     );
 
     // it is crucial that the directory size is rounded up to a multiple of 8!
-    let old = dir.size.get(LE);
-    let new = new_virtual_size;
-    let delta = next_multiple_of((new - old) as usize, 8);
+    // the value is already rounded, so to be correct we can't rely on `dir.size.get(LE)`
+    let new_reloc_directory_size = next_multiple_of(base_relocations.new_size as usize, 8);
+    dir.size.set(LE, new_reloc_directory_size as u32);
+}
 
-    dir.size.set(LE, old + delta as u32);
+/// Redirect `memcpy` and similar libc functions to their roc equivalents
+pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
+    match name {
+        "memcpy" => Some("roc_memcpy"),
+        "memset" => Some("roc_memset"),
+        "memmove" => Some("roc_memmove"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
