@@ -47,7 +47,7 @@ This command will generate the documentation in the [`generated-docs`](generated
 
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.
 - Create an issue if the purpose of a struct/field/type/function/... is not immediately clear from its name or nearby comments.
-- You can find good first issues [here][good-first-issues].
+- You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - [Fork](https://github.com/roc-lang/roc/fork) the repo so that you can apply your changes first on your own copy of the roc repo.
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Click the button "ready for review" when it's ready.
 - All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g):
