@@ -189,7 +189,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
+            internal_error!("todo! canonicalize malformed record field");
         }
     }
 }

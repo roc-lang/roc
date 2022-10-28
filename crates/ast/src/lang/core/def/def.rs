@@ -13,7 +13,7 @@
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::{internal_error, todo_abilities, user_error};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, CommentOrNewline, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
@@ -574,7 +574,7 @@ fn canonicalize_pending_def<'a>(
                                     ..
                                 } => {
                                     if arguments.len() != type_arguments.len() {
-                                        internal_error!("argument number mismatch");
+                                        user_error!("argument number mismatch");
                                     }
 
                                     let it: Vec<_> = closure_args

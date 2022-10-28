@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, Threading};
 use roc_target::TargetInfo;
 use std::path::Path;
@@ -21,7 +21,7 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
     match loaded {
         Ok(x) => x,
         Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            internal_error!(
+            user_error!(
                 "Failed to load module from src_file: {:?}. Report: {}",
                 src_file,
                 report

@@ -113,9 +113,9 @@ impl Pools {
     }
 
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
-        self.0.get_mut(rank.into_usize()).unwrap_or_else(|| {
-            internal_error!("Compiler bug: could not find pool at rank {}", rank)
-        })
+        self.0
+            .get_mut(rank.into_usize())
+            .unwrap_or_else(|| internal_error!("could not find pool at rank {}", rank))
     }
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
