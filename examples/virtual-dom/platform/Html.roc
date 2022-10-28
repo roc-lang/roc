@@ -2,8 +2,8 @@ interface Html
     exposes [
         Node,
         Attribute,
-        render,
-        renderWithoutDocType,
+        renderStatic,
+        renderStaticWithoutDocType,
         text,
         html,
         base,
@@ -132,7 +132,7 @@ element : Str -> (List (Attribute state), List (Node state) -> Node state)
 element = \tagName ->
     \attrs, children ->
         # While building the node tree, calculate the size of Str it will render to
-        withTag = 2 * (3 + Str.countUtf8Bytes (tagName))
+        withTag = 2 * (3 + Str.countUtf8Bytes tagName)
         withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
         totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
 
@@ -154,6 +154,7 @@ nodeSize = \node ->
         None ->
             0
 
+# internal helper
 attrSize : Attribute state -> Nat
 attrSize = \attr ->
     when attr is
@@ -162,28 +163,28 @@ attrSize = \attr ->
         DomProp _ _ -> 0
         Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
 
-## Render a Node to an HTML string
+## Render a Node to a static HTML string
 ##
 ## The output has no whitespace between nodes, to make it small.
 ## This is intended for generating full HTML documents, so it
 ## automatically adds `<!DOCTYPE html>` to the start of the string.
-## See also `renderWithoutDocType`.
-render : Node state -> Str
-render = \node ->
+## See also `renderStaticWithoutDocType`.
+renderStatic : Node {} -> Str
+renderStatic = \node ->
     buffer = Str.reserve "<!DOCTYPE html>" (nodeSize node)
 
-    renderHelp buffer node
+    renderStaticHelp buffer node
 
-## Render a Node to a string, without a DOCTYPE tag
-renderWithoutDocType : Node state -> Str
-renderWithoutDocType = \node ->
+## Render a Node to a static HTML string, without a DOCTYPE
+renderStaticWithoutDocType : Node {} -> Str
+renderStaticWithoutDocType = \node ->
     buffer = Str.reserve "" (nodeSize node)
 
-    renderHelp buffer node
+    renderStaticHelp buffer node
 
 # internal helper
-renderHelp : Str, Node state -> Str
-renderHelp = \buffer, node ->
+renderStaticHelp : Str, Node {} -> Str
+renderStaticHelp = \buffer, node ->
     when node is
         Text content ->
             Str.concat buffer content
@@ -194,37 +195,43 @@ renderHelp = \buffer, node ->
                 if List.isEmpty attrs then
                     withTagName
                 else
-                    { buffer: tmpBuffer, styles: tmpStyles } = List.walk attrs { buffer: "\(withTagName) ", styles: "" } renderAttribute
+                    init = { buffer: Str.concat withTagName " ", styles: "" }
+                    { buffer: attrBuffer, styles } =
+                        List.walk attrs init renderStaticAttrHelp
 
-                    if Str.isEmpty tmpStyles then
-                        tmpBuffer
+                    if Str.isEmpty styles then
+                        attrBuffer
                     else
-                        "\(tmpBuffer) style=\"\(tmpStyles)\""
+                        "\(attrBuffer) style=\"\(styles)\""
 
             withTag = Str.concat withAttrs ">"
-            withChildren = List.walk children withTag renderHelp
+            withChildren = List.walk children withTag renderStaticHelp
 
             "\(withChildren)</\(name)>"
 
-        # TODO: Lazy (Result { state, node : Node state } [NotCached] -> { state, node : Node state }),
-        Lazy _ -> buffer
+        Lazy callback ->
+            stateAndNode = callback (Err NotCached)
+
+            renderStaticHelp buffer stateAndNode.node
+
         None -> buffer
 
-# internal helper
-renderAttribute : { buffer : Str, styles : Str }, Attribute state -> { buffer : Str, styles : Str }
-renderAttribute = \{ buffer, styles }, attr ->
+renderStaticAttrHelp : { buffer : Str, styles : Str }, Attribute {} -> { buffer : Str, styles : Str }
+renderStaticAttrHelp = \{ buffer, styles }, attr ->
     when attr is
-        EventListener _ _ _ -> { buffer, styles }
         HtmlAttr key value ->
             newBuffer = "\(buffer) \(key)=\"\(value)\""
 
             { buffer: newBuffer, styles }
 
-        DomProp _ _ -> { buffer, styles }
         Style key value ->
             newStyles = "\(styles) \(key): \(value);"
 
             { buffer, styles: newStyles }
+
+        # The remaining variants only make sense on the front end. Ignore for server-side rendering.
+        EventListener _ _ _ -> { buffer, styles }
+        DomProp _ _ -> { buffer, styles }
 
 html = element "html"
 base = element "base"
