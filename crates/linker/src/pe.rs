@@ -1361,9 +1361,11 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     let thunks_offset_in_block = thunks_start_va % BLOCK_SIZE;
     let thunks_relocation_block_va = thunks_start_va - thunks_offset_in_block;
 
-    let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
-        .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
-        .collect();
+    let relocations = vec![];
+
+    //    let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
+    //        .map(|i| (thunks_offset_in_block as usize + 2 * i) as u16)
+    //        .collect();
 
     let base_relocations = write_image_base_relocation(
         executable,
