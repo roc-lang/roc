@@ -71,7 +71,7 @@ fn headers_from_annotation_help(
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | StrLiteral(_) => true,
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
@@ -182,9 +182,11 @@ pub fn constrain_pattern(
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
+                let type_index = constraints.push_type(expected.get_type());
+
                 state
                     .delayed_is_open_constraints
-                    .push(constraints.is_open_type(expected.get_type()));
+                    .push(constraints.is_open_type(type_index));
             }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
@@ -193,9 +195,11 @@ pub fn constrain_pattern(
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             if could_be_a_tag_union(expected.get_type_ref()) {
+                let type_index = constraints.push_type(expected.get_type_ref().clone());
+
                 state
                     .delayed_is_open_constraints
-                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+                    .push(constraints.is_open_type(type_index));
             }
 
             state.headers.insert(
@@ -212,9 +216,9 @@ pub fn constrain_pattern(
             specializes: _,
         } => {
             if could_be_a_tag_union(expected.get_type_ref()) {
-                state
-                    .constraints
-                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+                let type_index = constraints.push_type(expected.get_type_ref().clone());
+
+                state.constraints.push(constraints.is_open_type(type_index));
             }
 
             state.headers.insert(
@@ -238,6 +242,9 @@ pub fn constrain_pattern(
                 region,
                 Category::Num,
             );
+            let num_type = constraints.push_type(num_type);
+
+            let expected = constraints.push_pat_expected_type(expected);
 
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
@@ -259,18 +266,19 @@ pub fn constrain_pattern(
                 region,
                 Category::Int,
             );
+            let num_type = constraints.push_type(num_type);
 
             // Link the free num var with the int var and our expectation.
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
-            state.constraints.push(constraints.equal_types(
-                num_type.clone(), // TODO check me if something breaks!
-                Expected::NoExpectation(int_type),
-                Category::Int,
-                region,
-            ));
+            state.constraints.push({
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(int_type));
+                constraints.equal_types(num_type, expected_index, Category::Int, region)
+            });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
                 expected,
@@ -294,17 +302,18 @@ pub fn constrain_pattern(
 
             // Link the free num var with the float var and our expectation.
             let float_type = builtins::num_float(Type::Variable(precision_var));
+            let num_type_index = constraints.push_type(num_type); // TODO check me if something breaks!
 
-            state.constraints.push(constraints.equal_types(
-                num_type.clone(), // TODO check me if something breaks!
-                Expected::NoExpectation(float_type),
-                Category::Frac,
-                region,
-            ));
+            state.constraints.push({
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(float_type));
+                constraints.equal_types(num_type_index, expected_index, Category::Frac, region)
+            });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                num_type, // TODO check me if something breaks!
+                num_type_index,
                 expected,
                 PatternCategory::Float,
                 region,
@@ -312,17 +321,49 @@ pub fn constrain_pattern(
         }
 
         StrLiteral(_) => {
+            let str_type = constraints.push_type(builtins::str_type());
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                builtins::str_type(),
+                str_type,
                 expected,
                 PatternCategory::Str,
                 region,
             ));
         }
 
-        SingleQuote(_) => {
+        &SingleQuote(num_var, precision_var, _, bound) => {
+            // First constraint on the free num var; this improves the resolved type quality in
+            // case the bound is an alias.
+            let num_type = builtins::add_numeric_bound_constr(
+                constraints,
+                &mut state.constraints,
+                num_var,
+                num_var,
+                bound,
+                region,
+                Category::Int,
+            );
+
+            // Link the free num var with the int var and our expectation.
+            let int_type = builtins::num_int(Type::Variable(precision_var));
+
+            let num_type_index = constraints.push_type(num_type);
+
+            state.constraints.push({
+                let expected_index =
+                    constraints.push_expected_type(Expected::NoExpectation(int_type));
+                constraints.equal_types(
+                    num_type_index, // TODO check me if something breaks!
+                    expected_index,
+                    Category::Int,
+                    region,
+                )
+            });
+
+            // Also constrain the pattern against the num var, again to reuse aliases if they're present.
+            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
-                builtins::num_u32(),
+                num_type_index,
                 expected,
                 PatternCategory::Character,
                 region,
@@ -362,13 +403,17 @@ pub fn constrain_pattern(
 
                 let field_type = match typ {
                     DestructType::Guard(guard_var, loc_guard) => {
-                        state.constraints.push(constraints.pattern_presence(
-                            Type::Variable(*guard_var),
-                            PExpected::ForReason(
+                        let guard_type = constraints.push_type(Type::Variable(*guard_var));
+                        let expected_pat =
+                            constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::PatternGuard,
                                 pat_type.clone(),
                                 loc_guard.region,
-                            ),
+                            ));
+
+                        state.constraints.push(constraints.pattern_presence(
+                            guard_type,
+                            expected_pat,
                             PatternCategory::PatternGuard,
                             region,
                         ));
@@ -386,13 +431,17 @@ pub fn constrain_pattern(
                         RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        state.constraints.push(constraints.pattern_presence(
-                            Type::Variable(*expr_var),
-                            PExpected::ForReason(
+                        let expr_type = constraints.push_type(Type::Variable(*expr_var));
+                        let expected_pat =
+                            constraints.push_pat_expected_type(PExpected::ForReason(
                                 PReason::OptionalField,
                                 pat_type.clone(),
                                 loc_expr.region,
-                            ),
+                            ));
+
+                        state.constraints.push(constraints.pattern_presence(
+                            expr_type,
+                            expected_pat,
                             PatternCategory::PatternDefault,
                             region,
                         ));
@@ -429,15 +478,20 @@ pub fn constrain_pattern(
 
             let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
+            let whole_var_index = constraints.push_type(Type::Variable(*whole_var));
+            let expected_record =
+                constraints.push_expected_type(Expected::NoExpectation(record_type));
             let whole_con = constraints.equal_types(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(record_type),
+                whole_var_index,
+                expected_record,
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
+            let expected = constraints.push_pat_expected_type(expected);
+
             let record_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
+                whole_var_index,
                 expected,
                 PatternCategory::Record,
                 region,
@@ -452,12 +506,12 @@ pub fn constrain_pattern(
             tag_name,
             arguments,
         } => {
-            let mut argument_types = Vec::with_capacity(arguments.len());
+            let argument_types = constraints.variable_slice(arguments.iter().map(|(var, _)| *var));
+
             for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
 
                 let pattern_type = Type::Variable(*pattern_var);
-                argument_types.push(pattern_type.clone());
 
                 let expected = PExpected::ForReason(
                     PReason::TagArg {
@@ -478,21 +532,20 @@ pub fn constrain_pattern(
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
+            let expected_type = constraints.push_type(expected.get_type_ref().clone());
 
             let whole_con = constraints.includes_tag(
-                expected.clone().get_type(),
+                expected_type,
                 tag_name.clone(),
-                argument_types.clone(),
+                argument_types,
                 pat_category.clone(),
                 region,
             );
 
-            let tag_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
-                expected,
-                pat_category,
-                region,
-            );
+            let whole_type = constraints.push_type(Type::Variable(*whole_var));
+            let expected = constraints.push_pat_expected_type(expected);
+
+            let tag_con = constraints.pattern_presence(whole_type, expected, pat_category, region);
 
             state.vars.push(*whole_var);
             state.vars.push(*ext_var);
@@ -518,7 +571,7 @@ pub fn constrain_pattern(
                     .iter()
                     .map(|v| OptAbleType {
                         typ: Type::Variable(v.var),
-                        opt_ability: v.opt_ability,
+                        opt_abilities: v.opt_abilities.clone(),
                     })
                     .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
@@ -538,9 +591,12 @@ pub fn constrain_pattern(
             );
 
             // Next, link `whole_var` to the opaque type of "@Id who"
+            let whole_var_index = constraints.push_type(Type::Variable(*whole_var));
+            let expected_opaque =
+                constraints.push_expected_type(Expected::NoExpectation(opaque_type));
             let whole_con = constraints.equal_types(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(opaque_type),
+                whole_var_index,
+                expected_opaque,
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
@@ -558,16 +614,21 @@ pub fn constrain_pattern(
             // This must **always** be a presence constraint, that is enforcing
             // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
+            let arg_pattern_type = constraints.push_type(arg_pattern_type);
+            let specialized_type = constraints
+                .push_pat_expected_type(PExpected::NoExpectation((**specialized_def_type).clone()));
             let link_type_variables_con = constraints.pattern_presence(
                 arg_pattern_type,
-                PExpected::NoExpectation((**specialized_def_type).clone()),
+                specialized_type,
                 PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
 
             // Next, link `whole_var` (the type of "@Id who") to the expected type
+            let whole_type = constraints.push_type(Type::Variable(*whole_var));
+            let expected = constraints.push_pat_expected_type(expected);
             let opaque_pattern_con = constraints.pattern_presence(
-                Type::Variable(*whole_var),
+                whole_type,
                 expected,
                 PatternCategory::Opaque(*opaque),
                 region,

@@ -1,3 +1,5 @@
+//! Provides the core CLI functionality for the `roc` binary
+
 #[macro_use]
 extern crate const_format;
 
@@ -5,6 +7,7 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
+use roc_build::program::Problems;
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{Expectations, LoadingProblem, Threading};
@@ -43,6 +46,7 @@ pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
+pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -273,6 +277,23 @@ pub fn build_app<'a>() -> Command<'a> {
                     .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
                     .allow_invalid_utf8(true)
                     .required(true)
+            )
+        )
+        .subcommand(Command::new(CMD_GEN_STUB_LIB)
+            .about("Generate a stubbed shared library that can be used for linking a platform binary.\nThe stubbed library has prototypes, but no function bodies.\n\nNote: This command will be removed in favor of just using `roc build` once all platforms support the surgical linker")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for an app using the platform")
+                    .allow_invalid_utf8(true)
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Target::default().as_str())
+                    .possible_values(Target::OPTIONS)
+                    .required(false),
             )
         )
         .trailing_var_arg(true)
@@ -566,89 +587,36 @@ pub fn build(
                     // If possible, report the generated executable name relative to the current dir.
                     let generated_filename = binary_path
                         .strip_prefix(env::current_dir().unwrap())
-                        .unwrap_or(&binary_path);
+                        .unwrap_or(&binary_path)
+                        .to_str()
+                        .unwrap();
 
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
                     std::mem::forget(arena);
 
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while successfully building:\n\n    {}",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                        generated_filename.to_str().unwrap()
-                    );
+                    print_problems(problems, total_time);
+                    println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
                     Ok(problems.exit_code())
                 }
                 BuildAndRun => {
                     if problems.errors > 0 || problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
-                            if problems.errors == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.errors,
-                            if problems.errors == 1 {
-                                "error"
-                            } else {
-                                "errors"
-                            },
-                            if problems.warnings == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let bytes = std::fs::read(&binary_path).unwrap();
+                    // don't waste time deallocating; the process ends anyway
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(arena, opt_level, triple, args, bytes, expectations, interns)
                 }
                 BuildAndRunIfNoErrors => {
                     debug_assert!(
@@ -656,21 +624,16 @@ pub fn build(
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
+                    // don't waste time deallocating; the process ends anyway
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
@@ -686,40 +649,17 @@ pub fn build(
 
             let problems = roc_build::program::report_problems_typechecked(&mut module);
 
-            let mut output = format!(
-                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
-                if problems.errors == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.errors,
-                if problems.errors == 1 {
-                    "error"
-                } else {
-                    "errors"
-                },
-                if problems.warnings == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.warnings,
-                if problems.warnings == 1 {
-                    "warning"
-                } else {
-                    "warnings"
-                },
-                total_time.as_millis(),
-            );
+            print_problems(problems, total_time);
+
+            print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
             // If you're running "main.roc" then you can just do `roc run`
             // to re-run the program.
             if filename != DEFAULT_ROC_FILENAME {
-                output.push(' ');
-                output.push_str(&filename.to_string_lossy());
+                print!(" {}", &filename.to_string_lossy());
             }
 
-            println!("{}\x1B[39m", output);
+            println!("\x1B[39m");
 
             Ok(problems.exit_code())
         }
@@ -732,6 +672,34 @@ pub fn build(
             panic!("build_file failed with error:\n{:?}", other);
         }
     }
+}
+
+fn print_problems(problems: Problems, total_time: std::time::Duration) {
+    const GREEN: usize = 32;
+    const YELLOW: usize = 33;
+
+    print!(
+        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
+        match problems.errors {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.errors,
+        match problems.errors {
+            1 => "error",
+            _ => "errors",
+        },
+        match problems.warnings {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.warnings,
+        match problems.warnings {
+            1 => "warning",
+            _ => "warnings",
+        },
+        total_time.as_millis(),
+    );
 }
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
@@ -814,12 +782,63 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // envp is an array of pointers to strings, conventionally of the
     // form key=value, which are passed as the environment of the new
     // program.  The envp array must be terminated by a NULL pointer.
+    let mut buffer = Vec::with_capacity(100);
     let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-        .flat_map(|(k, v)| {
-            [
-                CString::new(k.as_bytes()).unwrap(),
-                CString::new(v.as_bytes()).unwrap(),
-            ]
+        .map(|(k, v)| {
+            buffer.clear();
+
+            use std::io::Write;
+            buffer.write_all(k.as_bytes()).unwrap();
+            buffer.write_all(b"=").unwrap();
+            buffer.write_all(v.as_bytes()).unwrap();
+
+            CString::new(buffer.as_slice()).unwrap()
+        })
+        .collect_in(arena);
+
+    (argv_cstrings, envp_cstrings)
+}
+
+#[cfg_attr(not(target_family = "windows"), allow(unused))]
+fn make_argv_envp_windows<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    arena: &'a Bump,
+    executable: &ExecutableFile,
+    args: I,
+) -> (
+    bumpalo::collections::Vec<'a, CString>,
+    bumpalo::collections::Vec<'a, CString>,
+) {
+    use bumpalo::collections::CollectIn;
+
+    let path = executable.as_path();
+    let path_cstring = CString::new(path.as_os_str().to_str().unwrap().as_bytes()).unwrap();
+
+    // argv is an array of pointers to strings passed to the new program
+    // as its command-line arguments.  By convention, the first of these
+    // strings (i.e., argv[0]) should contain the filename associated
+    // with the file being executed.  The argv array must be terminated
+    // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
+    let it = args
+        .into_iter()
+        .map(|x| CString::new(x.as_ref().to_str().unwrap().as_bytes()).unwrap());
+
+    let argv_cstrings: bumpalo::collections::Vec<CString> =
+        std::iter::once(path_cstring).chain(it).collect_in(arena);
+
+    // envp is an array of pointers to strings, conventionally of the
+    // form key=value, which are passed as the environment of the new
+    // program.  The envp array must be terminated by a NULL pointer.
+    let mut buffer = Vec::with_capacity(100);
+    let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
+        .map(|(k, v)| {
+            buffer.clear();
+
+            use std::io::Write;
+            buffer.write_all(k.to_str().unwrap().as_bytes()).unwrap();
+            buffer.write_all(b"=").unwrap();
+            buffer.write_all(v.to_str().unwrap().as_bytes()).unwrap();
+
+            CString::new(buffer.as_slice()).unwrap()
         })
         .collect_in(arena);
 
@@ -921,12 +940,9 @@ impl ExecutableFile {
 
             #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
-                let _ = argv;
-                let _ = envp;
-                use memexec::memexec_exe;
-                let bytes = std::fs::read(path).unwrap();
-                memexec_exe(&bytes).unwrap();
-                std::process::exit(0);
+                let path_cstring = CString::new(path.to_str().unwrap()).unwrap();
+
+                libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
         }
     }
@@ -1022,7 +1038,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
-    _args: I,
+    args: I,
     binary_bytes: &[u8],
     _expectations: VecMap<ModuleId, Expectations>,
     _interns: Interns,
@@ -1033,9 +1049,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         let executable = roc_run_executable_file_path(binary_bytes)?;
 
         // TODO forward the arguments
-        // let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
-        let argv_cstrings = bumpalo::vec![ in &arena; CString::default()];
-        let envp_cstrings = bumpalo::vec![ in &arena; CString::default()];
+        let (argv_cstrings, envp_cstrings) = make_argv_envp_windows(&arena, &executable, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
@@ -1165,7 +1179,7 @@ impl Target {
             Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
                 vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Unknown,
+                operating_system: OperatingSystem::Wasi,
                 environment: Environment::Unknown,
                 binary_format: BinaryFormat::Wasm,
             },

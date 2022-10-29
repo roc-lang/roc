@@ -50,6 +50,16 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::DECODE),
             builtins_path.join("Decode.roc"),
         ),
+        DeriveBuiltin::Hash => (
+            ModuleId::HASH,
+            module_source(ModuleId::HASH),
+            builtins_path.join("Hash.roc"),
+        ),
+        DeriveBuiltin::IsEq => (
+            ModuleId::BOOL,
+            module_source(ModuleId::BOOL),
+            builtins_path.join("Bool.roc"),
+        ),
     }
 }
 
@@ -154,12 +164,14 @@ macro_rules! v {
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
      ($name:ident has $ability:path) => {{
-         use roc_types::subs::{Subs, SubsIndex,  Content};
+         use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =
                  SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
 
-             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), $ability))
+             let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, [$ability]);
+
+             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), abilities_slice))
          }
      }};
      (^$rec_var:ident) => {{
@@ -245,6 +257,18 @@ where
     let key = Derived::builtin(builtin, &subs, var);
 
     assert_eq!(key, Ok(Derived::Immediate(immediate)));
+}
+
+pub(crate) fn check_single_lset_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Ok(Derived::SingleLambdaSetImmediate(immediate)));
 }
 
 #[allow(clippy::too_many_arguments)]

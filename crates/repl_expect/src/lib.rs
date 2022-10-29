@@ -54,8 +54,6 @@ pub fn get_values<'a>(
         let expr = {
             let variable = *variable;
 
-            let content = subs.get_content_without_compacting(variable);
-
             // TODO: pass layout_cache to jit_to_ast directly
             let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
@@ -71,7 +69,7 @@ pub fn get_values<'a>(
                 app,
                 "expect_repl_main_fn",
                 proc_layout,
-                content,
+                variable,
                 subs,
                 interns,
                 layout_interner.fork(),
@@ -853,7 +851,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface A exposes [] imports []
+                interface Test exposes [] imports []
 
                 NonEmpty := [
                     First Str U8,
@@ -899,7 +897,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface A exposes [] imports []
+                interface Test exposes [] imports []
 
                 makeForcer : {} -> (Str -> U8)
                 makeForcer = \{} -> \_ -> 2u8
@@ -925,11 +923,32 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                forcer : Str -> U8
-                forcer = <function>
-
                 case : Str
                 case = ""
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn issue_i4389() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    totalCount = \{} -> 1u8
+                    totalCount {} == 96u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      totalCount = \{} -> 1u8
+                5│>      totalCount {} == 96u8
                 "#
             ),
         );

@@ -1,9 +1,9 @@
-use crate::abilities::{ImplKey, PendingAbilitiesStore, ResolvedImpl};
+use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
+use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -17,8 +17,8 @@ use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExposedTypesStorageSubs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, AliasVar, Type};
+use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::types::{AbilitySet, Alias, AliasKind, AliasVar, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -122,7 +122,7 @@ pub struct ExposedModuleTypes {
 #[derive(Debug)]
 pub struct Module {
     pub module_id: ModuleId,
-    pub exposed_imports: MutMap<Symbol, Variable>,
+    pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -130,13 +130,13 @@ pub struct Module {
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
-    pub able: MutMap<Variable, (Lowercase, Symbol)>,
+    pub able: MutMap<Variable, (Lowercase, AbilitySet)>,
     pub wildcards: VecSet<Variable>,
 }
 
@@ -145,15 +145,14 @@ pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
     pub declarations: Declarations,
-    pub exposed_imports: MutMap<Symbol, Variable>,
-    pub lookups: Vec<(Symbol, Variable, Region)>,
+    pub exposed_imports: MutMap<Symbol, Region>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 fn validate_generate_with<'a>(
@@ -277,7 +276,6 @@ pub fn canonicalize_module_defs<'a>(
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
     let mut env = Env::new(arena, home, dep_idents, module_ids);
-    let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(
@@ -301,7 +299,6 @@ pub fn canonicalize_module_defs<'a>(
     // rules multiple times unnecessarily.
     crate::operator::desugar_defs(arena, loc_defs);
 
-    let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
@@ -319,20 +316,13 @@ pub fn canonicalize_module_defs<'a>(
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
-            // this is a value definition
-            let expr_var = var_store.fresh();
-
             match scope.import(ident, symbol, region) {
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
                     // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
-                    can_exposed_imports.insert(symbol, expr_var);
-
-                    // This will be used during constraint generation,
-                    // to add the usual Lookup constraint as if this were a normal def.
-                    lookups.push((symbol, expr_var, region));
+                    can_exposed_imports.insert(symbol, region);
                 }
                 Err((_shadowed_symbol, _region)) => {
                     panic!("TODO gracefully handle shadowing in imports.")
@@ -384,6 +374,7 @@ pub fn canonicalize_module_defs<'a>(
         if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
+            && !symbol.is_exposed_for_builtin_derivers()
         {
             env.problem(Problem::UnusedDef(symbol, region));
         }
@@ -396,7 +387,7 @@ pub fn canonicalize_module_defs<'a>(
     for able in output.introduced_variables.able {
         rigid_variables
             .able
-            .insert(able.variable, (able.name, able.ability));
+            .insert(able.variable, (able.name, able.abilities));
     }
 
     for var in output.introduced_variables.wildcards {
@@ -431,7 +422,7 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     let (mut declarations, mut output) =
-        crate::def::sort_can_defs_new(&mut env, &mut scope, var_store, defs, new_output);
+        crate::def::sort_can_defs_new(&mut scope, var_store, defs, new_output);
 
     debug_assert!(
         output.pending_derives.is_empty(),
@@ -795,7 +786,6 @@ pub fn canonicalize_module_defs<'a>(
         problems: env.problems,
         symbols_from_requires,
         pending_derives,
-        lookups,
         loc_expects,
     }
 }
@@ -910,7 +900,7 @@ fn fix_values_captured_in_closure_pattern(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | Underscore
         | Shadowed(..)
         | MalformedPattern(_, _)
@@ -1049,8 +1039,8 @@ fn fix_values_captured_in_closure_expr(
         | Int(..)
         | Float(..)
         | Str(_)
-        | SingleQuote(_)
-        | Var(_)
+        | SingleQuote(..)
+        | Var(..)
         | AbilityMember(..)
         | EmptyRecord
         | TypedHole { .. }
@@ -1188,5 +1178,55 @@ fn fix_values_captured_in_closure_expr(
             );
         }
         OpaqueWrapFunction(_) => {}
+    }
+}
+
+/// Type state for a single module.
+#[derive(Debug)]
+pub struct TypeState {
+    pub subs: Subs,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub abilities: AbilitiesStore,
+    pub solved_implementations: ResolvedImplementations,
+}
+
+impl TypeState {
+    pub fn serialize(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
+        let Self {
+            subs,
+            exposed_vars_by_symbol,
+            abilities,
+            solved_implementations,
+        } = self;
+
+        let written_subs = subs.serialize(exposed_vars_by_symbol, writer)?;
+        let written_ab = abilities.serialize(writer)?;
+        let written_solved_impls =
+            crate::abilities::serialize_solved_implementations(solved_implementations, writer)?;
+
+        Ok(written_subs + written_ab + written_solved_impls)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> (Self, usize) {
+        let ((subs, exposed_vars_by_symbol), len_subs) = Subs::deserialize(bytes);
+        let bytes = &bytes[len_subs..];
+
+        let (abilities, len_abilities) = AbilitiesStore::deserialize(bytes);
+        let bytes = &bytes[len_abilities..];
+
+        let (solved_implementations, len_solved_impls) =
+            crate::abilities::deserialize_solved_implementations(bytes);
+
+        let total_offset = len_subs + len_abilities + len_solved_impls;
+
+        (
+            Self {
+                subs,
+                exposed_vars_by_symbol: exposed_vars_by_symbol.to_vec(),
+                abilities,
+                solved_implementations,
+            },
+            total_offset,
+        )
     }
 }

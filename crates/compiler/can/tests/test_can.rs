@@ -918,37 +918,6 @@ mod test_can {
     }
 
     #[test]
-    fn invalid_self_recursion() {
-        let src = indoc!(
-            r#"
-                x = x
-
-                x
-            "#
-        );
-
-        let home = test_home();
-        let arena = Bump::new();
-        let CanExprOut {
-            loc_expr,
-            problems,
-            interns,
-            ..
-        } = can_expr_with(&arena, home, src);
-
-        let is_circular_def = matches!(loc_expr.value, RuntimeError(RuntimeError::CircularDef(_)));
-
-        let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
-            symbol: interns.symbol(home, "x".into()),
-            symbol_region: Region::new(Position::new(0), Position::new(1)),
-            expr_region: Region::new(Position::new(4), Position::new(5)),
-        }]));
-
-        assert_eq!(is_circular_def, true);
-        assert_eq!(problems, vec![problem]);
-    }
-
-    #[test]
     fn invalid_mutual_recursion() {
         let src = indoc!(
             r#"

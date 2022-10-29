@@ -714,7 +714,7 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(275);
+            pmb.set_inliner_with_threshold(750);
         }
     }
 
@@ -6035,6 +6035,34 @@ fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_TRIM_RIGHT,
             )
         }
+        StrWithCapacity => {
+            // Str.withCapacity : Nat -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let str_len = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[str_len],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_CAPACITY,
+            )
+        }
+        StrGraphemes => {
+            // Str.graphemes : Str -> List Str
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_GRAPHEMES,
+            )
+        }
         ListLen => {
             // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
@@ -6157,7 +6185,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
         StrGetUnsafe => {
-            // List.getUnsafe : Str, Nat -> u8
+            // Str.getUnsafe : Str, Nat -> u8
             debug_assert_eq!(args.len(), 2);
 
             let wrapper_struct = load_symbol(scope, &args[0]);
@@ -6448,8 +6476,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            debug_assert_eq!(lhs_layout, rhs_layout);
             let int_width = intwidth_from_layout(*lhs_layout);
+
+            debug_assert_eq!(rhs_layout, &Layout::Builtin(Builtin::Int(IntWidth::U8)));
+            let rhs_arg = if rhs_layout != lhs_layout {
+                // LLVM shift intrinsics expect the left and right sides to have the same type, so
+                // here we cast up `rhs` to the lhs type. Since the rhs was checked to be a U8,
+                // this cast isn't lossy.
+                let rhs_arg = env.builder.build_int_cast(
+                    rhs_arg.into_int_value(),
+                    lhs_arg.get_type().into_int_type(),
+                    "cast_for_shift",
+                );
+                rhs_arg.into()
+            } else {
+                rhs_arg
+            };
 
             build_int_binop(
                 env,
@@ -6822,7 +6864,7 @@ pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'
             return_size >= 2 * env.target_info.ptr_width() as u32
         }
         roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
-        roc_target::OperatingSystem::Wasi => unreachable!(),
+        roc_target::OperatingSystem::Wasi => return_size > 2 * env.target_info.ptr_width() as u32,
     };
 
     if return_size == 0 {
@@ -7921,11 +7963,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     //         (xor arg shifted) - shifted
 
     let bd = env.builder;
-    let ctx = env.context;
     let shifted_name = "abs_shift_right";
     let shifted_alloca = {
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
-        let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
+        let shift_val = int_type.const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
         let alloca = bd.build_alloca(int_type, "#int_abs_help");
 

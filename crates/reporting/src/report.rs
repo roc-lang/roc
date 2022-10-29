@@ -1,6 +1,6 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId, PQModuleName, PackageQualified, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -453,6 +453,15 @@ impl<'a> RocDocAllocator<'a> {
             "app".to_string()
         } else {
             name.to_string()
+        };
+
+        self.text(name).annotate(Annotation::Module)
+    }
+
+    pub fn pq_module_name(&'a self, name: PQModuleName<'a>) -> DocBuilder<'a, Self, Annotation> {
+        let name = match name {
+            PackageQualified::Unqualified(n) => n.to_string(),
+            PackageQualified::Qualified(prefix, n) => format!("{prefix}.{n}"),
         };
 
         self.text(name).annotate(Annotation::Module)

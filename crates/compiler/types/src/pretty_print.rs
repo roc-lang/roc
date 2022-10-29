@@ -2,7 +2,7 @@ use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, UnsortedUnionLabels, Variable,
 };
-use crate::types::{name_type_var, name_type_var_with_hint, RecordField, Uls};
+use crate::types::{name_type_var, name_type_var_with_hint, AbilitySet, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -541,7 +541,7 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 
 #[derive(Default)]
 struct Context<'a> {
-    able_variables: Vec<(&'a str, Symbol)>,
+    able_variables: Vec<(&'a str, AbilitySet)>,
     recursion_structs_to_expand: Vec<Variable>,
 }
 
@@ -568,11 +568,17 @@ fn content_to_string(
 
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
-    for (i, (var, ability)) in ctx.able_variables.into_iter().enumerate() {
+    for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
         buf.push_str(if i == 0 { " | " } else { ", " });
         buf.push_str(var);
-        buf.push_str(" has ");
-        write_symbol(&env, ability, &mut buf);
+        buf.push_str(" has");
+        for (i, ability) in abilities.into_sorted_iter().enumerate() {
+            if i > 0 {
+                buf.push_str(" &");
+            }
+            buf.push(' ');
+            write_symbol(&env, ability, &mut buf);
+        }
     }
 
     buf
@@ -621,16 +627,18 @@ fn write_content<'a>(
             let name = &subs.field_names[name_index.index as usize];
             buf.push_str(name.as_str())
         }
-        FlexAbleVar(opt_name_index, ability) => {
+        FlexAbleVar(opt_name_index, abilities) => {
             let name = opt_name_index
                 .map(|name_index| subs.field_names[name_index.index as usize].as_str())
                 .unwrap_or(WILDCARD);
-            ctx.able_variables.push((name, *ability));
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
+            ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
-        RigidAbleVar(name_index, ability) => {
+        RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].as_str();
-            ctx.able_variables.push((name, *ability));
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
+            ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
         RecursionVar {
@@ -1104,10 +1112,8 @@ fn write_flat_type<'a>(
                     buf.push_str(label.as_str());
 
                     match record_field {
-                        Optional(_) => buf.push_str(" ? "),
-                        Required(_) => buf.push_str(" : "),
-                        Demanded(_) => buf.push_str(" : "),
-                        RigidOptional(_) => buf.push_str(" ? "),
+                        Optional(_) | RigidOptional(_) => buf.push_str(" ? "),
+                        Required(_) | Demanded(_) | RigidRequired(_) => buf.push_str(" : "),
                     };
 
                     write_content(
@@ -1156,11 +1162,15 @@ fn write_flat_type<'a>(
             )
         }
 
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
             buf.push('[');
 
             let mut tags: MutMap<TagName, _> = MutMap::default();
-            tags.insert(subs[*tag_name].clone(), vec![]);
+            tags.extend(
+                subs.get_subs_slice(*tag_names)
+                    .iter()
+                    .map(|t| (t.clone(), vec![])),
+            );
             let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var);
 
             buf.push(']');
@@ -1241,8 +1251,12 @@ pub fn chase_ext_tag_union(
             push_union(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
-        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((subs[*tag_name].clone(), vec![]));
+        Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
+            fields.extend(
+                subs.get_subs_slice(*tag_names)
+                    .iter()
+                    .map(|t| (t.clone(), vec![])),
+            );
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }

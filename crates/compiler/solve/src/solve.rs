@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
@@ -9,7 +11,7 @@ use crate::specialize::{
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve, TypeOrVar};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_can::module::ExposedByModule;
@@ -274,6 +276,9 @@ impl Aliases {
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
+        problems: &mut Vec<TypeError>,
+        abilities_store: &AbilitiesStore,
+        obligation_cache: &mut ObligationCache,
         arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
@@ -340,12 +345,12 @@ impl Aliases {
 
         for OptAbleVar {
             var: rec_var,
-            opt_ability,
+            opt_abilities,
         } in delayed_variables
             .recursion_variables(&mut self.variables)
             .iter_mut()
         {
-            debug_assert!(opt_ability.is_none());
+            debug_assert!(opt_abilities.is_none());
             let new_var = subs.fresh_unnamed_flex_var();
             substitutions.insert(*rec_var, new_var);
 
@@ -362,7 +367,7 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
-            debug_assert!(old.opt_ability.is_none());
+            debug_assert!(old.opt_abilities.is_none());
             if old.var != *new {
                 substitutions.insert(old.var, *new);
 
@@ -375,7 +380,18 @@ impl Aliases {
         if !can_reuse_old_definition {
             let mut typ = typ.clone();
             typ.substitute_variables(&substitutions);
-            let alias_variable = type_to_variable(subs, rank, pools, arena, self, &typ, false);
+            let alias_variable = type_to_variable(
+                subs,
+                rank,
+                pools,
+                problems,
+                abilities_store,
+                obligation_cache,
+                arena,
+                self,
+                &typ,
+                false,
+            );
             (alias_variable, kind)
         } else {
             if !substitutions.is_empty() {
@@ -389,7 +405,18 @@ impl Aliases {
             // assumption: an alias does not (transitively) syntactically contain itself
             // (if it did it would have to be a recursive tag union, which we should have fixed up
             // during canonicalization)
-            let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t, false);
+            let alias_variable = type_to_variable(
+                subs,
+                rank,
+                pools,
+                problems,
+                abilities_store,
+                obligation_cache,
+                arena,
+                self,
+                &t,
+                false,
+            );
 
             {
                 match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
@@ -562,7 +589,14 @@ fn run_in_place(
     let mut obligation_cache = ObligationCache::default();
     let mut awaiting_specializations = AwaitingSpecializations::default();
 
-    let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
+    let pending_derives = PendingDerivesTable::new(
+        subs,
+        aliases,
+        pending_derives,
+        problems,
+        abilities_store,
+        &mut obligation_cache,
+    );
     let CheckedDerives {
         legal_derives: _,
         problems: derives_problems,
@@ -687,6 +721,9 @@ fn solve(
                     constraints,
                     rank,
                     pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -747,6 +784,9 @@ fn solve(
                     constraints,
                     next_rank,
                     pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -858,11 +898,29 @@ fn solve(
             Eq(roc_can::constraint::Eq(type_index, expectation_index, category_index, region)) => {
                 let category = &constraints.categories[category_index.index()];
 
-                let actual =
-                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    aliases,
+                    *type_index,
+                );
 
                 let expectation = &constraints.expectations[expectation_index.index()];
-                let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
+                let expected = type_cell_to_var(
+                    subs,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    pools,
+                    aliases,
+                    expectation.get_type_ref(),
+                );
 
                 match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                     Success {
@@ -903,7 +961,7 @@ fn solve(
                             *region,
                             category.clone(),
                             actual_type,
-                            expectation.clone().replace(expected_type),
+                            expectation.replace_ref(expected_type),
                         );
 
                         problems.push(problem);
@@ -927,6 +985,9 @@ fn solve(
                     subs,
                     rank,
                     pools,
+                    &mut vec![], // don't report any extra errors
+                    abilities_store,
+                    obligation_cache,
                     aliases,
                     *source_index,
                 );
@@ -962,8 +1023,16 @@ fn solve(
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
 
-                        let expected =
-                            type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
+                        let expected = type_cell_to_var(
+                            subs,
+                            rank,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            pools,
+                            aliases,
+                            expectation.get_type_ref(),
+                        );
 
                         match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                             Success {
@@ -1009,7 +1078,7 @@ fn solve(
                                     *region,
                                     Category::Lookup(*symbol),
                                     actual_type,
-                                    expectation.clone().replace(expected_type),
+                                    expectation.replace_ref(expected_type),
                                 );
 
                                 problems.push(problem);
@@ -1048,11 +1117,29 @@ fn solve(
             | PatternPresence(type_index, expectation_index, category_index, region) => {
                 let category = &constraints.pattern_categories[category_index.index()];
 
-                let actual =
-                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    aliases,
+                    *type_index,
+                );
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
-                let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
+                let expected = type_cell_to_var(
+                    subs,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    pools,
+                    aliases,
+                    expectation.get_type_ref(),
+                );
 
                 let mode = match constraint {
                     PatternPresence(..) => Mode::PRESENT,
@@ -1098,7 +1185,7 @@ fn solve(
                             *region,
                             category.clone(),
                             actual_type,
-                            expectation.clone().replace(expected_type),
+                            expectation.replace_ref(expected_type),
                         );
 
                         problems.push(problem);
@@ -1209,8 +1296,17 @@ fn solve(
                 }
             }
             IsOpenType(type_index) => {
-                let actual =
-                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    aliases,
+                    *type_index,
+                );
 
                 open_tag_union(subs, actual);
 
@@ -1227,16 +1323,39 @@ fn solve(
                     region,
                 } = includes_tag;
 
-                let typ = &constraints.types[type_index.index()];
-                let tys = &constraints.types[types.indices()];
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
-                let actual = type_to_var(subs, rank, pools, aliases, typ);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    aliases,
+                    *type_index,
+                );
+
+                let payload_types = constraints.variables[types.indices()]
+                    .iter()
+                    .map(|v| Type::Variable(*v))
+                    .collect();
+
                 let tag_ty = Type::TagUnion(
-                    vec![(tag_name.clone(), tys.to_vec())],
+                    vec![(tag_name.clone(), payload_types)],
                     TypeExtension::Closed,
                 );
-                let includes = type_to_var(subs, rank, pools, aliases, &tag_ty);
+                let includes = type_to_var(
+                    subs,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    pools,
+                    aliases,
+                    &tag_ty,
+                );
 
                 match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
                     Success {
@@ -1337,10 +1456,28 @@ fn solve(
                     }
                 };
 
-                let real_var =
-                    either_type_index_to_var(constraints, subs, rank, pools, aliases, real_var);
+                let real_var = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    aliases,
+                    real_var,
+                );
 
-                let branches_var = type_to_var(subs, rank, pools, aliases, expected_type);
+                let branches_var = type_cell_to_var(
+                    subs,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    pools,
+                    aliases,
+                    expected_type,
+                );
 
                 let real_content = subs.get_content_without_compacting(real_var);
                 let branches_content = subs.get_content_without_compacting(branches_var);
@@ -1522,8 +1659,9 @@ fn solve(
 
                     symbols.iter().any(|(s, _)| {
                         let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
-                        let content = subs.get_content_without_compacting(var);
-                        !matches!(content, Error | Structure(FlatType::Func(..)))
+                        let (_, underlying_content) = chase_alias_content(subs, var);
+
+                        !matches!(underlying_content, Error | Structure(FlatType::Func(..)))
                     })
                 };
 
@@ -1553,6 +1691,17 @@ fn solve(
     }
 
     state
+}
+
+fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::Alias(_, _, real_var, _) => {
+                var = *real_var;
+            }
+            content => return (var, content),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1877,6 +2026,9 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         constraints: &Constraints,
         rank: Rank,
         pools: &mut Pools,
+        problems: &mut Vec<TypeError>,
+        abilities_store: &mut AbilitiesStore,
+        obligation_cache: &mut ObligationCache,
         aliases: &mut Aliases,
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
@@ -1886,8 +2038,17 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 
         let mut local_def_vars = Self::with_length(types_slice.len());
 
-        for (&(symbol, region), typ) in (loc_symbols_slice.iter()).zip(types_slice) {
-            let var = type_to_var(subs, rank, pools, aliases, typ);
+        for (&(symbol, region), typ_cell) in (loc_symbols_slice.iter()).zip(types_slice) {
+            let var = type_cell_to_var(
+                subs,
+                rank,
+                problems,
+                abilities_store,
+                obligation_cache,
+                pools,
+                aliases,
+                typ_cell,
+            );
 
             local_def_vars.push((symbol, Loc { value: var, region }));
         }
@@ -1896,7 +2057,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -1918,14 +2079,26 @@ fn either_type_index_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
+    problems: &mut Vec<TypeError>,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
     aliases: &mut Aliases,
-    either_type_index: roc_collections::soa::EitherIndex<Type, Variable>,
+    either_type_index: TypeOrVar,
 ) -> Variable {
     match either_type_index.split() {
         Ok(type_index) => {
-            let typ = &constraints.types[type_index.index()];
+            let typ_cell = &constraints.types[type_index.index()];
 
-            type_to_var(subs, rank, pools, aliases, typ)
+            type_cell_to_var(
+                subs,
+                rank,
+                problems,
+                abilities_store,
+                obligation_cache,
+                pools,
+                aliases,
+                typ_cell,
+            )
         }
         Err(var_index) => {
             // we cheat, and  store the variable directly in the index
@@ -1934,9 +2107,38 @@ fn either_type_index_to_var(
     }
 }
 
+/// Converts a type in a cell to a variable, leaving the converted variable behind for re-use.
+fn type_cell_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    problems: &mut Vec<TypeError>,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    pools: &mut Pools,
+    aliases: &mut Aliases,
+    typ_cell: &Cell<Type>,
+) -> Variable {
+    let typ = typ_cell.replace(Type::EmptyTagUnion);
+    let var = type_to_var(
+        subs,
+        rank,
+        problems,
+        abilities_store,
+        obligation_cache,
+        pools,
+        aliases,
+        &typ,
+    );
+    typ_cell.replace(Type::Variable(var));
+    var
+}
+
 pub(crate) fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
+    problems: &mut Vec<TypeError>,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
     pools: &mut Pools,
     aliases: &mut Aliases,
     typ: &Type,
@@ -1946,7 +2148,18 @@ pub(crate) fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        let var = type_to_variable(subs, rank, pools, &arena, aliases, typ, false);
+        let var = type_to_variable(
+            subs,
+            rank,
+            pools,
+            problems,
+            abilities_store,
+            obligation_cache,
+            &arena,
+            aliases,
+            typ,
+            false,
+        );
 
         arena.reset();
         put_scratchpad(arena);
@@ -2097,6 +2310,9 @@ fn type_to_variable<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
+    problems: &mut Vec<TypeError>,
+    abilities_store: &AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
     arena: &'a bumpalo::Bump,
     aliases: &mut Aliases,
     typ: &Type,
@@ -2106,6 +2322,7 @@ fn type_to_variable<'a>(
     use bumpalo::collections::Vec;
 
     let mut stack = Vec::with_capacity_in(8, arena);
+    let mut bind_to_abilities = Vec::new_in(arena);
 
     macro_rules! helper {
         ($typ:expr, $ambient_function_policy:expr) => {{
@@ -2153,7 +2370,7 @@ fn type_to_variable<'a>(
             Apply(symbol, arguments, _) => {
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                    let var = helper!(var_index);
+                    let var = helper!(&var_index.value);
                     subs.variables[target_index] = var;
                 }
 
@@ -2241,6 +2458,7 @@ fn type_to_variable<'a>(
                             Optional(t) => Optional(helper!(t)),
                             Required(t) => Required(helper!(t)),
                             Demanded(t) => Demanded(helper!(t)),
+                            RigidRequired(t) => RigidRequired(helper!(t)),
                             RigidOptional(t) => RigidOptional(helper!(t)),
                         }
                     };
@@ -2299,10 +2517,11 @@ fn type_to_variable<'a>(
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }
 
-                let slice = SubsIndex::new(subs.tag_names.len() as u32);
-                subs.tag_names.push(tag_name.clone());
+                let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name.clone()]);
+                let symbols = SubsSlice::extend_new(&mut subs.symbol_names, [*symbol]);
 
-                let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
+                let content =
+                    Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2343,8 +2562,11 @@ fn type_to_variable<'a>(
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
                     for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
-                        let copy_var = helper!(arg_type);
+                        let copy_var = helper!(&arg_type.value.typ);
                         subs.variables[target_index] = copy_var;
+                        if let Some(abilities) = arg_type.value.opt_abilities.as_ref() {
+                            bind_to_abilities.push((Loc::at(arg_type.region, copy_var), abilities));
+                        }
                     }
 
                     let it = (new_variables.indices().skip(type_arguments.len()))
@@ -2352,8 +2574,18 @@ fn type_to_variable<'a>(
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
                         // instantiation of the real var, there will be nothing to link against.
-                        let copy_var =
-                            type_to_variable(subs, rank, pools, arena, aliases, &ls.0, true);
+                        let copy_var = type_to_variable(
+                            subs,
+                            rank,
+                            pools,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            arena,
+                            aliases,
+                            &ls.0,
+                            true,
+                        );
                         subs.variables[target_index] = copy_var;
                     }
 
@@ -2368,6 +2600,9 @@ fn type_to_variable<'a>(
                     subs,
                     rank,
                     pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
                     arena,
                     *symbol,
                     alias_variables,
@@ -2391,44 +2626,17 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, OptAbleType { typ, opt_ability }) in
+                    for (target_index, OptAbleType { typ, opt_abilities }) in
                         (new_variables.indices()).zip(type_arguments)
                     {
-                        let copy_var = match opt_ability {
-                            None => helper!(typ),
-                            Some(ability) => {
-                                // If this type argument is marked as being bound to an ability, we must
-                                // now correctly instantiate it as so.
-                                match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
-                                    RegisterVariable::Direct(var) => {
-                                        use Content::*;
-                                        match *subs.get_content_without_compacting(var) {
-                                            FlexVar(opt_name) => subs
-                                                .set_content(var, FlexAbleVar(opt_name, *ability)),
-                                            RigidVar(..) => internal_error!("Rigid var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
-                                            RigidAbleVar(..) | FlexAbleVar(..) => internal_error!("Able var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
-                                            _ => {
-                                                // TODO associate the type to the bound ability, and check
-                                                // that it correctly implements the ability.
-                                            }
-                                        }
-                                        var
-                                    }
-                                    RegisterVariable::Deferred => {
-                                        // TODO associate the type to the bound ability, and check
-                                        // that it correctly implements the ability.
-                                        let var = subs.fresh_unnamed_flex_var();
-                                        stack.push(TypeToVar::Defer {
-                                            typ,
-                                            destination: var,
-                                            ambient_function: AmbientFunctionPolicy::NoFunction,
-                                        });
-                                        var
-                                    }
-                                }
-                            }
-                        };
+                        let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
+                        if let Some(abilities) = opt_abilities.as_ref() {
+                            bind_to_abilities.push((
+                                Loc::at(roc_region::all::Region::zero(), copy_var),
+                                abilities,
+                            ));
+                        }
                     }
 
                     let it = (new_variables.indices().skip(type_arguments.len()))
@@ -2475,8 +2683,18 @@ fn type_to_variable<'a>(
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
                         // instantiation of the real var, there will be nothing to link against.
-                        let copy_var =
-                            type_to_variable(subs, rank, pools, arena, aliases, &ls.0, true);
+                        let copy_var = type_to_variable(
+                            subs,
+                            rank,
+                            pools,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            arena,
+                            aliases,
+                            &ls.0,
+                            true,
+                        );
                         subs.variables[target_index] = copy_var;
                     }
 
@@ -2488,8 +2706,18 @@ fn type_to_variable<'a>(
                 };
 
                 // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable =
-                    type_to_variable(subs, rank, pools, arena, aliases, alias_type, false);
+                let alias_variable = type_to_variable(
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    arena,
+                    aliases,
+                    alias_type,
+                    false,
+                );
                 // TODO(opaques): I think host-exposed aliases should always be structural
                 // (when does it make sense to give a host an opaque type?)
                 let content = Content::Alias(
@@ -2518,6 +2746,74 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
         };
+    }
+
+    for (Loc { value: var, region }, abilities) in bind_to_abilities {
+        match *subs.get_content_unchecked(var) {
+            Content::RigidVar(a) => {
+                // TODO(multi-abilities): check run cache
+                let abilities_slice =
+                    SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
+                subs.set_content(var, Content::RigidAbleVar(a, abilities_slice));
+            }
+            Content::RigidAbleVar(_, abs)
+                if (subs.get_subs_slice(abs).iter()).eq(abilities.sorted_iter()) =>
+            {
+                // pass, already bound
+            }
+            _ => {
+                let abilities_slice =
+                    SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
+                let flex_ability = subs.fresh(Descriptor {
+                    content: Content::FlexAbleVar(None, abilities_slice),
+                    rank,
+                    mark: Mark::NONE,
+                    copy: OptVariable::NONE,
+                });
+
+                let category = Category::OpaqueArg;
+                match unify(&mut UEnv::new(subs), var, flex_ability, Mode::EQ) {
+                    Success {
+                        vars: _,
+                        must_implement_ability,
+                        lambda_sets_to_specialize,
+                        extra_metadata: _,
+                    } => {
+                        // No introduction needed
+
+                        if !must_implement_ability.is_empty() {
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(region, category, flex_ability),
+                            );
+                            problems.extend(new_problems);
+                        }
+                        debug_assert!(lambda_sets_to_specialize
+                            .drain()
+                            .all(|(_, vals)| vals.is_empty()));
+                    }
+                    Failure(_vars, actual_type, expected_type, _bad_impls) => {
+                        // No introduction needed
+
+                        let problem = TypeError::BadExpr(
+                            region,
+                            category,
+                            actual_type,
+                            Expected::NoExpectation(expected_type),
+                        );
+
+                        problems.push(problem);
+                    }
+                    BadType(_vars, problem) => {
+                        // No introduction needed
+
+                        problems.push(TypeError::BadType(problem));
+                    }
+                }
+            }
+        }
     }
 
     result
@@ -2865,7 +3161,7 @@ fn create_union_lambda<'a>(
     let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, capture_types);
     let new_variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
-    let lambda_name_slice = SubsSlice::extend_new(&mut subs.closure_names, [closure]);
+    let lambda_name_slice = SubsSlice::extend_new(&mut subs.symbol_names, [closure]);
 
     UnionLambdas::from_slices(lambda_name_slice, new_variable_slices)
 }
@@ -3129,11 +3425,17 @@ fn adjust_rank_content(
                         let var = subs[var_index];
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
 
-                        // When generalizing annotations with rigid optionals, we want to promote
-                        // them to non-rigid, so that usages at specialized sites don't have to
-                        // exactly include the optional field.
-                        if let RecordField::RigidOptional(()) = subs[field_index] {
-                            subs[field_index] = RecordField::Optional(());
+                        // When generalizing annotations with rigid optional/required fields,
+                        // we want to promote them to non-rigid, so that usages at
+                        // specialized sites don't have to exactly include the optional/required field.
+                        match subs[field_index] {
+                            RecordField::RigidOptional(()) => {
+                                subs[field_index] = RecordField::Optional(());
+                            }
+                            RecordField::RigidRequired(()) => {
+                                subs[field_index] = RecordField::Required(());
+                            }
+                            _ => {}
                         }
                     }
 
@@ -3507,7 +3809,8 @@ fn deep_copy_var_help(
                                 let slice = SubsSlice::extend_new(
                                     &mut subs.record_fields,
                                     field_types.into_iter().map(|f| match f {
-                                        RecordField::RigidOptional(()) => internal_error!("RigidOptionals should be generalized to non-rigid by this point"),
+                                        RecordField::RigidOptional(())
+                                        | RecordField::RigidRequired(()) => internal_error!("Rigid optional/required should be generalized to non-rigid by this point"),
 
                                         RecordField::Demanded(_)
                                         | RecordField::Required(_)

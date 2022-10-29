@@ -12,6 +12,7 @@ use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
+use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 
@@ -59,7 +60,7 @@ pub enum Pattern {
     IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
     FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
-    SingleQuote(char),
+    SingleQuote(Variable, Variable, char, SingleQuoteBound),
     Underscore,
 
     /// An identifier that marks a specialization of an ability member.
@@ -95,7 +96,7 @@ impl Pattern {
             IntLiteral(var, ..) => Some(*var),
             FloatLiteral(var, ..) => Some(*var),
             StrLiteral(_) => None,
-            SingleQuote(_) => None,
+            SingleQuote(..) => None,
             Underscore => None,
 
             AbilityMemberSpecialization { .. } => None,
@@ -148,7 +149,7 @@ impl Pattern {
             IntLiteral(..) => C::Int,
             FloatLiteral(..) => C::Float,
             StrLiteral(_) => C::Str,
-            SingleQuote(_) => C::Character,
+            SingleQuote(..) => C::Character,
             Underscore => C::PatternDefault,
 
             AbilityMemberSpecialization { .. } => C::PatternDefault,
@@ -456,7 +457,12 @@ pub fn canonicalize_pattern<'a>(
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
                 if it.peek().is_none() {
-                    Pattern::SingleQuote(char)
+                    Pattern::SingleQuote(
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        char,
+                        SingleQuoteBound::from_char(char),
+                    )
                 } else {
                     // multiple chars is found
                     let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
@@ -615,6 +621,9 @@ pub fn canonicalize_pattern<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
+        List(..) => todo!(),
+        ListRest => todo!(),
+
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
@@ -724,7 +733,7 @@ impl<'a> BindingsFromPattern<'a> {
                         | IntLiteral(..)
                         | FloatLiteral(..)
                         | StrLiteral(_)
-                        | SingleQuote(_)
+                        | SingleQuote(..)
                         | Underscore
                         | Shadowed(_, _, _)
                         | MalformedPattern(_, _)

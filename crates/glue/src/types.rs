@@ -768,7 +768,9 @@ fn add_type_help<'a>(
                 .expect("something weird in content")
                 .flat_map(|(label, field)| {
                     match field {
-                        RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                        RecordField::Required(field_var)
+                        | RecordField::Demanded(field_var)
+                        | RecordField::RigidRequired(field_var) => {
                             Some((label.to_string(), field_var))
                         }
                         RecordField::Optional(_) | RecordField::RigidOptional(_) => {

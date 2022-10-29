@@ -1,15 +1,17 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
+    Unfulfilled,
 };
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
+    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
+    Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
 use roc_unify::unify::{Env, MustImplementConstraints};
@@ -49,7 +51,14 @@ pub struct PendingDerivesTable(
 );
 
 impl PendingDerivesTable {
-    pub fn new(subs: &mut Subs, aliases: &mut Aliases, pending_derives: PendingDerives) -> Self {
+    pub fn new(
+        subs: &mut Subs,
+        aliases: &mut Aliases,
+        pending_derives: PendingDerives,
+        problems: &mut Vec<TypeError>,
+        abilities_store: &mut AbilitiesStore,
+        obligation_cache: &mut ObligationCache,
+    ) -> Self {
         let mut table = VecMap::with_capacity(pending_derives.len());
 
         for (opaque, (typ, derives)) in pending_derives.into_iter() {
@@ -65,8 +74,16 @@ impl PendingDerivesTable {
                 let derive_key = RequestedDeriveKey { opaque, ability };
 
                 // Neither rank nor pools should matter here.
-                let opaque_var =
-                    type_to_var(subs, Rank::toplevel(), &mut Pools::default(), aliases, &typ);
+                let opaque_var = type_to_var(
+                    subs,
+                    Rank::toplevel(),
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut Pools::default(),
+                    aliases,
+                    &typ,
+                );
                 let real_var = match subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,
                     _ => internal_error!("Non-opaque in derives table"),
@@ -272,6 +289,12 @@ impl ObligationCache {
                 var,
             )),
 
+            Symbol::HASH_HASH_ABILITY => {
+                Some(DeriveHash::is_derivable(self, abilities_store, subs, var))
+            }
+
+            Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
+
             _ => None,
         };
 
@@ -416,7 +439,7 @@ impl ObligationCache {
 
 #[inline(always)]
 #[rustfmt::skip]
-fn is_builtin_number_alias(symbol: Symbol) -> bool {
+fn is_builtin_int_alias(symbol: Symbol) -> bool {
     matches!(symbol,
           Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
         | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
@@ -429,10 +452,30 @@ fn is_builtin_number_alias(symbol: Symbol) -> bool {
         | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
         | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
         | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
+    )
+}
+
+#[inline(always)]
+#[rustfmt::skip]
+fn is_builtin_float_alias(symbol: Symbol) -> bool {
+    matches!(symbol,
         | Symbol::NUM_F32  | Symbol::NUM_BINARY32
         | Symbol::NUM_F64  | Symbol::NUM_BINARY64
+    )
+}
+
+#[inline(always)]
+#[rustfmt::skip]
+fn is_builtin_dec_alias(symbol: Symbol) -> bool {
+    matches!(symbol,
         | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
     )
+}
+
+#[inline(always)]
+#[rustfmt::skip]
+fn is_builtin_number_alias(symbol: Symbol) -> bool {
+    is_builtin_int_alias(symbol) || is_builtin_float_alias(symbol) || is_builtin_dec_alias(symbol)
 }
 
 struct NotDerivable {
@@ -444,6 +487,7 @@ struct Descend(bool);
 
 trait DerivableVisitor {
     const ABILITY: Symbol;
+    const ABILITY_SLICE: SubsSlice<Symbol>;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
@@ -451,20 +495,8 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
-    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
+    fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
+        if abilities != [Self::ABILITY] {
             Err(NotDerivable {
                 var,
                 context: NotDerivableContext::NoContext,
@@ -594,7 +626,7 @@ trait DerivableVisitor {
             match *content {
                 FlexVar(opt_name) => {
                     // Promote the flex var to be bound to the ability.
-                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY_SLICE));
                 }
                 RigidVar(_) => {
                     return Err(NotDerivable {
@@ -602,8 +634,18 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
-                FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
-                RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
+                FlexAbleVar(opt_name, abilities) => {
+                    // This flex var inherits the ability.
+                    let merged_abilites = roc_unify::unify::merged_ability_slices(
+                        subs,
+                        abilities,
+                        Self::ABILITY_SLICE,
+                    );
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
+                }
+                RigidAbleVar(_, abilities) => {
+                    Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?
+                }
                 RecursionVar {
                     structure,
                     opt_name: _,
@@ -729,6 +771,7 @@ trait DerivableVisitor {
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_ENCODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -807,6 +850,7 @@ impl DerivableVisitor for DeriveEncoding {
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_DECODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -889,6 +933,197 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+}
+
+struct DeriveHash;
+impl DerivableVisitor for DeriveHash {
+    const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_HASH;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        for (field_name, _, field) in fields.iter_all() {
+            if subs[field].is_optional() {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                        subs[field_name].clone(),
+                    )),
+                });
+            }
+        }
+
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+}
+
+struct DeriveEq;
+impl DerivableVisitor for DeriveEq {
+    const ABILITY: Symbol = Symbol::BOOL_EQ;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_int_alias(symbol) || is_builtin_dec_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST
+                | Symbol::SET_SET
+                | Symbol::DICT_DICT
+                | Symbol::STR_STR
+                | Symbol::BOX_BOX_TYPE,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        for (field_name, _, field) in fields.iter_all() {
+            if subs[field].is_optional() {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                        subs[field_name].clone(),
+                    )),
+                });
+            }
+        }
+
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_float_alias(symbol) {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::Eq(NotDerivableEq::FloatingPoint),
+            })
+        } else if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        // Ranged numbers are allowed, because they are always possibly ints - floats can not have
+        // `isEq` derived, but if something were to be a float, we'd see it exactly as a float.
         Ok(())
     }
 }
@@ -1006,9 +1241,6 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
             match resolver.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(spec_symbol)
-                }
-                roc_types::types::MemberImpl::Derived => {
-                    todo_abilities!("get type from obligated opaque")
                 }
                 // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
                 // which will make this simpler.

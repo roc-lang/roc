@@ -1,3 +1,5 @@
+Click the ☰ button in the top left to see and search the table of contents.
+
 # Frequently Asked Questions
 
 ## Where did the name Roc come from?
@@ -44,6 +46,16 @@ Editor the best possible chance at kickstarting a virtuous cycle of plugin autho
 This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
 
 In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
+
+## Why won't the editor be able to edit non-roc files like .md, .gitignore, .yml, ... ?
+
+The downside of having the Roc editor support files other than .roc is that it seems extremely difficult to avoid scope creep if we allow it. For example, it starts with just editing json as plaintext but then it's annoying that there's no syntax highlighting, so maybe we add the capability to do syntax highlighting for json but of course then some people want it for toml, .md, etc, so we need to add a way to specify custom syntax highlighting rules for all of those.
+
+Then of course people don't want to be copy/pasting syntax highlighting rules from online, so maybe someone develops a third party "plugin manager" for the editor to distribute these syntax highlighting definitions.
+So maybe we add sharing syntax highlighting as a first-class thing, so people don't have to download a separate tool to use their editor normally but then some people who are using it for .json and .yaml start using it for .css too. Syntax highlighting is okay but it's annoying that they don't get error reporting when they mess up syntax or type an invalid selector or import and pretty soon there's demand for the Roc editor to do all the hardest parts of VS code.
+
+We have to draw the line somewhere in there...but where to draw it?
+It seems like drawing a bright line at .roc files is the most straightforward. It means the roc editor is the absolute best at editing .roc files and it isn't a weak editor for anything else because it doesn't try to be an editor for anything else and it means the scope is very clear.
 
 ## Why is there no way to specify "import everything this module exposes" in `imports`?
 
@@ -95,20 +107,20 @@ the function might give different answers.
 
 Both of these would make revising code riskier across the entire language, which is very undesirable.
 
-Another option would be to define that function equality always returns `False`. So both of these would evaluate
-to `False`:
+Another option would be to define that function equality always returns `false`. So both of these would evaluate
+to `false`:
 
 - `(\x -> x + 1) == (\x -> 1 + x)`
 - `(\x -> x + 1) == (\x -> x + 1)`
 
 This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
 
-- Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
+- Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `false`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
 - If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
 
-The first of these problems could be addressed by having function equality always return `True` instead of `False` (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
+The first of these problems could be addressed by having function equality always return true instead of false (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
 
-- Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
+- Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `Bool.true`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
 - Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
 
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more

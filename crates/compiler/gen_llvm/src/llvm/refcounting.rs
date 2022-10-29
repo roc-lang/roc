@@ -981,12 +981,20 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         VoidType(t) => t.fn_type(arguments, false),
     };
 
+    // this should be `Linkage::Private`, but that will remove all of the code for the inc/dec
+    // functions on windows. LLVM just does not emit the assembly for them. Investigate why this is
+    let linkage = if let roc_target::OperatingSystem::Windows = env.target_info.operating_system {
+        Linkage::External
+    } else {
+        Linkage::Private
+    };
+
     let fn_val = add_func(
         env.context,
         env.module,
         fn_name,
         FunctionSpec::known_fastcc(fn_type),
-        Linkage::Private,
+        linkage,
     );
 
     let subprogram = env.new_subprogram(fn_name);

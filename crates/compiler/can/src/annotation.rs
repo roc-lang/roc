@@ -9,8 +9,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType, OptAbleVar,
-    Problem, RecordField, Type, TypeExtension,
+    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType,
+    OptAbleVar, Problem, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]
@@ -105,10 +105,10 @@ impl OwnedNamedOrAble {
         }
     }
 
-    pub fn opt_ability(&self) -> Option<Symbol> {
+    pub fn opt_abilities(&self) -> Option<&AbilitySet> {
         match self {
             OwnedNamedOrAble::Named(_) => None,
-            OwnedNamedOrAble::Able(av) => Some(av.ability),
+            OwnedNamedOrAble::Able(av) => Some(&av.abilities),
         }
     }
 }
@@ -127,7 +127,7 @@ pub struct NamedVariable {
 pub struct AbleVariable {
     pub variable: Variable,
     pub name: Lowercase,
-    pub ability: Symbol,
+    pub abilities: AbilitySet,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
@@ -166,12 +166,12 @@ impl IntroducedVariables {
         self.named.insert(named_variable);
     }
 
-    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, ability: Symbol) {
+    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, abilities: AbilitySet) {
         self.debug_assert_not_already_present(var.value);
 
         let able_variable = AbleVariable {
             name,
-            ability,
+            abilities,
             variable: var.value,
             first_seen: var.region,
         };
@@ -450,7 +450,9 @@ pub fn find_type_def_symbols(
                 stack.push(&annotation.value);
 
                 for has_clause in clauses.iter() {
-                    stack.push(&has_clause.value.ability.value);
+                    for ab in has_clause.value.abilities {
+                        stack.push(&ab.value);
+                    }
                 }
             }
             Inferred | Wildcard | Malformed(_) => {}
@@ -537,7 +539,11 @@ fn can_annotation_help(
 
                 // Generate an variable bound to the ability so we can keep compiling.
                 let var = var_store.fresh();
-                introduced_variables.insert_able(fresh_ty_var, Loc::at(region, var), symbol);
+                introduced_variables.insert_able(
+                    fresh_ty_var,
+                    Loc::at(region, var),
+                    AbilitySet::singleton(symbol),
+                );
                 return Type::Variable(var);
             }
 
@@ -553,7 +559,7 @@ fn can_annotation_help(
                     references,
                 );
 
-                args.push(arg_ann);
+                args.push(Loc::at(arg.region, arg_ann));
             }
 
             match scope.lookup_alias(symbol) {
@@ -573,8 +579,14 @@ fn can_annotation_help(
 
                     let mut type_var_to_arg = Vec::new();
 
-                    for (_, arg_ann) in alias.type_variables.iter().zip(args) {
-                        type_var_to_arg.push(arg_ann);
+                    for (alias_arg, arg_ann) in alias.type_variables.iter().zip(args) {
+                        type_var_to_arg.push(Loc::at(
+                            arg_ann.region,
+                            OptAbleType {
+                                typ: arg_ann.value,
+                                opt_abilities: alias_arg.value.opt_bound_abilities.clone(),
+                            },
+                        ));
                     }
 
                     let mut lambda_set_variables =
@@ -667,7 +679,7 @@ fn can_annotation_help(
                         AliasVar {
                             name: var_name,
                             var,
-                            opt_bound_ability: None,
+                            opt_bound_abilities: None,
                         },
                     ));
                 } else {
@@ -682,7 +694,7 @@ fn can_annotation_help(
                         AliasVar {
                             name: var_name,
                             var,
-                            opt_bound_ability: None,
+                            opt_bound_abilities: None,
                         },
                     ));
                 }
@@ -760,13 +772,7 @@ fn can_annotation_help(
             } else {
                 Type::Alias {
                     symbol,
-                    type_arguments: vars
-                        .into_iter()
-                        .map(|typ| OptAbleType {
-                            typ,
-                            opt_ability: None,
-                        })
-                        .collect(),
+                    type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
                     kind: alias.kind,
@@ -914,7 +920,7 @@ fn canonicalize_has_clause(
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, ability },
+        value: roc_parse::ast::HasClause { var, abilities },
     } = clause;
     let region = *region;
 
@@ -925,29 +931,39 @@ fn canonicalize_has_clause(
     );
     let var_name = Lowercase::from(var_name);
 
-    let ability = match ability.value {
-        TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
-            let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
+    let mut can_abilities = AbilitySet::with_capacity(abilities.len());
+    for &Loc {
+        region,
+        value: ability,
+    } in *abilities
+    {
+        let ability = match ability {
+            TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
+                let symbol = make_apply_symbol(env, region, scope, module_name, ident)?;
 
-            // Ability defined locally, whose members we are constructing right now...
-            if !pending_abilities_in_scope.contains_key(&symbol)
+                // Ability defined locally, whose members we are constructing right now...
+                if !pending_abilities_in_scope.contains_key(&symbol)
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
-            {
-                let region = ability.region;
+                {
+                    env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                    return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+                }
+                symbol
+            }
+            _ => {
                 env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
                 return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
             }
-            symbol
-        }
-        _ => {
-            let region = ability.region;
-            env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
-            return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
-        }
-    };
+        };
 
-    references.insert(ability);
+        references.insert(ability);
+        let already_seen = can_abilities.insert(ability);
+
+        if already_seen {
+            env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
+        }
+    }
 
     if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
         let var_name_ident = var_name.to_string().into();
@@ -965,7 +981,7 @@ fn canonicalize_has_clause(
 
     let var = var_store.fresh();
 
-    introduced_variables.insert_able(var_name, Loc::at(region, var), ability);
+    introduced_variables.insert_able(var_name, Loc::at(region, var), can_abilities);
 
     Ok(())
 }
@@ -1117,7 +1133,7 @@ pub fn freshen_opaque_def(
         .iter()
         .map(|alias_var| OptAbleVar {
             var: var_store.fresh(),
-            opt_ability: alias_var.value.opt_bound_ability,
+            opt_abilities: alias_var.value.opt_bound_abilities.clone(),
         })
         .collect();
 
@@ -1203,7 +1219,7 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
-                    field_types.insert(label.clone(), Required(field_type));
+                    field_types.insert(label.clone(), RigidRequired(field_type));
 
                     break 'inner label;
                 }
@@ -1240,7 +1256,7 @@ fn can_assigned_fields<'a>(
                         }
                     };
 
-                    field_types.insert(field_name.clone(), Required(field_type));
+                    field_types.insert(field_name.clone(), RigidRequired(field_type));
 
                     break 'inner field_name;
                 }

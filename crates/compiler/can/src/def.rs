@@ -7,6 +7,7 @@ use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
+use crate::derive;
 use crate::env::Env;
 use crate::expr::AccessorData;
 use crate::expr::AnnotatedMark;
@@ -127,11 +128,7 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
-    Body(
-        &'a Loc<ast::Pattern<'a>>,
-        Loc<Pattern>,
-        &'a Loc<ast::Expr<'a>>,
-    ),
+    Body(Loc<Pattern>, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
     TypedBody(
         &'a Loc<ast::Pattern<'a>>,
@@ -145,7 +142,7 @@ impl PendingValueDef<'_> {
     fn loc_pattern(&self) -> &Loc<Pattern> {
         match self {
             PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
-            PendingValueDef::Body(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
         }
     }
@@ -168,6 +165,7 @@ enum PendingTypeDef<'a> {
 
     /// An opaque type alias, e.g. `Age := U32`.
     Opaque {
+        name_str: &'a str,
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -212,6 +210,7 @@ impl PendingTypeDef<'_> {
                 Some((name.value, region))
             }
             PendingTypeDef::Opaque {
+                name_str: _,
                 name,
                 vars: _,
                 ann,
@@ -358,14 +357,14 @@ fn canonicalize_alias<'a>(
                 // This is a valid lowercase rigid var for the type def.
                 let named_variable = named.swap_remove(index);
                 let var = named_variable.variable();
-                let opt_bound_ability = named_variable.opt_ability();
+                let opt_bound_abilities = named_variable.opt_abilities().map(ToOwned::to_owned);
                 let name = named_variable.name();
 
                 can_vars.push(Loc {
                     value: AliasVar {
                         name,
                         var,
-                        opt_bound_ability,
+                        opt_bound_abilities,
                     },
                     region: loc_lowercase.region,
                 });
@@ -387,7 +386,7 @@ fn canonicalize_alias<'a>(
                         value: AliasVar {
                             name: loc_lowercase.value.clone(),
                             var: var_store.fresh(),
-                            opt_bound_ability: None,
+                            opt_bound_abilities: None,
                         },
                         region: loc_lowercase.region,
                     });
@@ -641,6 +640,13 @@ fn separate_implemented_and_required_members(
     }
 }
 
+type DerivedDef<'a> = Loc<PendingValue<'a>>;
+
+struct CanonicalizedOpaque<'a> {
+    opaque_def: Alias,
+    derived_defs: Vec<DerivedDef<'a>>,
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
@@ -651,10 +657,11 @@ fn canonicalize_opaque<'a>(
     pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
+    name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
-) -> Result<Alias, ()> {
+) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
         output,
@@ -667,6 +674,7 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
+    let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
         let has_abilities = has_abilities.value.collection();
 
@@ -808,7 +816,24 @@ fn canonicalize_opaque<'a>(
                     .abilities_store
                     .register_declared_implementations(name.value, impls);
             } else if let Some((_, members)) = ability.derivable_ability() {
-                let impls = members.iter().map(|member| (*member, MemberImpl::Derived));
+                let num_members = members.len();
+
+                derived_defs.reserve(num_members);
+
+                let mut impls = Vec::with_capacity(num_members);
+                for &member in members.iter() {
+                    let (derived_impl, impl_pat, impl_body) =
+                        derive::synthesize_member_impl(env, scope, name_str, member);
+
+                    let derived_def = Loc::at(
+                        derive::DERIVED_REGION,
+                        PendingValue::Def(PendingValueDef::Body(impl_pat, impl_body)),
+                    );
+
+                    impls.push((member, MemberImpl::Impl(derived_impl)));
+                    derived_defs.push(derived_def);
+                }
+
                 scope
                     .abilities_store
                     .register_declared_implementations(name.value, impls);
@@ -829,7 +854,15 @@ fn canonicalize_opaque<'a>(
                 type_arguments: alias
                     .type_variables
                     .iter()
-                    .map(|_| Type::Variable(var_store.fresh()))
+                    .map(|alias_var| {
+                        Loc::at(
+                            alias_var.region,
+                            OptAbleType {
+                                typ: Type::Variable(var_store.fresh()),
+                                opt_abilities: alias_var.value.opt_bound_abilities.clone(),
+                            },
+                        )
+                    })
                     .collect(),
                 lambda_set_variables: alias
                     .lambda_set_variables
@@ -846,7 +879,10 @@ fn canonicalize_opaque<'a>(
         }
     }
 
-    Ok(alias)
+    Ok(CanonicalizedOpaque {
+        opaque_def: alias,
+        derived_defs,
+    })
 }
 
 #[inline(always)]
@@ -921,7 +957,11 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
-    let (aliases, symbols_introduced) = canonicalize_type_defs(
+    let CanonicalizedTypeDefs {
+        aliases,
+        symbols_introduced,
+        derived_defs,
+    } = canonicalize_type_defs(
         env,
         &mut output,
         var_store,
@@ -929,6 +969,11 @@ pub(crate) fn canonicalize_defs<'a>(
         &pending_abilities_in_scope,
         pending_type_defs,
     );
+
+    // Add the derived ASTs, so that we create proper canonicalized defs for them.
+    // They can go at the end, and derived defs should never reference anything other than builtin
+    // ability members.
+    pending_value_defs.extend(derived_defs);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -1078,6 +1123,12 @@ fn canonicalize_value_defs<'a>(
     (can_defs, output, symbols_introduced)
 }
 
+struct CanonicalizedTypeDefs<'a> {
+    aliases: VecMap<Symbol, Alias>,
+    symbols_introduced: MutMap<Symbol, Region>,
+    derived_defs: Vec<DerivedDef<'a>>,
+}
+
 fn canonicalize_type_defs<'a>(
     env: &mut Env<'a>,
     output: &mut Output,
@@ -1085,7 +1136,7 @@ fn canonicalize_type_defs<'a>(
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     pending_type_defs: Vec<PendingTypeDef<'a>>,
-) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
+) -> CanonicalizedTypeDefs<'a> {
     enum TypeDef<'a> {
         Alias(
             Loc<Symbol>,
@@ -1093,6 +1144,7 @@ fn canonicalize_type_defs<'a>(
             &'a Loc<ast::TypeAnnotation<'a>>,
         ),
         Opaque(
+            &'a str,
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
@@ -1121,6 +1173,7 @@ fn canonicalize_type_defs<'a>(
                 type_defs.insert(name.value, TypeDef::Alias(name, vars, ann));
             }
             PendingTypeDef::Opaque {
+                name_str,
                 name,
                 vars,
                 ann,
@@ -1133,7 +1186,10 @@ fn canonicalize_type_defs<'a>(
                 // builtin abilities, and hence do not affect the type def sorting. We'll insert
                 // references of usages when canonicalizing the derives.
 
-                type_defs.insert(name.value, TypeDef::Opaque(name, vars, ann, derived));
+                type_defs.insert(
+                    name.value,
+                    TypeDef::Opaque(name_str, name, vars, ann, derived),
+                );
             }
             PendingTypeDef::Ability { name, members } => {
                 let mut referenced_symbols = Vec::with_capacity(2);
@@ -1159,6 +1215,7 @@ fn canonicalize_type_defs<'a>(
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
     let mut aliases = VecMap::default();
     let mut abilities = MutMap::default();
+    let mut all_derived_defs = Vec::new();
 
     for type_name in sorted {
         match type_defs.remove(&type_name).unwrap() {
@@ -1180,7 +1237,7 @@ fn canonicalize_type_defs<'a>(
                 }
             }
 
-            TypeDef::Opaque(name, vars, ann, derived) => {
+            TypeDef::Opaque(name_str, name, vars, ann, derived) => {
                 let alias_and_derives = canonicalize_opaque(
                     env,
                     output,
@@ -1188,13 +1245,19 @@ fn canonicalize_type_defs<'a>(
                     scope,
                     pending_abilities_in_scope,
                     name,
+                    name_str,
                     ann,
                     &vars,
                     derived,
                 );
 
-                if let Ok(alias) = alias_and_derives {
-                    aliases.insert(name.value, alias);
+                if let Ok(CanonicalizedOpaque {
+                    opaque_def,
+                    derived_defs,
+                }) = alias_and_derives
+                {
+                    aliases.insert(name.value, opaque_def);
+                    all_derived_defs.extend(derived_defs);
                 }
             }
 
@@ -1230,7 +1293,11 @@ fn canonicalize_type_defs<'a>(
         pending_abilities_in_scope,
     );
 
-    (aliases, symbols_introduced)
+    CanonicalizedTypeDefs {
+        aliases,
+        symbols_introduced,
+        derived_defs: all_derived_defs,
+    }
 }
 
 /// Resolve all pending abilities, to add them to scope.
@@ -1278,7 +1345,7 @@ fn resolve_abilities<'a>(
                 .introduced_variables
                 .able
                 .iter()
-                .partition(|av| av.ability == ability);
+                .partition(|av| av.abilities.contains(&ability));
 
             let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
                 [one] => one.variable,
@@ -1445,7 +1512,6 @@ impl DefOrdering {
 
 #[inline(always)]
 pub(crate) fn sort_can_defs_new(
-    env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
     defs: CanDefs,
@@ -1516,48 +1582,43 @@ pub(crate) fn sort_can_defs_new(
                 let def = defs.pop().unwrap();
                 let index = group.first_one().unwrap();
 
-                if def_ordering.direct_references.get_row_col(index, index) {
-                    // a definition like `x = x + 1`, which is invalid in roc
-                    let symbol = def_ordering.get_symbol(index).unwrap();
+                if def_ordering.references.get_row_col(index, index) {
+                    // push the "header" for this group of recursive definitions
+                    let cycle_mark = IllegalCycleMark::new(var_store);
+                    declarations.push_recursive_group(1, cycle_mark);
 
-                    let entries = vec![make_cycle_entry(symbol, &def)];
+                    // then push the definition
+                    let (symbol, specializes) = match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => (symbol, None),
 
-                    let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
-                    env.problem(problem);
+                        Pattern::AbilityMemberSpecialization { ident, specializes } => {
+                            (ident, Some(specializes))
+                        }
 
-                    // Declaration::InvalidCycle(entries)
-                    todo!("InvalidCycle: {:?}", entries)
-                } else if def_ordering.references.get_row_col(index, index) {
-                    // this function calls itself, and must be typechecked as a recursive def
-                    match def.loc_pattern.value {
-                        Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                            _ => todo!(),
-                        },
-                        Pattern::AbilityMemberSpecialization {
-                            ident: symbol,
-                            specializes,
-                        } => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                            _ => todo!(),
-                        },
-                        _ => todo!("{:?}", &def.loc_pattern.value),
+                        _ => {
+                            internal_error!("destructures cannot participate in a recursive group; it's always a type error")
+                        }
+                    };
+
+                    match def.loc_expr.value {
+                        Closure(closure_data) => {
+                            declarations.push_recursive_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                Loc::at(def.loc_expr.region, closure_data),
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
+                        _ => {
+                            declarations.push_value_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
                     }
                 } else {
                     match def.loc_pattern.value {
@@ -1716,17 +1777,7 @@ pub(crate) fn sort_can_defs(
                 Pattern::AbilityMemberSpecialization { .. }
             );
 
-            let declaration = if def_ordering.direct_references.get_row_col(index, index) {
-                // a definition like `x = x + 1`, which is invalid in roc
-                let symbol = def_ordering.get_symbol(index).unwrap();
-
-                let entries = vec![make_cycle_entry(symbol, &def)];
-
-                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
-                env.problem(problem);
-
-                Declaration::InvalidCycle(entries)
-            } else if def_ordering.references.get_row_col(index, index) {
+            let declaration = if def_ordering.references.get_row_col(index, index) {
                 debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
 
                 // this function calls itself, and must be typechecked as a recursive def
@@ -1859,7 +1910,7 @@ fn pattern_to_vars_by_symbol(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
-        | SingleQuote(_)
+        | SingleQuote(..)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
@@ -2063,7 +2114,7 @@ fn canonicalize_pending_value_def<'a>(
                 Some(Loc::at(loc_ann.region, type_annotation)),
             )
         }
-        Body(_loc_pattern, loc_can_pattern, loc_expr) => {
+        Body(loc_can_pattern, loc_expr) => {
             //
             canonicalize_pending_body(
                 env,
@@ -2302,11 +2353,6 @@ fn to_pending_alias_or_opaque<'a>(
     opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
-    let shadow_kind = match kind {
-        AliasKind::Structural => ShadowKind::Alias,
-        AliasKind::Opaque => ShadowKind::Opaque,
-    };
-
     let region = Region::span_across(&name.region, &ann.region);
 
     match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
@@ -2341,6 +2387,7 @@ fn to_pending_alias_or_opaque<'a>(
                 }
             }
 
+            let name_str = name.value;
             let name = Loc {
                 region: name.region,
                 value: symbol,
@@ -2353,6 +2400,7 @@ fn to_pending_alias_or_opaque<'a>(
                     ann,
                 },
                 AliasKind::Opaque => PendingTypeDef::Opaque {
+                    name_str,
                     name,
                     vars: can_rigids,
                     ann,
@@ -2361,7 +2409,12 @@ fn to_pending_alias_or_opaque<'a>(
             }
         }
 
-        Err((original_region, loc_shadowed_symbol)) => {
+        Err((original_sym, original_region, loc_shadowed_symbol)) => {
+            let shadow_kind = match kind {
+                AliasKind::Structural => ShadowKind::Alias(original_sym),
+                AliasKind::Opaque => ShadowKind::Opaque(original_sym),
+            };
+
             env.problem(Problem::Shadowing {
                 original_region,
                 shadow: loc_shadowed_symbol,
@@ -2422,11 +2475,11 @@ fn to_pending_type_def<'a>(
                 .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
             {
                 Ok(symbol) => Loc::at(name.region, symbol),
-                Err((original_region, shadowed_symbol)) => {
+                Err((original_symbol, original_region, shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: shadowed_symbol,
-                        kind: ShadowKind::Ability,
+                        kind: ShadowKind::Ability(original_symbol),
                     });
                     return PendingTypeDef::AbilityShadows;
                 }
@@ -2539,11 +2592,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingValue::Def(PendingValueDef::Body(
-                loc_pattern,
-                loc_can_pattern,
-                loc_expr,
-            ))
+            PendingValue::Def(PendingValueDef::Body(loc_can_pattern, loc_expr))
         }
 
         AnnotatedBody {
@@ -2823,7 +2872,7 @@ fn make_tag_union_of_alias_recursive<'a>(
 
     let alias_opt_able_vars = alias.type_variables.iter().map(|l| OptAbleType {
         typ: Type::Variable(l.value.var),
-        opt_ability: l.value.opt_bound_ability,
+        opt_abilities: l.value.opt_bound_abilities.clone(),
     });
 
     let lambda_set_vars = alias.lambda_set_variables.iter();

@@ -124,14 +124,15 @@ fn build_effect_always(
             Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
-        let body = Expr::Var(value_symbol);
+        let value_var = var_store.fresh();
+        let body = Expr::Var(value_symbol, value_var);
 
         Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
             return_type: var_store.fresh(),
             name: inner_closure_symbol,
-            captured_symbols: vec![(value_symbol, var_store.fresh())],
+            captured_symbols: vec![(value_symbol, value_var)],
             recursive: Recursive::NotRecursive,
             arguments,
             loc_body: Box::new(Loc::at_zero(body)),
@@ -231,20 +232,22 @@ fn build_effect_map(
             .introduce("effect_map_thunk".into(), Region::zero())
             .unwrap()
     };
+    let thunk_var = var_store.fresh();
 
     let mapper_symbol = {
         scope
             .introduce("effect_map_mapper".into(), Region::zero())
             .unwrap()
     };
+    let mapper_var = var_store.fresh();
 
     let map_symbol = { scope.introduce("map".into(), Region::zero()).unwrap() };
 
     // `thunk {}`
     let force_thunk_call = {
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(thunk_symbol)),
+            thunk_var,
+            Loc::at_zero(Expr::Var(thunk_symbol, thunk_var)),
             var_store.fresh(),
             var_store.fresh(),
         );
@@ -256,8 +259,8 @@ fn build_effect_map(
     // `toEffect (thunk {})`
     let mapper_call = {
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(mapper_symbol)),
+            mapper_var,
+            Loc::at_zero(Expr::Var(mapper_symbol, mapper_var)),
             var_store.fresh(),
             var_store.fresh(),
         );
@@ -411,9 +414,9 @@ fn build_effect_map(
     (map_symbol, def)
 }
 
-fn force_thunk(expr: Expr, var_store: &mut VarStore) -> Expr {
+fn force_thunk(expr: Expr, thunk_var: Variable, var_store: &mut VarStore) -> Expr {
     let boxed = (
-        var_store.fresh(),
+        thunk_var,
         Loc::at_zero(expr),
         var_store.fresh(),
         var_store.fresh(),
@@ -441,13 +444,19 @@ fn build_effect_after(
     let outer_closure_symbol = new_symbol!(scope, "effect_after_inner");
 
     // `effect {}`
-    let force_effect_call = force_thunk(Expr::Var(effect_symbol), var_store);
+    let force_effect_var = var_store.fresh();
+    let force_effect_call = force_thunk(
+        Expr::Var(effect_symbol, force_effect_var),
+        force_effect_var,
+        var_store,
+    );
 
     // `toEffect (effect {})`
+    let to_effect_var = var_store.fresh();
     let to_effect_call = {
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(to_effect_symbol)),
+            to_effect_var,
+            Loc::at_zero(Expr::Var(to_effect_symbol, to_effect_var)),
             var_store.fresh(),
             var_store.fresh(),
         );
@@ -459,7 +468,12 @@ fn build_effect_after(
     // let @Effect thunk = toEffect (effect {}) in thunk {}
     let let_effect_thunk = {
         // `thunk {}`
-        let force_inner_thunk_call = force_thunk(Expr::Var(thunk_symbol), var_store);
+        let force_inner_thunk_var = var_store.fresh();
+        let force_inner_thunk_call = force_thunk(
+            Expr::Var(thunk_symbol, force_inner_thunk_var),
+            force_inner_thunk_var,
+            var_store,
+        );
 
         let (specialized_def_type, type_arguments, lambda_set_variables) =
             build_fresh_opaque_variables(var_store);
@@ -702,9 +716,10 @@ fn force_effect(
     let ret_var = var_store.fresh();
 
     let force_thunk_call = {
+        let thunk_var = var_store.fresh();
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(thunk_symbol)),
+            thunk_var,
+            Loc::at_zero(Expr::Var(thunk_symbol, thunk_var)),
             var_store.fresh(),
             ret_var,
         );
@@ -884,6 +899,7 @@ fn build_effect_forever_inner_body(
     effect: Symbol,
     var_store: &mut VarStore,
 ) -> Expr {
+    let thunk1_var = var_store.fresh();
     let thunk1_symbol = { scope.introduce("thunk1".into(), Region::zero()).unwrap() };
 
     let thunk2_symbol = { scope.introduce("thunk2".into(), Region::zero()).unwrap() };
@@ -909,7 +925,7 @@ fn build_effect_forever_inner_body(
 
         Def {
             loc_pattern: Loc::at_zero(pattern),
-            loc_expr: Loc::at_zero(Expr::Var(effect)),
+            loc_expr: Loc::at_zero(Expr::Var(effect, var_store.fresh())),
             expr_var: var_store.fresh(),
             pattern_vars,
             annotation: None,
@@ -920,8 +936,8 @@ fn build_effect_forever_inner_body(
     let force_thunk_call = {
         let ret_var = var_store.fresh();
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(thunk1_symbol)),
+            thunk1_var,
+            Loc::at_zero(Expr::Var(thunk1_symbol, thunk1_var)),
             var_store.fresh(),
             ret_var,
         );
@@ -945,12 +961,13 @@ fn build_effect_forever_inner_body(
     let forever_effect = {
         let boxed = (
             var_store.fresh(),
-            Loc::at_zero(Expr::Var(forever_symbol)),
+            Loc::at_zero(Expr::Var(forever_symbol, var_store.fresh())),
             var_store.fresh(),
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::Var(effect)))];
+        let effect_var = var_store.fresh();
+        let arguments = vec![(effect_var, Loc::at_zero(Expr::Var(effect, effect_var)))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
@@ -1198,14 +1215,16 @@ fn build_effect_loop_inner_body(
 
         // `step state`
         let rhs = {
+            let step_var = var_store.fresh();
             let boxed = (
-                var_store.fresh(),
-                Loc::at_zero(Expr::Var(step_symbol)),
+                step_var,
+                Loc::at_zero(Expr::Var(step_symbol, step_var)),
                 var_store.fresh(),
                 var_store.fresh(),
             );
 
-            let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::Var(state_symbol)))];
+            let state_var = var_store.fresh();
+            let arguments = vec![(state_var, Loc::at_zero(Expr::Var(state_symbol, state_var)))];
             Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
         };
 
@@ -1220,10 +1239,11 @@ fn build_effect_loop_inner_body(
 
     // thunk1 {}
     let force_thunk_call = {
+        let thunk1_var = var_store.fresh();
         let ret_var = var_store.fresh();
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(thunk1_symbol)),
+            thunk1_var,
+            Loc::at_zero(Expr::Var(thunk1_symbol, thunk1_var)),
             var_store.fresh(),
             ret_var,
         );
@@ -1236,16 +1256,22 @@ fn build_effect_loop_inner_body(
 
     // recursive call `loop newState step`
     let loop_new_state_step = {
+        let loop_var = var_store.fresh();
         let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(loop_symbol)),
+            loop_var,
+            Loc::at_zero(Expr::Var(loop_symbol, loop_var)),
             var_store.fresh(),
             var_store.fresh(),
         );
 
+        let new_state_var = var_store.fresh();
+        let step_var = var_store.fresh();
         let arguments = vec![
-            (var_store.fresh(), Loc::at_zero(Expr::Var(new_state_symbol))),
-            (var_store.fresh(), Loc::at_zero(Expr::Var(step_symbol))),
+            (
+                new_state_var,
+                Loc::at_zero(Expr::Var(new_state_symbol, new_state_var)),
+            ),
+            (step_var, Loc::at_zero(Expr::Var(step_symbol, step_var))),
         ];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
@@ -1283,7 +1309,7 @@ fn build_effect_loop_inner_body(
 
         crate::expr::WhenBranch {
             patterns: vec![done_pattern],
-            value: Loc::at_zero(Expr::Var(done_symbol)),
+            value: Loc::at_zero(Expr::Var(done_symbol, var_store.fresh())),
             guard: None,
             redundant: RedundantMark::new(var_store),
         }
@@ -1351,7 +1377,7 @@ pub fn build_host_exposed_def(
                     ));
 
                     captured_symbols.push((arg_symbol, arg_var));
-                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
+                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol, arg_var)));
                 }
 
                 let foreign_symbol_name = format!("roc_fx_{}", ident);
@@ -1526,7 +1552,7 @@ fn build_fresh_opaque_variables(
     );
     let type_arguments = vec![OptAbleVar {
         var: a_var,
-        opt_ability: None,
+        opt_abilities: None,
     }];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 

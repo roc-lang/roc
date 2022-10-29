@@ -1,5 +1,6 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
+const grapheme = @import("helpers/grapheme.zig");
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
@@ -50,7 +51,7 @@ pub const RocStr = extern struct {
     // This clones the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(bytes_ptr: [*]const u8, length: usize) RocStr {
-        var result = RocStr.allocate(length, length);
+        var result = RocStr.allocate(length);
         @memcpy(result.asU8ptr(), bytes_ptr, length);
 
         return result;
@@ -70,11 +71,14 @@ pub const RocStr = extern struct {
         };
     }
 
-    // allocate space for a (big or small) RocStr, but put nothing in it yet
-    pub fn allocate(length: usize, capacity: usize) RocStr {
-        const result_is_big = capacity >= SMALL_STRING_SIZE;
+    // allocate space for a (big or small) RocStr, but put nothing in it yet.
+    // May have a larger capacity than the length.
+    pub fn allocate(length: usize) RocStr {
+        const element_width = 1;
+        const result_is_big = length >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
+            const capacity = utils.calculateCapacity(0, length, element_width);
             return RocStr.allocateBig(length, capacity);
         } else {
             var string = RocStr.empty();
@@ -88,25 +92,6 @@ pub const RocStr = extern struct {
     pub fn deinit(self: RocStr) void {
         if (!self.isSmallStr()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
-        }
-    }
-
-    // This takes ownership of the pointed-to bytes if they won't fit in a
-    // small string, and returns a (pointer, len) tuple which points to them.
-    pub fn withCapacity(length: usize) RocStr {
-        const roc_str_size = @sizeOf(RocStr);
-
-        if (length < roc_str_size) {
-            return RocStr.empty();
-        } else {
-            var new_bytes = utils.alloc(length, RocStr.alignment) catch unreachable;
-
-            var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
-
-            return RocStr{
-                .str_bytes = new_bytes_ptr,
-                .str_len = length,
-            };
         }
     }
 
@@ -169,38 +154,43 @@ pub const RocStr = extern struct {
     pub fn reallocate(
         self: RocStr,
         new_length: usize,
-        new_capacity: usize,
     ) RocStr {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
-        if (self.str_bytes) |source_ptr| {
-            if (self.isUnique() and !self.isSmallStr()) {
-                const new_source = utils.unsafeReallocate(
-                    source_ptr,
-                    RocStr.alignment,
-                    old_capacity,
-                    new_capacity,
-                    element_width,
-                );
-
-                return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
-            }
+        if (self.isSmallStr() or !self.isUnique()) {
+            return self.reallocateFresh(new_length);
         }
 
-        return self.reallocateFresh(new_length, new_capacity);
+        if (self.str_bytes) |source_ptr| {
+            if (old_capacity > new_length) {
+                var output = self;
+                output.setLen(new_length);
+                return output;
+            }
+            const new_capacity = utils.calculateCapacity(old_capacity, new_length, element_width);
+            const new_source = utils.unsafeReallocate(
+                source_ptr,
+                RocStr.alignment,
+                old_capacity,
+                new_capacity,
+                element_width,
+            );
+
+            return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
+        }
+        return self.reallocateFresh(new_length);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
-    pub fn reallocateFresh(
+    fn reallocateFresh(
         self: RocStr,
         new_length: usize,
-        new_capacity: usize,
     ) RocStr {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        const result = RocStr.allocate(new_length, new_capacity);
+        const result = RocStr.allocate(new_length);
 
         // transfer the memory
 
@@ -235,6 +225,14 @@ pub const RocStr = extern struct {
             return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
         } else {
             return self.str_len;
+        }
+    }
+
+    pub fn setLen(self: *RocStr, length: usize) void {
+        if (self.isSmallStr()) {
+            self.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+        } else {
+            self.str_len = length;
         }
     }
 
@@ -800,6 +798,12 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 
             while (delimiter_index < delimiter_len) {
                 var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
+
+                if (str_index + delimiter_index >= str_len) {
+                    matches_delimiter = false;
+                    break;
+                }
+
                 var strChar = str_bytes[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
@@ -1209,7 +1213,6 @@ test "countSegments: string equals delimiter" {
 }
 
 // Str.countGraphemeClusters
-const grapheme = @import("helpers/grapheme.zig");
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
@@ -1245,59 +1248,76 @@ pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     return count;
 }
 
-test "countGraphemeClusters: empty string" {
-    const count = countGraphemeClusters(RocStr.empty());
-    try expectEqual(count, 0);
+// Str.graphemes
+pub fn strGraphemes(roc_str: RocStr) callconv(.C) RocList {
+    var break_state: ?grapheme.BoundClass = null;
+    var opt_last_codepoint: ?u21 = null;
+    var index: usize = 0;
+    var last_codepoint_len: u8 = 0;
+
+    var result = RocList.allocate(@alignOf(RocStr), countGraphemeClusters(roc_str), @sizeOf(RocStr));
+    const graphemes = result.elements(RocStr) orelse return result;
+    var slice = roc_str.asSlice();
+    var iter = (unicode.Utf8View.init(slice) catch unreachable).iterator();
+
+    while (iter.nextCodepoint()) |cur_codepoint| {
+        const cur_codepoint_len = unicode.utf8CodepointSequenceLength(cur_codepoint) catch unreachable;
+        if (opt_last_codepoint) |last_codepoint| {
+            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, &break_state);
+            if (did_break) {
+                graphemes[index] = RocStr.fromSlice(slice[0..last_codepoint_len]);
+                slice = slice[last_codepoint_len..];
+                index += 1;
+                break_state = null;
+                last_codepoint_len = 0;
+            }
+        }
+        last_codepoint_len += cur_codepoint_len;
+        opt_last_codepoint = cur_codepoint;
+    }
+    // Append last grapheme
+    graphemes[index] = RocStr.fromSlice(slice);
+    return result;
 }
 
-test "countGraphemeClusters: ascii characters" {
-    const bytes_arr = "abcd";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
+// these test both countGraphemeClusters() and strGraphemes()
+fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
+    const rocstr = RocStr.fromSlice(input);
+    defer rocstr.deinit();
+    const count = countGraphemeClusters(rocstr);
+    try expectEqual(expected.len, count);
 
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 4);
+    const graphemes = strGraphemes(rocstr);
+    defer graphemes.deinit(u8);
+    if (input.len == 0) return; // empty string
+    const elems = graphemes.elements(RocStr) orelse unreachable;
+    for (expected) |g, i| {
+        try std.testing.expectEqualStrings(g, elems[i].asSlice());
+    }
 }
 
-test "countGraphemeClusters: utf8 characters" {
-    const bytes_arr = "ãxā";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 3);
+test "graphemes: empty string" {
+    try graphemesTest("", &.{});
 }
 
-test "countGraphemeClusters: emojis" {
-    const bytes_arr = "🤔🤔🤔";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 3);
+test "graphemes: ascii characters" {
+    try graphemesTest("abcd", &.{ "a", "b", "c", "d" });
 }
 
-test "countGraphemeClusters: emojis and ut8 characters" {
-    const bytes_arr = "🤔å🤔¥🤔ç";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 6);
+test "graphemes: utf8 characters" {
+    try graphemesTest("ãxā", &.{ "ã", "x", "ā" });
 }
 
-test "countGraphemeClusters: emojis, ut8, and ascii characters" {
-    const bytes_arr = "6🤔å🤔e¥🤔çpp";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
+test "graphemes: emojis" {
+    try graphemesTest("🤔🤔🤔", &.{ "🤔", "🤔", "🤔" });
+}
 
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 10);
+test "graphemes: emojis and ut8 characters" {
+    try graphemesTest("🤔å🤔¥🤔ç", &.{ "🤔", "å", "🤔", "¥", "🤔", "ç" });
+}
+
+test "graphemes: emojis, ut8, and ascii characters" {
+    try graphemesTest("6🤔å🤔e¥🤔çpp", &.{ "6", "🤔", "å", "🤔", "e", "¥", "🤔", "ç", "p", "p" });
 }
 
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
@@ -1381,7 +1401,7 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
-    var ret_string = RocStr.allocate(count * bytes_len, count * bytes_len);
+    var ret_string = RocStr.allocate(count * bytes_len);
     var ret_string_ptr = ret_string.asU8ptr();
 
     var i: usize = 0;
@@ -1522,7 +1542,7 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        const result = arg1.reallocate(combined_length, combined_length);
+        const result = arg1.reallocate(combined_length);
 
         @memcpy(result.asU8ptr() + arg1.len(), arg2.asU8ptr(), arg2.len());
 
@@ -1594,7 +1614,7 @@ fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
         // include size of the separator
         total_size += separator.len() * (len - 1);
 
-        var result = RocStr.allocate(total_size, total_size);
+        var result = RocStr.allocate(total_size);
         var result_ptr = result.asU8ptr();
 
         var offset: usize = 0;
@@ -2506,14 +2526,14 @@ test "capacity: big string" {
     var data = RocStr.init(data_bytes, data_bytes.len);
     defer data.deinit();
 
-    try expectEqual(data.getCapacity(), data_bytes.len);
+    try expect(data.getCapacity() >= data_bytes.len);
 }
 
 pub fn appendScalar(string: RocStr, scalar_u32: u32) callconv(.C) RocStr {
     const scalar = @intCast(u21, scalar_u32);
     const width = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
 
-    var output = string.reallocate(string.len() + width, string.len() + width);
+    var output = string.reallocate(string.len() + width);
     var slice = output.asSliceWithCapacity();
 
     _ = std.unicode.utf8Encode(scalar, slice[string.len() .. string.len() + width]) catch unreachable;
@@ -2581,13 +2601,21 @@ test "appendScalar: big 😀" {
     try expect(actual.eq(expected));
 }
 
-pub fn reserve(string: RocStr, capacity: usize) callconv(.C) RocStr {
-    if (capacity > string.getCapacity()) {
-        // expand allocation but keep string length the same
-        return string.reallocate(string.len(), capacity);
-    } else {
+pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
+    const old_length = string.len();
+    if (string.getCapacity() >= old_length + spare) {
         return string;
+    } else {
+        var output = string.reallocate(old_length + spare);
+        output.setLen(old_length);
+        return output;
     }
+}
+
+pub fn withCapacity(capacity: usize) callconv(.C) RocStr {
+    var str = RocStr.allocate(capacity);
+    str.setLen(0);
+    return str;
 }
 
 pub fn getScalarUnsafe(string: RocStr, index: usize) callconv(.C) extern struct { bytesParsed: usize, scalar: u32 } {
