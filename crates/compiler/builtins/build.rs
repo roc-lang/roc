@@ -227,10 +227,9 @@ fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(
                     Err(_) => format!("Failed to run \"{}\"", command_str),
                 };
 
-                // flaky test errors
-                if error_str.contains("FileNotFound") // only occurs sometimes inside MacOS ci run
-                    || error_str.contains("unable to save cached ZIR code") // only occurs sometimes inside MacOS ci run
-                    || error_str.contains("lld-link: error: failed to write the output file: Permission denied") // only occurs sometimes on windows
+                // Flaky test errors that only occur sometimes on MacOS ci server.
+                if error_str.contains("FileNotFound")
+                    || error_str.contains("unable to save cached ZIR code")
                 {
                     if flaky_fail_counter == 10 {
                         panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
