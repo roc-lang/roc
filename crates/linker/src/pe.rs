@@ -389,7 +389,25 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
+                } else if name == "___chkstk_ms" {
+                    // this is a stack probe that is inserted when a function uses more than 2
+                    // pages of stack space. The source of this function is not linked in, so we
+                    // have to get a bit creative: we just jump to a `ret` instruction, so this
+                    // function call becomes a no-op.
+
+                    // the last byte of the section should be a `ret` instruction
+                    assert_eq!(slice.last(), Some(0xc3).as_ref());
+
+                    let delta =
+                        (slice.len() - 1) as i64 - *offset_in_section as i64 + relocation.addend();
+
+                    executable[offset + *offset_in_section as usize..][..4]
+                        .copy_from_slice(&(delta as i32).to_le_bytes());
                 } else {
+                    if *address == 0 {
+                        eprintln!("I don't know the address of the {} function!", name);
+                    }
+
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
