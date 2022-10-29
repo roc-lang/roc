@@ -404,8 +404,11 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
                 } else {
-                    if *address == 0 {
-                        eprintln!("I don't know the address of the {} function!", name);
+                    if *address == 0 && !name.starts_with("roc") {
+                        eprintln!(
+                            "I don't know the address of the {} function! this may cause segfaults",
+                            name
+                        );
                     }
 
                     match relocation.kind() {
