@@ -120,7 +120,7 @@ impl Pools {
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
         self.0.get(rank.into_usize()).unwrap_or_else(|| {
-            internal_error!("Compiler bug: could not find pool at rank {}", rank)
+            internal_error!("could not find pool at rank {}", rank)
         })
     }
 
