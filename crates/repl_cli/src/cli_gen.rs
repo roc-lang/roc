@@ -25,7 +25,6 @@ pub fn gen_and_eval_llvm<'a>(
     src: &str,
     target: Triple,
     opt_level: OptLevel,
-    var_name: String,
 ) -> (Option<ReplOutput>, Problems) {
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
@@ -64,7 +63,6 @@ pub fn gen_and_eval_llvm<'a>(
                 Some(ReplOutput {
                     expr: "<function>".to_string(),
                     expr_type: expr_type_str,
-                    var_name,
                 }),
                 problems,
             );
@@ -90,10 +88,7 @@ pub fn gen_and_eval_llvm<'a>(
         target_info,
     );
 
-    (
-        Some(format_answer(&arena, expr, expr_type_str, var_name)),
-        problems,
-    )
+    (Some(format_answer(&arena, expr, expr_type_str)), problems)
 }
 
 struct CliApp {

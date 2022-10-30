@@ -284,16 +284,11 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         target_info,
     );
 
-    let val_name = String::new(); // TODO
+    let var_name = String::new(); // TODO turn this into something like " # val1"
 
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
+    let ReplOutput { expr, expr_type } = format_answer(arena, res_answer, expr_type_str);
 
-    let ReplOutput {
-        expr,
-        expr_type,
-        var_name,
-    } = format_answer(arena, res_answer, expr_type_str, val_name);
-
-    Ok(format!("{expr} : {expr_type}  # {var_name}"))
+    Ok(format!("{expr} : {expr_type}{var_name}"))
 }

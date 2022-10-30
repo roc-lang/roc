@@ -14,15 +14,9 @@ use roc_target::TargetInfo;
 pub struct ReplOutput {
     pub expr: String,
     pub expr_type: String,
-    pub var_name: String,
 }
 
-pub fn format_answer(
-    arena: &Bump,
-    answer: Expr<'_>,
-    expr_type: String,
-    var_name: String,
-) -> ReplOutput {
+pub fn format_answer(arena: &Bump, answer: Expr<'_>, expr_type: String) -> ReplOutput {
     let mut expr = roc_fmt::Buf::new_in(arena);
 
     answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
@@ -30,7 +24,6 @@ pub fn format_answer(
     ReplOutput {
         expr: expr.into_bump_str().to_string(),
         expr_type,
-        var_name,
     }
 }
 

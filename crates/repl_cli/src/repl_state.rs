@@ -190,31 +190,34 @@ impl ReplState {
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
+        let opt_var_name;
         let (output, problems) = match self.past_def_idents.get(src.trim()) {
-            Some(existing_ident) => gen_and_eval_llvm(
-                &self.with_past_defs(src),
-                Triple::host(),
-                OptLevel::Normal,
-                existing_ident.to_string(),
-            ),
+            Some(existing_ident) => {
+                opt_var_name = Some(existing_ident.to_string());
+
+                gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal)
+            }
             None => {
-                let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
-                let answer = gen_and_eval_llvm(
-                    &self.with_past_defs(src),
-                    Triple::host(),
-                    OptLevel::Normal,
-                    var_name.clone(),
-                );
+                let (output, problems) =
+                    gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal);
 
-                let src = format!("{var_name} = {}", src.trim_end());
+                // Don't persist defs that have compile errors
+                if problems.errors.is_empty() {
+                    let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+                    let src = format!("{var_name} = {}", src.trim_end());
 
-                self.add_past_def(var_name, src);
+                    opt_var_name = Some(var_name.clone());
 
-                answer
+                    self.add_past_def(var_name, src);
+                } else {
+                    opt_var_name = None;
+                }
+
+                (output, problems)
             }
         };
 
-        format_output(output, problems)
+        format_output(output, problems, opt_var_name)
     }
 
     fn next_auto_ident(&mut self) -> u64 {
@@ -396,7 +399,11 @@ impl Validator for ReplState {
     }
 }
 
-fn format_output(opt_output: Option<ReplOutput>, problems: Problems) -> String {
+fn format_output(
+    opt_output: Option<ReplOutput>,
+    problems: Problems,
+    opt_var_name: Option<String>,
+) -> String {
     let mut buf = String::new();
 
     // Only print errors; discard warnings.
@@ -410,12 +417,7 @@ fn format_output(opt_output: Option<ReplOutput>, problems: Problems) -> String {
         buf.push('\n');
     }
 
-    if let Some(ReplOutput {
-        expr,
-        expr_type,
-        var_name,
-    }) = opt_output
-    {
+    if let Some(ReplOutput { expr, expr_type }) = opt_output {
         // If expr was empty, it was a type annotation or ability declaration;
         // don't print anything!
         if !expr.is_empty() {
@@ -432,7 +434,7 @@ fn format_output(opt_output: Option<ReplOutput>, problems: Problems) -> String {
             }
 
             // Print var_name right-aligned on the last line of output.
-            {
+            if let Some(var_name) = opt_var_name {
                 use unicode_segmentation::UnicodeSegmentation;
 
                 const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
