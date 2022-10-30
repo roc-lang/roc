@@ -130,9 +130,11 @@ pub fn expect_success(input: &str, expected: &str) {
 
     // Don't consider the auto variable name (e.g. "# val1") at the end.
     // The state.rs tests do that!
-    let stdout = out.stdout;
-    let comment_index = stdout.rfind("#").unwrap_or_else(|| stdout.len());
-    assert_multiline_str_eq!(expected, stdout[0..comment_index].trim_end());
+    let line = out.stdout.lines().last().unwrap();
+    let comment_index = line.rfind("#").unwrap_or_else(|| line.len());
+
+    assert_multiline_str_eq!(expected, line[0..comment_index].trim_end());
+
     assert!(out.status.success());
 }
 
