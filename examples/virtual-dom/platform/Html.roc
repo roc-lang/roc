@@ -119,42 +119,15 @@ interface Html
         slot,
         template,
     ]
-    imports []
+    imports [Html.Internal]
 
 Node state : Html.Internal.Node state
 Attribute state : Html.Internal.Attribute state
 
+element = Html.Internal.element
+
 text : Str -> Node state
 text = Text
-
-## Define an HTML Element
-element : Str -> (List (Attribute state), List (Node state) -> Node state)
-element = \tagName ->
-    \attrs, children ->
-        # While building the node tree, calculate the size of Str it will render to
-        withTag = 2 * (3 + Str.countUtf8Bytes tagName)
-        withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
-        totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
-
-        Element tagName totalSize attrs children
-
-# internal helper
-nodeSize : Node state -> Nat
-nodeSize = \node ->
-    when node is
-        Text content -> Str.countUtf8Bytes content
-        Element _ size _ _ -> size
-        Lazy _ -> 0 # Ignore Lazy for buffer size estimate. renderStatic might have to reallocate, but that's OK.
-        None -> 0
-
-# internal helper
-attrSize : Attribute state -> Nat
-attrSize = \attr ->
-    when attr is
-        EventListener _ _ _ -> 0
-        HtmlAttr key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
-        DomProp _ _ -> 0
-        Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
 
 ## Render a Node to a static HTML string
 ##
@@ -162,69 +135,18 @@ attrSize = \attr ->
 ## This is intended for generating full HTML documents, so it
 ## automatically adds `<!DOCTYPE html>` to the start of the string.
 ## See also `renderStaticWithoutDocType`.
-renderStatic : Node {} -> Str
+renderStatic : Node [] -> Str
 renderStatic = \node ->
-    buffer = Str.reserve "<!DOCTYPE html>" (nodeSize node)
+    buffer = Str.reserve "<!DOCTYPE html>" (Html.Internal.nodeSize node)
 
-    renderStaticHelp buffer node
+    Html.Internal.appendRenderedStatic buffer node
 
 ## Render a Node to a static HTML string, without a DOCTYPE
-renderStaticWithoutDocType : Node {} -> Str
+renderStaticWithoutDocType : Node [] -> Str
 renderStaticWithoutDocType = \node ->
-    buffer = Str.reserve "" (nodeSize node)
+    buffer = Str.reserve "" (Html.Internal.nodeSize node)
 
-    renderStaticHelp buffer node
-
-# internal helper
-renderStaticHelp : Str, Node {} -> Str
-renderStaticHelp = \buffer, node ->
-    when node is
-        Text content ->
-            Str.concat buffer content
-
-        Element name _ attrs children ->
-            withTagName = "\(buffer)<\(name)"
-            withAttrs =
-                if List.isEmpty attrs then
-                    withTagName
-                else
-                    init = { buffer: Str.concat withTagName " ", styles: "" }
-                    { buffer: attrBuffer, styles } =
-                        List.walk attrs init renderStaticAttrHelp
-
-                    if Str.isEmpty styles then
-                        attrBuffer
-                    else
-                        "\(attrBuffer) style=\"\(styles)\""
-
-            withTag = Str.concat withAttrs ">"
-            withChildren = List.walk children withTag renderStaticHelp
-
-            "\(withChildren)</\(name)>"
-
-        Lazy callback ->
-            stateAndNode = callback (Err NotCached)
-
-            renderStaticHelp buffer stateAndNode.node
-
-        None -> buffer
-
-renderStaticAttrHelp : { buffer : Str, styles : Str }, Attribute {} -> { buffer : Str, styles : Str }
-renderStaticAttrHelp = \{ buffer, styles }, attr ->
-    when attr is
-        HtmlAttr key value ->
-            newBuffer = "\(buffer) \(key)=\"\(value)\""
-
-            { buffer: newBuffer, styles }
-
-        Style key value ->
-            newStyles = "\(styles) \(key): \(value);"
-
-            { buffer, styles: newStyles }
-
-        # The remaining variants only make sense on the front end. Ignore for server-side rendering.
-        EventListener _ _ _ -> { buffer, styles }
-        DomProp _ _ -> { buffer, styles }
+    Html.Internal.appendRenderedStatic buffer node
 
 html = element "html"
 base = element "base"

@@ -4,12 +4,15 @@ interface Html.Internal
         Attribute,
         CyclicStructureAccessor,
         Handler,
+        element,
         translate,
         insertHandler,
         replaceHandler,
         dispatchEvent,
+        appendRenderedStatic,
+        nodeSize,
     ]
-    imports [Action.{ Action }]
+    imports [Action.{ Action }, Encode, Json, Html.VdomJs.{ virtualDomJavaScript }]
 
 Node state : [
     None,
@@ -39,6 +42,82 @@ Handler state : [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
 ]
+
+## Define an HTML Element
+element : Str -> (List (Attribute state), List (Node state) -> Node state)
+element = \tagName ->
+    \attrs, children ->
+        # While building the node tree, calculate the size of Str it will render to
+        withTag = 2 * (3 + Str.countUtf8Bytes tagName)
+        withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
+        totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
+
+        Element tagName totalSize attrs children
+
+# internal helper
+nodeSize : Node state -> Nat
+nodeSize = \node ->
+    when node is
+        Text content -> Str.countUtf8Bytes content
+        Element _ size _ _ -> size
+        Lazy _ -> 0 # Ignore Lazy for buffer size estimate. renderStatic might have to reallocate, but that's OK.
+        None -> 0
+
+# internal helper
+attrSize : Attribute state -> Nat
+attrSize = \attr ->
+    when attr is
+        EventListener _ _ _ -> 0
+        HtmlAttr key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
+        DomProp _ _ -> 0
+        Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
+
+# internal helper
+appendRenderedStatic : Str, Node [] -> Str
+appendRenderedStatic = \buffer, node ->
+    when node is
+        Text content ->
+            Str.concat buffer content
+
+        Element name _ attrs children ->
+            withTagName = "\(buffer)<\(name)"
+            withAttrs =
+                if List.isEmpty attrs then
+                    withTagName
+                else
+                    init = { buffer: Str.concat withTagName " ", styles: "" }
+                    { buffer: attrBuffer, styles } =
+                        List.walk attrs init appendRenderedStaticAttr
+
+                    if Str.isEmpty styles then
+                        attrBuffer
+                    else
+                        "\(attrBuffer) style=\"\(styles)\""
+
+            withTag = Str.concat withAttrs ">"
+            withChildren = List.walk children withTag appendRenderedStatic
+
+            "\(withChildren)</\(name)>"
+
+        # Lazy can only be constructed in virtual DOM, not static
+        None -> buffer
+
+appendRenderedStaticAttr : { buffer : Str, styles : Str }, Attribute [] -> { buffer : Str, styles : Str }
+appendRenderedStaticAttr = \{ buffer, styles }, attr ->
+    when attr is
+        HtmlAttr key value ->
+            newBuffer = "\(buffer) \(key)=\"\(value)\""
+
+            { buffer: newBuffer, styles }
+
+        Style key value ->
+            newStyles = "\(styles) \(key): \(value);"
+
+            { buffer, styles: newStyles }
+
+        # The remaining variants only make sense on the front end. Ignore for server-side rendering.
+        EventListener _ _ _ -> { buffer, styles }
+        DomProp _ _ -> { buffer, styles }
 
 # translate : Node c, (p -> c), (c -> p) -> Node p # TODO: use this type signature when it no longer triggers a type checker bug
 translate : Node _, (_ -> _), (_ -> _) -> Node _
