@@ -1,6 +1,6 @@
 interface Html
     exposes [
-        Node,
+        Html,
         Attribute,
         renderStatic,
         renderStaticWithoutDocType,
@@ -121,28 +121,28 @@ interface Html
     ]
     imports [Html.Internal]
 
-Node state : Html.Internal.Node state
+Html state : Html.Internal.Html state
 Attribute state : Html.Internal.Attribute state
 
 element = Html.Internal.element
 
-text : Str -> Node state
+text : Str -> Html state
 text = Text
 
-## Render a Node to a static HTML string
+## Render a static Html node to a string, for saving to disk or sending over a network
 ##
 ## The output has no whitespace between nodes, to make it small.
 ## This is intended for generating full HTML documents, so it
 ## automatically adds `<!DOCTYPE html>` to the start of the string.
 ## See also `renderStaticWithoutDocType`.
-renderStatic : Node [] -> Str
+renderStatic : Html [] -> Str
 renderStatic = \node ->
     buffer = Str.reserve "<!DOCTYPE html>" (Html.Internal.nodeSize node)
 
     Html.Internal.appendRenderedStatic buffer node
 
-## Render a Node to a static HTML string, without a DOCTYPE
-renderStaticWithoutDocType : Node [] -> Str
+## Render a Html node to a static string, without a DOCTYPE
+renderStaticWithoutDocType : Html [] -> Str
 renderStaticWithoutDocType = \node ->
     buffer = Str.reserve "" (Html.Internal.nodeSize node)
 

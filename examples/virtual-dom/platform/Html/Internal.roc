@@ -1,7 +1,7 @@
 interface Html.Internal
     exposes [
         App,
-        Node,
+        Html,
         Attribute,
         CyclicStructureAccessor,
         Handler,
@@ -17,14 +17,14 @@ interface Html.Internal
     ]
     imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
 
-Node state : [
+Html state : [
     None,
     Text Str,
-    Element Str Nat (List (Attribute state)) (List (Node state)),
-    Lazy (Result { state, node : Node state } [NotCached] -> { state, node : Node state }),
+    Element Str Nat (List (Attribute state)) (List (Html state)),
+    Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
 ]
 
-LazyCallback state : Result { state, node : Node state } [NotCached] -> { state, node : Node state }
+LazyCallback state : Result { state, node : Html state } [NotCached] -> { state, node : Html state }
 
 Attribute state : [
     EventListener Str (List CyclicStructureAccessor) (Result (Handler state) Nat),
@@ -47,7 +47,7 @@ Handler state : [
 ]
 
 ## Define an HTML Element
-element : Str -> (List (Attribute state), List (Node state) -> Node state)
+element : Str -> (List (Attribute state), List (Html state) -> Html state)
 element = \tagName ->
     \attrs, children ->
         # While building the node tree, calculate the size of Str it will render to
@@ -58,7 +58,7 @@ element = \tagName ->
         Element tagName totalSize attrs children
 
 # internal helper
-nodeSize : Node state -> Nat
+nodeSize : Html state -> Nat
 nodeSize = \node ->
     when node is
         Text content -> Str.countUtf8Bytes content
@@ -76,7 +76,7 @@ attrSize = \attr ->
         Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
 
 # internal helper
-appendRenderedStatic : Str, Node [] -> Str
+appendRenderedStatic : Str, Html [] -> Str
 appendRenderedStatic = \buffer, node ->
     when node is
         Text content ->
@@ -122,8 +122,8 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
         EventListener _ _ _ -> { buffer, styles }
         DomProp _ _ -> { buffer, styles }
 
-# translate : Node c, (p -> c), (c -> p) -> Node p # TODO: use this type signature when it no longer triggers a type checker bug
-translate : Node _, (_ -> _), (_ -> _) -> Node _
+# translate : Html c, (p -> c), (c -> p) -> Html p # TODO: use this type signature when it no longer triggers a type checker bug
+translate : Html _, (_ -> _), (_ -> _) -> Html _
 translate = \node, parentToChild, childToParent ->
     when node is
         Text content ->
@@ -184,7 +184,7 @@ translateHandler = \childHandler, parentToChild, childToParent ->
 
             Custom parentFn
 
-translateStatic : Node * -> Node []
+translateStatic : Html * -> Html []
 translateStatic = \node ->
     when node is
         Text content ->
@@ -254,12 +254,12 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 HtmlId : Str
 
 App state : {
-    static : Node [],
+    static : Html [],
     initDynamic : Str -> state,
-    renderDynamic : state -> Dict HtmlId (Node state),
+    renderDynamic : state -> Dict HtmlId (Html state),
 }
 
-rocScript : Str, List HtmlId, Str -> Result (Node []) [InvalidUtf8]*
+rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
 rocScript = \initData, dynamicRootIds, wasmUrl ->
     toJs = \data ->
         data
@@ -271,7 +271,7 @@ rocScript = \initData, dynamicRootIds, wasmUrl ->
 
     when { encInitData, encDynamicRootIds, encWasmUrl } is
         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
-            elem : Node []
+            elem : Html []
             elem = (element "script") [] [
                 Text
                     """
