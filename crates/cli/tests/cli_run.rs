@@ -43,13 +43,16 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
 
     // Disallow valgrind on macOS by default, because it reports a ton
     // of false positives. For local development on macOS, feel free to
     // change this to true!
     #[cfg(target_os = "macos")]
+    const ALLOW_VALGRIND: bool = false;
+
+    #[cfg(windows)]
     const ALLOW_VALGRIND: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
