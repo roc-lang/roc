@@ -210,8 +210,8 @@ fn roc_fx_getInt_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
-    const delimiter = if (builtin.os.tag == .windows) '\r' else '\n';
-    const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, delimiter)) orelse "";
+    const raw_line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    const line = std.mem.trimRight(u8, raw_line, &std.ascii.spaces);
 
     return std.fmt.parseInt(i64, line, 10);
 }
