@@ -10,10 +10,7 @@
  */
 
 /**
- * @typedef {Object} CyclicStructureAccessor
- * @property {[string, CyclicStructureAccessor]} [ObjectField]
- * @property {[number, CyclicStructureAccessor]} [ArrayIndex]
- * @property {undefined} [SerializableValue]
+ * @typedef {{ObjectField: [string, CyclicStructureAccessor]} | {ArrayIndex: [number, CyclicStructureAccessor]} | {SerializableValue: []}} CyclicStructureAccessor
  */
 
 /** @type {Array<Node | null>} */
