@@ -3,8 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
-use roc_repl_cli::repl_state::TIPS;
-use roc_repl_cli::WELCOME_MESSAGE;
+use roc_repl_cli::{SHORT_INSTRUCTIONS, WELCOME_MESSAGE};
 use roc_test_utils::assert_multiline_str_eq;
 
 const ERROR_MESSAGE_START: char = '─';
@@ -76,7 +75,7 @@ fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, TIPS);
+    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
@@ -128,7 +127,12 @@ pub fn expect_success(input: &str, expected: &str) {
     let out = repl_eval(input);
 
     assert_multiline_str_eq!("", out.stderr.as_str());
-    assert_multiline_str_eq!(expected, out.stdout.as_str());
+
+    // Don't consider the auto variable name (e.g. "# val1") at the end.
+    // The state.rs tests do that!
+    let stdout = out.stdout;
+    let comment_index = stdout.rfind("#").unwrap_or_else(|| stdout.len());
+    assert_multiline_str_eq!(expected, stdout[0..comment_index].trim_end());
     assert!(out.status.success());
 }
 
