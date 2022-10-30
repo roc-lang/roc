@@ -114,7 +114,7 @@ mod cli_run {
         let ignorable = "🔨 Rebuilding platform...\n";
         let stderr = compile_out.stderr.replacen(ignorable, "", 1);
 
-        // for some reason, llvm prints out this warning when targetting windows
+        // for some reason, llvm prints out this warning when targeting windows
         let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
         let stderr = stderr.replacen(ignorable, "", 1);
 
