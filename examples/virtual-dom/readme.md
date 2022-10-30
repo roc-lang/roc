@@ -26,6 +26,12 @@ WebAssembly does not have direct access to web APIs like the DOM. It needs to go
 - Use integer enums for commonly-used strings like HTML tag names, attributes, etc. and use the integer as an index into an array of JS strings. This reduces the time we spend dereferencing pointers in the Wasm code, and converting UTF-8 to UTF-16 at the boundary.
 - Use an arena allocator when running the view code to generate the virtual DOM, and free it all at once on the next render.
 
+## Server side rendering
+- We use the same library for static and dymnamic HTML.
+- Dynamic code produces `Html state` but the functions that render static HTML take `Html []`. The `[]` type is an empty tag union, and it's impossible to create a value of that type. If you want to pre-render a static version of a view, you can pass it to `translateStatic : Html state -> Html []`
+- A static `Html []` tree cannot contain any `Lazy` nodes or event handlers.
+- A static `Html []` tree can only contain HTML _attributes_, not DOM _properties_. The difference between the two is rather [pedantic and crazy](https://github.com/elm/html/blob/master/properties-vs-attributes.md), and I'm not sure if it has any practical real-world implications or not.
+
 ## Short term TODO
 - [x] JS to load and initialize WebAssembly
 - [ ] Make the Wasm part of the host, for allocators and stuff (probably Zig?)
