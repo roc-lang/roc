@@ -103,9 +103,7 @@ pub export fn main() u8 {
 
     var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
 
-    // start time
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    var timer = std.time.Timer.start() catch unreachable;
 
     // actually call roc to populate the callresult
     const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
@@ -114,9 +112,8 @@ pub export fn main() u8 {
     const length = std.math.min(20, callresult.length);
     var result = callresult.elements[0..length];
 
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
+    const nanos = timer.read();
+    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
     for (result) |x, i| {
         if (i == 0) {
@@ -128,9 +125,8 @@ pub export fn main() u8 {
         }
     }
 
-    // TODO apparently the typestamps are still (partially) undefined?
-    // const delta = to_seconds(ts2) - to_seconds(ts1);
-    // stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }
