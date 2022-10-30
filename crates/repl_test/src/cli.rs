@@ -124,16 +124,24 @@ fn repl_eval(input: &str) -> Out {
 }
 
 pub fn expect_success(input: &str, expected: &str) {
-    let out = repl_eval(input);
+    let out = repl_eval(input.trim());
 
     assert_multiline_str_eq!("", out.stderr.as_str());
 
     // Don't consider the auto variable name (e.g. "# val1") at the end.
     // The state.rs tests do that!
-    let line = out.stdout.lines().last().unwrap();
+    let mut iter = out.stdout.lines().rev();
+    let line = iter.next().unwrap();
     let comment_index = line.rfind("#").unwrap_or_else(|| line.len());
+    let line_without_comment = line[0..comment_index].trim_end();
 
-    assert_multiline_str_eq!(expected, line[0..comment_index].trim_end());
+    // Sometimes the "# val1" wraps around to its own line; if this happens,
+    // we just use the preceding line instead.
+    if line_without_comment.is_empty() {
+        assert_multiline_str_eq!(expected, iter.next().unwrap().trim_end());
+    } else {
+        assert_multiline_str_eq!(expected, line_without_comment);
+    }
 
     assert!(out.status.success());
 }

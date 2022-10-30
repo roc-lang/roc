@@ -199,8 +199,7 @@ fn newtype_of_big_data() {
                 Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
-                A lefty
-                "#
+                A lefty"#
         ),
         r#"A (Left "loosey") : [A (Either Str Str)]*"#,
     )
@@ -214,8 +213,7 @@ fn newtype_nested() {
                 Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
-                A (B (C lefty))
-                "#
+                A (B (C lefty))"#
         ),
         r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]*]*]*"#,
     )
@@ -229,8 +227,7 @@ fn newtype_of_big_of_newtype() {
                 Big a : [Big a [Wrapper [Newtype a]]]
                 big : Big Str
                 big = Big "s" (Wrapper (Newtype "t"))
-                A big
-                "#
+                A big"#
         ),
         r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]*"#,
     )
@@ -1007,8 +1004,7 @@ fn issue_2588_record_with_function_and_nonfunction() {
             r#"
             x = 1
             f = \n -> n * 2
-            { y: f x, f }
-            "#
+            { y: f x, f }"#
         ),
         r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
     )
@@ -1021,8 +1017,7 @@ fn opaque_apply() {
             r#"
             Age := U32
 
-            @Age 23
-            "#
+            @Age 23"#
         ),
         "@Age 23 : Age",
     )
@@ -1035,8 +1030,7 @@ fn opaque_apply_polymorphic() {
             r#"
             F t u := [Package t u]
 
-            @F (Package "" { a: "" })
-            "#
+            @F (Package "" { a: "" })"#
         ),
         r#"@F (Package "" { a: "" }) : F Str { a : Str }"#,
     )
@@ -1051,8 +1045,7 @@ fn opaque_pattern_and_call() {
 
             f = \@F (Package A {}) -> @F (Package {} A)
 
-            f (@F (Package A {}))
-            "#
+            f (@F (Package A {}))"#
         ),
         r#"@F (Package {} A) : F {} [A]*"#,
     )
@@ -1077,9 +1070,7 @@ fn print_i8_issue_2710() {
         indoc!(
             r#"
             a : I8
-            a = -1
-            a
-            "#
+            a = -1"#
         ),
         r#"-1 : I8"#,
     )
@@ -1091,8 +1082,7 @@ fn box_box() {
     expect_success(
         indoc!(
             r#"
-            Box.box "container store"
-            "#
+            Box.box "container store""#
         ),
         r#"Box.box "container store" : Box Str"#,
     )
@@ -1107,8 +1097,7 @@ fn box_box_type_alias() {
             HeapStr : Box Str
             helloHeap : HeapStr
             helloHeap = Box.box "bye stacks"
-            helloHeap
-            "#
+            helloHeap"#
         ),
         r#"Box.box "bye stacks" : HeapStr"#,
     )
@@ -1132,9 +1121,7 @@ fn issue_2818() {
             f : {} -> List Str
             f = \_ ->
               x = []
-              x
-            f
-            "#
+              x"#
         ),
         r"<function> : {} -> List Str",
     )
@@ -1152,9 +1139,7 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
             Tool : [SystemTool, FromJob Job]
 
             a : Job
-            a = Job (Command (FromJob (Job (Command SystemTool))))
-            a
-            "#
+            a = Job (Command (FromJob (Job (Command SystemTool))))"#
         ),
         "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
     )
@@ -1166,14 +1151,9 @@ fn render_nullable_unwrapped_passing_through_alias() {
         indoc!(
             r#"
             Deep : [L DeepList]
-
             DeepList : [Nil, Cons Deep]
-
             v : DeepList
-            v = (Cons (L (Cons (L (Cons (L Nil))))))
-
-            v
-            "#
+            v = (Cons (L (Cons (L (Cons (L Nil))))))"#
         ),
         "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
@@ -1185,8 +1165,7 @@ fn opaque_wrap_function() {
         indoc!(
             r#"
             A a := a
-            List.map [1u8, 2u8, 3u8] @A
-            "#
+            List.map [1u8, 2u8, 3u8] @A"#
         ),
         "[@A 1, @A 2, @A 3] : List (A U8)",
     );
@@ -1197,8 +1176,7 @@ fn dict_get_single() {
     expect_success(
         indoc!(
             r#"
-            Dict.single 0 {a: 1, c: 2} |> Dict.get 0
-            "#
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0"#
         ),
         r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
     )
@@ -1209,8 +1187,7 @@ fn record_of_poly_function() {
     expect_success(
         indoc!(
             r#"
-            { a: \_ -> "a" }
-            "#
+            { a: \_ -> "a" }"#
         ),
         r#"{ a: <function> } : { a : * -> Str }"#,
     );
@@ -1221,8 +1198,7 @@ fn record_of_poly_function_and_string() {
     expect_success(
         indoc!(
             r#"
-            { a: \_ -> "a", b: "b" }
-            "#
+            { a: \_ -> "a", b: "b" }"#
         ),
         r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
     );
@@ -1233,8 +1209,7 @@ fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
             r#"
-            Result.try (Err 42) (\x -> Err (x+1))
-            "#
+            Result.try (Err 42) (\x -> Err (x+1))"#
         ),
         r#"Err 42 : Result b (Num *)"#,
     );
@@ -1242,8 +1217,7 @@ fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
             r#"
-            Result.try (Ok 42) (\x -> Ok (x+1))
-            "#
+            Result.try (Ok 42) (\x -> Ok (x+1))"#
         ),
         r#"Ok 43 : Result (Num *) err"#,
     );
