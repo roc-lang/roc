@@ -110,9 +110,13 @@ impl ReplState {
 
     pub fn eval_and_format<'a>(&mut self, src: &str) -> String {
         let arena = Bump::new();
-
+        let mut opt_var_name;
         let src = match parse_src(&arena, src) {
-            ParseOutcome::Expr(_) => src,
+            ParseOutcome::Expr(_) => {
+                opt_var_name = None;
+
+                src
+            }
             ParseOutcome::ValueDef(value_def) => {
                 match value_def {
                     ValueDef::Annotation(
@@ -155,10 +159,10 @@ impl ReplState {
                         ..
                     } => {
                         self.add_past_def(ident.to_string(), src.to_string());
+                        opt_var_name = Some(ident.to_string());
 
-                        // Return early without running eval, since neither standalone annotations
-                        // nor pending potential AnnotatedBody exprs can be evaluated as expressions.
-                        return String::new();
+                        // Eval the body of the def by adding a lookup to it
+                        *ident
                     }
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
@@ -190,16 +194,17 @@ impl ReplState {
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
-        let opt_var_name;
-        let (output, problems) = match self.past_def_idents.get(src.trim()) {
+        let (output, problems) = match opt_var_name
+            .or_else(|| self.past_def_idents.get(src.trim()).cloned())
+        {
             Some(existing_ident) => {
-                opt_var_name = Some(existing_ident.to_string());
+                opt_var_name = Some(existing_ident);
 
-                gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal)
+                gen_and_eval_llvm(&self.with_past_defs(&src), Triple::host(), OptLevel::Normal)
             }
             None => {
                 let (output, problems) =
-                    gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal);
+                    gen_and_eval_llvm(&self.with_past_defs(&src), Triple::host(), OptLevel::Normal);
 
                 // Don't persist defs that have compile errors
                 if problems.errors.is_empty() {
