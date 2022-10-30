@@ -25,16 +25,7 @@ pub fn format_answer(
 ) -> ReplOutput {
     let mut expr = roc_fmt::Buf::new_in(arena);
 
-    // match answer {
-    // There's nothing to eval when the expression is a function, so just print "<function>"
-    // Expr::Closure(_, _) => {
-    //     expr.indent(0);
-    //     expr.push_str("<function>");
-    // }
-    // _ => {
     answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
-    // }
-    // }
 
     ReplOutput {
         expr: expr.into_bump_str().to_string(),
