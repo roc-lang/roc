@@ -455,9 +455,52 @@ fn format_output<F: FnMut(&&String) -> bool>(
         // If expr was empty, it was a type annotation or ability declaration;
         // don't print anything!
         if !expr.is_empty() {
-            buf.push_str(&format!(
-                "\n{expr} {PINK}:{END_COL} {expr_type}  {GREEN} # {var_name}"
-            ))
+            const EXPR_TYPE_SEPARATOR: &str = " : "; // e.g. in "5 : Num *"
+
+            // Print the expr and its type
+            {
+                buf.push('\n');
+                buf.push_str(&expr);
+                buf.push_str(PINK); // Color for the type separator
+                buf.push_str(EXPR_TYPE_SEPARATOR);
+                buf.push_str(END_COL);
+                buf.push_str(&expr_type);
+            }
+
+            // Print var_name right-aligned on the last line of output.
+            {
+                use unicode_segmentation::UnicodeSegmentation;
+
+                const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
+                const VAR_NAME_COLUMN: usize = 80; // Right-align the var_name at this column
+
+                let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");
+
+                // Count graphemes because we care about what's *rendered* in the terminal
+                let last_line_len = expr_with_type
+                    .split("\n")
+                    .last()
+                    .unwrap_or_default()
+                    .graphemes(true)
+                    .count();
+                let var_name_len =
+                    var_name.graphemes(true).count() + VAR_NAME_PREFIX.graphemes(true).count();
+                let spaces_needed = if last_line_len + var_name_len > VAR_NAME_COLUMN {
+                    buf.push('\n');
+                    VAR_NAME_COLUMN - var_name_len
+                } else {
+                    VAR_NAME_COLUMN - last_line_len - var_name_len
+                };
+
+                for _ in 0..spaces_needed {
+                    buf.push(' ');
+                }
+
+                buf.push_str(GREEN);
+                buf.push_str(VAR_NAME_PREFIX);
+                buf.push_str(&var_name);
+                buf.push_str(END_COL);
+            }
         }
     }
 
