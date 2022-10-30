@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use roc_collections::MutSet;
 use roc_mono::ir::OptLevel;
-use roc_parse::ast::{Expr, Pattern, TypeDef, ValueDef};
+use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
 use roc_parse::parser::Either;
 use roc_parse::parser::{EClosure, EExpr};
@@ -128,8 +128,8 @@ impl ReplState {
                         // Record the standalone type annotation for future use.
                         self.add_past_def(ident.trim_end().to_string(), src.to_string());
 
-                        // Return early without running eval, since neither standalone annotations
-                        // nor pending potential AnnotatedBody exprs can be evaluated as expressions.
+                        // Return early without running eval, since standalone annotations
+                        // cannnot be evaluated as expressions.
                         return String::new();
                     }
                     ValueDef::Body(
@@ -166,9 +166,36 @@ impl ReplState {
                     }
                 }
             }
-            ParseOutcome::TypeDef(_) => {
-                // Alias, Opaque, or Ability
-                todo!("handle Alias, Opaque, or Ability")
+            ParseOutcome::TypeDef(TypeDef::Alias {
+                header:
+                    TypeHeader {
+                        name: Loc { value: ident, .. },
+                        ..
+                    },
+                ..
+            })
+            | ParseOutcome::TypeDef(TypeDef::Opaque {
+                header:
+                    TypeHeader {
+                        name: Loc { value: ident, .. },
+                        ..
+                    },
+                ..
+            })
+            | ParseOutcome::TypeDef(TypeDef::Ability {
+                header:
+                    TypeHeader {
+                        name: Loc { value: ident, .. },
+                        ..
+                    },
+                ..
+            }) => {
+                // Record the type for future use.
+                self.add_past_def(ident.trim_end().to_string(), src.to_string());
+
+                // Return early without running eval, since none of these
+                // can be evaluated as expressions.
+                return String::new();
             }
             ParseOutcome::Incomplete => {
                 if src.ends_with('\n') {

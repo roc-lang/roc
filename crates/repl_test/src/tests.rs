@@ -993,9 +993,7 @@ fn tag_with_type_behind_alias() {
             r#"
             T : [A Str]
             v : T
-            v = A "value"
-            v
-            "#
+            v = A "value""#
         ),
         r#"A "value" : T"#,
     );
