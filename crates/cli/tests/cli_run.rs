@@ -157,7 +157,10 @@ mod cli_run {
             let flags = {
                 let mut vec = flags.to_vec();
 
-                vec.push("--max-threads=1");
+                // max-threads segfaults on windows right now
+                if !cfg!(windows) {
+                    vec.push("--max-threads=1");
+                }
 
                 vec.into_iter()
             };
