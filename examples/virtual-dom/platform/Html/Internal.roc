@@ -1,5 +1,6 @@
 interface Html.Internal
     exposes [
+        App,
         Node,
         Attribute,
         CyclicStructureAccessor,
@@ -9,6 +10,7 @@ interface Html.Internal
         insertHandler,
         replaceHandler,
         dispatchEvent,
+        rocScript,
         appendRenderedStatic,
         nodeSize,
     ]
@@ -219,3 +221,42 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 
         Ok (Custom handler) ->
             handler state eventData
+
+HtmlId : Str
+
+App state : {
+    static : Node [],
+    initDynamic : Str -> state,
+    renderDynamic : state -> Dict HtmlId (Node state),
+}
+
+rocScript : Str, List HtmlId, Str -> Result (Node []) [InvalidUtf8]*
+rocScript = \initData, dynamicRootIds, wasmUrl ->
+    toJs = \data ->
+        data
+        |> Encode.toBytes Json.toUtf8
+        |> Str.fromUtf8
+    encInitData = toJs initData
+    encDynamicRootIds = toJs dynamicRootIds
+    encWasmUrl = toJs wasmUrl
+
+    when { encInitData, encDynamicRootIds, encWasmUrl } is
+        { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
+            elem : Node []
+            elem = (element "script") [] [
+                Text
+                    """
+                    \(virtualDomJavaScript)
+                    (function() {
+                        const initData = \(jsInitData);
+                        const dynamicRootIds = \(jsDynamicRootIds);
+                        const wasmUrl = \(jsWasmUrl);
+                        window.roc.init(initData, dynamicRootIds, wasmUrl);
+                    })();
+                    """,
+            ]
+
+            Ok elem
+
+        _ ->
+            Err InvalidUtf8
