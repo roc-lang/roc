@@ -40,22 +40,8 @@ Handler state : [
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
 ]
 
-# This when expression produces:
-#
-#     [Element Str Nat (List (Attribute p ? ?)) (List [
-#           Element Str Nat (List (Attribute c ? ?)) (List ∞),
-#           Lazy (Result { node : ∞, state : c } [NotCached] -> { node : ∞, state : c }),
-#           None,
-#           Text Str] as ∞),
-#     Lazy (LazyCallback p ? ? ? ? ? ? ?), None, Text Str]
-#
-# But you are trying to use it as:
-#
-#     [Element Str Nat (List (Attribute p ? ?)) (List b), Lazy (Result {
-#     node : Node p ? ? ?, state : p } [NotCached] -> { node : b,
-#     state : p }), None, Text Str] as b
-#
-translate : Node c, (p -> c), (c -> p) -> Node p
+# translate : Node c, (p -> c), (c -> p) -> Node p # TODO: use this type signature when it no longer triggers a type checker bug
+translate : Node _, (_ -> _), (_ -> _) -> Node _
 translate = \node, parentToChild, childToParent ->
     when node is
         Text content ->
@@ -63,7 +49,6 @@ translate = \node, parentToChild, childToParent ->
 
         Element name size attrs children ->
             newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
-            # why does this have the wrong type?
             newChildren = List.map children \c -> translate c parentToChild childToParent
 
             Element name size newAttrs newChildren
@@ -73,7 +58,8 @@ translate = \node, parentToChild, childToParent ->
 
         None -> None
 
-translateLazy : LazyCallback c, (p -> c), (c -> p) -> LazyCallback p
+# translateLazy : LazyCallback c, (p -> c), (c -> p) -> LazyCallback p # TODO: use this type signature when it no longer triggers a type checker bug
+translateLazy : LazyCallback _, (_ -> _), (_ -> _) -> LazyCallback _
 translateLazy = \childCallback, parentToChild, childToParent ->
     \parentCacheValue ->
         childCacheValue =
