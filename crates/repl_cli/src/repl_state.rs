@@ -2,7 +2,6 @@ use crate::cli_gen::gen_and_eval_llvm;
 use crate::colors::{BLUE, END_COL, GREEN, PINK};
 use bumpalo::Bump;
 use const_format::concatcp;
-use roc_collections::linked_list_extra::drain_filter;
 use roc_collections::MutSet;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::{Expr, Pattern, TypeDef, ValueDef};
@@ -16,7 +15,6 @@ use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
-use std::collections::LinkedList;
 use target_lexicon::Triple;
 
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
@@ -58,7 +56,7 @@ struct PastDef {
 #[derive(Completer, Helper, Hinter)]
 pub struct ReplState {
     validator: InputValidator,
-    past_defs: LinkedList<PastDef>,
+    past_defs: Vec<PastDef>,
     past_def_idents: MutSet<String>,
     last_auto_ident: u64,
 }
@@ -235,22 +233,7 @@ impl ReplState {
 
         existing_idents.insert(ident.clone());
 
-        // Override any defs that would be shadowed
-        if !self.past_defs.is_empty() {
-            drain_filter(&mut self.past_defs, |PastDef { ident, .. }| {
-                if existing_idents.contains(ident) {
-                    // We already have a newer def for this ident, so drop the old one.
-                    false
-                } else {
-                    // We've never seen this def, so record it!
-                    existing_idents.insert(ident.clone());
-
-                    true
-                }
-            });
-        }
-
-        self.past_defs.push_front(PastDef { ident, src });
+        self.past_defs.push(PastDef { ident, src });
     }
 
     /// Wrap the given expresssion in the appropriate past defs
