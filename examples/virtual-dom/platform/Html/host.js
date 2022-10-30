@@ -13,19 +13,21 @@
  * @typedef {{ObjectField: [string, CyclicStructureAccessor]} | {ArrayIndex: [number, CyclicStructureAccessor]} | {SerializableValue: []}} CyclicStructureAccessor
  */
 
-/** @type {Array<Node | null>} */
-const nodes = [];
-
-/** @type {Array<Listener | null>} */
-const listeners = [];
-
-const utf8Decoder = new TextDecoder();
-const utf8Encoder = new TextEncoder();
-
 /**
- * @param {string} wasmFilename
+ * @param {string} initData
+ * @param {string[]} dynamicRootIds
+ * @param {string} wasmUrl
  */
-export const init = async (wasmFilename) => {
+const init = async (initData, dynamicRootIds, wasmUrl) => {
+  /** @type {Array<Node | null>} */
+  const nodes = [];
+
+  /** @type {Array<Listener | null>} */
+  const listeners = [];
+
+  const utf8Decoder = new TextDecoder();
+  const utf8Encoder = new TextEncoder();
+
   const effects = {
     /**
      * @param {number} tagAddr
@@ -59,7 +61,6 @@ export const init = async (wasmFilename) => {
      * @param {number} id
      */
     removeNode: (id) => {
-      var _a;
       const node = nodes[id];
       nodes[id] = null;
       node.parentElement.removeChild(node);
@@ -202,8 +203,58 @@ export const init = async (wasmFilename) => {
     return utf8Decoder.decode(bytes);
   };
 
+  /**
+   * @param {Node} node
+   */
+  const insertNode = (node) => {
+    let i = 0;
+    for (; i < nodes.length; i++) {
+      if (!nodes[i]) break;
+    }
+    nodes[i] = node;
+    return i;
+  };
+
+  /**
+   * @param {CyclicStructureAccessor} accessor
+   * @param {any} structure
+   */
+  const accessCyclicStructure = (accessor, structure) => {
+    while (true) {
+      if ("SerializableValue" in accessor) {
+        return JSON.stringify(structure);
+      } else if ("ObjectField" in accessor) {
+        const [field, childAccessor] = accessor.ObjectField;
+        structure = structure[field];
+        accessor = childAccessor;
+      } else if ("ArrayIndex" in accessor) {
+        const [index, childAccessor] = accessor.ArrayIndex;
+        structure = structure[index];
+        accessor = childAccessor;
+      }
+      throw new Error("Invalid CyclicStructureAccessor");
+    }
+  };
+
+  /**
+   * @param {Element} element
+   * @param {number} handlerId
+   */
+  const findListener = (element, handlerId) => {
+    const listener = listeners[handlerId];
+    if (listener) {
+      return listener;
+    } else {
+      throw new Error(
+        `Event listener #${handlerId} not found. This is a bug in virtual-dom, not your app!` +
+          "It should have been on this node:\n" +
+          element.outerHTML
+      );
+    }
+  };
+
   const wasmImports = { effects };
-  const promise = fetch(wasmFilename);
+  const promise = fetch(wasmUrl);
   const instanceAndModule = await WebAssembly.instantiateStreaming(
     promise,
     wasmImports
@@ -217,55 +268,5 @@ export const init = async (wasmFilename) => {
   const exitCode = main();
   if (exitCode) {
     throw new Error(`Roc exited with error code ${exitCode}`);
-  }
-};
-
-/**
- * @param {Node} node
- */
-const insertNode = (node) => {
-  let i = 0;
-  for (; i < nodes.length; i++) {
-    if (!nodes[i]) break;
-  }
-  nodes[i] = node;
-  return i;
-};
-
-/**
- * @param {CyclicStructureAccessor} accessor
- * @param {any} structure
- */
-const accessCyclicStructure = (accessor, structure) => {
-  while (true) {
-    if ("SerializableValue" in accessor) {
-      return JSON.stringify(structure);
-    } else if ("ObjectField" in accessor) {
-      const [field, childAccessor] = accessor.ObjectField;
-      structure = structure[field];
-      accessor = childAccessor;
-    } else if ("ArrayIndex" in accessor) {
-      const [index, childAccessor] = accessor.ArrayIndex;
-      structure = structure[index];
-      accessor = childAccessor;
-    }
-    throw new Error("Invalid CyclicStructureAccessor");
-  }
-};
-
-/**
- * @param {Element} element
- * @param {number} handlerId
- */
-const findListener = (element, handlerId) => {
-  const listener = listeners[handlerId];
-  if (listener) {
-    return listener;
-  } else {
-    throw new Error(
-      `Event listener #${handlerId} not found. This is a bug in virtual-dom, not your app!` +
-        "It should have been on this node:\n" +
-        element.outerHTML
-    );
   }
 };
