@@ -15,7 +15,7 @@ interface Html.Internal
         appendRenderedStatic,
         nodeSize,
     ]
-    imports [Action.{ Action }, Encode, Json, Html.VdomJs.{ virtualDomJavaScript }]
+    imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
 
 Node state : [
     None,
@@ -275,7 +275,7 @@ rocScript = \initData, dynamicRootIds, wasmUrl ->
             elem = (element "script") [] [
                 Text
                     """
-                    \(virtualDomJavaScript)
+                    \(hostJavaScript)
                     (function() {
                         const initData = \(jsInitData);
                         const dynamicRootIds = \(jsDynamicRootIds);

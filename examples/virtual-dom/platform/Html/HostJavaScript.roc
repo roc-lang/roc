@@ -1,9 +1,9 @@
-interface Html.VdomJs
-    exposes [virtualDomJavaScript]
+interface Html.HostJavaScript
+    exposes [hostJavaScript]
     imports []
 
-virtualDomJavaScript : Str
-virtualDomJavaScript =
+hostJavaScript : Str
+hostJavaScript =
     """
     /** @typedef {(e: Event) => void} JsEventDispatcher */
 
