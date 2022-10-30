@@ -88,6 +88,9 @@ mod cli_run {
         // make paths consistent
         let err = err.replace('\\', "/");
 
+        // consistency with typewriters, very important
+        let err = err.replace('\r', "");
+
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
