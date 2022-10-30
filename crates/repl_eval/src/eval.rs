@@ -13,7 +13,7 @@ use roc_mono::layout::{
     self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
     UnionVariant, WrappedVariant,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
@@ -67,7 +67,20 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
             // it's `main` and can be executed.
             jit_to_ast_help(&mut env, app, main_fn_name, &result, var)
         }
-        _ => Expr::MalformedClosure,
+        ProcLayout { arguments, .. } => {
+            // This is a user-supplied function; create a fake Expr for it.
+            let mut arg_patterns =
+                bumpalo::collections::Vec::with_capacity_in(arguments.len(), arena);
+
+            // Put in an underscore for each of the args, just to get the arity right.
+            for _ in 0..arguments.len() {
+                arg_patterns.push(Loc::at_zero(Pattern::Underscore("_")));
+            }
+
+            let body_expr = Loc::at_zero(Expr::Record(Collection::empty()));
+
+            Expr::Closure(arg_patterns.into_bump_slice(), arena.alloc(body_expr))
+        }
     }
 }
 

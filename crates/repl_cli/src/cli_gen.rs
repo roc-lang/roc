@@ -58,15 +58,7 @@ pub fn gen_and_eval_llvm<'a>(
 
     let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
-        None => {
-            return (
-                Some(ReplOutput {
-                    expr: "<function>".to_string(),
-                    expr_type: expr_type_str,
-                }),
-                problems,
-            );
-        }
+        None => unreachable!(),
     };
 
     let interns = loaded.interns.clone();
@@ -87,8 +79,15 @@ pub fn gen_and_eval_llvm<'a>(
         layout_interner.into_global().fork(),
         target_info,
     );
+    let expr_str = format_answer(&arena, expr).to_string();
 
-    (Some(format_answer(&arena, expr, expr_type_str)), problems)
+    (
+        Some(ReplOutput {
+            expr: expr_str,
+            expr_type: expr_type_str,
+        }),
+        problems,
+    )
 }
 
 struct CliApp {

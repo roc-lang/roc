@@ -11,23 +11,26 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_target::TargetInfo;
 
+#[derive(Debug)]
 pub struct ReplOutput {
     pub expr: String,
     pub expr_type: String,
 }
 
-pub fn format_answer(arena: &Bump, answer: Expr<'_>, expr_type: String) -> ReplOutput {
-    let mut expr = roc_fmt::Buf::new_in(arena);
+pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
+    match answer {
+        Expr::Closure(_, _) | Expr::MalformedClosure => "<function>",
+        _ => {
+            let mut expr = roc_fmt::Buf::new_in(arena);
 
-    answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+            answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
 
-    ReplOutput {
-        expr: expr.into_bump_str().to_string(),
-        expr_type,
+            expr.into_bump_str()
+        }
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Problems {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
