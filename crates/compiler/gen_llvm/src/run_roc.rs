@@ -118,9 +118,9 @@ macro_rules! run_jit_function {
                 // only if there are no exceptions thrown, check for errors
                 assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
 
-                $transform(success)
+                Ok($transform(success))
             }
-            Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
+            Err(error_msg) => Err(error_msg.to_string()),
         }
     }};
 }

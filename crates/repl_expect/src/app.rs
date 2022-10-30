@@ -84,7 +84,11 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&mut self, _main_fn_name: &str, mut transform: F) -> Expr<'a>
+    fn call_function<Return, F>(
+        &mut self,
+        _main_fn_name: &str,
+        mut transform: F,
+    ) -> Result<Expr<'a>, String>
     where
         F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
@@ -95,7 +99,8 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
             ptr.read()
         };
 
-        transform(self.memory, result)
+        // TODO if it panicked, return Err
+        Ok(transform(self.memory, result))
     }
 
     fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
