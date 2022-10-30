@@ -112,7 +112,7 @@ mod cli_run {
         let stderr = compile_out.stderr.replacen(ignorable, "", 1);
 
         // for some reason, llvm prints out this warning when targetting windows
-        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\n";
+        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
         let stderr = stderr.replacen(ignorable, "", 1);
 
         let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
@@ -402,6 +402,11 @@ mod cli_run {
         )
     }
 
+    #[cfg(windows)]
+    const LINE_ENDING: &str = "\r\n";
+    #[cfg(not(windows))]
+    const LINE_ENDING: &str = "\n";
+
     #[test]
     // uses C platform
     fn platform_switching_main() {
@@ -409,7 +414,7 @@ mod cli_run {
             "examples/platform-switching",
             "main.roc",
             "rocLovesPlatforms",
-            "Which platform am I running on now?\n",
+            &("Which platform am I running on now?".to_string() + LINE_ENDING),
             true,
         )
     }
