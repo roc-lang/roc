@@ -70,16 +70,15 @@ fn exhaustiveness_problem() {
 
             This when does not cover all the possibilities:
 
-            7│>      when t is
-            8│>          A -> "a"
+            6│>      when t is
+            7│>          A -> 1
 
             Other possibilities include:
 
                 B
                 C
 
-            I would have to crash if I saw one of those! Add branches for them!
-            "#
+            I would have to crash if I saw one of those! Add branches for them!"#
         );
 
         error(&input, &mut state, EXPECTED_ERROR.to_string());
