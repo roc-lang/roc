@@ -21,7 +21,7 @@ use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
 use target_lexicon::Triple;
 
-pub fn gen_and_eval_llvm<'a>(
+pub fn gen_and_eval_llvm(
     src: &str,
     target: Triple,
     opt_level: OptLevel,
