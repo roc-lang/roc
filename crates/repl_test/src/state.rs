@@ -31,6 +31,21 @@ fn persisted_defs() {
 }
 
 #[test]
+fn annotated_body() {
+    let mut input = "t : [A, B, C]".to_string();
+
+    incomplete(&mut input);
+
+    input.push_str("t = A");
+
+    incomplete(&mut input);
+
+    let mut state = ReplState::new();
+
+    complete(&input, &mut state, Ok(("A : [A]*", "t")));
+}
+
+#[test]
 fn exhaustiveness_problem() {
     let mut input = "t : [A, B, C]".to_string();
 
