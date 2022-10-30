@@ -10,6 +10,26 @@ fn one_plus_one() {
 }
 
 #[test]
+fn generated_expr_names() {
+    let mut state = ReplState::new();
+
+    complete("2 * 3", &mut state, Ok(("6 : Num *", "val1")));
+    complete("4 - 1", &mut state, Ok(("3 : Num *", "val2")));
+    complete("val1 + val2", &mut state, Ok(("9 : Num *", "val3")));
+    complete("1 + (val2 * val3)", &mut state, Ok(("28 : Num *", "val4")));
+}
+
+#[test]
+fn persisted_defs() {
+    let mut state = ReplState::new();
+
+    complete("x = 5", &mut state, Ok(("5 : Num *", "x")));
+    complete("7 - 3", &mut state, Ok(("4 : Num *", "val1")));
+    complete("y = 6", &mut state, Ok(("6 : Num *", "y")));
+    complete("val1 + x + y", &mut state, Ok(("15 : Num *", "val2")));
+}
+
+#[test]
 fn tips() {
     assert!(!is_incomplete(""));
     assert_eq!(ReplState::new().step(""), Ok(format!("\n{TIPS}\n")));
