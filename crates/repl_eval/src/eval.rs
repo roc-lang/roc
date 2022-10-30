@@ -49,7 +49,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     interns: &'a Interns,
     layout_interner: LayoutInterner<'a>,
     target_info: TargetInfo,
-) -> Result<Expr<'a>, String> {
+) -> Expr<'a> {
     let mut env = Env {
         arena,
         subs,
@@ -330,7 +330,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     main_fn_name: &str,
     layout: &Layout<'a>,
     var: Variable,
-) -> Result<Expr<'a>, String> {
+) -> Expr<'a> {
     let (newtype_containers, alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
 
     macro_rules! num_helper {
@@ -341,7 +341,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let result = match layout {
+    let expr = match layout {
         Layout::Builtin(Builtin::Bool) => {
             app.call_function(main_fn_name, |mem: &A::Memory, num: bool| {
                 bool_to_ast(
@@ -499,7 +499,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::LambdaSet(_) => OPAQUE_FUNCTION,
         Layout::Boxed(_) => {
             let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
 
@@ -516,7 +516,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         }
     };
 
-    result.map(|expr| apply_newtypes(env, newtype_containers.into_bump_slice(), expr))
+    apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {

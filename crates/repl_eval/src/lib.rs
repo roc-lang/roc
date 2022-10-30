@@ -11,20 +11,12 @@ pub trait ReplApp<'a> {
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
-    fn call_function<Return, F>(
-        &mut self,
-        main_fn_name: &str,
-        transform: F,
-    ) -> Result<Expr<'a>, String>
+    fn call_function<Return, F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
         F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a;
 
-    fn call_function_returns_roc_list<F>(
-        &mut self,
-        main_fn_name: &str,
-        transform: F,
-    ) -> Result<Expr<'a>, String>
+    fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
         F: FnMut(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
         Self::Memory: 'a,
@@ -37,7 +29,7 @@ pub trait ReplApp<'a> {
         target_info: TargetInfo,
         main_fn_name: &str,
         transform: F,
-    ) -> Result<T, String>
+    ) -> T
     where
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
@@ -57,7 +49,7 @@ pub trait ReplApp<'a> {
         main_fn_name: &str,
         ret_bytes: usize,
         transform: F,
-    ) -> Result<T, String>
+    ) -> T
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a;

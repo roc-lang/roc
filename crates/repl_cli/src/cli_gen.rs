@@ -107,11 +107,7 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
-    fn call_function<Return, F>(
-        &mut self,
-        main_fn_name: &str,
-        mut transform: F,
-    ) -> Result<Expr<'a>, String>
+    fn call_function<Return, F>(&mut self, main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
         F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
