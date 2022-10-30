@@ -1,8 +1,12 @@
 use roc_repl_cli::repl_state::{is_incomplete, ReplState, TIPS};
 
+// These are tests of the REPL state machine. They work without actually
+// running the CLI, and without using rustyline, and instead verify
+// the expected outputs for various sequences of user input strings.
+
 #[test]
 fn one_plus_one() {
-    complete("1 + 1", &mut ReplState::new(), Ok("2 : Num *   # TODOval1"));
+    complete("1 + 1", &mut ReplState::new(), Ok(("2 : Num *", "val1")));
 }
 
 #[test]
@@ -19,14 +23,20 @@ fn standalone_annotation() {
     assert_eq!(&state.with_past_defs("test"), "test");
 
     incomplete(&mut input);
-    complete(&input, &mut state, Ok(""));
+    assert!(!is_incomplete(&input));
+    assert_eq!(state.step(&input), Ok(String::new()));
 
-    assert_eq!(&state.with_past_defs("test"), "x : Str\ntest");
+    assert_eq!(&state.with_past_defs("test"), "x : Str\n\ntest");
+}
+
+#[test]
+fn multiline_def() {
+    todo!("x =\n1");
 }
 
 /// validate and step the given input, then check the Result vs the input
 /// with ANSI escape codes stripped.
-fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<&str, i32>) {
+fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<(&str, &str), i32>) {
     assert!(!is_incomplete(input));
 
     match state.step(input) {
@@ -36,7 +46,18 @@ fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<&st
             )
             .unwrap();
 
-            assert_eq!(expected_step_result.map(str::to_string), Ok(escaped));
+            let comment_index = escaped.rfind('#').unwrap_or_else(|| escaped.len());
+
+            assert_eq!(
+                expected_step_result.map(|(starts_with, _)| starts_with),
+                Ok(*&escaped[0..comment_index].trim())
+            );
+
+            assert_eq!(
+                expected_step_result.map(|(_, ends_with)| ends_with),
+                // +1 because we want to skip over the '#' itself
+                Ok(*&escaped[comment_index + 1..].trim())
+            );
         }
         Err(err) => {
             assert_eq!(expected_step_result, Err(err));
