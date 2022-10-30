@@ -10,7 +10,6 @@ license = "UPL-1.0"
 [dependencies]
 bumpalo = { version = "3.11.0", features = ["collections"] }
 
-roc_error_macros = { path = "../error_macros" }
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
 roc_collections = {path = "../compiler/collections"}

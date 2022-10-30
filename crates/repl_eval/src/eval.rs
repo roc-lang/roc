@@ -1,6 +1,5 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_error_macros::internal_error;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
@@ -68,9 +67,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
             // it's `main` and can be executed.
             jit_to_ast_help(&mut env, app, main_fn_name, &result, var)
         }
-        _ => {
-            internal_error!("The layout generated for {main_fn_name} was not a Procedure!")
-        }
+        _ => Expr::MalformedClosure,
     }
 }
 
