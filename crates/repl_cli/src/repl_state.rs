@@ -442,6 +442,11 @@ pub fn is_incomplete(input: &str) -> bool {
         //
         // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
         ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with('\n') => true,
+        ParseOutcome::Expr(Expr::When(_, _)) => {
+            // There might be lots of `when` branches, so don't assume the user is done entering
+            // them until they enter a blank line!
+            !input.ends_with('\n')
+        }
         ParseOutcome::Empty
         | ParseOutcome::Help
         | ParseOutcome::Exit

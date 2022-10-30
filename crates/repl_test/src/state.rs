@@ -43,26 +43,29 @@ fn annotated_body() {
 
 #[test]
 fn exhaustiveness_problem() {
-    let mut input = "t : [A, B, C]".to_string();
-
-    incomplete(&mut input);
-
-    input.push_str("t = A");
-
-    incomplete(&mut input);
-
     let mut state = ReplState::new();
 
-    complete(&input, &mut state, Ok(("A : [A]*", "t")));
+    // Enter an annotated tag union to make it exhaustive
+    {
+        let mut input = "t : [A, B, C]".to_string();
 
-    input.push_str("when t is");
-    incomplete(&mut input);
+        incomplete(&mut input);
 
-    input.push_str("    A -> 1");
-    incomplete(&mut input);
+        input.push_str("t = A");
 
-    const EXPECTED_ERROR: &str = indoc!(
-        r#"
+        complete(&input, &mut state, Ok(("A : [A, B, C]", "t")));
+    }
+
+    // Run a `when` on it that isn't exhaustive
+    {
+        let mut input = "when t is".to_string();
+        incomplete(&mut input);
+
+        input.push_str("    A -> 1");
+        incomplete(&mut input);
+
+        const EXPECTED_ERROR: &str = indoc!(
+            r#"
             ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
             This when does not cover all the possibilities:
@@ -77,9 +80,10 @@ fn exhaustiveness_problem() {
 
             I would have to crash if I saw one of those! Add branches for them!
             "#
-    );
+        );
 
-    error(&input, &mut state, EXPECTED_ERROR.to_string());
+        error(&input, &mut state, EXPECTED_ERROR.to_string());
+    }
 }
 
 #[test]
