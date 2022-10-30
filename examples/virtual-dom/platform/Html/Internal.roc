@@ -7,6 +7,7 @@ interface Html.Internal
         Handler,
         element,
         translate,
+        translateStatic,
         insertHandler,
         replaceHandler,
         dispatchEvent,
@@ -182,6 +183,34 @@ translateHandler = \childHandler, parentToChild, childToParent ->
                 { action: action |> Action.map childToParent, stopPropagation, preventDefault }
 
             Custom parentFn
+
+translateStatic : Node * -> Node []
+translateStatic = \node ->
+    when node is
+        Text content ->
+            Text content
+
+        Element name size attrs children ->
+            newAttrs = List.keepOks attrs keepStaticAttr
+            newChildren = List.map children translateStatic
+
+            Element name size newAttrs newChildren
+
+        # TODO: Triggers a stack overflow in the compiler. I think in type checking.
+        # If someone made this node Lazy, then it's probably expensive, and worth server-side rendering.
+        # Lazy callback ->
+        #     { node: dynamicNode } = callback (Err NotCached)
+        #     translateStatic dynamicNode
+        Lazy _ -> None
+        None -> None
+
+keepStaticAttr : Attribute _ -> Result (Attribute []) {}
+keepStaticAttr = \attr ->
+    when attr is
+        EventListener _ _ _ -> Err {}
+        HtmlAttr k v -> Ok (HtmlAttr k v)
+        DomProp _ _ -> Err {}
+        Style k v -> Ok (Style k v)
 
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, lookup : List (Result (Handler state) [NoHandler]) }
 insertHandler = \lookup, newHandler ->
