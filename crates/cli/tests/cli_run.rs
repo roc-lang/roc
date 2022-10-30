@@ -85,6 +85,9 @@ mod cli_run {
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
         let err = format!("{}found in <ignored for test> ms.", before_first_digit);
 
+        // make paths consistent
+        let err = err.replace('\\', "/");
+
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
