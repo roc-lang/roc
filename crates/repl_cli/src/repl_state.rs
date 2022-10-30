@@ -214,34 +214,7 @@ impl ReplState {
             }
         };
 
-        format_output(output, problems, |warning| {
-            // Filter out UNUSED warnings for entries in past_def_idents,
-            // since otherwise those are totally unhelpful and very annoying!
-            //
-            // Obviously doing string matching on the error message itself is a
-            // brittle and hacky way to do this. It would be nice in the future to
-            // thread the authoritative information through here, but that's
-            // too large a change to justify in the first (already very large)
-            // implementation of the "remembered defs" feature!
-            const UNUSED_DEF_SHORT_PREFIX: &str = "\u{1b}[36m── UNUSED DEFINITION ─";
-            const UNUSED_DEF_FULL_PREFIX:&str  = "\u{1b}[36m── UNUSED DEFINITION ───────────────────────────────────────────────────────────\u{1b}[0m\n\n\u{1b}[34m";
-
-            if warning.starts_with(UNUSED_DEF_SHORT_PREFIX) {
-                let ident_start = &warning[UNUSED_DEF_FULL_PREFIX.len()..];
-
-                if let Some(ident_len) = ident_start.find("\u{1b}[0m") {
-                    let ident = &ident_start[..ident_len];
-
-                    // If this is an unused definition warning for an entry
-                    // in our past_def_idents, filter it out.
-                    if self.past_def_idents.contains(ident) {
-                        return false;
-                    }
-                }
-            }
-
-            true
-        })
+        format_output(output, problems)
     }
 
     fn next_auto_ident(&mut self) -> u64 {
@@ -423,20 +396,11 @@ impl Validator for ReplState {
     }
 }
 
-fn format_output<F: FnMut(&&String) -> bool>(
-    opt_output: Option<ReplOutput>,
-    problems: Problems,
-    warning_filter: F,
-) -> String {
+fn format_output(opt_output: Option<ReplOutput>, problems: Problems) -> String {
     let mut buf = String::new();
 
-    // Join all the warnings and errors together with blank lines.
-    for message in problems
-        .warnings
-        .iter()
-        .filter(warning_filter)
-        .chain(problems.errors.iter())
-    {
+    // Only print errors; discard warnings.
+    for message in problems.errors.iter() {
         if !buf.is_empty() {
             buf.push_str("\n\n");
         }
