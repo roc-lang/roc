@@ -1,3 +1,4 @@
+use indoc::indoc;
 use roc_repl_cli::repl_state::{is_incomplete, ReplState, TIPS};
 
 // These are tests of the REPL state machine. They work without actually
@@ -30,6 +31,47 @@ fn persisted_defs() {
 }
 
 #[test]
+fn exhaustiveness_problem() {
+    let mut input = "t : [A, B, C]".to_string();
+
+    incomplete(&mut input);
+
+    input.push_str("t = A");
+
+    incomplete(&mut input);
+
+    let mut state = ReplState::new();
+
+    complete(&input, &mut state, Ok(("A : [A]*", "t")));
+
+    input.push_str("when t is");
+    incomplete(&mut input);
+
+    input.push_str("    A -> 1");
+    incomplete(&mut input);
+
+    const EXPECTED_ERROR: &str = indoc!(
+        r#"
+            ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+            This when does not cover all the possibilities:
+
+            7│>      when t is
+            8│>          A -> "a"
+
+            Other possibilities include:
+
+                B
+                C
+
+            I would have to crash if I saw one of those! Add branches for them!
+            "#
+    );
+
+    error(&input, &mut state, EXPECTED_ERROR.to_string());
+}
+
+#[test]
 fn tips() {
     assert!(!is_incomplete(""));
     assert_eq!(ReplState::new().step(""), Ok(format!("\n{TIPS}\n")));
@@ -54,7 +96,7 @@ fn multiline_def() {
     todo!("x =\n1");
 }
 
-/// validate and step the given input, then check the Result vs the input
+/// validate and step the given input, then check the Result vs the output
 /// with ANSI escape codes stripped.
 fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<(&str, &str), i32>) {
     assert!(!is_incomplete(input));
@@ -91,4 +133,17 @@ fn incomplete(input: &mut String) {
     // Since this was incomplete, rustyline won't step the state. Instead, it will
     // remember the input (with a newline appended) for next time.
     input.push('\n');
+}
+
+/// validate and step the given input, then check the given string vs the output
+/// with ANSI escape codes stripped.
+fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
+    assert!(!is_incomplete(input));
+
+    let escaped = state.step(input).map(|string| {
+        std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap().into())
+            .unwrap()
+    });
+
+    assert_eq!(Ok(expected_step_result), escaped);
 }

@@ -936,39 +936,6 @@ fn parse_problem() {
     );
 }
 
-#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
-#[test]
-fn exhaustiveness_problem() {
-    expect_failure(
-        indoc!(
-            r#"
-            t : [A, B, C]
-            t = A
-
-            when t is
-                A -> "a"
-            "#
-        ),
-        indoc!(
-            r#"
-            ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
-
-            This when does not cover all the possibilities:
-
-            7│>      when t is
-            8│>          A -> "a"
-
-            Other possibilities include:
-
-                B
-                C
-
-            I would have to crash if I saw one of those! Add branches for them!
-            "#
-        ),
-    );
-}
-
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2343_complete_mono_with_shadowed_vars() {
