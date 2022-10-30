@@ -121,7 +121,7 @@ macro_rules! run_jit_function {
                 $transform(success)
             }
             Err(error_msg) => {
-                eprintln!("Compiling this Roc code triggered a bug in the Roc compiler: \"{error_msg}\" - if you have time, it would be helpful if you could open an issue at https://github.com/roc-lang/roc/issues with steps to reproduce this error message.");
+                eprintln!("This Roc code crashed with: \"{error_msg}\"");
 
                 Expr::MalformedClosure
             }
