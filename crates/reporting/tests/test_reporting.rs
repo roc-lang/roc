@@ -8751,11 +8751,11 @@ All branches in an `if` must have the same type!
 
         a | a has MHash
 
-    Tip: The type annotation uses the type variable `a` to say that this
-    definition can produce any value implementing the `MHash` ability. But
-    in the body I see that it will only produce a `Id` value of a single
-    specific type. Maybe change the type annotation to be more specific?
-    Maybe change the code to be more general?
+    Note: The type variable `a` says it can take on any value that has the
+    ability `MHash`.
+
+    But, I see that the type is only ever used as a a `Id` value. Can you
+    replace `a` with a more specific type?
     "###
     );
 
@@ -11482,6 +11482,253 @@ All branches in an `if` must have the same type!
     But the annotation on `foo` says the 1st argument should be:
 
         { a : Str }
+    "###
+    );
+
+    test_report!(
+        underivable_opaque_doesnt_error_for_derived_bodies,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            F := U8 -> U8 has [Hash, Eq, Encoding]
+
+            main = ""
+            "#
+        ),
+    @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Hash` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                           ^^^^
+
+    Note: `Hash` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Hash` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                 ^^
+
+    Note: `Eq` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Eq` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Encoding` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                     ^^^^^^^^
+
+    Note: `Encoding` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Encoding` for `F`.
+    "###
+    );
+
+    test_report!(
+        duplicate_ability_in_has_clause,
+        indoc!(
+            r#"
+            f : a -> {} | a has Hash & Hash
+
+            f
+            "#
+        ),
+    @r###"
+    ── DUPLICATE BOUND ABILITY ─────────────────────────────── /code/proj/Main.roc ─
+
+    I already saw that this type variable is bound to the `Hash` ability
+    once before:
+
+    4│      f : a -> {} | a has Hash & Hash
+                                       ^^^^
+
+    Abilities only need to bound to a type variable once in a `has` clause!
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_multiple,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding & Hash
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Hash & Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the abilities `Hash` and
+    `Decoding`. Can you use `x` without those abilities? If not, consider
+    adding them to the `has` clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_with_indirection,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            f : x -> x | x has Hash
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Hash & Encoding
+            main = \x -> g (f x)
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    7│  main = \x -> g (f x)
+                        ^^^
+
+    This `f` call produces:
+
+        x | x has Hash & Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the abilities `Hash` and `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
+
+    test_report!(
+        list_pattern_not_terminated,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2, -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ────────── tmp/list_pattern_not_terminated/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2, -> ""
+                       ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_indent,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2,
+            3] -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ──────────── tmp/list_pattern_weird_indent/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2,
+    6│      3] -> ""
+            ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_rest_pattern,
+        indoc!(
+            r#"
+            when [] is 
+                [...] -> ""
+            "#
+        ),
+    @r###"
+    ── INCORRECT REST PATTERN ─────── tmp/list_pattern_weird_rest_pattern/Test.roc ─
+
+    It looks like you may trying to write a list rest pattern, but it's
+    not the form I expect:
+
+    5│          [...] -> ""
+                 ^
+
+    List rest patterns, which match zero or more elements in a list, are
+    denoted with .. - is that what you meant?
     "###
     );
 }

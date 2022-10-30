@@ -16,9 +16,7 @@ interface Set
     ]
     imports [List, Bool.{ Bool, Eq }, Dict.{ Dict }, Num.{ Nat }]
 
-Set k := Dict.Dict k {} has [Eq { isEq: setEq }]
-
-setEq = \@Set d1, @Set d2 -> d1 == d2
+Set k := Dict.Dict k {} has [Eq]
 
 fromDict : Dict k {} -> Set k
 fromDict = \dict -> @Set dict

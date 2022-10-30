@@ -3748,7 +3748,6 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.20",
  "iced-x86",
  "indoc",
  "libc",
@@ -3758,7 +3757,9 @@ dependencies = [
  "roc_build",
  "roc_collections",
  "roc_error_macros",
+ "roc_load",
  "roc_mono",
+ "roc_reporting",
  "serde",
  "target-lexicon",
  "tempfile",

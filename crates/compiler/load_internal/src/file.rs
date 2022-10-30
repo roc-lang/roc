@@ -4471,7 +4471,7 @@ fn run_solve_solve(
                 .values()
                 .any(|resolved_impl| match resolved_impl {
                     ResolvedImpl::Impl(specialization) => specialization.symbol == sym,
-                    ResolvedImpl::Derived | ResolvedImpl::Error => false,
+                    ResolvedImpl::Error => false,
                 })
         };
 

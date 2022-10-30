@@ -5705,6 +5705,98 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn clauses_with_multiple_abilities() {
+        expr_formats_same(indoc!(
+            r#"
+            f : {} -> a | a has Eq & Hash & Decode
+
+            f
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode,
+                              b has Eq & Hash
+
+                f
+                "#
+            ),
+            indoc!(
+                // TODO: ideally, this would look a bit nicer - consider
+                // f : {} -> a
+                //   | a has Eq & Hash & Decode,
+                //     b has Eq & Hash
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode, b has Eq & Hash
+
+                f
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn format_list_patterns() {
+        expr_formats_same(indoc!(
+            r#"
+            when [] is
+                [] -> []
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [  ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [] -> []
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [ x,  ..  ,    A  5   6,  .. ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [x, .., A 5 6, ..] -> []
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [ x, 4, 5 ] -> []
+                    [ ..,   5 ] -> []
+                    [ x,   .. ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [x, 4, 5] -> []
+                    [.., 5] -> []
+                    [x, ..] -> []
+                "#
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

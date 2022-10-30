@@ -2,10 +2,12 @@ use memmap2::{Mmap, MmapMut};
 use object::Object;
 use roc_build::link::{rebuild_host, LinkType};
 use roc_error_macros::internal_error;
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
+use roc_reporting::report::RenderTarget;
 use std::cmp::Ordering;
 use std::mem;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
 mod elf;
@@ -54,8 +56,8 @@ pub fn build_and_preprocess_host(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
-    let dummy_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("libapp.obj")
+    let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        host_input_path.with_file_name("libapp.dll")
     } else {
         host_input_path.with_file_name("libapp.so")
     };
@@ -66,9 +68,9 @@ pub fn build_and_preprocess_host(
         host_input_path.with_file_name("dynhost")
     };
 
-    let dummy_dll_symbols = make_dummy_dll_symbols(exposed_to_host, exported_closure_types);
-    generate_dynamic_lib(target, &dummy_dll_symbols, &dummy_lib);
-    rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
+    let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
+    generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
+    rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
     let metadata = host_input_path.with_file_name("metadata");
     // let prehost = host_input_path.with_file_name("preprocessedhost");
 
@@ -77,8 +79,8 @@ pub fn build_and_preprocess_host(
         &dynhost,
         &metadata,
         preprocessed_host_path,
-        &dummy_lib,
-        &dummy_dll_symbols,
+        &stub_lib,
+        &stub_dll_symbols,
         false,
         false,
     )
@@ -94,7 +96,69 @@ pub fn link_preprocessed_host(
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
-fn make_dummy_dll_symbols(
+// Exposed function to load a platform file and generate a stub lib for it.
+pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<i32> {
+    // Note: this should theoretically just be able to load the host, I think.
+    // Instead, I am loading an entire app because that was simpler and had example code.
+    // If this was expected to stay around for the the long term, we should change it.
+    // But hopefully it will be removable once we have surgical linking on all platforms.
+    let target_info = triple.into();
+    let arena = &bumpalo::Bump::new();
+    let subs_by_module = Default::default();
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        input_path.to_path_buf(),
+        subs_by_module,
+        LoadConfig {
+            target_info,
+            render: RenderTarget::Generic,
+            threading: Threading::AllAvailable,
+            exec_mode: ExecutionMode::Executable,
+        },
+    )
+    .unwrap_or_else(|problem| todo!("{:?}", problem));
+
+    let exposed_to_host = loaded
+        .exposed_to_host
+        .values
+        .keys()
+        .map(|x| x.as_str(&loaded.interns).to_string())
+        .collect();
+
+    let exported_closure_types = loaded
+        .exposed_to_host
+        .closure_types
+        .iter()
+        .map(|x| {
+            format!(
+                "{}_{}",
+                x.module_string(&loaded.interns),
+                x.as_str(&loaded.interns)
+            )
+        })
+        .collect();
+
+    if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
+        let platform_path = input_path
+            .to_path_buf()
+            .parent()
+            .unwrap()
+            .join(platform_path);
+        let stub_lib = if let target_lexicon::OperatingSystem::Windows = triple.operating_system {
+            platform_path.with_file_name("libapp.obj")
+        } else {
+            platform_path.with_file_name("libapp.so")
+        };
+
+        let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
+        generate_dynamic_lib(triple, &stub_dll_symbols, &stub_lib);
+    } else {
+        unreachable!();
+    };
+    Ok(0)
+}
+
+fn make_stub_dll_symbols(
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) -> Vec<String> {
@@ -123,13 +187,85 @@ fn make_dummy_dll_symbols(
     custom_names
 }
 
-fn generate_dynamic_lib(target: &Triple, custom_names: &[String], dummy_lib_path: &Path) {
-    if !dummy_lib_is_up_to_date(target, dummy_lib_path, custom_names) {
-        let bytes = crate::generate_dylib::generate(target, custom_names)
+fn generate_dynamic_lib(target: &Triple, stub_dll_symbols: &[String], stub_lib_path: &Path) {
+    if !stub_lib_is_up_to_date(target, stub_lib_path, stub_dll_symbols) {
+        let bytes = crate::generate_dylib::generate(target, stub_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        std::fs::write(dummy_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"))
+        std::fs::write(stub_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+
+        if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+            generate_import_library(stub_lib_path, stub_dll_symbols);
+        }
     }
+}
+
+fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
+    let def_file_content = generate_def_file(custom_names).expect("write to string never fails");
+
+    let mut def_path = stub_lib_path.to_owned();
+    def_path.set_extension("def");
+
+    std::fs::write(def_path, def_file_content.as_bytes())
+        .unwrap_or_else(|e| internal_error!("{e}"));
+
+    let mut def_filename = PathBuf::from(generate_dylib::APP_DLL);
+    def_filename.set_extension("def");
+
+    let mut lib_filename = PathBuf::from(generate_dylib::APP_DLL);
+    lib_filename.set_extension("lib");
+
+    let zig = std::env::var("ROC_ZIG").unwrap_or_else(|_| "zig".into());
+
+    // use zig to generate the .lib file. Here is a good description of what is in an import library
+    //
+    // > https://www.codeproject.com/Articles/1253835/The-Structure-of-import-Library-File-lib
+    //
+    // For when we want to do this in-memory in the future. We can also consider using
+    //
+    // > https://github.com/messense/implib-rs
+    let output = std::process::Command::new(&zig)
+        .current_dir(stub_lib_path.parent().unwrap())
+        .args(&[
+            "dlltool",
+            "-d",
+            def_filename.to_str().unwrap(),
+            "-m",
+            "i386:x86-64",
+            "-D",
+            generate_dylib::APP_DLL,
+            "-l",
+            lib_filename.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        use std::io::Write;
+
+        std::io::stdout().write_all(&output.stdout).unwrap();
+        std::io::stderr().write_all(&output.stderr).unwrap();
+
+        panic!("zig dlltool failed");
+    }
+}
+
+fn generate_def_file(custom_names: &[String]) -> Result<String, std::fmt::Error> {
+    use std::fmt::Write;
+
+    let mut def_file = String::new();
+
+    writeln!(def_file, "LIBRARY libapp")?;
+    writeln!(def_file, "EXPORTS")?;
+
+    for (i, name) in custom_names.iter().enumerate() {
+        // 1-indexed of course...
+        let index = i + 1;
+
+        writeln!(def_file, "    {name} @{index}")?;
+    }
+
+    Ok(def_file)
 }
 
 fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]>) -> bool {
@@ -154,20 +290,16 @@ fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]
     }
 }
 
-/// Checks whether the dummy `.dll/.so` is up to date, in other words that it exports exactly the
+/// Checks whether the stub `.dll/.so` is up to date, in other words that it exports exactly the
 /// symbols that it is supposed to export, and is built for the right target. If this is the case,
-/// we can skip rebuildingthe dummy lib.
-fn dummy_lib_is_up_to_date(
-    target: &Triple,
-    dummy_lib_path: &Path,
-    custom_names: &[String],
-) -> bool {
-    if !std::path::Path::exists(dummy_lib_path) {
+/// we can skip rebuildingthe stub lib.
+fn stub_lib_is_up_to_date(target: &Triple, stub_lib_path: &Path, custom_names: &[String]) -> bool {
+    if !std::path::Path::exists(stub_lib_path) {
         return false;
     }
 
-    let dummy_lib = open_mmap(dummy_lib_path);
-    let object = object::File::parse(&*dummy_lib).unwrap();
+    let stub_lib = open_mmap(stub_lib_path);
+    let object = object::File::parse(&*stub_lib).unwrap();
 
     // the user may have been cross-compiling.
     // The dynhost on disk must match our current target
@@ -193,7 +325,7 @@ fn preprocess(
     metadata_path: &Path,
     preprocessed_path: &Path,
     shared_lib: &Path,
-    dummy_dll_symbols: &[String],
+    stub_dll_symbols: &[String],
     verbose: bool,
     time: bool,
 ) {
@@ -235,7 +367,7 @@ fn preprocess(
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
-                dummy_dll_symbols,
+                stub_dll_symbols,
                 verbose,
                 time,
             )

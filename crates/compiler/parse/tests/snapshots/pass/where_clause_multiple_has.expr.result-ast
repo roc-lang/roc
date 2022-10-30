@@ -40,27 +40,33 @@ Defs(
                     [
                         @20-27 HasClause {
                             var: @20-21 "a",
-                            ability: @26-27 Apply(
-                                "",
-                                "A",
-                                [],
-                            ),
+                            abilities: [
+                                @26-27 Apply(
+                                    "",
+                                    "A",
+                                    [],
+                                ),
+                            ],
                         },
                         @29-37 HasClause {
                             var: @29-30 "b",
-                            ability: @35-37 Apply(
-                                "",
-                                "Eq",
-                                [],
-                            ),
+                            abilities: [
+                                @35-37 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                            ],
                         },
                         @39-48 HasClause {
                             var: @39-40 "c",
-                            ability: @45-48 Apply(
-                                "",
-                                "Ord",
-                                [],
-                            ),
+                            abilities: [
+                                @45-48 Apply(
+                                    "",
+                                    "Ord",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),

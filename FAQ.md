@@ -1,3 +1,5 @@
+Click the ☰ button in the top left to see and search the table of contents.
+
 # Frequently Asked Questions
 
 ## Where did the name Roc come from?
@@ -44,6 +46,16 @@ Editor the best possible chance at kickstarting a virtuous cycle of plugin autho
 This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
 
 In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
+
+## Why won't the editor be able to edit non-roc files like .md, .gitignore, .yml, ... ?
+
+The downside of having the Roc editor support files other than .roc is that it seems extremely difficult to avoid scope creep if we allow it. For example, it starts with just editing json as plaintext but then it's annoying that there's no syntax highlighting, so maybe we add the capability to do syntax highlighting for json but of course then some people want it for toml, .md, etc, so we need to add a way to specify custom syntax highlighting rules for all of those.
+
+Then of course people don't want to be copy/pasting syntax highlighting rules from online, so maybe someone develops a third party "plugin manager" for the editor to distribute these syntax highlighting definitions.
+So maybe we add sharing syntax highlighting as a first-class thing, so people don't have to download a separate tool to use their editor normally but then some people who are using it for .json and .yaml start using it for .css too. Syntax highlighting is okay but it's annoying that they don't get error reporting when they mess up syntax or type an invalid selector or import and pretty soon there's demand for the Roc editor to do all the hardest parts of VS code.
+
+We have to draw the line somewhere in there...but where to draw it?
+It seems like drawing a bright line at .roc files is the most straightforward. It means the roc editor is the absolute best at editing .roc files and it isn't a weak editor for anything else because it doesn't try to be an editor for anything else and it means the scope is very clear.
 
 ## Why is there no way to specify "import everything this module exposes" in `imports`?
 

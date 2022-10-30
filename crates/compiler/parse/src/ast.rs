@@ -439,7 +439,7 @@ pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HasClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
-    pub ability: AbilityName<'a>,
+    pub abilities: &'a [AbilityName<'a>],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -652,6 +652,13 @@ pub enum Pattern<'a> {
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
     SingleQuote(&'a str),
+
+    /// A list pattern like [_, x, ..]
+    List(Collection<'a, Loc<Pattern<'a>>>),
+
+    /// A list-rest pattern ".."
+    /// Can only occur inside of a [Pattern::List]
+    ListRest,
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),

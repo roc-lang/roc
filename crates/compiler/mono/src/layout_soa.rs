@@ -292,7 +292,7 @@ impl LambdaSet {
 
         let variables = solved.variables();
         if variables.len() == 1 {
-            let symbol = subs.closure_names[lambda_names.start as usize];
+            let symbol = subs.symbol_names[lambda_names.start as usize];
             let symbol_index = Index::new(layouts.symbols.len() as u32);
             layouts.symbols.push(symbol);
             let variable_slice = subs.variable_slices[variables.start as usize];
@@ -339,7 +339,7 @@ impl LambdaSet {
     ) -> Slice<Symbol> {
         let slice = Slice::new(layouts.symbols.len() as u32, subs_slice.len() as u16);
 
-        let symbols = &subs.closure_names[subs_slice.indices()];
+        let symbols = &subs.symbol_names[subs_slice.indices()];
 
         for symbol in symbols {
             layouts.symbols.push(*symbol);

@@ -1644,7 +1644,7 @@ mod tests {
         let dylib_bytes = crate::generate_dylib::create_dylib_elf64(&names).unwrap();
         std::fs::write(dir.join("libapp.so"), dylib_bytes).unwrap();
 
-        // now we can compile the host (it uses libapp.obj, hence the order here)
+        // now we can compile the host (it uses libapp.so, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
             .args(&[
