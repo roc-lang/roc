@@ -925,6 +925,8 @@ pub fn parse_single_def<'a>(
     }
 }
 
+// This is a macro only because trying to make it be a function caused lifetime issues.
+#[macro_export]
 macro_rules! join_ann_to_body {
     ($arena:expr, $loc_pattern:expr, $loc_def_expr:expr, $ann_pattern:expr, $ann_type:expr, $spaces_before_current:expr, $region:expr) => {{
         // join this body with the preceding annotation
@@ -934,20 +936,24 @@ macro_rules! join_ann_to_body {
             ann_type: $arena.alloc(*$ann_type),
             comment: $spaces_before_current
                 .first()
-                .and_then(CommentOrNewline::comment_str),
+                .and_then($crate::ast::CommentOrNewline::comment_str),
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };
 
         (
             value_def,
-            Region::span_across(&$ann_pattern.region, &$region),
+            roc_region::all::Region::span_across(&$ann_pattern.region, &$region),
         )
     }};
 }
 
+// This is a macro only because trying to make it be a function caused lifetime issues.
+#[macro_export]
 macro_rules! join_alias_to_body {
     ($arena:expr, $loc_pattern:expr, $loc_def_expr:expr, $header:expr, $ann_type:expr, $spaces_before_current:expr, $region:expr) => {{
+        use roc_region::all::Region;
+
         // This is a case like
         //   UserId x : [UserId Int]
         //   UserId x = UserId 42
@@ -966,7 +972,7 @@ macro_rules! join_alias_to_body {
             ann_type: $arena.alloc(*$ann_type),
             comment: $spaces_before_current
                 .first()
-                .and_then(CommentOrNewline::comment_str),
+                .and_then($crate::ast::CommentOrNewline::comment_str),
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };

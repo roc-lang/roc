@@ -38,11 +38,7 @@ fn annotated_body() {
 
     input.push_str("t = A");
 
-    incomplete(&mut input);
-
-    let mut state = ReplState::new();
-
-    complete(&input, &mut state, Ok(("A : [A]*", "t")));
+    complete(&input, &mut ReplState::new(), Ok(("A : [A, B, C]", "t")));
 }
 
 #[test]
