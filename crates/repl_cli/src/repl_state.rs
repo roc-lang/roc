@@ -425,7 +425,10 @@ fn format_output(
     if let Some(ReplOutput { expr, expr_type }) = opt_output {
         // If expr was empty, it was a type annotation or ability declaration;
         // don't print anything!
-        if !expr.is_empty() {
+        //
+        // Also, for now we also don't print anything if there was a compile-time error.
+        // In the future, it would be great to run anyway and print useful output here!
+        if !expr.is_empty() && problems.errors.is_empty() {
             const EXPR_TYPE_SEPARATOR: &str = " : "; // e.g. in "5 : Num *"
 
             // Print the expr and its type
