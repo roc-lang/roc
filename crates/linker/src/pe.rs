@@ -1259,8 +1259,10 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
     );
 
     // for unclear reasons, we must bump the image directory size here.
+    // we also need some zeroed-out memory at the end, so if the directory
+    // ends at a multiple of `file_alignment`, pick the next one.
     let new_reloc_directory_size =
-        next_multiple_of(dir.size.get(LE) as usize, md.file_alignment as usize);
+        next_multiple_of(dir.size.get(LE) as usize + 4, md.file_alignment as usize);
     dir.size.set(LE, new_reloc_directory_size as u32);
 }
 
