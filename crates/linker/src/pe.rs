@@ -1280,6 +1280,40 @@ pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
     }
 }
 
+// 0000000000000000 <.text>:
+//    0:	51                   	push   rcx
+//    1:	50                   	push   rax
+//    2:	48 3d 00 10 00 00    	cmp    rax,0x1000
+//    8:	48 8d 4c 24 18       	lea    rcx,[rsp+0x18]
+//    d:	72 18                	jb     27 <.text+0x27>
+//    f:	48 81 e9 00 10 00 00 	sub    rcx,0x1000
+//   16:	48 85 09             	test   QWORD PTR [rcx],rcx
+//   19:	48 2d 00 10 00 00    	sub    rax,0x1000
+//   1f:	48 3d 00 10 00 00    	cmp    rax,0x1000
+//   25:	77 e8                	ja     f <.text+0xf>
+//   27:	48 29 c1             	sub    rcx,rax
+//   2a:	48 85 09             	test   QWORD PTR [rcx],rcx
+//   2d:	58                   	pop    rax
+//   2e:	59                   	pop    rcx
+//   2f:	c3                   	ret
+const ___CHKSTK_MS: [u8; 48] = [
+    0x51, //  push   rcx
+    0x50, //  push   rax
+    0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, //  cmp    rax,0x0x1000
+    0x48, 0x8d, 0x4c, 0x24, 0x18, //  lea    rcx,0x[rsp+0x18]
+    0x72, 0x18, //  jb     0x27
+    0x48, 0x81, 0xe9, 0x00, 0x10, 0x00, 0x00, //  sub    rcx,0x0x1000
+    0x48, 0x85, 0x09, //  test   QWORD PTR [rcx],0xrcx
+    0x48, 0x2d, 0x00, 0x10, 0x00, 0x00, //  sub    rax,0x0x1000
+    0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, //  cmp    rax,0x0x1000
+    0x77, 0xe8, //  ja     0xf
+    0x48, 0x29, 0xc1, //  sub    rcx,0xrax
+    0x48, 0x85, 0x09, //  test   QWORD PTR [rcx],rcx
+    0x58, //  pop    rax
+    0x59, //  pop    rcx
+    0xc3, // ret
+];
+
 #[cfg(test)]
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
