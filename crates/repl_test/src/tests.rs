@@ -2,13 +2,12 @@
 use indoc::indoc;
 use roc_test_utils::assert_multiline_str_eq;
 
-use crate::cli::repl_eval;
 #[cfg(not(feature = "wasm"))]
-use crate::cli::{expect_failure, expect_success};
+use crate::cli::{expect_failure, expect_success, repl_eval};
 
 #[cfg(feature = "wasm")]
 #[allow(unused_imports)]
-use crate::wasm::{expect_failure, expect_success};
+use crate::wasm::{expect_failure, expect_success, repl_eval};
 
 #[test]
 fn literal_0() {
@@ -562,8 +561,9 @@ fn four_element_record() {
     );
 }
 
+#[cfg(not(wasm))]
 #[test]
-fn multiline_string() {
+fn multiline_string_non_wasm() {
     // If a string contains newlines, format it as a multiline string in the output.
 
     // We can't use expect_success to test this, because it only looks at the last
@@ -586,6 +586,22 @@ fn multiline_string() {
     assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
 
     assert!(out.status.success());
+}
+
+#[cfg(wasm)]
+#[test]
+fn multiline_string_wasm() {
+    // If a string contains newlines, format it as a multiline string in the output
+    expect_success(
+        r#""\n\nhi!\n\n""#,
+        indoc!(
+            r#""""
+
+                hi!
+
+                """ : Str"#
+        ),
+    );
 }
 
 #[test]
