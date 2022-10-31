@@ -463,7 +463,7 @@ pub fn is_incomplete(input: &str) -> bool {
     let arena = Bump::new();
 
     match parse_src(&arena, input) {
-        ParseOutcome::Incomplete => true,
+        ParseOutcome::Incomplete => !input.ends_with('\n'),
         // Standalone annotations are default incomplete, because we can't know
         // whether they're about to annotate a body on the next line
         // (or if not, meaning they stay standalone) until you press Enter again!
