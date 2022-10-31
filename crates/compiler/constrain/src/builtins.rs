@@ -224,6 +224,9 @@ pub fn num_literal(
     constraints.exists([num_var], and_constraint)
 }
 
+// Try not to be too clever about inlining, at least in debug builds.
+// Inlining these tiny leaf functions can lead to death by a thousand cuts,
+// where we end up with huge stack frames in non-tail-recursive functions.
 #[cfg_attr(not(debug_assertions), inline(always))]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
     Type::Apply(
