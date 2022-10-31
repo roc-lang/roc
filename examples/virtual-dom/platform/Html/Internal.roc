@@ -288,7 +288,7 @@ rocScript = \initData, dynamicRootIds, wasmUrl ->
         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
             elem : Html []
             elem = (element "script") [] [
-                Text
+                Text NoJsIndex
                     """
                     (function(){
 
