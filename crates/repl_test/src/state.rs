@@ -112,22 +112,21 @@ fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<(&s
 
     match state.step(input) {
         Ok(string) => {
-            let escaped = std::string::String::from_utf8(
-                strip_ansi_escapes::strip(string.trim()).unwrap().into(),
-            )
-            .unwrap();
+            let escaped =
+                std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
+                    .unwrap();
 
-            let comment_index = escaped.rfind('#').unwrap_or_else(|| escaped.len());
+            let comment_index = escaped.rfind('#').unwrap_or(escaped.len());
 
             assert_eq!(
                 expected_step_result.map(|(starts_with, _)| starts_with),
-                Ok(*&escaped[0..comment_index].trim())
+                Ok(escaped[0..comment_index].trim())
             );
 
             assert_eq!(
                 expected_step_result.map(|(_, ends_with)| ends_with),
                 // +1 because we want to skip over the '#' itself
-                Ok(*&escaped[comment_index + 1..].trim())
+                Ok(escaped[comment_index + 1..].trim())
             );
         }
         Err(err) => {
@@ -150,8 +149,7 @@ fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
     assert!(!is_incomplete(input));
 
     let escaped = state.step(input).map(|string| {
-        std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap().into())
-            .unwrap()
+        std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap()).unwrap()
     });
 
     assert_eq!(Ok(expected_step_result), escaped);

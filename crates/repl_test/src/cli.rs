@@ -132,7 +132,7 @@ pub fn expect_success(input: &str, expected: &str) {
     // The state.rs tests do that!
     let mut iter = out.stdout.lines().rev();
     let line = iter.next().unwrap();
-    let comment_index = line.rfind("#").unwrap_or_else(|| line.len());
+    let comment_index = line.rfind('#').unwrap_or(line.len());
     let line_without_comment = line[0..comment_index].trim_end();
 
     // Sometimes the "# val1" wraps around to its own line; if this happens,
