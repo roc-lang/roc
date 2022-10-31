@@ -7,7 +7,7 @@ use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,
-    gen::{compile_to_mono, format_answer, ReplOutput},
+    gen::{compile_to_mono, format_answer},
     ReplApp, ReplAppMemory,
 };
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
@@ -288,7 +288,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
-    let ReplOutput { expr, expr_type } = format_answer(arena, res_answer, expr_type_str);
+    let expr = format_answer(arena, res_answer);
 
-    Ok(format!("{expr} : {expr_type}{var_name}"))
+    Ok(format!("{expr} : {expr_type_str}{var_name}"))
 }
