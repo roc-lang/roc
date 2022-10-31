@@ -259,6 +259,17 @@ fn to_expr_report<'a>(
                     Context::InNode(Node::WhenBranch, _pos, _) => {
                         return to_unexpected_arrow_report(alloc, lines, filename, *pos, start);
                     }
+
+                    Context::InDef(_pos) => {
+                        vec![alloc.stack([
+                            alloc.reflow("Looks like you are trying to define a function. "),
+                            alloc.reflow("In roc, functions are always written as a lambda, like "),
+                            alloc
+                                .parser_suggestion("increment = \\n -> n + 1")
+                                .indent(4),
+                        ])]
+                    }
+
                     _ => {
                         vec![alloc.stack([
                             alloc.concat([

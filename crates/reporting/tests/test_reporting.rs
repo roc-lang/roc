@@ -5653,11 +5653,11 @@ All branches in an `if` must have the same type!
     4│      main = 5 -> 3
                      ^^
 
-    The arrow -> is only used to define cases in a `when`.
+    Looks like you are trying to define a function. 
 
-        when color is
-            Red -> "stop!"
-            Green -> "go!"
+    In roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
     "###
     );
 
