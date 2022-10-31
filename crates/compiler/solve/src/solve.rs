@@ -1729,6 +1729,9 @@ fn solve(
                     // `C` was matched as well. Since the positive/negative value determination is
                     // only an estimate, we also only apply this heursitic in the "almost equal"
                     // case, when there was in fact a unification error.
+                    //
+                    // TODO: this can likely be removed after remodelling tag extension types
+                    // (#4440).
                     if cond_source_is_likely_positive_value && has_unification_error {
                         close_pattern_matched_tag_unions(subs, real_var);
                     }
