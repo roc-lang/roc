@@ -251,15 +251,7 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
-    let stack_check_section = Section {
-        bytes: &___CHKSTK_MS,
-        kind: SectionKind::Text,
-        relocations: Default::default(),
-        app_section_index: object::SectionIndex(0),
-    };
-
-    let mut app_obj_sections = AppSections::from_data(roc_app_bytes);
-    app_obj_sections.sections.push(stack_check_section);
+    let app_obj_sections = AppSections::from_data(roc_app_bytes);
 
     let mut symbols = app_obj_sections.roc_symbols;
 
@@ -400,11 +392,10 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 } else if name == "___chkstk_ms" {
                     // this is a stack probe that is inserted when a function uses more than 2
                     // pages of stack space. The source of this function is not linked in, so we
-                    // have to get a bit creative: we just jump to a `ret` instruction, so this
-                    // function call becomes a no-op.
+                    // have to do it ourselves. We patch in the bytes as a separate section, and
+                    // here just need to jump to those bytes
 
-                    // find a the implementation of the stack probe. This relies on the
-                    // ___CHKSTK_MS section being the last text section in the list of sections
+                    // This relies on the ___CHKSTK_MS section being the last text section in the list of sections
                     let destination = length - ___CHKSTK_MS.len();
 
                     let delta =
@@ -1131,6 +1122,16 @@ impl<'a> AppSections<'a> {
 
             sections.push(section);
         }
+
+        // add a fake section that contains code for a stack probe that some app functions need
+        let stack_check_section = Section {
+            bytes: &___CHKSTK_MS,
+            kind: SectionKind::Text,
+            relocations: Default::default(),
+            app_section_index: object::SectionIndex(0),
+        };
+
+        sections.push(stack_check_section);
 
         let mut roc_symbols = Vec::new();
         let mut other_symbols = Vec::new();
