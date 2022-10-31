@@ -76,6 +76,12 @@ pub struct ReplState {
     last_auto_ident: u64,
 }
 
+impl Default for ReplState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplState {
     pub fn new() -> Self {
         Self {
@@ -92,7 +98,7 @@ impl ReplState {
         match parse_src(&arena, line) {
             ParseOutcome::Empty => {
                 if line.is_empty() {
-                    return Ok(TIPS.to_string());
+                    Ok(TIPS.to_string())
                 } else if line.ends_with('\n') {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck
@@ -122,7 +128,7 @@ impl ReplState {
         }
     }
 
-    pub fn eval_and_format<'a>(&mut self, src: &str) -> String {
+    pub fn eval_and_format(&mut self, src: &str) -> String {
         let arena = Bump::new();
         let mut opt_var_name;
         let src = match parse_src(&arena, src) {
@@ -227,11 +233,11 @@ impl ReplState {
             Some(existing_ident) => {
                 opt_var_name = Some(existing_ident);
 
-                gen_and_eval_llvm(&self.with_past_defs(&src), Triple::host(), OptLevel::Normal)
+                gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal)
             }
             None => {
                 let (output, problems) =
-                    gen_and_eval_llvm(&self.with_past_defs(&src), Triple::host(), OptLevel::Normal);
+                    gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal);
 
                 // Don't persist defs that have compile errors
                 if problems.errors.is_empty() {
@@ -300,7 +306,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
         _ => {
             let src_bytes = line.as_bytes();
 
-            match roc_parse::expr::parse_loc_expr(0, &arena, State::new(src_bytes)) {
+            match roc_parse::expr::parse_loc_expr(0, arena, State::new(src_bytes)) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _), _))
@@ -315,7 +321,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                             check_for_arrow: true,
                         },
                         0,
-                        &arena,
+                        arena,
                         State::new(src_bytes),
                     ) {
                         Ok((
@@ -339,7 +345,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                     check_for_arrow: true,
                                 },
                                 0,
-                                &arena,
+                                arena,
                                 state,
                             ) {
                                 Ok((
@@ -387,7 +393,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                     check_for_arrow: true,
                                 },
                                 0,
-                                &arena,
+                                arena,
                                 state,
                             ) {
                                 Ok((
@@ -400,12 +406,15 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {
+                                    // Inlining this borrow makes clippy unhappy for some reason.
+                                    let ann_pattern = &ann_pattern;
+
                                     // This was, in fact, an AnnotatedBody! Build and return it.
                                     let (value_def, _) = join_ann_to_body!(
                                         arena,
                                         loc_pattern,
                                         loc_def_expr,
-                                        &ann_pattern,
+                                        ann_pattern,
                                         &ann_type,
                                         spaces_before,
                                         region
@@ -578,7 +587,7 @@ fn format_output(
 
                 // Count graphemes because we care about what's *rendered* in the terminal
                 let last_line_len = expr_with_type
-                    .split("\n")
+                    .split('\n')
                     .last()
                     .unwrap_or_default()
                     .graphemes(true)
