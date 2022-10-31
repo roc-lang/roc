@@ -5999,6 +5999,7 @@ pub fn default_aliases() -> roc_solve::solve::Aliases {
             type_variables: vec![],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
+            infer_ext_in_output_variables: Default::default(),
             typ: Type::EmptyTagUnion,
             kind: AliasKind::Opaque,
         };

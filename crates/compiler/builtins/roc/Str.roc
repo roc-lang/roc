@@ -220,7 +220,7 @@ toUtf8 : Str -> List U8
 ##
 ##     expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
 ##     expect Str.fromUtf8 [0xb0] == Err (BadUtf8 InvalidStartByte 0)
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
+fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
 
@@ -233,7 +233,7 @@ fromUtf8 = \bytes ->
 ## into a [Str]
 ##
 ##     expect Str.fromUtf8Range [72, 105, 80, 103] { start : 0, count : 2 } == Ok "Hi"
-fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
+fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]
 fromUtf8Range = \bytes, config ->
     if config.start + config.count <= List.len bytes then
         result = fromUtf8RangeLowlevel bytes config.start config.count
@@ -288,7 +288,7 @@ trimRight : Str -> Str
 ##     expect Str.toDec "10" == Ok 10dec
 ##     expect Str.toDec "-0.25" == Ok -0.25dec
 ##     expect Str.toDec "not a number" == Err InvalidNumStr
-toDec : Str -> Result Dec [InvalidNumStr]*
+toDec : Str -> Result Dec [InvalidNumStr]
 toDec = \string -> strToNumHelp string
 
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
@@ -297,7 +297,7 @@ toDec = \string -> strToNumHelp string
 ##
 ##     expect Str.toF64 "0.10" == Ok 0.10f64
 ##     expect Str.toF64 "not a number" == Err InvalidNumStr
-toF64 : Str -> Result F64 [InvalidNumStr]*
+toF64 : Str -> Result F64 [InvalidNumStr]
 toF64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
@@ -306,7 +306,7 @@ toF64 = \string -> strToNumHelp string
 ##
 ##     expect Str.toF32 "0.10" == Ok 0.10f32
 ##     expect Str.toF32 "not a number" == Err InvalidNumStr
-toF32 : Str -> Result F32 [InvalidNumStr]*
+toF32 : Str -> Result F32 [InvalidNumStr]
 toF32 = \string -> strToNumHelp string
 
 ## Convert a [Str] to a [Nat]. If the given number doesn't fit in [Nat], it will be [truncated](https://www.ualberta.ca/computing-science/media-library/teaching-resources/java/truncation-rounding.html).
@@ -324,7 +324,7 @@ toF32 = \string -> strToNumHelp string
 ##
 ##     expect Str.toNat "9_000_000_000" == Ok 9000000000
 ##     expect Str.toNat "not a number" == Err InvalidNumStr
-toNat : Str -> Result Nat [InvalidNumStr]*
+toNat : Str -> Result Nat [InvalidNumStr]
 toNat = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
@@ -335,7 +335,7 @@ toNat = \string -> strToNumHelp string
 ##     expect Str.toU128 "0.1" == Err InvalidNumStr
 ##     expect Str.toU128 "-1" == Err InvalidNumStr
 ##     expect Str.toU128 "not a number" == Err InvalidNumStr
-toU128 : Str -> Result U128 [InvalidNumStr]*
+toU128 : Str -> Result U128 [InvalidNumStr]
 toU128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
@@ -347,7 +347,7 @@ toU128 = \string -> strToNumHelp string
 ##     expect Str.toI128 "-1" == Ok -1i128
 ##     expect Str.toI128 "0.1" == Err InvalidNumStr
 ##     expect Str.toI128 "not a number" == Err InvalidNumStr
-toI128 : Str -> Result I128 [InvalidNumStr]*
+toI128 : Str -> Result I128 [InvalidNumStr]
 toI128 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
@@ -358,7 +358,7 @@ toI128 = \string -> strToNumHelp string
 ##     expect Str.toU64 "0.1" == Err InvalidNumStr
 ##     expect Str.toU64 "-1" == Err InvalidNumStr
 ##     expect Str.toU64 "not a number" == Err InvalidNumStr
-toU64 : Str -> Result U64 [InvalidNumStr]*
+toU64 : Str -> Result U64 [InvalidNumStr]
 toU64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
@@ -369,7 +369,7 @@ toU64 = \string -> strToNumHelp string
 ##     expect Str.toI64 "-1" == Ok -1i64
 ##     expect Str.toI64 "0.1" == Err InvalidNumStr
 ##     expect Str.toI64 "not a number" == Err InvalidNumStr
-toI64 : Str -> Result I64 [InvalidNumStr]*
+toI64 : Str -> Result I64 [InvalidNumStr]
 toI64 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
@@ -380,7 +380,7 @@ toI64 = \string -> strToNumHelp string
 ##     expect Str.toU32 "0.1" == Err InvalidNumStr
 ##     expect Str.toU32 "-1" == Err InvalidNumStr
 ##     expect Str.toU32 "not a number" == Err InvalidNumStr
-toU32 : Str -> Result U32 [InvalidNumStr]*
+toU32 : Str -> Result U32 [InvalidNumStr]
 toU32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
@@ -391,7 +391,7 @@ toU32 = \string -> strToNumHelp string
 ##     expect Str.toI32 "-1" == Ok -1i32
 ##     expect Str.toI32 "0.1" == Err InvalidNumStr
 ##     expect Str.toI32 "not a number" == Err InvalidNumStr
-toI32 : Str -> Result I32 [InvalidNumStr]*
+toI32 : Str -> Result I32 [InvalidNumStr]
 toI32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
@@ -401,7 +401,7 @@ toI32 = \string -> strToNumHelp string
 ##     expect Str.toU16 "0.1" == Err InvalidNumStr
 ##     expect Str.toU16 "-1" == Err InvalidNumStr
 ##     expect Str.toU16 "not a number" == Err InvalidNumStr
-toU16 : Str -> Result U16 [InvalidNumStr]*
+toU16 : Str -> Result U16 [InvalidNumStr]
 toU16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
@@ -412,7 +412,7 @@ toU16 = \string -> strToNumHelp string
 ##     expect Str.toI16 "-1" == Ok -1i16
 ##     expect Str.toI16 "0.1" == Err InvalidNumStr
 ##     expect Str.toI16 "not a number" == Err InvalidNumStr
-toI16 : Str -> Result I16 [InvalidNumStr]*
+toI16 : Str -> Result I16 [InvalidNumStr]
 toI16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
@@ -422,7 +422,7 @@ toI16 = \string -> strToNumHelp string
 ##     expect Str.toU8 "-0.1" == Err InvalidNumStr
 ##     expect Str.toU8 "not a number" == Err InvalidNumStr
 ##     expect Str.toU8 "1500" == Err InvalidNumStr
-toU8 : Str -> Result U8 [InvalidNumStr]*
+toU8 : Str -> Result U8 [InvalidNumStr]
 toU8 = \string -> strToNumHelp string
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
@@ -432,7 +432,7 @@ toU8 = \string -> strToNumHelp string
 ##     expect Str.toI8 "-15" == Ok -15i8
 ##     expect Str.toI8 "150.00" == Err InvalidNumStr
 ##     expect Str.toI8 "not a number" == Err InvalidNumStr
-toI8 : Str -> Result I8 [InvalidNumStr]*
+toI8 : Str -> Result I8 [InvalidNumStr]
 toI8 = \string -> strToNumHelp string
 
 ## Get the byte at the given index, without performing a bounds check.
@@ -451,7 +451,7 @@ substringUnsafe : Str, Nat, Nat -> Str
 ##
 ##     expect Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
 ##     expect Str.replaceEach "not here" "/" "_" == Err NotFound
-replaceEach : Str, Str, Str -> Result Str [NotFound]*
+replaceEach : Str, Str, Str -> Result Str [NotFound]
 replaceEach = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
@@ -483,7 +483,7 @@ expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
 ##
 ##     expect Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
 ##     expect Str.replaceFirst "no slashes here" "/" "_" == Err NotFound
-replaceFirst : Str, Str, Str -> Result Str [NotFound]*
+replaceFirst : Str, Str, Str -> Result Str [NotFound]
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
@@ -498,7 +498,7 @@ expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
 ##
 ##     expect Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
 ##     expect Str.replaceLast "no slashes here" "/" "_" == Err NotFound
-replaceLast : Str, Str, Str -> Result Str [NotFound]*
+replaceLast : Str, Str, Str -> Result Str [NotFound]
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
@@ -514,7 +514,7 @@ expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 ##
 ##     expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ##     expect Str.splitFirst "no slashes here" "/" == Err NotFound
-splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]
 splitFirst = \haystack, needle ->
     when firstMatch haystack needle is
         Some index ->
@@ -567,7 +567,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
 ##
 ##     expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
 ##     expect Str.splitLast "no slashes here" "/" == Err NotFound
-splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]
 splitLast = \haystack, needle ->
     when lastMatch haystack needle is
         Some index ->
@@ -684,7 +684,7 @@ appendScalarUnsafe : Str, U32 -> Str
 ##
 ##     expect Str.appendScalar "H" 105 == Ok "Hi"
 ##     expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
-appendScalar : Str, U32 -> Result Str [InvalidScalar]*
+appendScalar : Str, U32 -> Result Str [InvalidScalar]
 appendScalar = \string, scalar ->
     if isValidScalar scalar then
         Ok (appendScalarUnsafe string scalar)
@@ -749,7 +749,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
 
 strToNum : Str -> { berrorcode : U8, aresult : Num * }
 
-strToNumHelp : Str -> Result (Num a) [InvalidNumStr]*
+strToNumHelp : Str -> Result (Num a) [InvalidNumStr]
 strToNumHelp = \string ->
     result : { berrorcode : U8, aresult : Num a }
     result = strToNum string

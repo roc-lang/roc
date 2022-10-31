@@ -260,10 +260,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : Num a
+                a : Num *
                 a = 1
 
-                b : Num a
+                b : Num *
                 b = 2
                 "#
             ),
@@ -357,7 +357,7 @@ mod test {
 
                 expect
                     items = [0, 1]
-                    expected : Result I64 [OutOfBounds]*
+                    expected : Result I64 [OutOfBounds]
                     expected = Ok 42
 
                     List.get items 0 == expected
@@ -369,17 +369,17 @@ mod test {
 
                  5│>  expect
                  6│>      items = [0, 1]
-                 7│>      expected : Result I64 [OutOfBounds]*
+                 7│>      expected : Result I64 [OutOfBounds]
                  8│>      expected = Ok 42
                  9│>
                 10│>      List.get items 0 == expected
 
                 When it failed, these variables had these values:
 
-                items : List (Num a)
+                items : List (Num *)
                 items = [0, 1]
 
-                expected : Result I64 [OutOfBounds]*
+                expected : Result I64 [OutOfBounds]
                 expected = Ok 42
                 "#
             ),
@@ -458,10 +458,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : Frac a, y : Frac b }
+                vec1 : { x : Frac *, y : Frac * }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : Frac a, y : Frac b }
+                vec2 : { x : Frac *, y : Frac * }
                 vec2 = { x: 4, y: 8 }
                 "#
             ),
@@ -644,10 +644,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : [Ok Str]a
+                a : [Ok Str]
                 a = Ok "Astra mortemque praestare gradatim"
 
-                b : [Err Str]a
+                b : [Err Str]
                 b = Err "Profundum et fundamentum"
                 "#
             ),

@@ -224,7 +224,10 @@ pub fn num_literal(
     constraints.exists([num_var], and_constraint)
 }
 
-#[inline(always)]
+// Try not to be too clever about inlining, at least in debug builds.
+// Inlining these tiny leaf functions can lead to death by a thousand cuts,
+// where we end up with huge stack frames in non-tail-recursive functions.
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
     Type::Apply(
         symbol,
@@ -233,23 +236,23 @@ pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn empty_list_type(var: Variable) -> Type {
     list_type(Type::Variable(var))
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn list_type(typ: Type) -> Type {
     builtin_type(Symbol::LIST_LIST, vec![typ])
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn str_type() -> Type {
     builtin_type(Symbol::STR_STR, Vec::new())
 }
 
-#[inline(always)]
-fn builtin_alias(
+#[cfg_attr(not(debug_assertions), inline(always))]
+fn builtin_num_alias(
     symbol: Symbol,
     type_arguments: Vec<OptAbleType>,
     actual: Box<Type>,
@@ -260,13 +263,14 @@ fn builtin_alias(
         type_arguments,
         actual,
         lambda_set_variables: vec![],
+        infer_ext_in_output_types: vec![],
         kind,
     }
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_float(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_FRAC,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
@@ -274,9 +278,9 @@ pub fn num_float(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_floatingpoint(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_FLOATINGPOINT,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
@@ -284,9 +288,9 @@ pub fn num_floatingpoint(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_u32() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_U32,
         vec![],
         Box::new(num_int(num_unsigned32())),
@@ -294,9 +298,9 @@ pub fn num_u32() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 fn num_unsigned32() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_UNSIGNED32,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -304,9 +308,9 @@ fn num_unsigned32() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_binary64() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_BINARY64,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -314,9 +318,9 @@ pub fn num_binary64() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_int(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_INT,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_integer(range))),
@@ -324,9 +328,9 @@ pub fn num_int(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_signed64() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_SIGNED64,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -334,9 +338,9 @@ pub fn num_signed64() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_integer(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_INTEGER,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
@@ -344,9 +348,9 @@ pub fn num_integer(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_num(typ: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_NUM,
         vec![OptAbleType::unbound(typ.clone())],
         Box::new(typ),

@@ -33,8 +33,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar, Reason,
-    RecordField, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar,
+    Polarity, Reason, RecordField, TypeExtension, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -99,6 +99,7 @@ struct DelayedAliasVariables {
     type_variables_len: u8,
     lambda_set_variables_len: u8,
     recursion_variables_len: u8,
+    infer_ext_in_output_variables_len: u8,
 }
 
 impl DelayedAliasVariables {
@@ -120,6 +121,16 @@ impl DelayedAliasVariables {
     fn type_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize;
         let length = self.type_variables_len as usize;
+
+        &mut variables[start..][..length]
+    }
+
+    fn infer_ext_in_output_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
+        let start = self.start as usize
+            + (self.type_variables_len
+                + self.lambda_set_variables_len
+                + self.recursion_variables_len) as usize;
+        let length = self.infer_ext_in_output_variables_len as usize;
 
         &mut variables[start..][..length]
     }
@@ -160,11 +171,20 @@ impl Aliases {
                         .map(OptAbleVar::unbound),
                 );
 
+                self.variables.extend(
+                    alias
+                        .infer_ext_in_output_variables
+                        .iter()
+                        .map(|v| OptAbleVar::unbound(*v)),
+                );
+
                 DelayedAliasVariables {
                     start,
                     type_variables_len: alias.type_variables.len() as _,
                     lambda_set_variables_len: alias.lambda_set_variables.len() as _,
                     recursion_variables_len,
+                    infer_ext_in_output_variables_len: alias.infer_ext_in_output_variables.len()
+                        as _,
                 }
             };
 
@@ -204,7 +224,7 @@ impl Aliases {
     ) -> Variable {
         let content = Content::Alias(
             symbol,
-            AliasVariables::insert_into_subs(subs, [range_var], []),
+            AliasVariables::insert_into_subs(subs, [range_var], [], []),
             range_var,
             AliasKind::Opaque,
         );
@@ -367,6 +387,22 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
+            debug_assert!(old.opt_abilities.is_none());
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
+
+                if can_reuse_old_definition {
+                    old.var = *new;
+                }
+            }
+        }
+
+        let old_infer_ext_vars =
+            delayed_variables.infer_ext_in_output_variables(&mut self.variables);
+        let new_infer_ext_vars =
+            &subs.variables[alias_variables.infer_ext_in_output_variables().indices()];
+
+        for (old, new) in old_infer_ext_vars.iter_mut().zip(new_infer_ext_vars) {
             debug_assert!(old.opt_abilities.is_none());
             if old.var != *new {
                 substitutions.insert(old.var, *new);
@@ -922,7 +958,13 @@ fn solve(
                     expectation.get_type_ref(),
                 );
 
-                match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    expected,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1034,7 +1076,13 @@ fn solve(
                             expectation.get_type_ref(),
                         );
 
-                        match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+                        match unify(
+                            &mut UEnv::new(subs),
+                            actual,
+                            expected,
+                            Mode::EQ,
+                            Polarity::OF_VALUE,
+                        ) {
                             Success {
                                 vars,
                                 must_implement_ability,
@@ -1146,7 +1194,13 @@ fn solve(
                     _ => Mode::EQ,
                 };
 
-                match unify(&mut UEnv::new(subs), actual, expected, mode) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    expected,
+                    mode,
+                    Polarity::OF_PATTERN,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1357,7 +1411,13 @@ fn solve(
                     &tag_ty,
                 );
 
-                match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    includes,
+                    Mode::PRESENT,
+                    Polarity::OF_PATTERN,
+                ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1479,6 +1539,13 @@ fn solve(
                     expected_type,
                 );
 
+                let cond_source_is_likely_positive_value = category_and_expected.is_ok();
+                let cond_polarity = if cond_source_is_likely_positive_value {
+                    Polarity::OF_VALUE
+                } else {
+                    Polarity::OF_PATTERN
+                };
+
                 let real_content = subs.get_content_without_compacting(real_var);
                 let branches_content = subs.get_content_without_compacting(branches_var);
                 let already_have_error = matches!(
@@ -1493,10 +1560,17 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                let unify_cond_and_patterns_outcome =
-                    unify(&mut UEnv::new(subs), branches_var, real_var, Mode::EQ);
+                let unify_cond_and_patterns_outcome = unify(
+                    &mut UEnv::new(subs),
+                    branches_var,
+                    real_var,
+                    Mode::EQ,
+                    cond_polarity,
+                );
 
                 let should_check_exhaustiveness;
+                let has_unification_error =
+                    !matches!(unify_cond_and_patterns_outcome, Success { .. });
                 match unify_cond_and_patterns_outcome {
                     Success {
                         vars,
@@ -1539,7 +1613,13 @@ fn solve(
                         // open_tag_union(subs, real_var);
                         open_tag_union(subs, branches_var);
                         let almost_eq = matches!(
-                            unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ),
+                            unify(
+                                &mut UEnv::new(subs),
+                                real_var,
+                                branches_var,
+                                Mode::EQ,
+                                cond_polarity,
+                            ),
                             Success { .. }
                         );
 
@@ -1551,7 +1631,13 @@ fn solve(
                         } else {
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
-                            match unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ) {
+                            match unify(
+                                &mut UEnv::new(subs),
+                                real_var,
+                                branches_var,
+                                Mode::EQ,
+                                cond_polarity,
+                            ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
                                     introduce(subs, rank, pools, &vars);
 
@@ -1604,6 +1690,51 @@ fn solve(
 
                 if should_check_exhaustiveness {
                     use roc_can::exhaustive::{check, ExhaustiveSummary};
+
+                    // If the condition type likely comes from an positive-position value (e.g. a
+                    // literal or a return type), rather than an input position, we employ the
+                    // heuristic that the positive-position value would only need to be open if the
+                    // branches of the `when` constrained them as open. To avoid suggesting
+                    // catch-all branches, now mark the condition type as closed, so that we only
+                    // show the variants that explicitly not matched.
+                    //
+                    // We avoid this heuristic if the condition type likely comes from a negative
+                    // position, e.g. a function parameter, since in that case if the condition
+                    // type is open, we definitely want to show the catch-all branch as necessary.
+                    //
+                    // For example:
+                    //
+                    //   x : [A, B, C]
+                    //
+                    //   when x is
+                    //      A -> ..
+                    //      B -> ..
+                    //
+                    // This is checked as "almost equal" and hence exhaustiveness-checked with
+                    // [A, B] compared to [A, B, C]*. However, we really want to compare against
+                    // [A, B, C] (notice the closed union), so we optimistically close the
+                    // condition type here.
+                    //
+                    // On the other hand, in a case like
+                    //
+                    //   f : [A, B, C]* -> ..
+                    //   f = \x -> when x is
+                    //     A -> ..
+                    //     B -> ..
+                    //
+                    // we want to show `C` and/or `_` as necessary branches, so this heuristic is
+                    // not applied.
+                    //
+                    // In the above case, notice it would not be safe to apply this heuristic if
+                    // `C` was matched as well. Since the positive/negative value determination is
+                    // only an estimate, we also only apply this heursitic in the "almost equal"
+                    // case, when there was in fact a unification error.
+                    //
+                    // TODO: this can likely be removed after remodelling tag extension types
+                    // (#4440).
+                    if cond_source_is_likely_positive_value && has_unification_error {
+                        close_pattern_matched_tag_unions(subs, real_var);
+                    }
 
                     let ExhaustiveSummary {
                         errors,
@@ -1774,6 +1905,72 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
     }
 }
 
+/// Optimistically closes the positive type of a value matched in a `when` statement, to produce
+/// better exhaustiveness error messages.
+///
+/// This should only be applied if it's already known that a `when` expression is not exhaustive.
+///
+/// See [Constraint::Exhaustive].
+fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
+    let mut stack = vec![var];
+    while let Some(var) = stack.pop() {
+        use {Content::*, FlatType::*};
+
+        let desc = subs.get(var);
+        match desc.content {
+            Structure(TagUnion(tags, mut ext)) => {
+                // Close the extension, chasing it as far as it goes.
+                loop {
+                    match subs.get_content_without_compacting(ext) {
+                        Structure(FlatType::EmptyTagUnion) => {
+                            break;
+                        }
+                        FlexVar(..) | FlexAbleVar(..) => {
+                            subs.set_content_unchecked(ext, Structure(FlatType::EmptyTagUnion));
+                            break;
+                        }
+                        RigidVar(..) | RigidAbleVar(..) => {
+                            // Don't touch rigids, they tell us more information than the heuristic
+                            // of closing tag unions does for better exhaustiveness checking does.
+                            break;
+                        }
+                        Structure(FlatType::TagUnion(_, deep_ext))
+                        | Structure(FlatType::RecursiveTagUnion(_, _, deep_ext))
+                        | Structure(FlatType::FunctionOrTagUnion(_, _, deep_ext)) => {
+                            ext = *deep_ext;
+                        }
+                        other => internal_error!(
+                            "not a tag union: {:?}",
+                            roc_types::subs::SubsFmtContent(other, subs)
+                        ),
+                    }
+                }
+
+                // Also open up all nested tag unions.
+                let all_vars = tags.variables().into_iter();
+                stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+            }
+
+            Structure(Record(fields, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Alias(_, _, real_var, _) => {
+                stack.push(real_var);
+            }
+
+            _ => {
+                // Everything else is not a type that can be opened/matched in a pattern match.
+            }
+        }
+
+        // Recursive tag unions are constructed at a later time
+        // (during occurs checks after tag unions are resolved),
+        // so that's not handled here.
+    }
+}
+
 /// If a symbol claims to specialize an ability member, check that its solved type in fact
 /// does specialize the ability, and record the specialization.
 #[allow(clippy::too_many_arguments)]
@@ -1868,7 +2065,8 @@ fn check_ability_specialization(
                             // Commit so that the bad signature and its error persists in subs.
                             subs.commit_snapshot(snapshot);
 
-                            let (_typ, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+                            let (_typ, _problems) =
+                                subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                             let problem = TypeError::WrongSpecialization {
                                 region: symbol_loc_var.region,
@@ -1888,7 +2086,7 @@ fn check_ability_specialization(
                         // Commit so that `var` persists in subs.
                         subs.commit_snapshot(snapshot);
 
-                        let (typ, _problems) = subs.var_to_error_type(var);
+                        let (typ, _problems) = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
                         let problem = TypeError::StructuralSpecialization {
                             region: symbol_loc_var.region,
@@ -1910,8 +2108,10 @@ fn check_ability_specialization(
                         // so we can have two separate error types.
                         subs.rollback_to(snapshot);
 
-                        let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
-                        let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+                        let (expected_type, _problems) =
+                            subs.var_to_error_type(root_signature_var, Polarity::OF_VALUE);
+                        let (actual_type, _problems) =
+                            subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
                             member_name: ability_member,
@@ -2556,12 +2756,21 @@ fn type_to_variable<'a>(
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types,
             }) => {
                 let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+                    let all_vars_length = type_arguments.len()
+                        + lambda_set_variables.len()
+                        + infer_ext_in_output_types.len();
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
-                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
+                    let type_arguments_offset = 0;
+                    let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
+                    let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
+
+                    for (target_index, arg_type) in
+                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
+                    {
                         let copy_var = helper!(&arg_type.value.typ);
                         subs.variables[target_index] = copy_var;
                         if let Some(abilities) = arg_type.value.opt_abilities.as_ref() {
@@ -2569,7 +2778,7 @@ fn type_to_variable<'a>(
                         }
                     }
 
-                    let it = (new_variables.indices().skip(type_arguments.len()))
+                    let it = (new_variables.indices().skip(lambda_set_vars_offset))
                         .zip(lambda_set_variables);
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
@@ -2589,10 +2798,18 @@ fn type_to_variable<'a>(
                         subs.variables[target_index] = copy_var;
                     }
 
+                    let it = (new_variables.indices().skip(infer_ext_vars_offset))
+                        .zip(infer_ext_in_output_types);
+                    for (target_index, ext_typ) in it {
+                        let copy_var = helper!(ext_typ);
+                        subs.variables[target_index] = copy_var;
+                    }
+
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
-                        all_variables_len: length as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
+                        all_variables_len: all_vars_length as _,
                     }
                 };
 
@@ -2618,16 +2835,24 @@ fn type_to_variable<'a>(
                 type_arguments,
                 actual,
                 lambda_set_variables,
+                infer_ext_in_output_types,
                 kind,
             } => {
                 debug_assert!(Variable::get_reserved(*symbol).is_none());
 
                 let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+                    let all_vars_length = type_arguments.len()
+                        + lambda_set_variables.len()
+                        + infer_ext_in_output_types.len();
+
+                    let type_arguments_offset = 0;
+                    let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
+                    let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
+
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
                     for (target_index, OptAbleType { typ, opt_abilities }) in
-                        (new_variables.indices()).zip(type_arguments)
+                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
                     {
                         let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
@@ -2639,17 +2864,25 @@ fn type_to_variable<'a>(
                         }
                     }
 
-                    let it = (new_variables.indices().skip(type_arguments.len()))
+                    let it = (new_variables.indices().skip(lambda_set_vars_offset))
                         .zip(lambda_set_variables);
                     for (target_index, ls) in it {
                         let copy_var = helper!(&ls.0);
                         subs.variables[target_index] = copy_var;
                     }
 
+                    let it = (new_variables.indices().skip(infer_ext_vars_offset))
+                        .zip(infer_ext_in_output_types);
+                    for (target_index, ext_typ) in it {
+                        let copy_var = helper!(ext_typ);
+                        subs.variables[target_index] = copy_var;
+                    }
+
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
-                        all_variables_len: length as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
+                        all_variables_len: all_vars_length as _,
                     }
                 };
 
@@ -2701,6 +2934,7 @@ fn type_to_variable<'a>(
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
+                        lambda_set_variables_len: lambda_set_variables.len() as _,
                         all_variables_len: length as _,
                     }
                 };
@@ -2772,7 +3006,13 @@ fn type_to_variable<'a>(
                 });
 
                 let category = Category::OpaqueArg;
-                match unify(&mut UEnv::new(subs), var, flex_ability, Mode::EQ) {
+                match unify(
+                    &mut UEnv::new(subs),
+                    var,
+                    flex_ability,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
                     Success {
                         vars: _,
                         must_implement_ability,
@@ -3212,7 +3452,7 @@ fn circular_error(
     loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
-    let (error_type, _) = subs.var_to_error_type(var);
+    let (error_type, _) = subs.var_to_error_type(var, Polarity::OF_VALUE);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);

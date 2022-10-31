@@ -1,7 +1,10 @@
 use roc_can::{abilities::SpecializationLambdaSets, module::ExposedByModule};
 use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Symbol};
-use roc_types::subs::{instantiate_rigids, Subs, Variable};
+use roc_types::{
+    subs::{instantiate_rigids, Subs, Variable},
+    types::Polarity,
+};
 
 use crate::DERIVED_SYNTH;
 
@@ -69,7 +72,13 @@ impl Env<'_> {
     pub fn unify(&mut self, left: Variable, right: Variable) {
         use roc_unify::unify::{unify, Env, Mode, Unified};
 
-        let unified = unify(&mut Env::new(self.subs), left, right, Mode::EQ);
+        let unified = unify(
+            &mut Env::new(self.subs),
+            left,
+            right,
+            Mode::EQ,
+            Polarity::OF_PATTERN,
+        );
 
         match unified {
             Unified::Success {

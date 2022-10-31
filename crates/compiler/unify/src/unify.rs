@@ -13,7 +13,9 @@ use roc_types::subs::{
     OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
     UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField, Uls};
+use roc_types::types::{
+    AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
+};
 
 macro_rules! mismatch {
     () => {{
@@ -340,9 +342,21 @@ impl<'a> Env<'a> {
     }
 }
 
+/// Unifies two types.
+/// The [mode][Mode] enables or disables certain extensional features of unification.
+///
+/// `observed_pol` describes the [polarity][Polarity] of the type observed to be under unification.
+/// This is only relevant for producing error types, and is not material to the unification
+/// algorithm.
 #[inline(always)]
-pub fn unify(env: &mut Env, var1: Variable, var2: Variable, mode: Mode) -> Unified {
-    unify_help(env, var1, var2, mode)
+pub fn unify(
+    env: &mut Env,
+    var1: Variable,
+    var2: Variable,
+    mode: Mode,
+    observed_pol: Polarity,
+) -> Unified {
+    unify_help(env, var1, var2, mode, observed_pol)
 }
 
 #[inline(always)]
@@ -353,7 +367,13 @@ pub fn unify_introduced_ability_specialization(
     specialization_var: Variable,
     mode: Mode,
 ) -> Unified<SpecializationLsetCollector> {
-    unify_help(env, ability_member_signature, specialization_var, mode)
+    unify_help(
+        env,
+        ability_member_signature,
+        specialization_var,
+        mode,
+        Polarity::OF_VALUE,
+    )
 }
 
 #[inline(always)]
@@ -363,8 +383,9 @@ pub fn unify_with_collector<M: MetaCollector>(
     var1: Variable,
     var2: Variable,
     mode: Mode,
+    observed_pol: Polarity,
 ) -> Unified<M> {
-    unify_help(env, var1, var2, mode)
+    unify_help(env, var1, var2, mode, observed_pol)
 }
 
 #[inline(always)]
@@ -374,6 +395,7 @@ fn unify_help<M: MetaCollector>(
     var1: Variable,
     var2: Variable,
     mode: Mode,
+    observed_pol: Polarity,
 ) -> Unified<M> {
     let mut vars = Vec::new();
     let Outcome {
@@ -397,8 +419,12 @@ fn unify_help<M: MetaCollector>(
             ErrorTypeContext::None
         };
 
-        let (type1, mut problems) = env.subs.var_to_error_type_contextual(var1, error_context);
-        let (type2, problems2) = env.subs.var_to_error_type_contextual(var2, error_context);
+        let (type1, mut problems) =
+            env.subs
+                .var_to_error_type_contextual(var1, error_context, observed_pol);
+        let (type2, problems2) =
+            env.subs
+                .var_to_error_type_contextual(var2, error_context, observed_pol);
 
         problems.extend(problems2);
 
@@ -412,7 +438,8 @@ fn unify_help<M: MetaCollector>(
                 .filter_map(|mismatch| match mismatch {
                     Mismatch::DoesNotImplementAbiity(var, ab) => {
                         let (err_type, _new_problems) =
-                            env.subs.var_to_error_type_contextual(var, error_context);
+                            env.subs
+                                .var_to_error_type_contextual(var, error_context, observed_pol);
                         Some((err_type, ab))
                     }
                     _ => None,
@@ -716,7 +743,7 @@ fn wrap_range_var(
 ) -> Variable {
     let range_desc = env.subs.get(range_var);
     let new_range_var = env.subs.fresh(range_desc);
-    let var_slice = AliasVariables::insert_into_subs(env.subs, [new_range_var], []);
+    let var_slice = AliasVariables::insert_into_subs(env.subs, [new_range_var], [], []);
     env.subs.set_content(
         range_var,
         Alias(symbol, var_slice, new_range_var, alias_kind),
@@ -751,11 +778,18 @@ fn unify_two_aliases<M: MetaCollector>(
             .into_iter()
             .zip(other_args.lambda_set_variables().into_iter());
 
+        let infer_ext_in_output_vars_it = (args.infer_ext_in_output_variables().into_iter())
+            .zip(other_args.infer_ext_in_output_variables().into_iter());
+
         let mut merged_args = Vec::with_capacity(args.type_variables().len());
         let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
+        let mut merged_infer_ext_in_output_vars =
+            Vec::with_capacity(args.infer_ext_in_output_variables().len());
         debug_assert_eq!(
-            merged_args.capacity() + merged_lambda_set_args.capacity(),
-            args.all_variables_len as _
+            merged_args.capacity()
+                + merged_lambda_set_args.capacity()
+                + merged_infer_ext_in_output_vars.capacity(),
+            args.all_variables_len as _,
         );
 
         for (l, r) in args_it {
@@ -774,6 +808,15 @@ fn unify_two_aliases<M: MetaCollector>(
 
             let merged_var = choose_merged_var(env.subs, l_var, r_var);
             merged_lambda_set_args.push(merged_var);
+        }
+
+        for (l, r) in infer_ext_in_output_vars_it {
+            let l_var = env.subs[l];
+            let r_var = env.subs[r];
+            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            merged_infer_ext_in_output_vars.push(merged_var);
         }
 
         if outcome.mismatches.is_empty() {
@@ -810,8 +853,12 @@ fn unify_two_aliases<M: MetaCollector>(
             // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
             // the merged vars are all left, avoid re-insertion. Is checking for argument slice
             // equality faster than re-inserting?
-            let merged_variables =
-                AliasVariables::insert_into_subs(env.subs, merged_args, merged_lambda_set_args);
+            let merged_variables = AliasVariables::insert_into_subs(
+                env.subs,
+                merged_args,
+                merged_lambda_set_args,
+                merged_infer_ext_in_output_vars,
+            );
             let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
 
             outcome.union(merge(env, ctx, merged_content));
@@ -2182,6 +2229,27 @@ fn should_extend_ext_with_uninhabited_type(
     ) && !subs.is_inhabited(candidate_type)
 }
 
+/// After extending an empty tag union extension type [with uninhabited
+/// variants][should_extend_ext_with_uninhabited_type], the extension type must be closed again.
+fn close_uninhabited_extended_union(subs: &mut Subs, mut var: Variable) {
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(FlatType::EmptyTagUnion) => {
+                return;
+            }
+            FlexVar(..) | FlexAbleVar(..) => {
+                subs.set_content_unchecked(var, Structure(FlatType::EmptyTagUnion));
+                return;
+            }
+            Structure(FlatType::TagUnion(_, ext))
+            | Structure(FlatType::RecursiveTagUnion(_, _, ext)) => {
+                var = *ext;
+            }
+            _ => internal_error!("not a tag union"),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 fn unify_tag_unions<M: MetaCollector>(
@@ -2262,7 +2330,9 @@ fn unify_tag_unions<M: MetaCollector>(
 
             // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
             // patch `ext1` to grow accordingly.
-            if should_extend_ext_with_uninhabited_type(env.subs, ext1, extra_tags_in_2) {
+            let extend_ext_with_uninhabited =
+                should_extend_ext_with_uninhabited_type(env.subs, ext1, extra_tags_in_2);
+            if extend_ext_with_uninhabited {
                 let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
                 let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
                 let mut new_desc = ctx.first_desc;
@@ -2290,6 +2360,10 @@ fn unify_tag_unions<M: MetaCollector>(
 
             shared_tags_outcome.union(ext_outcome);
 
+            if extend_ext_with_uninhabited {
+                close_uninhabited_extended_union(env.subs, ctx.first);
+            }
+
             shared_tags_outcome
         }
     } else if separate.only_in_2.is_empty() {
@@ -2302,10 +2376,12 @@ fn unify_tag_unions<M: MetaCollector>(
         let mut total_outcome = Outcome::default();
 
         // In a presence context, we don't care about ext2 being equal to tags1
-        if ctx.mode.is_eq() {
+        let extend_ext_with_uninhabited = if ctx.mode.is_eq() {
             // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
             // patch `ext2` to grow accordingly.
-            if should_extend_ext_with_uninhabited_type(env.subs, ext2, extra_tags_in_1) {
+            let extend_ext_with_uninhabited =
+                should_extend_ext_with_uninhabited_type(env.subs, ext2, extra_tags_in_1);
+            if extend_ext_with_uninhabited {
                 let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
                 let new_union = Structure(FlatType::TagUnion(tags2, new_ext));
                 let mut new_desc = ctx.second_desc;
@@ -2321,7 +2397,11 @@ fn unify_tag_unions<M: MetaCollector>(
                 return ext_outcome;
             }
             total_outcome.union(ext_outcome);
-        }
+
+            extend_ext_with_uninhabited
+        } else {
+            false
+        };
 
         let shared_tags_outcome = unify_shared_tags_new(
             env,
@@ -2333,6 +2413,11 @@ fn unify_tag_unions<M: MetaCollector>(
             recursion_var,
         );
         total_outcome.union(shared_tags_outcome);
+
+        if extend_ext_with_uninhabited {
+            close_uninhabited_extended_union(env.subs, ctx.first);
+        }
+
         total_outcome
     } else {
         let other_tags = OtherTags2::Union(separate.only_in_1.clone(), separate.only_in_2.clone());

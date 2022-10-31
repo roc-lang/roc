@@ -19,7 +19,7 @@ pushStack = \ctx, data ->
 # I think an open tag union should just work here.
 # Instead at a call sites, I need to match on the error and then return the same error.
 # Otherwise it hits unreachable code in ir.rs
-popStack : Context -> Result [T Context Data] [EmptyStack]*
+popStack : Context -> Result [T Context Data] [EmptyStack]
 popStack = \ctx ->
     when List.last ctx.stack is
         Ok val ->
@@ -66,7 +66,7 @@ with = \path, callback ->
     callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
-getChar : Context -> Task [T U8 Context] [EndOfData, NoScope]*
+getChar : Context -> Task [T U8 Context] [EndOfData, NoScope]
 getChar = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
@@ -76,7 +76,7 @@ getChar = \ctx ->
         Err ListWasEmpty ->
             Task.fail NoScope
 
-getCharScope : Scope -> Task [T U8 Scope] [EndOfData, NoScope]*
+getCharScope : Scope -> Task [T U8 Scope] [EndOfData, NoScope]
 getCharScope = \scope ->
     when List.get scope.buf scope.index is
         Ok val ->
