@@ -58,7 +58,12 @@ pub fn gen_and_eval_llvm(
 
     let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
-        None => unreachable!(),
+        None => {
+            let empty_vec: Vec<String> = Vec::new(); // rustc can't infer the type of this Vec.
+            debug_assert_ne!(problems.errors, empty_vec, "Got no errors but also no valid layout for the generated main function in the repl!");
+
+            return (None, problems);
+        }
     };
 
     let interns = loaded.interns.clone();
