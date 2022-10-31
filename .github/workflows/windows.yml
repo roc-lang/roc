@@ -43,6 +43,6 @@ jobs:
       - name: Build tests release without running. Twice for flakyness.
         run: cargo test --locked --release --no-run || cargo test --locked --release --no-run
 
-      - run: cargo test-gen-llvm
+      #- run: cargo test-gen-llvm
 
       - run: cargo test-gen-wasm
