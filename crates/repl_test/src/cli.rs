@@ -9,10 +9,10 @@ use roc_test_utils::assert_multiline_str_eq;
 const ERROR_MESSAGE_START: char = '─';
 
 #[derive(Debug)]
-struct Out {
-    stdout: String,
-    stderr: String,
-    status: ExitStatus,
+pub struct Out {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: ExitStatus,
 }
 
 fn path_to_roc_binary() -> PathBuf {
@@ -39,7 +39,7 @@ fn path_to_roc_binary() -> PathBuf {
     path
 }
 
-fn repl_eval(input: &str) -> Out {
+pub fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
     cmd.arg("repl");

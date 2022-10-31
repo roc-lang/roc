@@ -1,6 +1,8 @@
 #[allow(unused_imports)]
 use indoc::indoc;
+use roc_test_utils::assert_multiline_str_eq;
 
+use crate::cli::repl_eval;
 #[cfg(not(feature = "wasm"))]
 use crate::cli::{expect_failure, expect_success};
 
@@ -562,19 +564,28 @@ fn four_element_record() {
 
 #[test]
 fn multiline_string() {
-    // If a string contains newlines, format it as a multiline string in the output
-    expect_success(
-        r#""\n\nhi!\n\n""#,
-        indoc!(
-            r#""""
+    // If a string contains newlines, format it as a multiline string in the output.
 
-            
+    // We can't use expect_success to test this, because it only looks at the last
+    // line of output, and in this case we care about every line of output!
+    let out = repl_eval(r#""\n\nhi!\n\n""#);
+    let expected = indoc!(
+        r#""""
+
+
                 hi!
-            
+
 
                 """ : Str"#
-        ),
     );
+
+    assert_multiline_str_eq!("", out.stderr.as_str());
+
+    // Don't consider the auto variable name ("# val1") at the end.
+    // The state.rs tests do that!
+    assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
+
+    assert!(out.status.success());
 }
 
 #[test]
