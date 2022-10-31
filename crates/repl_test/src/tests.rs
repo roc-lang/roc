@@ -597,7 +597,9 @@ fn multiline_string_wasm() {
         indoc!(
             r#""""
 
+
                 hi!
+
 
                 """ : Str"#
         ),
@@ -1018,7 +1020,8 @@ fn tag_with_type_behind_alias() {
             r#"
             T : [A Str]
             v : T
-            v = A "value""#
+            v = A "value"
+            v"#
         ),
         r#"A "value" : T"#,
     );
@@ -1098,7 +1101,8 @@ fn print_i8_issue_2710() {
         indoc!(
             r#"
             a : I8
-            a = -1"#
+            a = -1
+            a"#
         ),
         r#"-1 : I8"#,
     )
@@ -1167,7 +1171,8 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
             Tool : [SystemTool, FromJob Job]
 
             a : Job
-            a = Job (Command (FromJob (Job (Command SystemTool))))"#
+            a = Job (Command (FromJob (Job (Command SystemTool))))
+            a"#
         ),
         "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
     )
@@ -1181,7 +1186,8 @@ fn render_nullable_unwrapped_passing_through_alias() {
             Deep : [L DeepList]
             DeepList : [Nil, Cons Deep]
             v : DeepList
-            v = (Cons (L (Cons (L (Cons (L Nil))))))"#
+            v = (Cons (L (Cons (L (Cons (L Nil))))))
+            v"#
         ),
         "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
