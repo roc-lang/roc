@@ -1945,7 +1945,34 @@ fn to_pattern_report<'b>(
                     severity: Severity::RuntimeError,
                 }
             }
-            PReason::TagArg { .. } | PReason::PatternGuard | PReason::ListElem => {
+            PReason::ListElem => {
+                let doc = alloc.stack([
+                    alloc.concat([alloc.reflow("This list element doesn't match the types of other elements in the pattern:")]),
+                    alloc.region(lines.convert_region(region)),
+                    pattern_type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        add_pattern_category(
+                            alloc,
+                            alloc.text("It matches"),
+                            &category,
+                        ),
+                        alloc.concat([
+                            alloc.text("But the other elements in this list pattern match")
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity: Severity::RuntimeError,
+                }
+            }
+            PReason::TagArg { .. } | PReason::PatternGuard => {
                 internal_error!("We didn't think this could trigger. Please tell us about it on Zulip if it does!")
             }
         },
