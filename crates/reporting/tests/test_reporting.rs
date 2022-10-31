@@ -11714,7 +11714,7 @@ All branches in an `if` must have the same type!
         list_pattern_weird_rest_pattern,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [...] -> ""
             "#
         ),
@@ -11751,6 +11751,74 @@ All branches in an `if` must have the same type!
     Tag unions that are constants, or the return values of functions, are
     always inferred to be open by default! You can remove this annotation
     safely.
+    "###
+    );
+
+    test_report!(
+        multiple_list_patterns_start_and_end,
+        indoc!(
+            r#"
+            when [] is
+                [.., A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [.., A, ..] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is 
+    5│>          [.., A, ..] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        multiple_list_patterns_in_a_row,
+        indoc!(
+            r#"
+            when [] is
+                [A, .., .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [A, .., .., B] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is 
+    5│>          [A, .., .., B] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
     "###
     );
 }
