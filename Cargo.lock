@@ -3258,6 +3258,7 @@ version = "0.0.1"
 dependencies = [
  "indoc",
  "lazy_static",
+ "roc_build",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
