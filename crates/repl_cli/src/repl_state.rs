@@ -99,6 +99,7 @@ impl ReplState {
             ParseOutcome::Expr(_)
             | ParseOutcome::ValueDef(_)
             | ParseOutcome::TypeDef(_)
+            | ParseOutcome::SyntaxErr
             | ParseOutcome::Incomplete => Ok(self.eval_and_format(line)),
             ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
@@ -112,7 +113,10 @@ impl ReplState {
         let arena = Bump::new();
         let mut opt_var_name;
         let src = match parse_src(&arena, src) {
-            ParseOutcome::Expr(_) => {
+            ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
+                // If it's a SyntaxErr (or Incomplete at this point, meaning it will
+                // become a SyntaxErr as soon as we evaluate it),
+                // proceed as normal and let the error reporting happen during eval.
                 opt_var_name = None;
 
                 src
@@ -198,13 +202,6 @@ impl ReplState {
                 // can be evaluated as expressions.
                 return String::new();
             }
-            ParseOutcome::Incomplete => {
-                if src.ends_with('\n') {
-                    todo!("handle SYNTAX ERROR");
-                } else {
-                    todo!("handle Incomplete parse");
-                }
-            }
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
@@ -276,6 +273,7 @@ enum ParseOutcome<'a> {
     TypeDef(TypeDef<'a>),
     Expr(Expr<'a>),
     Incomplete,
+    SyntaxErr,
     Empty,
     Help,
     Exit,
@@ -296,7 +294,9 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
             match roc_parse::expr::parse_loc_expr(0, &arena, State::new(src_bytes)) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
                 // Special case some syntax errors to allow for multi-line inputs
-                Err((_, EExpr::Closure(EClosure::Body(_, _), _), _)) => ParseOutcome::Incomplete,
+                Err((_, EExpr::Closure(EClosure::Body(_, _), _), _))
+                | Err((_, EExpr::Start(_), _))
+                | Err((_, EExpr::IndentStart(_), _)) => ParseOutcome::Incomplete,
                 Err((_, EExpr::DefMissingFinalExpr(_), _))
                 | Err((_, EExpr::DefMissingFinalExpr2(_, _), _)) => {
                     // This indicates that we had an attempted def; re-parse it as a single-line def.
@@ -432,10 +432,10 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         Ok((_, None, _)) => {
                             todo!("TODO determine appropriate ParseOutcome for Ok(None)")
                         }
-                        Err(_) => ParseOutcome::Incomplete,
+                        Err(_) => ParseOutcome::SyntaxErr,
                     }
                 }
-                Err(_) => ParseOutcome::Incomplete,
+                Err(_) => ParseOutcome::SyntaxErr,
             }
         }
     }
@@ -480,6 +480,7 @@ pub fn is_incomplete(input: &str) -> bool {
         | ParseOutcome::Exit
         | ParseOutcome::ValueDef(_)
         | ParseOutcome::TypeDef(_)
+        | ParseOutcome::SyntaxErr
         | ParseOutcome::Expr(_) => false,
     }
 }
