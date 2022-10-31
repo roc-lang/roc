@@ -561,7 +561,7 @@ fn four_element_record() {
     );
 }
 
-#[cfg(not(wasm))]
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn multiline_string_non_wasm() {
     // If a string contains newlines, format it as a multiline string in the output.
@@ -588,7 +588,7 @@ fn multiline_string_non_wasm() {
     assert!(out.status.success());
 }
 
-#[cfg(wasm)]
+#[cfg(feature = "wasm")]
 #[test]
 fn multiline_string_wasm() {
     // If a string contains newlines, format it as a multiline string in the output
