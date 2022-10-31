@@ -11777,7 +11777,7 @@ All branches in an `if` must have the same type!
 
     This `when` does not cover all the possibilities:
 
-    4│>      when [] is 
+    4│>      when [] is
     5│>          [.., A, ..] -> ""
 
     Other possibilities include:
@@ -11811,7 +11811,7 @@ All branches in an `if` must have the same type!
 
     This `when` does not cover all the possibilities:
 
-    4│>      when [] is 
+    4│>      when [] is
     5│>          [A, .., .., B] -> ""
 
     Other possibilities include:
