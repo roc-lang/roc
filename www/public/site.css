@@ -24,11 +24,17 @@ code.snippet, samp {
     white-space: pre;
     padding: 10px 16px;
     background-color: #eee;
+    margin-bottom: 16px;
 }
 
-code .ann, samp .ann {
+.ann {
     /* type annotation - purple in the repl */
     color: rebeccapurple;
+}
+
+.autovar {
+    /* automatic variable names in the repl, e.g. # val1 */
+    color: green;
 }
 
 /* Used on on the different-names page. */

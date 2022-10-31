@@ -42,16 +42,32 @@ short.</p>
 <samp>The rockin’ roc repl</samp>
 <p>So far, so good!</p>
 <h3 id="hello-world">Hello, World!</h3>
-<p>Try typing this at the REPL prompt and pressing enter:</p>
+<p>Try typing this at the REPL prompt and pressing Enter:</p>
 <code class="snippet">"Hello, World!"</code>
 <p>The REPL should cheerfully display the following:</p>
-<samp>"Hello, World!" <span class="ann">:</span> Str</span></samp>
+<samp>"Hello, World!" <span class="ann">:</span> Str</span>            <span class="autovar"># val1</span></samp>
 <p>Congratulations! You&#39;ve just written your first Roc code!</p>
-<h3 id="arithmetic">Arithmetic</h3>
-<p>When you entered the <em>expression</em> <code>&quot;Hello, World!&quot;</code> into the REPL,
+<h3 id="arithmetic">String Interpolation</h3>
+<p>When you entered the <em>expression</em> <code>&quot;Hello, World!&quot;</code>,
 the REPL printed it back out. It also printed <code><span class="ann">:</span> Str</code>, because
-<code>Str</code> is the expression's type. We'll talk about types later; for now, let's ignore
-the <code><span class="ann">:</span></code> and whatever comes after it whenever the REPL prints them.</p>
+<code>Str</code> is that expression's type. We'll talk about types later; for now, let's ignore
+the <code><span class="ann">:</span></code> and whatever comes after it whenever we see them.</p>
+<p>The REPL also printed <code class="autovar"># val1</code> at the end of the line.
+That means from now on you can use the variable name <code>val1</code> to refer
+to the <code>"Hello, World!"</code> expression you just entered. This comes in handy
+when entering complicated expressions! Future sections of the tutorial will omit these labels, since they're
+just there as a convenience.</p>
+<p>Still, while we're talking about them, let's try it out. Put this into the repl and press Enter:</p>
+<code class="snippet">val1</code>
+<p>You should see the same <code>"Hello, World!"</code> line as before.</p>
+<p>You can also create your own names for expressions. Try entering these lines:</p>
+<code class="snippet">greeting = "Hi"</code>
+<code class="snippet">audience = "World"</code>
+<code class="snippet">"\(greeting), \(audience)!"</code>
+<p>After entering that last one, you should see this output:</p>
+<samp>"Hi, World!" <span class="ann">:</span> Str</span>            <span class="autovar"># val2</span></samp>
+<p>This</p>
+<h3 id="arithmetic">Arithmetic</h3>
 <p>Next let's try putting in a more complicated expression:</p>
 <samp>1 + 1
 
@@ -64,7 +80,7 @@ be grouped.</p>
 
 -1 <span class="ann">:</span> Num *</samp>
 <h3 id="functions">Functions</h3>
-<p>Let&#39;s try calling a function:</p>
+<p>Let's try calling a function:</p>
 <pre><code class="lang-coffee"><span class="hljs-meta">&gt;&gt;</span> Str.concat <span class="hljs-string">"Hi "</span> <span class="hljs-string">"there!"</span>
 <span class="hljs-string">"Hi there!"</span> : Str
 </code></pre>
