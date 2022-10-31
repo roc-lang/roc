@@ -11821,4 +11821,30 @@ All branches in an `if` must have the same type!
     I would have to crash if I saw one of those! Add branches for them!
     "###
     );
+
+    test_report!(
+        #[ignore = "must implement exhaustiveness sketching for lists first"]
+        mismatch_within_list_pattern,
+        indoc!(
+            r#"
+            when [] is
+                [A, 1u8] -> ""
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        #[ignore = "must implement exhaustiveness sketching for lists first"]
+        mismatch_list_pattern_vs_condition,
+        indoc!(
+            r#"
+            when [A, B] is
+                ["foo", "bar"] -> ""
+            "#
+        ),
+    @r###"
+    "###
+    );
 }

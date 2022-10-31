@@ -1945,8 +1945,8 @@ fn to_pattern_report<'b>(
                     severity: Severity::RuntimeError,
                 }
             }
-            PReason::TagArg { .. } | PReason::PatternGuard => {
-                unreachable!("I didn't think this could trigger. Please tell Folkert about it!")
+            PReason::TagArg { .. } | PReason::PatternGuard | PReason::ListElem => {
+                internal_error!("We didn't think this could trigger. Please tell us about it on Zulip if it does!")
             }
         },
     }
