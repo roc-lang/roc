@@ -933,6 +933,7 @@ fn parse_problem() {
     );
 }
 
+#[ignore] // re-enable (and fix) after https://github.com/roc-lang/roc/issues/4425 is done!
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2343_complete_mono_with_shadowed_vars() {
