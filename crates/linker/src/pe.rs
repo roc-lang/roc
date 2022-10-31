@@ -1,6 +1,5 @@
 use std::{
     io::{BufReader, BufWriter},
-    ops::Range,
     path::Path,
 };
 
@@ -252,7 +251,16 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
-    let app_obj_sections = AppSections::from_data(roc_app_bytes);
+    let stack_check_section = Section {
+        bytes: &___CHKSTK_MS,
+        kind: SectionKind::Text,
+        relocations: Default::default(),
+        app_section_index: object::SectionIndex(0),
+    };
+
+    let mut app_obj_sections = AppSections::from_data(roc_app_bytes);
+    app_obj_sections.sections.push(stack_check_section);
+
     let mut symbols = app_obj_sections.roc_symbols;
 
     let image_base: u64 = md.image_base;
@@ -262,7 +270,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let app_sections_size: usize = app_obj_sections
         .sections
         .iter()
-        .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
+        .map(|s| next_multiple_of(s.bytes.len(), file_alignment))
         .sum();
 
     let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
@@ -300,7 +308,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
             .sections
             .iter()
             .filter(|s| s.kind == kind)
-            .map(|s| s.file_range.end - s.file_range.start)
+            .map(|s| s.bytes.len())
             .sum();
 
         // offset_in_section now becomes a proper virtual address
@@ -348,7 +356,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         let mut offset = section_file_offset;
         let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
         for section in it {
-            let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
+            let slice = section.bytes;
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
             let it = section
@@ -395,15 +403,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // have to get a bit creative: we just jump to a `ret` instruction, so this
                     // function call becomes a no-op.
 
-                    // find a `ret`
-                    let index = slice
-                        .iter()
-                        .rev()
-                        .position(|byte| *byte == 0xc3)
-                        .unwrap_or_else(|| internal_error!("cannot find a `ret` instruction"));
+                    // find a the implementation of the stack probe. This relies on the
+                    // ___CHKSTK_MS section being the last text section in the list of sections
+                    let destination = length - ___CHKSTK_MS.len();
 
-                    let delta = (slice.len() - 1 - index) as i64 - *offset_in_section as i64
-                        + relocation.addend();
+                    let delta =
+                        destination as i64 - *offset_in_section as i64 + relocation.addend();
 
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
@@ -998,9 +1003,8 @@ struct AppRelocation {
 }
 
 #[derive(Debug)]
-struct Section {
-    /// File range of the section (in the app object)
-    file_range: Range<usize>,
+struct Section<'a> {
+    bytes: &'a [u8],
     kind: SectionKind,
     relocations: MutMap<String, Vec<AppRelocation>>,
     app_section_index: SectionIndex,
@@ -1014,8 +1018,8 @@ struct AppSymbol {
 }
 
 #[derive(Debug, Default)]
-struct AppSections {
-    sections: Vec<Section>,
+struct AppSections<'a> {
+    sections: Vec<Section<'a>>,
     roc_symbols: Vec<AppSymbol>,
     other_symbols: Vec<(SectionIndex, AppSymbol)>,
 }
@@ -1047,7 +1051,7 @@ fn process_internal_relocations(
         let length: usize = sections
             .iter()
             .filter(|s| s.kind == kind)
-            .map(|s| s.file_range.end - s.file_range.start)
+            .map(|s| s.bytes.len())
             .sum();
 
         host_section_virtual_address += next_multiple_of(length, section_alignment) as u32;
@@ -1056,8 +1060,8 @@ fn process_internal_relocations(
     result
 }
 
-impl AppSections {
-    fn from_data(data: &[u8]) -> Self {
+impl<'a> AppSections<'a> {
+    fn from_data(data: &'a [u8]) -> Self {
         use object::ObjectSection;
 
         let file = object::File::parse(data).unwrap();
@@ -1102,7 +1106,7 @@ impl AppSections {
             }
 
             let (start, length) = section.file_range().unwrap();
-            let file_range = start as usize..(start + length) as usize;
+            let file_range = &data[start as usize..][..length as usize];
 
             // sections are one-indexed...
             let index = SectionIndex(i + 1);
@@ -1120,7 +1124,7 @@ impl AppSections {
 
             let section = Section {
                 app_section_index: index,
-                file_range,
+                bytes: file_range,
                 kind,
                 relocations,
             };
