@@ -286,6 +286,8 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
             SP::KnownCtor(union, IndexCtor::Record, tag_id, patterns)
         }
 
+        List { .. } => todo!(),
+
         AppliedTag {
             tag_name,
             arguments,

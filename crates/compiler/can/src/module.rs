@@ -898,6 +898,15 @@ fn fix_values_captured_in_closure_pattern(
                 }
             }
         }
+        List { patterns, .. } => {
+            for loc_pat in patterns.patterns.iter_mut() {
+                fix_values_captured_in_closure_pattern(
+                    &mut loc_pat.value,
+                    no_capture_symbols,
+                    closure_captures,
+                );
+            }
+        }
         Identifier(_)
         | NumLiteral(..)
         | IntLiteral(..)

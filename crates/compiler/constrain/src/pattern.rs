@@ -101,6 +101,14 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
+        List { .. } => {
+            // There are no interesting headers to introduce for list patterns, since the only
+            // exhaustive list pattern is
+            //   \[..] -> <body>
+            // which does not introduce any symbols.
+            false
+        },
+
         AppliedTag {
             tag_name,
             arguments,
@@ -501,6 +509,18 @@ pub fn constrain_pattern(
             state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
+
+        List {
+            list_var,
+            elem_var,
+            patterns: _,
+        } => {
+            state.vars.push(*list_var);
+            state.vars.push(*elem_var);
+
+            todo!();
+        }
+
         AppliedTag {
             whole_var,
             ext_var,

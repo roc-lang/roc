@@ -2703,7 +2703,7 @@ fn pattern_to_when<'a>(
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
     use roc_can::expr::{WhenBranch, WhenBranchPattern};
-    use roc_can::pattern::Pattern::*;
+    use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
         Identifier(symbol) => (*symbol, body),
@@ -2765,6 +2765,8 @@ fn pattern_to_when<'a>(
 
             (symbol, Loc::at_zero(wrapped_body))
         }
+
+        Pattern::List { .. } => todo!(),
 
         IntLiteral(..)
         | NumLiteral(..)
@@ -9604,6 +9606,8 @@ fn from_can_pattern_help<'a>(
                 field_layouts.into_bump_slice(),
             ))
         }
+
+        List { .. } => todo!(),
     }
 }
 

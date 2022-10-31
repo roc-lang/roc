@@ -1921,6 +1921,14 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
+        List {
+            patterns, elem_var, ..
+        } => {
+            for pat in patterns.patterns.iter() {
+                pattern_to_vars_by_symbol(vars_by_symbol, &pat.value, *elem_var);
+            }
+        }
+
         NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)

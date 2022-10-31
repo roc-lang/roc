@@ -1993,6 +1993,7 @@ fn add_pattern_category<'b>(
         PatternDefault => alloc.reflow(" an optional field of type:"),
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
+        List => alloc.reflow(" lists of type:"),
         Ctor(tag_name) => alloc.concat([
             alloc.reflow(" a "),
             alloc.tag_name(tag_name.clone()),
