@@ -105,11 +105,6 @@ fn standalone_annotation() {
     assert_eq!(&state.with_past_defs("test"), "x : Str\n\ntest");
 }
 
-#[test]
-fn multiline_def() {
-    todo!("x =\n1");
-}
-
 /// validate and step the given input, then check the Result vs the output
 /// with ANSI escape codes stripped.
 fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<(&str, &str), i32>) {
