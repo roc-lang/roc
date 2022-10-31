@@ -6,6 +6,9 @@ interface Html.Internal
         CyclicStructureAccessor,
         Handler,
         element,
+        text,
+        # lazy, TODO
+        none,
         translate,
         translateStatic,
         insertHandler,
@@ -17,15 +20,15 @@ interface Html.Internal
     ]
     imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
 
-JsNodeIndex : Result Nat [NotRendered]
+JsIndex : [
+    JsIndex Nat, # Index of the corresponding real DOM node in a JavaScript array
+    NoJsIndex, # We don't have a JavaScript index for fresh nodes not yet diffed, or for static HTML
+]
 
-# Compiler crash! I just added JsNodeIndex in the type but not the code that uses it.
-# So I know my code is broken, I just wanted the compiler to tell me which lines to fix.
-# But instead, it crashes at crates/compiler/unify/src/unify.rs:2636:13 debug_assert!(is_recursion_var(env.subs, *rec1));
 Html state : [
     None,
-    Text JsNodeIndex Str,
-    Element Str JsNodeIndex Nat (List (Attribute state)) (List (Html state)),
+    Text JsIndex Str,
+    Element Str JsIndex Nat (List (Attribute state)) (List (Html state)),
     Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
 ]
 
@@ -60,18 +63,26 @@ element = \tagName ->
         withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
         totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
 
-        Element tagName totalSize attrs children
+        Element tagName NoJsIndex totalSize attrs children
 
-# internal helper
+text : Str -> Html state
+text = \content -> Text NoJsIndex content
+
+# TODO: causes stack overflow in compiler
+# lazy : (Result { state, node : Html state } [NotCached] -> { state, node : Html state }) -> Html state
+# lazy = \f -> Lazy f
+
+none : Html state
+none = None
+
 nodeSize : Html state -> Nat
 nodeSize = \node ->
     when node is
-        Text content -> Str.countUtf8Bytes content
-        Element _ size _ _ -> size
+        Text _ content -> Str.countUtf8Bytes content
+        Element _ _ size _ _ -> size
         Lazy _ -> 0 # Ignore Lazy for buffer size estimate. renderStatic might have to reallocate, but that's OK.
         None -> 0
 
-# internal helper
 attrSize : Attribute state -> Nat
 attrSize = \attr ->
     when attr is
@@ -80,14 +91,13 @@ attrSize = \attr ->
         DomProp _ _ -> 0
         Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
 
-# internal helper
 appendRenderedStatic : Str, Html [] -> Str
 appendRenderedStatic = \buffer, node ->
     when node is
-        Text content ->
+        Text _ content ->
             Str.concat buffer content
 
-        Element name _ attrs children ->
+        Element name _ _ attrs children ->
             withTagName = "\(buffer)<\(name)"
             withAttrs =
                 if List.isEmpty attrs then
@@ -131,14 +141,14 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 translate : Html _, (_ -> _), (_ -> _) -> Html _
 translate = \node, parentToChild, childToParent ->
     when node is
-        Text content ->
-            Text content
+        Text jsIndex content ->
+            Text jsIndex content
 
-        Element name size attrs children ->
+        Element name jsIndex size attrs children ->
             newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
             newChildren = List.map children \c -> translate c parentToChild childToParent
 
-            Element name size newAttrs newChildren
+            Element name jsIndex size newAttrs newChildren
 
         Lazy childCallback ->
             Lazy (translateLazy childCallback parentToChild childToParent)
@@ -192,17 +202,17 @@ translateHandler = \childHandler, parentToChild, childToParent ->
 translateStatic : Html * -> Html []
 translateStatic = \node ->
     when node is
-        Text content ->
-            Text content
+        Text jsIndex content ->
+            Text jsIndex content
 
-        Element name size attrs children ->
+        Element name jsIndex size attrs children ->
             newAttrs = List.keepOks attrs keepStaticAttr
             newChildren = List.map children translateStatic
 
-            Element name size newAttrs newChildren
+            Element name jsIndex size newAttrs newChildren
 
         # TODO: Triggers a stack overflow in the compiler. I think in type checking.
-        # If someone made this node Lazy, then it's probably expensive, and worth server-side rendering.
+        # That's a pity because if someone used Lazy, it's probably worth server-side rendering.
         # Lazy callback ->
         #     { node: dynamicNode } = callback (Err NotCached)
         #     translateStatic dynamicNode
@@ -258,9 +268,9 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 
 HtmlId : Str
 
-App state : {
+App state initData : {
     static : Html [],
-    initDynamic : Str -> state,
+    initDynamic : initData -> state,
     renderDynamic : state -> Dict HtmlId (Html state),
 }
 
@@ -278,14 +288,17 @@ rocScript = \initData, dynamicRootIds, wasmUrl ->
         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
             elem : Html []
             elem = (element "script") [] [
-                Text
+                Text NoJsIndex
                     """
+                    (function(){
+
                     \(hostJavaScript)
-                    (function() {
-                        const initData = \(jsInitData);
-                        const dynamicRootIds = \(jsDynamicRootIds);
-                        const wasmUrl = \(jsWasmUrl);
-                        window.roc.init(initData, dynamicRootIds, wasmUrl);
+
+                    const initData = \(jsInitData);
+                    const dynamicRootIds = \(jsDynamicRootIds);
+                    const wasmUrl = \(jsWasmUrl);
+                    window.roc = roc_init(initData, dynamicRootIds, wasmUrl);
+
                     })();
                     """,
             ]
