@@ -17,10 +17,15 @@ interface Html.Internal
     ]
     imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
 
+JsNodeIndex : Result Nat [NotRendered]
+
+# Compiler crash! I just added JsNodeIndex in the type but not the code that uses it.
+# So I know my code is broken, I just wanted the compiler to tell me which lines to fix.
+# But instead, it crashes at crates/compiler/unify/src/unify.rs:2636:13 debug_assert!(is_recursion_var(env.subs, *rec1));
 Html state : [
     None,
-    Text Str,
-    Element Str Nat (List (Attribute state)) (List (Html state)),
+    Text JsNodeIndex Str,
+    Element Str JsNodeIndex Nat (List (Attribute state)) (List (Html state)),
     Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
 ]
 
