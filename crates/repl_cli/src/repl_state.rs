@@ -28,6 +28,19 @@ pub const AUTO_VAR_PREFIX: &str = "val";
 
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
+    "\nEnter an expression to evaluate, or a definition (like ",
+    BLUE,
+    "x = 1",
+    END_COL,
+    ") to use in future expressions.\n\nUnless there was a compile-time error, expressions get automatically named so you can refer to them later.\nFor example, if you see ",
+    GREEN,
+    "# val1",
+    END_COL,
+    " after an output, you can now refer to that expression as ",
+    BLUE,
+    "val1",
+    END_COL,
+    " in future expressions.\n\nTips:\n\n",
     BLUE,
     "  - ",
     END_COL,
@@ -46,7 +59,7 @@ pub const TIPS: &str = concatcp!(
     BLUE,
     "  - ",
     END_COL,
-    ":help\n"
+    ":help"
 );
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,7 +92,7 @@ impl ReplState {
         match parse_src(&arena, line) {
             ParseOutcome::Empty => {
                 if line.is_empty() {
-                    return Ok(tips());
+                    return Ok(TIPS.to_string());
                 } else if line.ends_with('\n') {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck
@@ -103,7 +116,7 @@ impl ReplState {
             | ParseOutcome::Incomplete => Ok(self.eval_and_format(line)),
             ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
-                Ok(tips())
+                Ok(TIPS.to_string())
             }
             ParseOutcome::Exit => Err(0),
         }
@@ -277,10 +290,6 @@ enum ParseOutcome<'a> {
     Empty,
     Help,
     Exit,
-}
-
-fn tips() -> String {
-    format!("\n{}\n", TIPS)
 }
 
 fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {

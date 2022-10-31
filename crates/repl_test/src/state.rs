@@ -88,7 +88,7 @@ fn exhaustiveness_problem() {
 #[test]
 fn tips() {
     assert!(!is_incomplete(""));
-    assert_eq!(ReplState::new().step(""), Ok(format!("\n{TIPS}\n")));
+    assert_eq!(ReplState::new().step(""), Ok(TIPS.to_string()));
 }
 
 #[test]
