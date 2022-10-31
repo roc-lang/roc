@@ -17,6 +17,7 @@ use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
 use target_lexicon::Triple;
+use termsize::Size;
 
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
@@ -556,7 +557,12 @@ fn format_output(
                 use unicode_segmentation::UnicodeSegmentation;
 
                 const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
-                const VAR_NAME_COLUMN: usize = 80; // Right-align the var_name at this column
+                const VAR_NAME_COLUMN_MAX: u16 = 80; // Right-align the var_name at this column
+
+                let var_name_column = match termsize::get() {
+                    Some(Size { cols, rows: _ }) => cols.min(VAR_NAME_COLUMN_MAX) as usize,
+                    None => VAR_NAME_COLUMN_MAX as usize,
+                };
 
                 let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");
 
@@ -569,11 +575,11 @@ fn format_output(
                     .count();
                 let var_name_len =
                     var_name.graphemes(true).count() + VAR_NAME_PREFIX.graphemes(true).count();
-                let spaces_needed = if last_line_len + var_name_len > VAR_NAME_COLUMN {
+                let spaces_needed = if last_line_len + var_name_len > var_name_column {
                     buf.push('\n');
-                    VAR_NAME_COLUMN - var_name_len
+                    var_name_column - var_name_len
                 } else {
-                    VAR_NAME_COLUMN - last_line_len - var_name_len
+                    var_name_column - last_line_len - var_name_len
                 };
 
                 for _ in 0..spaces_needed {
