@@ -831,7 +831,8 @@ fn can_annotation_help(
                 hidden_variables.remove(&loc_var.value.var);
             }
 
-            let infer_ext_in_output = vec![]; // TODO
+            // TODO: handle implicit ext variables in `as` aliases
+            let infer_ext_in_output = vec![];
 
             scope.add_alias(
                 symbol,
