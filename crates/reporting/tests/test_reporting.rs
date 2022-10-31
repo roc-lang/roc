@@ -11831,6 +11831,21 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This list element doesn't match the types of other elements in the
+    pattern:
+
+    5│          [A, 1u8] -> ""
+                    ^^^
+
+    It matches integers:
+
+        U8
+
+    But the other elements in this list pattern match
+
+        [A]
     "###
     );
 
@@ -11843,6 +11858,22 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when [A, B] is
+    5│           ["foo", "bar"] -> ""
+
+    The `when` condition is a list of type:
+
+        List [A, B]
+
+    But the branch patterns have type:
+
+        List Str
+
+    The branches must be cases of the `when` condition's type!
     "###
     );
 }
