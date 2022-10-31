@@ -11,6 +11,7 @@ path = "src/tests.rs"
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
+roc_utils = { path = "../../utils" }
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [dev-dependencies]
@@ -25,6 +26,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
+roc_utils = { path = "../../utils" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_reporting = { path = "../../reporting" }

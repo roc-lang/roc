@@ -1,3 +1,4 @@
+use roc_utils::zig;
 use std::convert::AsRef;
 use std::env;
 use std::ffi::OsStr;
@@ -13,13 +14,6 @@ use tempfile::tempdir;
 
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
 const DEBUG: bool = false;
-
-fn zig_executable() -> String {
-    match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    }
-}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -97,7 +91,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
     if !DEBUG {
         run_command(
             &bitcode_path,
-            &zig_executable(),
+            zig(),
             &["build", zig_object, "-Drelease=true"],
             0,
         );
@@ -132,7 +126,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
 
     run_command(
         &bitcode_path,
-        &zig_executable(),
+        zig(),
         &["build", zig_object, "-Drelease=true"],
         0,
     );
@@ -206,17 +200,18 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
 
 fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(
     path: P,
-    command_str: &str,
+    mut command: Command,
     args: I,
     flaky_fail_counter: usize,
 ) where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output_result = Command::new(OsStr::new(&command_str))
-        .current_dir(path)
-        .args(args)
-        .output();
+    let full_command = command.current_dir(path).args(args);
+
+    let command_str = format!("{:?}", &full_command);
+
+    let output_result = full_command.output();
 
     match output_result {
         Ok(output) => match output.status.success() {
@@ -234,7 +229,7 @@ fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(
                     if flaky_fail_counter == 10 {
                         panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
                     } else {
-                        run_command(path, command_str, args, flaky_fail_counter + 1)
+                        run_command(path, command, args, flaky_fail_counter + 1)
                     }
                 } else {
                     panic!("{} failed: {}", command_str, error_str);

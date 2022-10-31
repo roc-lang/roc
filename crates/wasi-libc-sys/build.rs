@@ -1,8 +1,8 @@
+use roc_utils::zig;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -13,7 +13,7 @@ fn main() {
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
-    Command::new(&zig_executable())
+    zig()
         .args([
             "build-exe",
             "-target",
@@ -49,13 +49,6 @@ fn main() {
         "cargo:rustc-env=WASI_COMPILER_RT_PATH={}",
         compiler_rt_path.to_str().unwrap()
     );
-}
-
-fn zig_executable() -> String {
-    match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    }
 }
 
 fn find(dir: &Path, filename: &OsString) -> std::io::Result<Option<PathBuf>> {

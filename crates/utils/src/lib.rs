@@ -1,5 +1,5 @@
 use snafu::OptionExt;
-use std::{collections::HashMap, path::PathBuf, slice::SliceIndex};
+use std::{collections::HashMap, path::PathBuf, process::Command, slice::SliceIndex};
 use util_error::{IndexOfFailedSnafu, KeyNotFoundSnafu, OutOfBoundsSnafu, UtilResult};
 
 pub mod util_error;
@@ -119,4 +119,82 @@ pub fn get_lib_path() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Gives a friendly error if cargo is not installed.
+/// Also makes it easy to track where we use cargo in the codebase.
+pub fn cargo() -> Command {
+    let command_str = "cargo";
+
+    if check_command_available(command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the cargo command.\nVisit https://rustup.rs/ to install cargo.",)
+    }
+}
+
+/// Gives a friendly error if clang is not installed.
+/// Also makes it easy to track where we use clang in the codebase.
+pub fn clang() -> Command {
+    let command_str = "clang";
+
+    if check_command_available(command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the clang command.\nPlease install clang.",)
+        //TODO detect OS and provide detailed install instructions
+    }
+}
+
+/// Gives a friendly error if zig is not installed.
+/// Also makes it easy to track where we use zig in the codebase.
+pub fn zig() -> Command {
+    let command_str = match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    };
+
+    if check_command_available(&command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the zig command.\nPlease install zig, see instructions at https://ziglang.org/learn/getting-started/.",)
+    }
+}
+
+fn check_command_available(command_name: &str) -> bool {
+    if cfg!(target_family = "unix") {
+        let mut cmd = Command::new("which");
+
+        cmd.args([command_name]);
+
+        let cmd_str = format!("{:?}", cmd);
+
+        let cmd_out = cmd.output().unwrap_or_else(|err| {
+            panic!(
+                "Failed to execute `{}` to check if {} is available:\n    {}",
+                cmd_str, command_name, err
+            )
+        });
+
+        cmd_out.status.success()
+    } else if cfg!(target = "windows") {
+        let mut cmd = Command::new("Get-Command");
+
+        cmd.args([command_name]);
+
+        let cmd_str = format!("{:?}", cmd);
+
+        let cmd_out = cmd.output().unwrap_or_else(|err| {
+            panic!(
+                "Failed to execute `{}` to check if {} is available:\n    {}",
+                cmd_str, command_name, err
+            )
+        });
+
+        cmd_out.status.success()
+    } else {
+        // We're in uncharted waters, best not to panic if
+        // things may end up working out down the line.
+        true
+    }
 }
