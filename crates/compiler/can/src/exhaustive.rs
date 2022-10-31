@@ -1,14 +1,17 @@
 use crate::expr::{self, IntValue, WhenBranch};
-use crate::pattern::DestructType;
+use crate::pattern::{DestructType, ListPatterns};
 use roc_collections::all::HumanIndex;
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{
-    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
+    is_useful, Ctor, CtorName, Error, Guard, ListArity, Literal, Pattern, RenderAs, TagId, Union,
 };
-use roc_module::ident::{TagIdIntType, TagName};
+use roc_module::ident::{Lowercase, TagIdIntType, TagName};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{Content, FlatType, RedundantMark, Subs, SubsFmtContent, Variable};
+use roc_types::subs::{
+    Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
+};
 use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
@@ -64,7 +67,8 @@ enum SketchedPattern {
     /// A constructor whose expected union is not yet known.
     /// We'll know the whole union when reifying the sketched pattern against an expected case type.
     Ctor(TagName, Vec<SketchedPattern>),
-    KnownCtor(Union, IndexCtor<'static>, TagId, Vec<SketchedPattern>),
+    KnownCtor(Union, TagId, Vec<SketchedPattern>),
+    List(ListArity, Vec<SketchedPattern>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -72,12 +76,42 @@ enum IndexCtor<'a> {
     /// Index an opaque type. There should be one argument.
     Opaque,
     /// Index a record type. The arguments are the types of the record fields.
-    Record,
+    Record(&'a [Lowercase]),
     /// Index a guard constructor. The arguments are a faux guard pattern, and then the real
     /// pattern being guarded. E.g. `A B if g` becomes Guard { [True, (A B)] }.
     Guard,
     /// Index a tag union with the given tag constructor.
     Tag(&'a TagName),
+    /// Index a list type. The argument is the element type.
+    List,
+}
+
+impl<'a> IndexCtor<'a> {
+    fn of_union(un: &'a Union, tag_id: TagId) -> Self {
+        let Union {
+            alternatives,
+            render_as,
+        } = un;
+
+        match render_as {
+            RenderAs::Tag => {
+                let tag_name = alternatives
+                    .iter()
+                    .find(|ctor| ctor.tag_id == tag_id)
+                    .map(|Ctor { name, .. }| match name {
+                        CtorName::Tag(tag) => tag,
+                        CtorName::Opaque(_) => {
+                            internal_error!("tag union should never have opaque alternative")
+                        }
+                    })
+                    .expect("indexable tag ID must be known to alternatives");
+                Self::Tag(&tag_name)
+            }
+            RenderAs::Opaque => Self::Opaque,
+            RenderAs::Record(fields) => Self::Record(fields),
+            RenderAs::Guard => Self::Guard,
+        }
+    }
 }
 
 /// Index a variable as a certain constructor, to get the expected argument types of that constructor.
@@ -220,6 +254,13 @@ impl SketchedPattern {
 
                 Ok(Pattern::Ctor(union, tag_id, args))
             }
+            Self::List(arity, patterns) => {
+                let elem_var = index_var(subs, real_var, IndexCtor::List, &RenderAs::Tag)?[0];
+
+                let patterns = patterns
+                    .into_iter()
+                    .map(|pat| pat.reify(subs, elem_var))
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Pattern::List(arity, patterns))
             }
@@ -294,10 +335,28 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
                 }],
             };
 
-            SP::KnownCtor(union, IndexCtor::Record, tag_id, patterns)
+            SP::KnownCtor(union, tag_id, patterns)
         }
 
-        List { .. } => todo!(),
+        List {
+            patterns: ListPatterns { patterns, opt_rest },
+            list_var: _,
+            elem_var: _,
+        } => {
+            let list_arity = match opt_rest {
+                Some(i) => {
+                    let before = *i;
+                    let after = patterns.len() - before;
+                    ListArity::Slice(before, after)
+                }
+                None => ListArity::Exact(patterns.len()),
+            };
+
+            let sketched_elem_patterns =
+                patterns.iter().map(|p| sketch_pattern(&p.value)).collect();
+
+            SP::List(list_arity, sketched_elem_patterns)
+        }
 
         AppliedTag {
             tag_name,
@@ -398,7 +457,6 @@ pub fn sketch_when_branches(region: Region, patterns: &[expr::WhenBranch]) -> Sk
 
                 vec![SP::KnownCtor(
                     union,
-                    IndexCtor::Guard,
                     tag_id,
                     // NB: ordering the guard pattern first seems to be better at catching
                     // non-exhaustive constructors in the second argument; see the paper to see if
@@ -526,8 +584,14 @@ fn is_inhabited_pattern(pat: &Pattern) -> bool {
             Pattern::Literal(_) => {}
             Pattern::Ctor(union, id, pats) => {
                 if !union.alternatives.iter().any(|alt| alt.tag_id == *id) {
+                    // The tag ID was dropped from the union, which means that this tag ID is one
+                    // that is not material to the union, and so is uninhabited!
                     return false;
                 }
+                stack.extend(pats);
+            }
+            Pattern::List(_, pats) => {
+                // List is uninhabited if any element is uninhabited.
                 stack.extend(pats);
             }
         }

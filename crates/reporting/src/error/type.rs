@@ -4,7 +4,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
-use roc_exhaustive::CtorName;
+use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -4380,6 +4380,35 @@ fn pattern_to_doc_help<'b>(
             Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
             Str(s) => alloc.string(s.into()),
         },
+        List(arity, patterns) => {
+            let inner = match arity {
+                ListArity::Exact(_) => alloc.intersperse(
+                    patterns
+                        .into_iter()
+                        .map(|p| pattern_to_doc_help(alloc, p, false)),
+                    alloc.text(",").append(alloc.space()),
+                ),
+                ListArity::Slice(before, _) => {
+                    let mut all_patterns = patterns
+                        .into_iter()
+                        .map(|p| pattern_to_doc_help(alloc, p, in_type_param));
+
+                    let before = all_patterns.by_ref().take(before);
+                    let prefix = alloc.intersperse(before, alloc.text(",").append(alloc.space()));
+
+                    let spread = alloc.text("..");
+
+                    let after = all_patterns;
+                    let suffix = alloc.intersperse(after, alloc.text(",").append(alloc.space()));
+
+                    alloc.intersperse(
+                        [prefix, spread, suffix],
+                        alloc.text(",").append(alloc.space()),
+                    )
+                }
+            };
+            alloc.concat([alloc.text("["), inner, alloc.text("]")])
+        }
         Ctor(union, tag_id, args) => {
             match union.render_as {
                 RenderAs::Guard => {
@@ -4405,7 +4434,7 @@ fn pattern_to_doc_help<'b>(
                             Anything => {
                                 arg_docs.push(alloc.text(label.to_string()));
                             }
-                            Literal(_) | Ctor(_, _, _) => {
+                            Literal(_) | Ctor(_, _, _) | List(..) => {
                                 arg_docs.push(
                                     alloc
                                         .text(label.to_string())
