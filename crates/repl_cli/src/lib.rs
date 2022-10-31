@@ -56,7 +56,7 @@ pub fn main() -> i32 {
                 };
             }
             #[cfg(windows)]
-            Err(Readline::WindowResize) => {
+            Err(ReadlineError::WindowResize) => {
                 // This is fine; just ignore it.
             }
             Err(ReadlineError::Eof) => {
