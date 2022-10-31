@@ -11823,7 +11823,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "must implement exhaustiveness sketching for lists first"]
         mismatch_within_list_pattern,
         indoc!(
             r#"
@@ -11836,7 +11835,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore = "must implement exhaustiveness sketching for lists first"]
         mismatch_list_pattern_vs_condition,
         indoc!(
             r#"

@@ -1736,24 +1736,28 @@ fn solve(
                         close_pattern_matched_tag_unions(subs, real_var);
                     }
 
-                    let ExhaustiveSummary {
+                    if let Ok(ExhaustiveSummary {
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, real_var, sketched_rows, context);
+                    }) = check(subs, real_var, sketched_rows, context)
+                    {
+                        // Store information about whether the "when" is exhaustive, and
+                        // which (if any) of its branches are redundant. Codegen may use
+                        // this for branch-fixing and redundant elimination.
+                        if !exhaustive {
+                            exhaustive_mark.set_non_exhaustive(subs);
+                        }
+                        for redundant_mark in redundancies {
+                            redundant_mark.set_redundant(subs);
+                        }
 
-                    // Store information about whether the "when" is exhaustive, and
-                    // which (if any) of its branches are redundant. Codegen may use
-                    // this for branch-fixing and redundant elimination.
-                    if !exhaustive {
-                        exhaustive_mark.set_non_exhaustive(subs);
+                        // Store the errors.
+                        problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                    } else {
+                        // Otherwise there were type errors deeper in the pattern; we will have
+                        // already reported them.
                     }
-                    for redundant_mark in redundancies {
-                        redundant_mark.set_redundant(subs);
-                    }
-
-                    // Store the errors.
-                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                 }
 
                 state
