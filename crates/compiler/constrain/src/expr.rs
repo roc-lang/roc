@@ -1182,6 +1182,7 @@ pub fn constrain_expr(
                     })
                     .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
+                infer_ext_in_output_types: vec![],
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,
             });
@@ -1253,6 +1254,7 @@ pub fn constrain_expr(
                     })
                     .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
+                infer_ext_in_output_types: vec![],
                 actual: Box::new(argument_type.clone()),
                 kind: AliasKind::Opaque,
             };
@@ -2906,6 +2908,9 @@ fn instantiate_rigids(
     // lambda set vars are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
 
+    // ext-infer vars are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+
     let new_infer_variables: Vec<Variable> =
         introduced_vars.inferred.iter().map(|v| v.value).collect();
 
@@ -2965,6 +2970,9 @@ fn instantiate_rigids_simple(
 
     // lambda set vars are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+
+    // ext-infer vars are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
 
     let new_infer_variables: Vec<Variable> =
         introduced_vars.inferred.iter().map(|v| v.value).collect();
@@ -3597,6 +3605,9 @@ fn rec_defs_help(
                         let def_con = constraints.exists(vars, and_constraint);
 
                         if is_hybrid {
+                            // TODO this is not quite right, types that are purely rigid should not
+                            // be stored as hybrid!
+                            // However it might not be possible to fix this before types SoA lands.
                             hybrid_and_flex_info.vars.extend(&new_rigid_variables);
                             hybrid_and_flex_info.constraints.push(def_con);
                             hybrid_and_flex_info

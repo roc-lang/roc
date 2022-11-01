@@ -143,6 +143,7 @@ fn headers_from_annotation_help(
                 actual,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types: _,
             } if symbol == opaque
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
@@ -575,6 +576,7 @@ pub fn constrain_pattern(
                     })
                     .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
+                infer_ext_in_output_types: vec![],
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
             };

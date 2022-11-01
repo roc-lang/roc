@@ -6,7 +6,7 @@ use roc_parse::ast::Expr;
 use roc_region::all::{LineColumnRegion, LineInfo, Region};
 use roc_types::{
     subs::{Subs, Variable},
-    types::ErrorType,
+    types::{ErrorType, Polarity},
 };
 
 use crate::report::{RenderTarget, RocDocAllocator, RocDocBuilder};
@@ -83,7 +83,7 @@ impl<'a> Renderer<'a> {
                 .zip(variables)
                 .zip(expressions)
                 .map(|((symbol, variable), expr)| {
-                    let (error_type, _) = subs.var_to_error_type(*variable);
+                    let (error_type, _) = subs.var_to_error_type(*variable, Polarity::OF_VALUE);
                     self.render_lookup(*symbol, expr, error_type)
                 });
 

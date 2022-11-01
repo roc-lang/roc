@@ -219,9 +219,8 @@ pub fn build_zig_host_native(
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
-        "--library",
-        "c",
-        "-dynamic",
+        "-lc",
+        "-rdynamic",
         // cross-compile?
         "-target",
         target,

@@ -229,10 +229,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
         .unwrap_or_default()
         .is_empty());
 
-    let debug_print = DebugPrint {
-        print_lambda_sets: false,
-        print_only_under_alias: false,
-    };
+    let debug_print = DebugPrint::NOTHING;
 
     let interns = &loaded_module.interns;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
@@ -447,11 +444,15 @@ fn iface_quicksort() {
 #[test]
 fn quicksort_one_def() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
+    let loaded_module = load_fixture("app_with_deps", "QuicksortMultiDef", subs_by_module);
 
     expect_types(
         loaded_module,
         hashmap! {
+            "swap" => "Nat, Nat, List a -> List a",
+            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
+            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
+            "quicksortHelp" => "List (Num a), Nat, Nat -> List (Num a)",
             "quicksort" => "List (Num a) -> List (Num a)",
         },
     );
@@ -481,12 +482,12 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound]* | position has Eq",
+            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Eq",
             "initialModel" => "position -> Model position",
             "reconstructPath" => "Dict position position, position -> List position | position has Eq",
             "updateCost" => "position, position, Model position -> Model position | position has Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound]* | position has Eq",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]* | position has Eq",
+            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Eq",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Eq",
         },
     );
 }

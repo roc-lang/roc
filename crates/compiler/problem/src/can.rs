@@ -182,6 +182,9 @@ pub enum Problem {
         original_opaque: Symbol,
         ability_member: Symbol,
     },
+    UnnecessaryOutputWildcard {
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

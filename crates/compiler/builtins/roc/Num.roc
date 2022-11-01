@@ -743,7 +743,7 @@ atan : Frac a -> Frac a
 ## >>> Num.sqrt -4.0f64
 sqrt : Frac a -> Frac a
 
-sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
+sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]
 sqrtChecked = \x ->
     if x < 0.0 then
         Err SqrtOfNegative
@@ -752,7 +752,7 @@ sqrtChecked = \x ->
 
 log : Frac a -> Frac a
 
-logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
+logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]
 logChecked = \x ->
     if x <= 0.0 then
         Err LogNeedsPositive
@@ -791,7 +791,7 @@ logChecked = \x ->
 ## >>>     |> Num.div 2.0
 div : Frac a, Frac a -> Frac a
 
-divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
+divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]
 divChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
@@ -800,7 +800,7 @@ divChecked = \a, b ->
 
 divCeil : Int a, Int a -> Int a
 
-divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divCeilChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
@@ -825,7 +825,7 @@ divCeilChecked = \a, b ->
 ##
 divTrunc : Int a, Int a -> Int a
 
-divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
@@ -845,7 +845,7 @@ divTruncChecked = \a, b ->
 ## >>> Num.rem -8 -3
 rem : Int a, Int a -> Int a
 
-remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
@@ -944,7 +944,7 @@ addSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addChecked : Num a, Num a -> Result (Num a) [Overflow]*
+addChecked : Num a, Num a -> Result (Num a) [Overflow]
 addChecked = \a, b ->
     result = addCheckedLowlevel a b
 
@@ -970,7 +970,7 @@ subSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subChecked : Num a, Num a -> Result (Num a) [Overflow]*
+subChecked : Num a, Num a -> Result (Num a) [Overflow]
 subChecked = \a, b ->
     result = subCheckedLowlevel a b
 
@@ -994,7 +994,7 @@ mulSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-mulChecked : Num a, Num a -> Result (Num a) [Overflow]*
+mulChecked : Num a, Num a -> Result (Num a) [Overflow]
 mulChecked = \a, b ->
     result = mulCheckedLowlevel a b
 
@@ -1250,19 +1250,19 @@ toF64 : Num * -> F64
 ## Converts a [Int] to an [I8].
 ## If the given integer can't be precisely represented in an [I8], returns
 ## `Err OutOfBounds`.
-toI8Checked : Int * -> Result I8 [OutOfBounds]*
-toI16Checked : Int * -> Result I16 [OutOfBounds]*
-toI32Checked : Int * -> Result I32 [OutOfBounds]*
-toI64Checked : Int * -> Result I64 [OutOfBounds]*
-toI128Checked : Int * -> Result I128 [OutOfBounds]*
-toU8Checked : Int * -> Result U8 [OutOfBounds]*
-toU16Checked : Int * -> Result U16 [OutOfBounds]*
-toU32Checked : Int * -> Result U32 [OutOfBounds]*
-toU64Checked : Int * -> Result U64 [OutOfBounds]*
-toU128Checked : Int * -> Result U128 [OutOfBounds]*
-toNatChecked : Int * -> Result Nat [OutOfBounds]*
-toF32Checked : Num * -> Result F32 [OutOfBounds]*
-toF64Checked : Num * -> Result F64 [OutOfBounds]*
+toI8Checked : Int * -> Result I8 [OutOfBounds]
+toI16Checked : Int * -> Result I16 [OutOfBounds]
+toI32Checked : Int * -> Result I32 [OutOfBounds]
+toI64Checked : Int * -> Result I64 [OutOfBounds]
+toI128Checked : Int * -> Result I128 [OutOfBounds]
+toU8Checked : Int * -> Result U8 [OutOfBounds]
+toU16Checked : Int * -> Result U16 [OutOfBounds]
+toU32Checked : Int * -> Result U32 [OutOfBounds]
+toU64Checked : Int * -> Result U64 [OutOfBounds]
+toU128Checked : Int * -> Result U128 [OutOfBounds]
+toNatChecked : Int * -> Result Nat [OutOfBounds]
+toF32Checked : Num * -> Result F32 [OutOfBounds]
+toF64Checked : Num * -> Result F64 [OutOfBounds]
 
 # Special Floating-Point operations
 ## When given a [F64] or [F32] value, returns `Bool.false` if that value is
