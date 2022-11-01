@@ -4388,23 +4388,25 @@ fn pattern_to_doc_help<'b>(
                         .map(|p| pattern_to_doc_help(alloc, p, false)),
                     alloc.text(",").append(alloc.space()),
                 ),
-                ListArity::Slice(before, _) => {
+                ListArity::Slice(num_before, num_after) => {
                     let mut all_patterns = patterns
                         .into_iter()
                         .map(|p| pattern_to_doc_help(alloc, p, in_type_param));
 
-                    let before = all_patterns.by_ref().take(before);
-                    let prefix = alloc.intersperse(before, alloc.text(",").append(alloc.space()));
-
                     let spread = alloc.text("..");
+                    let comma_space = alloc.text(",").append(alloc.space());
 
-                    let after = all_patterns;
-                    let suffix = alloc.intersperse(after, alloc.text(",").append(alloc.space()));
+                    let mut list = alloc.intersperse(
+                        all_patterns.by_ref().take(num_before).chain([spread]),
+                        comma_space.clone(),
+                    );
 
-                    alloc.intersperse(
-                        [prefix, spread, suffix],
-                        alloc.text(",").append(alloc.space()),
-                    )
+                    if num_after > 0 {
+                        let after = all_patterns;
+                        list = alloc.intersperse([list].into_iter().chain(after), comma_space);
+                    }
+
+                    list
                 }
             };
             alloc.concat([alloc.text("["), inner, alloc.text("]")])
