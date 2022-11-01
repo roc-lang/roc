@@ -2788,7 +2788,7 @@ fn unify_flat_type<M: MetaCollector>(
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
-            let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args);
+            let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
                 outcome.union(merge(env, ctx, Structure(Apply(*r_symbol, *r_args))));
@@ -2799,7 +2799,7 @@ fn unify_flat_type<M: MetaCollector>(
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_outcome = unify_zip_slices(env, pool, *l_args, *r_args);
+            let arg_outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
             let ret_outcome = unify_pool(env, pool, *l_ret, *r_ret, ctx.mode);
             let closure_outcome = unify_pool(env, pool, *l_closure, *r_closure, ctx.mode);
 
@@ -2926,6 +2926,7 @@ fn unify_zip_slices<M: MetaCollector>(
     pool: &mut Pool,
     left: SubsSlice<Variable>,
     right: SubsSlice<Variable>,
+    mode: Mode,
 ) -> Outcome<M> {
     let mut outcome = Outcome::default();
 
@@ -2935,7 +2936,7 @@ fn unify_zip_slices<M: MetaCollector>(
         let l_var = env.subs[l_index];
         let r_var = env.subs[r_index];
 
-        outcome.union(unify_pool(env, pool, l_var, r_var, Mode::EQ));
+        outcome.union(unify_pool(env, pool, l_var, r_var, mode));
     }
 
     outcome

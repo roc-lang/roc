@@ -3595,6 +3595,7 @@ name = "roc_exhaustive"
 version = "0.0.1"
 dependencies = [
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
 ]

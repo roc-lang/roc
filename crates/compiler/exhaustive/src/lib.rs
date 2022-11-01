@@ -2,6 +2,7 @@
 //! http://moscova.inria.fr/~maranget/papers/warn/warn.pdf
 
 use roc_collections::all::{HumanIndex, MutMap};
+use roc_error_macros::internal_error;
 use roc_module::{
     ident::{Lowercase, TagIdIntType, TagName},
     symbol::Symbol,
@@ -69,6 +70,57 @@ pub enum Pattern {
     Anything,
     Literal(Literal),
     Ctor(Union, TagId, std::vec::Vec<Pattern>),
+    List(ListArity, std::vec::Vec<Pattern>),
+}
+
+/// The arity of list pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListArity {
+    /// A list pattern of an exact size.
+    Exact(usize),
+    /// A list pattern matching a variable size, where `Slice(before, after)` refers to the number
+    /// of elements that must be present before and after the variable rest pattern, respectively.
+    ///
+    /// For example,
+    ///   [..] => Slice(0, 0)
+    ///   [A, .., B] => Slice(1, 1)
+    ///   [A, B, ..] => Slice(2, 0)
+    ///   [.., A, B] => Slice(0, 2)
+    Slice(usize, usize),
+}
+
+impl ListArity {
+    /// The trivially-exhaustive list pattern `[..]`
+    const ANY: ListArity = ListArity::Slice(0, 0);
+
+    fn min_len(&self) -> usize {
+        match self {
+            ListArity::Exact(n) => *n,
+            ListArity::Slice(l, r) => l + r,
+        }
+    }
+
+    /// Could this list pattern include list pattern arity `other`?
+    fn covers_arities_of(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ListArity::Exact(l), ListArity::Exact(r)) => l == r,
+            (ListArity::Exact(this_exact), ListArity::Slice(other_left, other_right)) => {
+                // [_, _, _] can only cover [_, _, .., _]
+                *this_exact == (other_left + other_right)
+            }
+            (ListArity::Slice(this_left, this_right), ListArity::Exact(other_exact)) => {
+                // [_, _, .., _] can cover [_, _, _], [_, _, _, _], [_, _, _, _, _], and so on
+                (this_left + this_right) <= *other_exact
+            }
+            (
+                ListArity::Slice(this_left, this_right),
+                ListArity::Slice(other_left, other_right),
+            ) => {
+                // [_, _, .., _] can cover [_, _, .., _], [_, .., _, _], [_, _, .., _, _], [_, _, _, .., _, _], and so on
+                (this_left + this_right) <= (other_left + other_right)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,15 +193,16 @@ pub fn check(
 ///   The initial count of items per row "n" is also 1
 ///   The resulting rows are examples of missing patterns
 fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
-    if matrix.is_empty() {
-        vec![std::iter::repeat(Anything).take(n).collect()]
+    let ctors = if matrix.is_empty() {
+        return vec![std::iter::repeat(Anything).take(n).collect()];
     } else if n == 0 {
-        vec![]
+        return vec![];
     } else {
-        let ctors = collect_ctors(matrix);
-        let num_seen = ctors.len();
+        collect_ctors(matrix)
+    };
 
-        if num_seen == 0 {
+    match ctors {
+        CollectedCtors::NonExhaustiveAny => {
             let new_matrix: Vec<_> = matrix
                 .iter()
                 .filter_map(|row| specialize_row_by_anything(row))
@@ -161,7 +214,11 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
             }
 
             rest
-        } else {
+        }
+        CollectedCtors::Ctors(ctors) => {
+            debug_assert!(!ctors.is_empty());
+
+            let num_seen = ctors.len();
             let alts = ctors.iter().next().unwrap().1;
 
             let alt_list = &alts.alternatives;
@@ -212,6 +269,21 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
                     .collect()
             }
         }
+        CollectedCtors::NonExhaustiveList(alt_lists) => {
+            let is_alt_exhaustive = |arity: ListArity| {
+                let new_matrix: Vec<_> = matrix
+                    .iter()
+                    .filter_map(|row| specialize_row_by_list(arity, row.to_owned()))
+                    .collect();
+
+                let rest = is_exhaustive(&new_matrix, arity.min_len() + n - 1);
+
+                rest.into_iter()
+                    .map(move |row_not_covered| recover_list(arity, row_not_covered))
+            };
+
+            alt_lists.into_iter().flat_map(is_alt_exhaustive).collect()
+        }
     }
 }
 
@@ -236,6 +308,15 @@ fn recover_ctor(
     let args = patterns;
 
     rest.push(Ctor(union, tag_id, args));
+
+    rest
+}
+
+fn recover_list(arity: ListArity, mut patterns: Vec<Pattern>) -> Vec<Pattern> {
+    let mut rest = patterns.split_off(arity.min_len());
+    let list_elems = patterns;
+
+    rest.push(List(arity, list_elems));
 
     rest
 }
@@ -267,6 +348,46 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                         std::mem::swap(&mut old_matrix, &mut matrix);
 
                         vector.extend(args);
+                    }
+
+                    List(arity, args) => {
+                        // Check if there any specialized constructor of this list pattern
+                        // that is useful.
+                        let spec_list_ctors = build_list_ctors_covering_patterns(
+                            arity,
+                            filter_matrix_list_ctors(&old_matrix),
+                        );
+                        debug_assert!(!spec_list_ctors.is_empty());
+
+                        if spec_list_ctors.len() == 1 {
+                            specialize_matrix_by_list(
+                                spec_list_ctors[0],
+                                &mut old_matrix,
+                                &mut matrix,
+                            );
+
+                            std::mem::swap(&mut old_matrix, &mut matrix);
+
+                            vector.extend(args);
+                        } else {
+                            // TODO turn this into an iteration over the outer loop rather than bouncing
+                            vector.extend(args);
+                            for list_ctor in spec_list_ctors {
+                                let mut old_matrix = old_matrix.clone();
+                                let mut spec_matrix = Vec::with_capacity(old_matrix.len());
+
+                                specialize_matrix_by_list(
+                                    list_ctor,
+                                    &mut old_matrix,
+                                    &mut spec_matrix,
+                                );
+
+                                if is_useful(spec_matrix, vector.clone()) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }
                     }
 
                     Anything => {
@@ -330,6 +451,8 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                                 }
                                 Some(Anything) => matrix.push(patterns),
 
+                                Some(List(..)) => internal_error!("After type checking, lists and literals should never align in exhaustiveness checking"),
+
                                 Some(Ctor(_, _, _)) => panic!(
                                     r#"Compiler bug! After type checking, constructors and literals should never align in pattern match exhaustiveness checks."#
                                 ),
@@ -347,6 +470,82 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
     }
 }
 
+// Specialize rows in the matrix that match a list's constructor(s).
+//
+// See the docs on [build_list_ctors_covering_patterns] for more information on how list
+// constructors are built up.
+fn specialize_matrix_by_list(
+    spec_arity: ListArity,
+    old_matrix: &mut PatternMatrix,
+    spec_matrix: &mut PatternMatrix,
+) {
+    for row in old_matrix.drain(..) {
+        if let Some(spec_row) = specialize_row_by_list(spec_arity, row) {
+            spec_matrix.push(spec_row);
+        }
+    }
+}
+
+// Specialize a row that matches a list's constructor(s).
+//
+// See the docs on [build_list_ctors_covering_patterns] for more information on how list
+// constructors are built up.
+fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
+    let head = row.pop();
+    let row_patterns = row;
+
+    match head {
+        Some(List(this_arity, args)) => {
+            if this_arity.covers_arities_of(&spec_arity) {
+                let mut specialized_pats = Vec::with_capacity(row_patterns.len() + args.len());
+
+                // This pattern covers the constructor we are specializing, so add on the
+                // specialized fields of this pattern relative to the given constructor.
+                if spec_arity.min_len() != this_arity.min_len() {
+                    // This list pattern covers the list we are specializing, so it must be
+                    // a variable-length slice, i.e. of the form `[before, .., after]`.
+                    //
+                    // Hence, the list we're specializing for must have at least a larger minimum length.
+                    // So we fill the middle part with enough wildcards to reach the length of
+                    // list constructor we're specializing for.
+                    debug_assert!(spec_arity.min_len() > this_arity.min_len());
+                    match this_arity {
+                        ListArity::Exact(_) => internal_error!("exact-sized lists cannot cover lists of other minimum length"),
+                        ListArity::Slice(before, after) => {
+                            let before = &args[..before];
+                            let after = &args[this_arity.min_len() - after..];
+                            let num_extra_wildcards = spec_arity.min_len() - this_arity.min_len();
+                            let extra_wildcards = std::iter::repeat(&Anything).take(num_extra_wildcards);
+
+                            let new_pats = (before.iter().chain(extra_wildcards).chain(after)).cloned();
+
+                            specialized_pats.extend(new_pats);
+                            specialized_pats.extend(row_patterns);
+                        }
+                    }
+                } else {
+                    debug_assert_eq!(this_arity.min_len(), spec_arity.min_len());
+
+                    specialized_pats.extend(args);
+                    specialized_pats.extend(row_patterns);
+                }
+                Some(specialized_pats)
+            } else {
+                None
+            }
+        }
+        Some(Anything) => {
+            // The specialized fields for a `Anything` pattern with a list constructor is just
+            // `Anything` repeated for the number of times we want to see the list pattern.
+            let specialized_pats = std::iter::repeat(Anything).take(spec_arity.min_len()).chain(row_patterns).collect();
+            Some(specialized_pats)
+        }
+        Some(Ctor(..)) => internal_error!("After type checking, lists and constructors should never align in exhaustiveness checking"),
+        Some(Literal(..)) => internal_error!("After type checking, lists and literals should never align in exhaustiveness checking"),
+        None => internal_error!("Empty matrices should not get specialized"),
+    }
+}
+
 /// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
 fn specialize_row_by_ctor2(
     tag_id: TagId,
@@ -359,21 +558,23 @@ fn specialize_row_by_ctor2(
         let mut patterns = row;
 
         match head {
-        Some(Ctor(_, id, args)) =>
-            if id == tag_id {
-                patterns.extend(args);
+            Some(Ctor(_, id, args)) => {
+                if id == tag_id {
+                    patterns.extend(args);
+                    matrix.push(patterns);
+                } else {
+                    // do nothing
+                }
+            }
+            Some(Anything) => {
+                // TODO order!
+                patterns.extend(std::iter::repeat(Anything).take(arity));
                 matrix.push(patterns);
-            } else {
-                // do nothing
             }
-        Some(Anything) => {
-            // TODO order!
-            patterns.extend(std::iter::repeat(Anything).take(arity));
-            matrix.push(patterns);
-            }
-        Some(Literal(_)) => panic!( "Compiler bug! After type checking, constructors and literal should never align in pattern match exhaustiveness checks."),
-        None => panic!("Compiler error! Empty matrices should not get specialized."),
-    }
+            Some(List(..)) => internal_error!("After type checking, constructors and lists should never align in exhaustiveness checking"),
+            Some(Literal(_)) => internal_error!("After type checking, constructors and literal should never align in pattern match exhaustiveness checks."),
+            None => internal_error!("Empty matrices should not get specialized."),
+        }
     }
 }
 
@@ -404,10 +605,13 @@ fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &RefRow) -> Option<R
                 .collect();
             Some(new_patterns)
         }
-        Some(Literal(_)) => unreachable!(
-            r#"Compiler bug! After type checking, a constructor can never align with a literal: that should be a type error!"#
+        Some(List(..)) => {
+            internal_error!(r#"After type checking, a constructor can never align with a list"#)
+        }
+        Some(Literal(_)) => internal_error!(
+            r#"After type checking, a constructor can never align with a literal: that should be a type error!"#
         ),
-        None => panic!("Compiler error! Empty matrices should not get specialized."),
+        None => internal_error!("Empty matrices should not get specialized."),
     }
 }
 
@@ -430,16 +634,21 @@ pub enum Complete {
 
 fn is_complete(matrix: &RefPatternMatrix) -> Complete {
     let ctors = collect_ctors(matrix);
-    let length = ctors.len();
-    let mut it = ctors.into_iter();
+    match ctors {
+        CollectedCtors::NonExhaustiveAny | CollectedCtors::NonExhaustiveList(_) => Complete::No,
+        CollectedCtors::Ctors(ctors) => {
+            let length = ctors.len();
+            let mut it = ctors.into_iter();
 
-    match it.next() {
-        None => Complete::No,
-        Some((_, Union { alternatives, .. })) => {
-            if length == alternatives.len() {
-                Complete::Yes(alternatives)
-            } else {
-                Complete::No
+            match it.next() {
+                None => Complete::No,
+                Some((_, Union { alternatives, .. })) => {
+                    if length == alternatives.len() {
+                        Complete::Yes(alternatives)
+                    } else {
+                        Complete::No
+                    }
+                }
             }
         }
     }
@@ -452,14 +661,219 @@ type PatternMatrix = Vec<Vec<Pattern>>;
 type RefRow = [Pattern];
 type Row = Vec<Pattern>;
 
-fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagId, Union> {
-    let mut ctors = MutMap::default();
+enum CollectedCtors {
+    NonExhaustiveAny,
+    NonExhaustiveList(Vec<ListArity>),
+    Ctors(MutMap<TagId, Union>),
+}
 
-    for row in matrix {
-        if let Some(Ctor(union, id, _)) = row.last() {
-            ctors.insert(*id, union.clone());
-        }
+fn collect_ctors(matrix: &RefPatternMatrix) -> CollectedCtors {
+    if matrix.is_empty() {
+        return CollectedCtors::NonExhaustiveAny;
     }
 
-    ctors
+    let first_row = &matrix[0];
+
+    if let Some(ctor) = first_row.last() {
+        match ctor {
+            Anything => CollectedCtors::NonExhaustiveAny,
+            Pattern::Literal(_) => CollectedCtors::NonExhaustiveAny,
+            List(_, _) => {
+                let list_ctors = build_list_ctors_covering_patterns(
+                    ListArity::ANY,
+                    filter_matrix_list_ctors(matrix),
+                );
+
+                CollectedCtors::NonExhaustiveList(list_ctors)
+            }
+            Pattern::Ctor(_, _, _) => {
+                let mut ctors = MutMap::default();
+
+                for row in matrix {
+                    if let Some(Ctor(union, id, _)) = row.last() {
+                        ctors.insert(*id, union.clone());
+                    }
+                }
+
+                CollectedCtors::Ctors(ctors)
+            }
+        }
+    } else {
+        CollectedCtors::NonExhaustiveAny
+    }
+}
+
+/// Largely derived from Rust's list-pattern exhaustiveness checking algorithm: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/thir/pattern/usefulness/index.html
+/// Dual-licensed under MIT and Apache licenses.
+/// Thank you, Rust contributors.
+///
+/// Calculates the list constructors that are covered by a given [slice constructor][ListArity::Slice],
+/// relative to other list constructors matched by a series of patterns.
+///
+/// This is relevant for both exhaustiveness and redundancy checking; to understand the motivation,
+/// let's start with the exhaustiveness checking case.
+///
+/// # Exhaustiveness Checking
+///
+/// All list constructors are exausted by the pattern [..], which actually represents the infinite
+/// series of constructors
+///   []
+///   [_]
+///   [_, _]
+///   ...
+///
+/// But we don't need to enumerate that infinite series to check if a series of list patterns is exhaustive -
+/// we only need to enumerate a finite number of constructors, up to the largest exact-size list
+/// pattern not covered by the patterns, or the largest slice pattern covered by the patterns.
+///
+/// ## Exact-sized patterns
+///
+/// Say we have patterns
+///   [_] -> ..
+///   [_, _] -> ..
+/// To exhaustiveness-check these patterns, we only need to build the subset of `[..]` constructors
+///   []
+///   [_]
+///   [_, _]
+///   [_, _, _, ..]
+/// to cover all list constructors that may or may not be matched by the patterns (in this case
+/// not, because `[]` is not matched, and the last constructor `[_, _, _, ..]` is not matched).
+///
+/// We include `[_, _, _, ..]` here because during exhaustiveness checking, we specialize list
+/// patterns **by exact size**, not by ranges. That means that is we stopped enumerating the
+/// constructors needed at `[_, _, ..]`, when specializing the list patterns against `[_, _, ..]`,
+/// we would see that the last pattern `[_, _] -> ..` exhausts it.
+///
+/// So, in the presence of exact-size constructors, we want to include a slice constructor that is
+/// larger than all other exact-size list pattern.
+///
+/// ## Slice patterns
+///
+/// Say we have patterns
+///   [1] -> ..
+///   [2, ..] -> ..
+/// now it's enough to just build
+///   []
+///   [_, ..]
+/// as possible constructors, since the last constructor `[_, ..]` will specialize both patterns to
+///   [1] -> ..
+///   [2] -> ..
+/// and if these patterns are exhaustive w.r.t. their arguments (`1` and `2`, which they are not,
+/// since number literals are not exhaustive), then the whole pattern must be exhaustive, since the
+/// largest slice constructor `[_, ..]` will cover the remaining infinite number of list constructors.
+///
+/// You can see that this holds with slice constructors that match elements at their head and tail
+/// as well:
+///   [{}, ..] -> ..
+///   [.., {}] -> ..
+/// Here again it's enough to just build the constructors [] and [_, ..] to match against -
+/// notice that above slices of arity `1`, the patterns above do not provide any more information,
+/// since they match any additional elements at the tail and head, respectively.
+///
+/// So, if they are exhaustive at arity `1`, they must be exhaustive at any higher arity.
+///
+/// In fact, in this case, if we are matching against `List {}`, the second pattern redundant!
+///
+/// # Redundancy checking
+///
+/// Redundancy checking (in general, and for list patterns) is the same as exhaustiveness checking,
+/// except that instead of checking whether `[..]` is covered by all patterns, we want to check if
+/// the list constructor of a pattern introduces any more information than previous patterns we've
+/// seen.
+///
+/// Let's say we're redundancy checking the pattern marked by `*`
+///     [] -> ..
+///     [_] -> ..
+/// (*) [.., _] -> ..
+///
+/// The list constructors this pattern introduces are the infinite series [_], [_, _], ...
+/// But the only ones relevant, relevant to the patterns we've already seen, are
+///   [_]
+///   [_, _]
+/// (Notice that the enumeration algorithm is the same as for `[..]` in the presence of exact-size
+/// slices, just that the starting size differs - due to the tail matched by this pattern)
+///
+/// During checking we'll see that the `[_, _]` pattern is not already covered, so `[.., _]` is in
+/// fact not redundant.
+///
+/// On the other hand, suppose we have
+///     [] -> ..
+///     [_, ..] -> ..
+/// (*) [.., _] -> ..
+///
+/// Again enumerating the relevant constructors of `[.., _]` relative to the other patterns, we find
+/// them to be
+///   []
+///   [.., _]
+/// the first is already matched by the first pattern `[] -> ..`, and the latter specialized to
+/// `[_]`, which in fact is covered by the second pattern `[_, ..] -> ..`. So the pattern marked by (*)
+/// is indeed redundant.
+///
+/// # All together
+///
+/// So the idea to cover the infinite # of list constructors enumerated by a [slice][ListArity::Slice],
+/// while specializing to the constructors that the user has provided, is as follows:
+///   - Build [exact][ListArity::Exact] constructor variants for everything up to the max slice
+///     constructor size, L.
+///   - Then, the infinite # of list constructors is covered by the [0..L) exact-size constructors, and
+///     the last slice constructor, that covers size [L..∞).
+///
+/// If we might only see [exact][ListArity::Exact] constructors along the way, we want to pick the
+/// max slice size L that is larger than all of those exact size constructors.
+///
+/// But for slice constructors, we can just pick the largest slice, since that will cover slices of
+/// that size, and any larger size.
+///
+/// Putting that together, we calculate L via
+///
+///   L = max(max_exact_len + 1, max_prefix_len + max_suffix_len)
+fn build_list_ctors_covering_patterns(
+    list_arity: ListArity,
+    list_pattern_arities: impl IntoIterator<Item = ListArity>,
+) -> std::vec::Vec<ListArity> {
+    match list_arity {
+        ListArity::Exact(_) => {
+            // Exact-size lists can only cover themselves..
+            vec![list_arity]
+        }
+        ListArity::Slice(prefix_len, suffix_len) => {
+            let min_len = prefix_len + suffix_len;
+
+            let mut max_exact_len = 0;
+            let mut max_prefix_len = prefix_len;
+            let mut max_suffix_len = suffix_len;
+
+            for arity in list_pattern_arities {
+                match arity {
+                    ListArity::Exact(n) => max_exact_len = max_exact_len.max(n),
+                    ListArity::Slice(prefix, suffix) => {
+                        max_prefix_len = max_prefix_len.max(prefix);
+                        max_suffix_len = max_suffix_len.max(suffix);
+                    }
+                }
+            }
+
+            let (inf_cover_prefix, inf_cover_suffix) = {
+                if max_exact_len + 1 >= max_prefix_len + max_suffix_len {
+                    max_prefix_len = max_exact_len + 1 - max_suffix_len;
+                }
+                (max_prefix_len, max_suffix_len)
+            };
+            let l = inf_cover_prefix + inf_cover_suffix;
+
+            let exact_size_lists = (min_len..l) // exclusive
+                .map(ListArity::Exact);
+
+            exact_size_lists
+                .chain([ListArity::Slice(inf_cover_prefix, inf_cover_suffix)])
+                .collect()
+        }
+    }
+}
+
+fn filter_matrix_list_ctors(matrix: &RefPatternMatrix) -> impl Iterator<Item = ListArity> + '_ {
+    matrix.iter().filter_map(|ctor| match ctor.last() {
+        Some(List(ar, _)) => Some(*ar),
+        _ => None,
+    })
 }

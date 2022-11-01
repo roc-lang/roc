@@ -1736,24 +1736,28 @@ fn solve(
                         close_pattern_matched_tag_unions(subs, real_var);
                     }
 
-                    let ExhaustiveSummary {
+                    if let Ok(ExhaustiveSummary {
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, real_var, sketched_rows, context);
+                    }) = check(subs, real_var, sketched_rows, context)
+                    {
+                        // Store information about whether the "when" is exhaustive, and
+                        // which (if any) of its branches are redundant. Codegen may use
+                        // this for branch-fixing and redundant elimination.
+                        if !exhaustive {
+                            exhaustive_mark.set_non_exhaustive(subs);
+                        }
+                        for redundant_mark in redundancies {
+                            redundant_mark.set_redundant(subs);
+                        }
 
-                    // Store information about whether the "when" is exhaustive, and
-                    // which (if any) of its branches are redundant. Codegen may use
-                    // this for branch-fixing and redundant elimination.
-                    if !exhaustive {
-                        exhaustive_mark.set_non_exhaustive(subs);
+                        // Store the errors.
+                        problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                    } else {
+                        // Otherwise there were type errors deeper in the pattern; we will have
+                        // already reported them.
                     }
-                    for redundant_mark in redundancies {
-                        redundant_mark.set_redundant(subs);
-                    }
-
-                    // Store the errors.
-                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                 }
 
                 state
@@ -1892,6 +1896,11 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
                 stack.extend(subs.get_subs_slice(fields.variables()));
             }
 
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Open up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
+            }
+
             _ => {
                 // Everything else is not a structural type that can be opened
                 // (i.e. cannot be matched in a pattern-match)
@@ -1952,8 +1961,13 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
             }
 
             Structure(Record(fields, _)) => {
-                // Open up all nested tag unions.
+                // Close up all nested tag unions.
                 stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Close up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
             }
 
             Alias(_, _, real_var, _) => {
