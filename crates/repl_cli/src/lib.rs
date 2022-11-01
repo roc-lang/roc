@@ -22,7 +22,7 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 
 // For when nothing is entered in the repl
 // TODO add link to repl tutorial(does not yet exist).
-pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n";
+pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
 
 pub fn main() -> i32 {
     use rustyline::error::ReadlineError;

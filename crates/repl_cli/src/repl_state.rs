@@ -1,5 +1,5 @@
 use crate::cli_gen::gen_and_eval_llvm;
-use crate::colors::{BLUE, END_COL, GREEN, PINK};
+use crate::colors::{BLUE, END_COL, GRAY, GREEN, PINK};
 use bumpalo::Bump;
 use const_format::concatcp;
 use roc_collections::MutSet;
@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use target_lexicon::Triple;
 use termsize::Size;
 
-pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
+pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 /// The prefix we use for the automatic variable names we assign to each expr,
@@ -578,7 +578,7 @@ fn format_output(
                 const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
                 const VAR_NAME_COLUMN_MAX: u16 = 80; // Right-align the var_name at this column
 
-                let var_name_column = match termsize::get() {
+                let term_width = match termsize::get() {
                     Some(Size { cols, rows: _ }) => cols.min(VAR_NAME_COLUMN_MAX) as usize,
                     None => VAR_NAME_COLUMN_MAX as usize,
                 };
@@ -594,11 +594,11 @@ fn format_output(
                     .count();
                 let var_name_len =
                     var_name.graphemes(true).count() + VAR_NAME_PREFIX.graphemes(true).count();
-                let spaces_needed = if last_line_len + var_name_len > var_name_column {
+                let spaces_needed = if last_line_len + var_name_len > term_width {
                     buf.push('\n');
-                    var_name_column - var_name_len
+                    term_width - var_name_len
                 } else {
-                    var_name_column - last_line_len - var_name_len
+                    term_width - last_line_len - var_name_len
                 };
 
                 for _ in 0..spaces_needed {
@@ -608,7 +608,15 @@ fn format_output(
                 buf.push_str(GREEN);
                 buf.push_str(VAR_NAME_PREFIX);
                 buf.push_str(&var_name);
+                buf.push_str("\n\n");
+                buf.push_str(GRAY);
+
+                for _ in 0..term_width {
+                    buf.push('─');
+                }
+
                 buf.push_str(END_COL);
+                buf.push('\n');
             }
         }
     }
