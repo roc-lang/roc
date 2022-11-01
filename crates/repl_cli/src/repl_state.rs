@@ -130,9 +130,11 @@ impl ReplState {
 
     pub fn eval_and_format(&mut self, src: &str) -> String {
         let arena = Bump::new();
+        let pending_past_def;
         let mut opt_var_name;
         let src = match parse_src(&arena, src) {
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
+                pending_past_def = None;
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
                 // become a SyntaxErr as soon as we evaluate it),
                 // proceed as normal and let the error reporting happen during eval.
@@ -171,7 +173,7 @@ impl ReplState {
                             },
                         ..
                     } => {
-                        self.add_past_def(ident.to_string(), src.to_string());
+                        pending_past_def = Some((ident.to_string(), src.to_string()));
                         opt_var_name = Some(ident.to_string());
 
                         // Recreate the body of the def and then evaluate it as a lookup.
@@ -274,6 +276,10 @@ impl ReplState {
                     (output, problems)
                 }
             };
+
+        if let Some((ident, src)) = pending_past_def {
+            self.add_past_def(ident.to_string(), src.to_string());
+        }
 
         format_output(output, problems, opt_var_name)
     }
