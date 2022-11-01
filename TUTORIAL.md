@@ -1111,9 +1111,6 @@ when color is
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because
 those are the three possibilities this `when` handles.
 
-> **Note:** If this `when` had a `_ ->` branch, then the type of `color` would look slightly different.
-> This will be discussed later, in the section "Open and Closed Tag Unions."
-
 Just like how `{}` is the type of an empty record, `[]` is the type of an empty tag union.
 There is no way to create an empty tag union at runtime, since creating a tag union requires
 making an actual tag, and an empty tag union has no tags in it!
@@ -1835,7 +1832,7 @@ type that accumulates more and more fields as it progresses through a series of 
 
 Just like how Roc has open records and closed records, it also has open and closed tag unions.  Similarly to how an open record can have other fields besides the ones explicitly listed, an open tag union can have other tags beyond the ones explicitly listed.
 
-For example, here `[Red, Green]` is a closed union like the ones we've seen before:
+For example, here `[Red, Green]` is a closed union like the ones we saw earlier:
 
 ```coffee
 colorToStr : [Red, Green] -> String
@@ -1856,15 +1853,9 @@ colorOrOther = \color ->
         _ -> "other"
 ```
 
-Two things have changed compare to the previous example.
+Two things have changed compared to the first example.
 1. The `when color is` now has an extra branch: `_ -> "other"`
-2. Since this branch matches any tag, the type annotation for the `color` argument changes from the closed union `[Red, Green]` to the open union `[Red, Green]*`.
-
-> **Note:** Just like with records, you can replace the type variable in tag union types with a concrete type.
-> For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
->
-> Also just like with records, you can use this to compose tag union type aliases. For example, you can write
-> `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
+2. Since this branch matches any tag, the type annotation for the `color` argument changed from the closed union `[Red, Green]` to the _open union_ `[Red, Green]*`.
 
 Also like with open records, you can name the type variable in an open tag union. For example:
 
@@ -1884,6 +1875,11 @@ So let's say you called this `stopGoOther` function passing `Foo "hello"`. Then 
 > **Aside:** You can annotate a function as returning an open union with no named type variable -
 > such as `Str -> [Red, Green]*` - but since returning doesn't involve pattern matching, this
 > is no different from returning a closed tag union. It's a more verbose way to say the same thing.
+
+Just like with records, you can replace the type variable in tag union types with a concrete type.
+For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
+
+Also just like with records, you can use this to compose tag union type aliases. For example, you can write `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`.
 
 Note that that a function which accepts an open union does not accept "all possible tags."
 For example, if I have a function `[Ok Str]* -> Bool` and I pass it
