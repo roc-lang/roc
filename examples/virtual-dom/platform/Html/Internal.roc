@@ -12,6 +12,7 @@ interface Html.Internal
         translate,
         translateStatic,
         initServerApp,
+        initClientApp,
         insertHandler,
         replaceHandler,
         dispatchEvent,
@@ -404,6 +405,37 @@ populateViewContainers = \walkState, oldTreeNode ->
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
+
+ClientInit state : {
+    state,
+    dynamicViews: Dict HtmlId (Html state),
+    staticViews: Dict HtmlId (Html state),
+}
+
+initClientApp : initData, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId]*
+initClientApp = \initData, viewIdList, app ->
+    state = app.initDynamic initData
+    dynamicViews = app.renderDynamic state
+    unindexedViews = Dict.map dynamicViews translateStatic
+    empty = Dict.withCapacity (Dict.len unindexedViews)
+    staticViews <- indexViews viewIdList unindexedViews 0 0 empty |> Result.try
+    Ok {
+        state,
+        dynamicViews,
+        staticViews,
+    }
+
+indexViews : List HtmlId, Dict HtmlId (Html state), Nat, Nat, Dict HtmlId (Html state) -> Result (Dict HtmlId (Html state)) [ViewNotFound HtmlId]*
+indexViews = \viewIdList, unindexedViews, viewIndex, nodeIndex, indexedViews ->
+    when List.get viewIdList viewIndex is
+        Err OutOfBounds -> Ok indexedViews
+        Ok id ->
+            view <- Dict.get unindexedViews id |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
+            indexedState = indexNodes { list: List.withCapacity 1, index: nodeIndex } view
+            indexedView <- List.first indexedState.list |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
+            newIndexedViews = Dict.insert indexedViews id indexedView
+            indexViews viewIdList unindexedViews (viewIndex + 1) indexedState.index newIndexedViews
+
 indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
 indexNodes = \{ list, index }, node ->
     when node is
