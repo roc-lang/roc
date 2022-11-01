@@ -26,7 +26,7 @@ App state initData : {
     initDynamic : initData -> state,
     renderDynamic : state -> Dict HtmlId (Html state),
     wasmUrl : Str,
-} | initData has Encoding
+}
 
 HtmlId : Str
 
@@ -290,7 +290,7 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument]*
+initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument]* | initData has Encoding
 initServerApp = \initData, app ->
     views =
         initData
@@ -412,7 +412,7 @@ ClientInit state : {
     staticViews: Dict HtmlId (Html state),
 }
 
-initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, JsonError]*
+initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, JsonError]* | initData has Decoding
 initClientApp = \json, viewIdList, app ->
     initData <- json |> Decode.fromBytes Json.fromUtf8 |> Result.mapErr (\_ -> JsonError) |> Result.try
     state = app.initDynamic initData
