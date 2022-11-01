@@ -394,7 +394,7 @@ populateViewContainers = \walkState, oldTreeNode ->
                 walkState
             maybeView =
                 # TODO: swap Attribute for HtmlAttr and see if it hangs the compiler
-                if Result.isOk (List.findFirst attrs (\a -> isEqAttr a (HtmlAttr "id" id))) then
+                if Result.isOk (List.findFirst attrs (\a -> isEqAttr a (Attribute "id" id))) then
                     Dict.get views id
                 else
                     Err KeyNotFound
