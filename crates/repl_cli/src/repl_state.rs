@@ -278,7 +278,7 @@ impl ReplState {
             };
 
         if let Some((ident, src)) = pending_past_def {
-            self.add_past_def(ident.to_string(), src.to_string());
+            self.add_past_def(ident, src);
         }
 
         format_output(output, problems, opt_var_name)
