@@ -45,6 +45,4 @@ jobs:
 
       - run: cargo test --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
 
-      - run: cargo test --release -p roc_cli cli_run::platform_switching_rust
-
       - run: cargo test --release -p roc_fmt -- --skip test_fmt::test_fmt_builtins --skip test_fmt::test_fmt_examples
