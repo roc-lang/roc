@@ -412,9 +412,9 @@ ClientInit state : {
     staticViews: Dict HtmlId (Html state),
 }
 
-initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, Leftover (List U8), TooShort]*
+initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, JsonError]*
 initClientApp = \json, viewIdList, app ->
-    initData <- json |> Decode.fromBytes Json.fromUtf8 |> Result.try
+    initData <- json |> Decode.fromBytes Json.fromUtf8 |> Result.mapErr (\_ -> JsonError) |> Result.try
     state = app.initDynamic initData
     dynamicViews = app.renderDynamic state
     unindexedViews = Dict.map dynamicViews translateStatic
