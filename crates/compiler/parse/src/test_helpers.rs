@@ -34,7 +34,9 @@ pub fn parse_loc_with<'a>(
 pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, SyntaxError<'a>> {
     let state = State::new(input.trim().as_bytes());
 
-    match module_defs().parse(arena, state) {
+    let min_indent = 0;
+
+    match module_defs().parse(arena, state, min_indent) {
         Ok(tuple) => Ok(tuple.1),
         Err(tuple) => Err(tuple.1),
     }

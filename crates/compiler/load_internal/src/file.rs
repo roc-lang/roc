@@ -4824,7 +4824,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state) {
+    let parsed_defs = match module_defs().parse(arena, parse_state, 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
             return Err(LoadingProblem::ParsingFailed(
