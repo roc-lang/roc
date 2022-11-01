@@ -334,9 +334,47 @@ App state initData : {
 #         Client ->
 
 # initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
-# initServerSide = \initData, { static, initDynamic, renderDynamic } ->
-#     state = app.initDynamic initData
-#     dynamicViews = app.renderDynamic state
+# initServerSide = \initData, app ->
+#     viewDict =
+#         initData
+#         |> app.initDynamic
+#         |> app.renderDynamic
+#         |> transformStatic
+
+# TODO: are the empty tag unions a problem?
+# populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html []), newTree: Html [] }, Html [] -> { id: HtmlId, views: Dict HtmlId (Html []), newTree: Html [] }
+populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html a), newTree: Html a }, Html a -> { id: HtmlId, views: Dict HtmlId (Html a), newTree: Html a }
+populateViewContainers = \walkState, oldTreeNode ->
+    when oldTreeNode is
+        Element name jsIndex size attrs children ->
+            { id, views, newTree } =
+                walkState
+            maybeView = Ok newTree
+                # TODO: swap Attribute for HtmlAttr and see if it hangs the compiler
+                # TODO: List.contains doesn't typecheck since we don't have Eq. Is that causing the compiler crash?
+                # if List.contains attrs (HtmlAttr "id" id) then
+                #     Dict.get views id
+                # else
+                #     Err KeyNotFound
+
+            when maybeView is
+                Ok view ->
+                    { id,
+                      views, #: Dict.remove views id, # TODO: does missing the first argument cause the compiler stack overflow?
+                      newTree: Element name jsIndex size attrs [view], # TODO this causes compiler stack overflow
+                            #  Element Str JsIndex Nat (List (Attribute state)) (List (Html state))
+                    #   newTree: view, # this works fine
+                    }
+                Err KeyNotFound ->
+                    walkState
+                    # { id,
+                    #   views,
+                    #   newTree: Element name jsIndex size attrs (List.walk children walkState populateViewContainers),
+                    # }
+
+        _ ->
+            walkState
+
 
 # server side
 #    convert `initData` to `state`
