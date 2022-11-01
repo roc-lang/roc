@@ -473,7 +473,7 @@ fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
 fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
     use std::os::windows::ffi::OsStrExt;
 
-    let bytes = os_str.encode_wide().flat_map(|c| c.to_be_bytes()).collect();
+    let bytes: Vec<_> = os_str.encode_wide().flat_map(|c| c.to_be_bytes()).collect();
 
     RocList::from(&bytes)
 }
