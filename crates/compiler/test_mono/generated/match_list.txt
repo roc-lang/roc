@@ -1,67 +1,46 @@
 procedure Test.0 ():
-    let Test.42 : Int1 = false;
-    let Test.43 : Int1 = true;
-    let Test.1 : List Int1 = Array [Test.42, Test.43];
-    joinpoint Test.16:
+    let Test.29 : Int1 = false;
+    let Test.30 : Int1 = true;
+    let Test.1 : List Int1 = Array [Test.29, Test.30];
+    joinpoint Test.19:
         let Test.8 : Str = "E";
         ret Test.8;
     in
-    joinpoint Test.10:
+    joinpoint Test.17:
+        let Test.7 : Str = "D";
+        ret Test.7;
+    in
+    joinpoint Test.14:
+        let Test.6 : Str = "C";
+        ret Test.6;
+    in
+    joinpoint Test.11:
         let Test.5 : Str = "B";
         ret Test.5;
     in
-    let Test.39 : U64 = lowlevel ListLen Test.1;
-    let Test.40 : U64 = 0i64;
-    let Test.41 : Int1 = lowlevel Eq Test.39 Test.40;
-    if Test.41 then
-        dec Test.1;
+    joinpoint Test.9:
         let Test.4 : Str = "A";
         ret Test.4;
+    in
+    let Test.26 : U64 = lowlevel ListLen Test.1;
+    let Test.27 : U64 = 0i64;
+    let Test.28 : Int1 = lowlevel Eq Test.26 Test.27;
+    if Test.28 then
+        dec Test.1;
+        jump Test.9;
     else
-        let Test.36 : U64 = lowlevel ListLen Test.1;
-        let Test.37 : U64 = 1i64;
-        let Test.38 : Int1 = lowlevel Eq Test.36 Test.37;
-        if Test.38 then
-            let Test.17 : U64 = 0i64;
-            let Test.18 : Int1 = lowlevel ListGetUnsafe Test.1 Test.17;
+        let Test.23 : U64 = lowlevel ListLen Test.1;
+        let Test.24 : U64 = 1i64;
+        let Test.25 : Int1 = lowlevel Eq Test.23 Test.24;
+        if Test.25 then
             dec Test.1;
-            let Test.19 : Int1 = false;
-            let Test.20 : Int1 = lowlevel Eq Test.19 Test.18;
-            if Test.20 then
-                jump Test.10;
-            else
-                jump Test.16;
+            jump Test.9;
         else
-            let Test.33 : U64 = lowlevel ListLen Test.1;
-            let Test.34 : U64 = 2i64;
-            let Test.35 : Int1 = lowlevel NumGte Test.33 Test.34;
-            if Test.35 then
-                let Test.25 : U64 = 0i64;
-                let Test.26 : Int1 = lowlevel ListGetUnsafe Test.1 Test.25;
-                let Test.27 : Int1 = false;
-                let Test.28 : Int1 = lowlevel Eq Test.27 Test.26;
-                if Test.28 then
-                    let Test.21 : U64 = 1i64;
-                    let Test.22 : Int1 = lowlevel ListGetUnsafe Test.1 Test.21;
-                    dec Test.1;
-                    let Test.23 : Int1 = false;
-                    let Test.24 : Int1 = lowlevel Eq Test.23 Test.22;
-                    if Test.24 then
-                        let Test.6 : Str = "C";
-                        ret Test.6;
-                    else
-                        let Test.7 : Str = "D";
-                        ret Test.7;
-                else
-                    dec Test.1;
-                    jump Test.16;
+            let Test.20 : U64 = lowlevel ListLen Test.1;
+            dec Test.1;
+            let Test.21 : U64 = 2i64;
+            let Test.22 : Int1 = lowlevel NumGte Test.20 Test.21;
+            if Test.22 then
+                jump Test.9;
             else
-                let Test.29 : U64 = 0i64;
-                let Test.30 : Int1 = lowlevel ListGetUnsafe Test.1 Test.29;
-                dec Test.1;
-                let Test.31 : Int1 = false;
-                let Test.32 : Int1 = lowlevel Eq Test.31 Test.30;
-                if Test.32 then
-                    jump Test.10;
-                else
-                    jump Test.16;
+                jump Test.9;

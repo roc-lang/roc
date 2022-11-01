@@ -796,18 +796,7 @@ fn to_relevant_branch_help<'a>(
             elements,
             element_layout: _,
         } => match test {
-            IsListLen { bound, len }
-                if (match (bound, my_arity) {
-                    (ListLenBound::Exact, ListArity::Exact(my_len)) => my_len == *len as _,
-                    (ListLenBound::Exact, ListArity::Slice(my_head, my_tail)) => {
-                        my_head + my_tail <= *len as _
-                    }
-                    (ListLenBound::AtLeast, ListArity::Exact(my_len)) => my_len == *len as _,
-                    (ListLenBound::AtLeast, ListArity::Slice(my_head, my_tail)) => {
-                        my_head + my_tail <= *len as _
-                    }
-                }) =>
-            {
+            IsListLen { bound: _, len } if my_arity.covers_length(*len as _) => {
                 let sub_positions = elements.into_iter().enumerate().map(|(index, elem_pat)| {
                     let mut new_path = path.to_vec();
 
