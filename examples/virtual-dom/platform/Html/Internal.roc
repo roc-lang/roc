@@ -60,12 +60,10 @@ CyclicStructureAccessor : [
 Handler state := [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
-] # has [Eq { isEq: isEqHandler }] TODO: compiler crash
-
+] #  has [Eq { isEq: isEqHandler }] TODO: compiler crash
 # -------------------------------
 #   CUSTOM EQUALITY
 # -------------------------------
-
 isEqHandler : Handler state, Handler state -> Bool
 isEqHandler = \@Handler a, @Handler b ->
     when { a, b } is
@@ -77,11 +75,14 @@ isEqAttr : Attribute state, Attribute state -> Bool
 isEqAttr = \a, b ->
     when { a, b } is
         { a: EventListener ea la ra, b: EventListener eb lb rb } ->
-            ea == eb && la == lb &&
-                when { ra, rb } is
-                    { ra: Ok ha, rb: Ok hb } -> isEqHandler ha hb
-                    { ra: Err ia, rb: Err ib } -> ia == ib
-                    _ -> Bool.false
+            (ea == eb)
+            && (la == lb)
+            &&
+            when { ra, rb } is
+                { ra: Ok ha, rb: Ok hb } -> isEqHandler ha hb
+                { ra: Err ia, rb: Err ib } -> ia == ib
+                _ -> Bool.false
+
         { a: HtmlAttr ka va, b: HtmlAttr kb vb } -> ka == kb && va == vb
         { a: DomProp ka va, b: DomProp kb vb } -> ka == kb && va == vb
         { a: Style ka va, b: Style kb vb } -> ka == kb && va == vb
@@ -317,7 +318,6 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 # -------------------------------
 #   SERVER SIDE RENDERING
 # -------------------------------
-
 # rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
 # rocScript = \initData, dynamicRootIds, wasmUrl ->
 #     toJs = \data ->
@@ -327,7 +327,6 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #     encInitData = toJs initData
 #     encDynamicRootIds = toJs dynamicRootIds
 #     encWasmUrl = toJs wasmUrl
-
 #     when { encInitData, encDynamicRootIds, encWasmUrl } is
 #         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
 #             elem : Html []
@@ -336,24 +335,17 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #                     NoJsIndex
 #                     """
 #                     (function(){
-                    
 #                     \(hostJavaScript)
-                    
 #                     const initData = \(jsInitData);
 #                     const dynamicRootIds = \(jsDynamicRootIds);
 #                     const wasmUrl = \(jsWasmUrl);
 #                     window.roc = roc_init(initData, dynamicRootIds, wasmUrl);
-                    
 #                     })();
 #                     """,
 #             ]
-
 #             Ok elem
-
 #         _ ->
 #             Err InvalidUtf8
-
-
 # init : initData, side, App state initData -> InitializedApp state | initData has Encoding
 # init = \initData, side, app ->
 #     state = app.initDynamic initData
@@ -377,7 +369,6 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #             |> insertRocScript initDataJsJson initViewJsJson
 #             |> StaticApp
 #         Client ->
-
 # initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
 # initServerSide = \initData, app ->
 #     viewDict =
@@ -436,7 +427,6 @@ populateViewContainers = \walkState, oldTreeNode ->
 #       run dynamic view code
 #       run the Roc version of indexNodes, inserting node indices into the virtual tree
 #           (uses the same algorithm as the JS version, to produce the same indices)
-
 indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
 indexNodes = \{ list, index }, node ->
     when node is
