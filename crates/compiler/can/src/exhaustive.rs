@@ -27,8 +27,8 @@ pub struct ExhaustiveSummary {
 
 /// Exhaustiveness-checks [sketched rows][SketchedRows] against an expected type.
 ///
-/// Returns an error if the sketch has a type error, in which case exhautiveness checking should
-/// not be performed.
+/// Returns an error if the sketch has a type error, in which case exhautiveness checking will not
+/// have been performed.
 pub fn check(
     subs: &Subs,
     real_var: Variable,
