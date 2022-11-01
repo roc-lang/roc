@@ -1106,7 +1106,7 @@ colorFromStr = \string ->
 
 You can read the type `[Red, Green, Yellow]` as "a *tag union* of the tags `Red`, `Green`, and `Yellow`."
 
-Tags are always annotated as being part of a tag union, even if that union only has one tag in it. For example:
+Some tag unions have only one tag in them. For example:
 
 ```coffee
 redTag : [Red]
@@ -2078,10 +2078,6 @@ stopGoOther = \color ->
 You can read this type annotation as "`stopGoOther` takes either a `Red` tag, a `Green` tag, or some other tag. It returns either a `Stop` tag, a `Go` tag, or any one of the tags it received in its argument."
 
 So let's say you called this `stopGoOther` function passing `Foo "hello"`. Then the `a` type variable would be the closed union `[Foo Str]`, and `stopGoOther` would return a union with the type `[Stop, Go][Foo Str]` - which is equivalent to `[Stop, Go, Foo Str]`.
-
-> **Aside:** You can annotate a function as returning an open union with no named type variable -
-> such as `Str -> [Red, Green]*` - but since returning doesn't involve pattern matching, this
-> is no different from returning a closed tag union. It's a more verbose way to say the same thing.
 
 Just like with records, you can replace the type variable in tag union types with a concrete type.
 For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
