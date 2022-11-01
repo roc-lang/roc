@@ -7,12 +7,11 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
-use libc;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::Write;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
@@ -316,7 +315,7 @@ pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
 pub extern "C" fn roc_fx_stdoutWrite(text: &RocStr) {
     let string = text.as_str();
     print!("{}", string);
-    io::stdout().flush().unwrap();
+    std::io::stdout().flush().unwrap();
 }
 
 #[no_mangle]
@@ -329,7 +328,7 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
 pub extern "C" fn roc_fx_stderrWrite(text: &RocStr) {
     let string = text.as_str();
     eprint!("{}", string);
-    io::stderr().flush().unwrap();
+    std::io::stderr().flush().unwrap();
 }
 
 // #[no_mangle]
@@ -364,8 +363,6 @@ pub extern "C" fn roc_fx_fileWriteBytes(
 }
 
 fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> {
-    use std::io::Write;
-
     match File::create(path_from_roc_path(roc_path)) {
         Ok(mut file) => match file.write_all(bytes) {
             Ok(()) => RocResult::ok(()),
@@ -379,22 +376,25 @@ fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> 
     }
 }
 
-fn path_from_roc_path(bytes: &RocList<u8>) -> &Path {
-    Path::new(os_str_from_list(bytes))
-}
-
 #[cfg(target_family = "unix")]
-fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
-    std::os::unix::ffi::OsStrExt::from_bytes(bytes.as_slice())
+fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
+    use std::os::unix::ffi::OsStrExt;
+    let os_str = OsStr::from_bytes(bytes.as_slice());
+    Cow::Borrowed(Path::new(os_str))
 }
 
 #[cfg(target_family = "windows")]
-fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
+fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
+    use std::os::windows::ffi::OsStrExt;
+
     let bytes = bytes.as_slice();
     assert_eq!(bytes.len() % 2, 0);
     let characters: &[u16] =
         unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 2) };
-    std::os::windows::ffi::OsStrExt::from_wide(characters)
+
+    let os_string = std::ffi::OsString::from_wide(characters);
+
+    Cow::Owned(std::path::PathBuf::from(os_string))
 }
 
 #[no_mangle]
@@ -475,7 +475,7 @@ fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
 
     let bytes: Vec<_> = os_str.encode_wide().flat_map(|c| c.to_be_bytes()).collect();
 
-    RocList::from(&bytes)
+    RocList::from(bytes.as_slice())
 }
 
 #[no_mangle]
