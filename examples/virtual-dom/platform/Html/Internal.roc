@@ -290,7 +290,7 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument]* | initData has Encoding
+initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument] | initData has Encoding
 initServerApp = \initData, app ->
     views =
         initData
@@ -312,7 +312,7 @@ initServerApp = \initData, app ->
             Ok document ->
                 insertRocScript document initData (Dict.keys views) app.wasmUrl
 
-insertRocScript : Html [], initData, List HtmlId, Str -> Result (Html []) [InvalidDocument]* | initData has Encoding
+insertRocScript : Html [], initData, List HtmlId, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
 insertRocScript = \document, initData, viewIds, wasmUrl ->
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
@@ -412,7 +412,7 @@ ClientInit state : {
     staticViews: Dict HtmlId (Html state),
 }
 
-initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, JsonError]* | initData has Decoding
+initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [ViewNotFound HtmlId, JsonError] | initData has Decoding
 initClientApp = \json, viewIdList, app ->
     initData <- json |> Decode.fromBytes Json.fromUtf8 |> Result.mapErr (\_ -> JsonError) |> Result.try
     state = app.initDynamic initData
@@ -426,7 +426,7 @@ initClientApp = \json, viewIdList, app ->
         staticViews,
     }
 
-indexViews : List HtmlId, Dict HtmlId (Html state), Nat, Nat, Dict HtmlId (Html state) -> Result (Dict HtmlId (Html state)) [ViewNotFound HtmlId]*
+indexViews : List HtmlId, Dict HtmlId (Html state), Nat, Nat, Dict HtmlId (Html state) -> Result (Dict HtmlId (Html state)) [ViewNotFound HtmlId]
 indexViews = \viewIdList, unindexedViews, viewIndex, nodeIndex, indexedViews ->
     when List.get viewIdList viewIndex is
         Err OutOfBounds -> Ok indexedViews
