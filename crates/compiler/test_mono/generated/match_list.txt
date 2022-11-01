@@ -24,9 +24,9 @@ procedure Test.0 ():
         if Test.38 then
             let Test.17 : U64 = 0i64;
             let Test.18 : Int1 = lowlevel ListGetUnsafe Test.1 Test.17;
-            let Test.19 : Int1 = false;
-            let Test.20 : Int1 = lowlevel Eq Test.19 Test.1;
             dec Test.1;
+            let Test.19 : Int1 = false;
+            let Test.20 : Int1 = lowlevel Eq Test.19 Test.18;
             if Test.20 then
                 jump Test.10;
             else
@@ -39,13 +39,13 @@ procedure Test.0 ():
                 let Test.25 : U64 = 0i64;
                 let Test.26 : Int1 = lowlevel ListGetUnsafe Test.1 Test.25;
                 let Test.27 : Int1 = false;
-                let Test.28 : Int1 = lowlevel Eq Test.27 Test.1;
+                let Test.28 : Int1 = lowlevel Eq Test.27 Test.26;
                 if Test.28 then
                     let Test.21 : U64 = 1i64;
                     let Test.22 : Int1 = lowlevel ListGetUnsafe Test.1 Test.21;
-                    let Test.23 : Int1 = false;
-                    let Test.24 : Int1 = lowlevel Eq Test.23 Test.1;
                     dec Test.1;
+                    let Test.23 : Int1 = false;
+                    let Test.24 : Int1 = lowlevel Eq Test.23 Test.22;
                     if Test.24 then
                         let Test.6 : Str = "C";
                         ret Test.6;
@@ -58,9 +58,9 @@ procedure Test.0 ():
             else
                 let Test.29 : U64 = 0i64;
                 let Test.30 : Int1 = lowlevel ListGetUnsafe Test.1 Test.29;
-                let Test.31 : Int1 = false;
-                let Test.32 : Int1 = lowlevel Eq Test.31 Test.1;
                 dec Test.1;
+                let Test.31 : Int1 = false;
+                let Test.32 : Int1 = lowlevel Eq Test.31 Test.30;
                 if Test.32 then
                     jump Test.10;
                 else

@@ -1454,6 +1454,7 @@ fn path_to_expr_help<'a>(
                         stores.push((load_sym, *elem_layout, load_expr));
 
                         layout = *elem_layout;
+                        symbol = load_sym;
                     }
                     _ => internal_error!("not a list"),
                 }
