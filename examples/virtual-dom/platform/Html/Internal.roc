@@ -60,7 +60,15 @@ CyclicStructureAccessor : [
 Handler state := [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
-]
+] has [Eq { isEq: isEqHandler }]
+
+# ERROR: 'member signature lambda sets should contain only one unspecialized lambda set', crates/compiler/unify/src/unify.rs:1118:5
+# isEqHandler : Handler state, Handler state -> Bool
+isEqHandler = \@Handler a, @Handler b ->
+    when { a, b } is
+        { a: Normal _, b: Normal _ } -> Bool.true
+        { a: Custom _, b: Custom _ } -> Bool.true
+        _ -> Bool.false
 
 # -------------------------------
 #   VIEW FUNCTIONS
