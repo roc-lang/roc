@@ -14,7 +14,7 @@ interface Html.Internal
         insertHandler,
         replaceHandler,
         dispatchEvent,
-        rocScript,
+        # rocScript,
         appendRenderedStatic,
         nodeSize,
     ]
@@ -71,7 +71,6 @@ text = \content -> Text NoJsIndex content
 # TODO: causes stack overflow in compiler
 # lazy : (Result { state, node : Html state } [NotCached] -> { state, node : Html state }) -> Html state
 # lazy = \f -> Lazy f
-
 none : Html state
 none = None
 
@@ -199,7 +198,7 @@ translateHandler = \childHandler, parentToChild, childToParent ->
 
             Custom parentFn
 
-translateStatic : Html * -> Html []
+translateStatic : Html state -> Html *
 translateStatic = \node ->
     when node is
         Text jsIndex content ->
@@ -219,7 +218,7 @@ translateStatic = \node ->
         Lazy _ -> None
         None -> None
 
-keepStaticAttr : Attribute _ -> Result (Attribute []) {}
+keepStaticAttr : Attribute _ -> Result (Attribute *) {}
 keepStaticAttr = \attr ->
     when attr is
         EventListener _ _ _ -> Err {}
@@ -272,38 +271,118 @@ App state initData : {
     static : Html [],
     initDynamic : initData -> state,
     renderDynamic : state -> Dict HtmlId (Html state),
-}
+} | initData has Encoding
 
-rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
-rocScript = \initData, dynamicRootIds, wasmUrl ->
-    toJs = \data ->
-        data
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-    encInitData = toJs initData
-    encDynamicRootIds = toJs dynamicRootIds
-    encWasmUrl = toJs wasmUrl
+# rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
+# rocScript = \initData, dynamicRootIds, wasmUrl ->
+#     toJs = \data ->
+#         data
+#         |> Encode.toBytes Json.toUtf8
+#         |> Str.fromUtf8
+#     encInitData = toJs initData
+#     encDynamicRootIds = toJs dynamicRootIds
+#     encWasmUrl = toJs wasmUrl
 
-    when { encInitData, encDynamicRootIds, encWasmUrl } is
-        { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
-            elem : Html []
-            elem = (element "script") [] [
-                Text NoJsIndex
-                    """
-                    (function(){
+#     when { encInitData, encDynamicRootIds, encWasmUrl } is
+#         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
+#             elem : Html []
+#             elem = (element "script") [] [
+#                 Text
+#                     NoJsIndex
+#                     """
+#                     (function(){
+                    
+#                     \(hostJavaScript)
+                    
+#                     const initData = \(jsInitData);
+#                     const dynamicRootIds = \(jsDynamicRootIds);
+#                     const wasmUrl = \(jsWasmUrl);
+#                     window.roc = roc_init(initData, dynamicRootIds, wasmUrl);
+                    
+#                     })();
+#                     """,
+#             ]
 
-                    \(hostJavaScript)
+#             Ok elem
 
-                    const initData = \(jsInitData);
-                    const dynamicRootIds = \(jsDynamicRootIds);
-                    const wasmUrl = \(jsWasmUrl);
-                    window.roc = roc_init(initData, dynamicRootIds, wasmUrl);
+#         _ ->
+#             Err InvalidUtf8
 
-                    })();
-                    """,
-            ]
 
-            Ok elem
+# init : initData, side, App state initData -> InitializedApp state | initData has Encoding
+# init = \initData, side, app ->
+#     state = app.initDynamic initData
+#     dynamicViews = app.renderDynamic state
+#     # What we really want for preloading the JS array is an array of { rootId: string; nodeIds: number[] }
+#     { dict: viewDict, nodeList } =
+#         Dict.walk views { dict: Dict.empty, currentNodeId: 0 } \{ dict, currentNodeId }, k, v ->
+#             { node: staticNode, currentNodeId: nextNodeId } = v |> transformStatic |> indexNodes currentNodeId
+#             { dict: Dict.insert dict k staticNode,
+#               nodeList: newNodeList
+#             }
+#     when side is
+#         Server ->
+#             # Create some JS strings containing JSON data to insert into a <script> tag. Double encoding.
+#             toJsJson = \data -> data |> Encode.toBytes Json.toUtf8 |> Encode.toBytes Json.toUtf8
+#             initDataJsJson = initData |> toJsJson
+#             initViewJsJson = viewDict |> toJsJson
+#             # Probably only need the initData. If we serialize the initial view then we have it twice in the HTML file, bloating the dynamic part by 2x!
+#             app.template
+#             |> replaceNodes viewDict
+#             |> insertRocScript initDataJsJson initViewJsJson
+#             |> StaticApp
+#         Client ->
+
+# initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
+# initServerSide = \initData, { static, initDynamic, renderDynamic } ->
+#     state = app.initDynamic initData
+#     dynamicViews = app.renderDynamic state
+
+# server side
+#    convert `initData` to `state`
+#    run dynamic view code
+#    merge dynamic views into template
+#    insert a JS <script> to initialize the Wasm app, including initData as JSON
+# client side
+#    JS
+#       run the JS version of indexNodes, inserting real DOM nodes into JS array
+#       call Wasm roc_alloc
+#       write initData JSON to Wasm memory
+#    Wasm
+#       convert `initData` to `state`
+#       run dynamic view code
+#       run the Roc version of indexNodes, inserting node indices into the virtual tree
+#           (uses the same algorithm as the JS version, to produce the same indices)
+
+indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
+indexNodes = \{ list, index }, node ->
+    when node is
+        Text jsIndex content ->
+            { nodeIndex, nextIndex } =
+                when jsIndex is
+                    JsIndex id -> { nodeIndex: JsIndex id, nextIndex: index }
+                    NoJsIndex -> { nodeIndex: JsIndex index, nextIndex: index + 1 }
+
+            {
+                list: List.append list (Text nodeIndex content),
+                index: nextIndex,
+            }
+
+        Element name jsIndex size attrs children ->
+            { list: newChildren, index: afterChildren } =
+                List.walk children { list, index } indexNodes
+            { nodeIndex, nextIndex } =
+                when jsIndex is
+                    JsIndex id -> { nodeIndex: JsIndex id, nextIndex: afterChildren }
+                    NoJsIndex -> { nodeIndex: JsIndex afterChildren, nextIndex: afterChildren + 1 }
+
+            {
+                list: List.append list (Element name nodeIndex size attrs newChildren),
+                index: nextIndex,
+            }
 
         _ ->
-            Err InvalidUtf8
+            {
+                list: List.append list node,
+                index,
+            }
