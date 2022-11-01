@@ -288,7 +288,7 @@ pub extern "C" fn roc_fx_setCwd(roc_path: &RocList<u8>) -> RocResult<(), ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_exePath(roc_str: &RocStr) -> RocResult<RocList<u8>, ()> {
+pub extern "C" fn roc_fx_exePath(_roc_str: &RocStr) -> RocResult<RocList<u8>, ()> {
     match std::env::current_exe() {
         Ok(path_buf) => RocResult::ok(os_str_to_roc_path(path_buf.as_path().as_os_str())),
         Err(_) => RocResult::err(()),
@@ -385,7 +385,7 @@ fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
 
 #[cfg(target_family = "windows")]
 fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
-    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
 
     let bytes = bytes.as_slice();
     assert_eq!(bytes.len() % 2, 0);
