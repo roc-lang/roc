@@ -1,8 +1,7 @@
 # Tutorial
 
-This is a tutorial for how to build Roc applications. It covers the REPL, basic
-types (strings, lists, tags, and functions), syntax (`when`, `if then else`)
-and more!
+This is a tutorial to learn how to build Roc applications. 
+It covers the REPL, basic types like strings, lists, tags, and functions, syntax like `when` and `if then else`, and more!
 
 Enjoy!
 
@@ -10,7 +9,7 @@ Enjoy!
 
 Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
-## Strings and Numbers
+## REPL (Read - Eval - Print - Loop)
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
 short. Run this in a terminal:
@@ -34,12 +33,14 @@ Try typing this in and pressing enter:
 
 Congratulations! You've just written your first Roc code!
 
-Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
+## Strings and Numbers
+
+Previously you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
 expression's type. We'll talk about types later; for now, we'll ignore the `:`
 and whatever comes after it whenever the REPL prints them.
 
-Let's try putting in a more complicated expression:
+Let's try a more complicated expression:
 
 ```coffee
 >> 1 + 1
@@ -111,21 +112,21 @@ to use them for more than that anyway!
 
 Let's move out of the REPL and create our first Roc application.
 
-Create a new file called `Hello.roc` and put this inside it:
+Create a new file called `Hello.roc` and put the following code inside it:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
-main = Stdout.line "I'm a Roc application!"
+main = Stdout.line "I'm a Roc application!" |> Program.quick
 ```
 
 > **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
 > source code. If you'd like to put it somewhere else, you'll need to replace
-> `"examples/interactive/cli-platform/main.roc"` with the path to the
-> `examples/interactive/cli-platform/main.roc` file in that source code. In the future,
+> `"examples/cli/cli-platform/main.roc"` with the path to the
+> `examples/cli/cli-platform/main.roc` file in that source code. In the future,
 > Roc will have the tutorial built in, and this aside will no longer be
 > necessary!
 
@@ -146,7 +147,7 @@ this file above `main` do later, but first let's play around a bit.
 Try replacing the `main` line with this:
 
 ```coffee
-main = Stdout.line "There are \(total) animals."
+main = Stdout.line "There are \(total) animals." |> Program.quick
 
 birds = 3
 
@@ -166,7 +167,7 @@ short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
 
-- The first def assigns the name `main` to the expression `Stdout.line "There are \(total) animals."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
+- The first def assigns the name `main` to the expression `Stdout.line "There are \(total) animals." |> Program.quick`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device). Then `Program.quick` wrap this expression into an executable Roc program.
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 
@@ -195,13 +196,13 @@ you like, and everything will still work the same way!
 This works because Roc expressions don't have *side effects*. We'll talk more
 about side effects later.
 
-## Functions and `if`
+## Functions
 
 So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`.
 Next let's try defining a function of our own.
 
 ```coffee
-main = Stdout.line "There are \(total) animals."
+main = Stdout.line "There are \(total) animals." |> Program.quick
 
 birds = 3
 
@@ -218,6 +219,10 @@ calls `Num.toStr` on the result, and returns that. The `\num1, num2 ->` syntax
 defines a function's arguments, and the expression after the `->` is the body
 of the function. The expression at the end of the body (`Num.toStr (num1 + num2)`
 in this case) is returned automatically.
+
+Note that there is no separate syntax for named and anonymous functions in Roc.
+
+## if then else
 
 Let's modify the function to return an empty string if the numbers add to zero.
 
@@ -279,6 +284,9 @@ addAndStringify = \num1, num2 ->
 
 This code is equivalent to writing `else if sum < 0 then` on one line, although the stylistic
 convention is to write `else if` on the same line.
+
+> *Note*: In Roc, `if` conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
+> so the compiler will report an error for conditionals like `if 1 then` or `if "true" then`.)
 
 ## Records
 
@@ -345,6 +353,7 @@ a function that takes a record and returns its `x` field. You can do this with a
 For example:
 
 ```elm
+# function returnFoo takes a Record and returns the 'foo' field of that record.
 returnFoo = .foo
 
 returnFoo { foo: "hi!", bar: "blah" }
@@ -431,12 +440,6 @@ the number `42` or the string `"forty-two"` without defining them first, I can a
 the tag `FortyTwo` without defining it first. Also, similarly to how `42 == 42` and
 `"forty-two" == "forty-two"`, it's also the case that `FortyTwo == FortyTwo`.
 
-Speaking of equals, if we put `42 == 42` into `roc repl`, the output we'll see is `True`.
-This is because booleans in Roc are tags; a boolean is either the tag `True` or the tag
-`False`. So I can write `if True then` or `if False then` and it will work as expected,
-even though I'd get an error if I wrote `if "true" then` or `if 1 then`. (Roc doesn't
-have a concept of "truthiness" - you always have to use booleans for conditionals!)
-
 Let's say we wanted to turn `stoplightColor` from a `Red`, `Green`, or `Yellow` into
 a string. Here's one way we could do that:
 
@@ -450,7 +453,8 @@ stoplightStr =
         "yellow"
 ```
 
-We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
+### Pattern matching
+We can express the same logic more concisely using `when`/`is` instead of `if`/`then`:
 
 ```elm
 stoplightStr =
@@ -468,7 +472,7 @@ conditions are specified; here, we specify between `when` and `is` that we're ma
 Besides being more concise, there are other advantages to using `when` here.
 
 1. We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
+2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in the `stoplightColor` definition we made earlier.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing "else", we write
 "_ ->" like so:
@@ -566,6 +570,25 @@ We refer to whatever comes before a `->` in a `when` expression as a *pattern* -
 patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
 suggest making a `when` branch that begins with something like `Custom description ->`.
 
+## Booleans
+
+In many programming languages, `true` and `false` are special language keywords that refer to
+the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed
+as the ordinary values `Bool.true` and `Bool.false`.
+
+This design is partly to keep the number of special keywords in the language smaller, but mainly
+to suggest how booleans are intended be used in Roc: for
+[*boolean logic*](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed
+to for data modeling. Tags are the preferred choice for data modeling, and having tag values be
+more concise than boolean values helps make this preference clear.
+
+As an example of why tags are encouraged for data modeling, in many languages it would be common
+to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable
+to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only
+ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of
+booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` -
+some of which might also want payloads.
+
 ## Lists
 
 Another thing we can do in Roc is to make a *list* of values. Here's an example:
@@ -606,10 +629,10 @@ In this example, `List.map` calls the function `\num -> num * 2` on each element
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
-For example, the `Num.isOdd` function returns `True` if it's given an odd number, and `False` otherwise.
-So `Num.isOdd 5` returns `True` and `Num.isOdd 2` returns `False`.
+For example, the `Num.isOdd` function returns `true` if it's given an odd number, and `false` otherwise.
+So `Num.isOdd 5` returns `true` and `Num.isOdd 2` returns `false`.
 
-So calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[True, False, True]`.
+As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
 ### List element type compatibility
 
@@ -619,7 +642,7 @@ an error at compile time. Here's a valid, and then an invalid example:
 ```coffee
 # working example
 List.map [-1, 2, 3, -4] Num.isNegative
-# returns [True, False, False, True]
+# returns [Bool.true, Bool.false, Bool.false, Bool.true]
 ```
 
 ```coffee
@@ -659,7 +682,7 @@ List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
         NumElem num -> Num.isNegative num
         StrElem str -> Str.isCapitalized str
 
-# returns [True, False, False, False, True]
+# returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
 
 Compare this with the example from earlier, which caused a compile-time error:
@@ -672,7 +695,7 @@ The version that uses tags works because we aren't trying to call `Num.isNegativ
 Instead, we're using a `when` to tell when we've got a string or a number, and then calling either
 `Num.isNegative` or `Str.isCapitalized` depending on which type we have.
 
-We could take this as far as we like, adding more different tags (e.g. `BoolElem True`) and then adding
+We could take this as far as we like, adding more different tags (e.g. `BoolElem Bool.true`) and then adding
 more branches to the `when` to handle them appropriately.
 
 ### Using tags as functions
@@ -696,29 +719,29 @@ want a function which uses all of its arguments as the payload to the given tag.
 ### `List.any` and `List.all`
 
 There are several functions that work like `List.map` - they walk through each element of a list and do
-something with it. Another is `List.any`, which returns `True` if calling the given function on any element
-in the list returns `True`:
+something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element
+in the list returns `true`:
 
 ```coffee
 List.any [1, 2, 3] Num.isOdd
-# returns True because 1 and 3 are odd
+# returns `Bool.true` because 1 and 3 are odd
 ```
 
 ```coffee
 List.any [1, 2, 3] Num.isNegative
-# returns False because none of these is negative
+# returns `Bool.false` because none of these is negative
 ```
 
-There's also `List.all` which only returns `True` if all the elements in the list pass the test:
+There's also `List.all` which only returns `true` if all the elements in the list pass the test:
 
 ```coffee
 List.all [1, 2, 3] Num.isOdd
-# returns False because 2 is not odd
+# returns `Bool.false` because 2 is not odd
 ```
 
 ```coffee
 List.all [1, 2, 3] Num.isPositive
-# returns True because all of these are positive
+# returns `Bool.true` because all of these are positive
 ```
 
 ### Removing elements from a list
@@ -731,7 +754,7 @@ List.dropAt ["Sam", "Lee", "Ari"] 1
 ```
 
 Another way is to use `List.keepIf`, which passes each of the list's elements to the given
-function, and then keeps them only if that function returns `True`.
+function, and then keeps them only if that function returns `true`.
 
 ```coffee
 List.keepIf [1, 2, 3, 4, 5] Num.isEven
@@ -762,7 +785,7 @@ List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
 
 `List.walk` walks through each element of the list, building up a state as it goes. At the end,
 it returns the final state - whatever it ended up being after processing the last element. The `\state, elem ->`
-function it takes as its last argument accepts both the current state as well as the current list element
+function that `List.walk` takes as its last argument accepts both the current state as well as the current list element
 it's looking at, and then returns the new state based on whatever it decides to do with that element.
 
 In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds`
@@ -785,7 +808,7 @@ the initial state gets returned immediately.)
 > **Note:** Other languages give this operation different names, such as "fold," "reduce," "accumulate,"
 > "aggregate," "compress," and "inject."
 
-### Getting an individual element from a list
+### Getting an element from a List
 
 Another thing we can do with a list is to get an individual element out of it. `List.get` is a common way to do this;
 it takes a list and an index, and then returns the element at that index...if there is one. But what if there isn't?
@@ -828,7 +851,7 @@ Result.withDefault (List.get ["a", "b", "c"] 100) ""
 
 ```coffee
 Result.isOk (List.get ["a", "b", "c"] 1)
-# returns True because `List.get` returned an `Ok` tag. (The payload gets ignored.)
+# returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
 
 # Note: There's a Result.isErr function that works similarly.
 ```
@@ -924,6 +947,8 @@ accuracy. If the annotation ever doesn't fit with the implementation, we'll get 
 The annotation `fullName : Str, Str -> Str` says "`fullName` is a function that takes two strings as
 arguments and returns a string."
 
+#### Strings
+
 We can give type annotations to any value, not just functions. For example:
 
 ```coffee
@@ -936,6 +961,8 @@ lastName = "Lee"
 
 These annotations say that both `firstName` and `lastName` have the type `Str`.
 
+#### Records
+
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
 ```coffee
@@ -946,7 +973,9 @@ jen : { firstName : Str, lastName : Str }
 jen = { firstName: "Jen", lastName: "Majura" }
 ```
 
-When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
+#### Type Aliasing
+
+When we have a recurring type annotation like before, it can be nice to give it its own name. We do this like
 so:
 
 ```coffee
@@ -964,6 +993,23 @@ instead of to a value. Just like how you can read `name : Str` as "`name` has th
 you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type
 `{ firstName : Str, lastName : Str }`."
 
+#### Tag Unions
+
+We can also give type annotations to tag unions:
+
+```coffee
+colorFromStr : Str -> [Red, Green, Yellow]
+colorFromStr = \string ->
+    when string is
+        "red" -> Red
+        "green" -> Green
+        _ -> Yellow
+```
+
+You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
+
+#### List
+
 When we annotate a list type, we have to specify the type of its elements:
 
 ```coffee
@@ -976,6 +1022,8 @@ You can read `List Str` as "a list of strings." Here, `Str` is a *type parameter
 parameter; there's no way to give something a type of `List` without a type parameter - you have to specify
 what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
 
+#### Wildcard type
+
 There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty`
 has this type:
 
@@ -985,7 +1033,7 @@ isEmpty : List * -> Bool
 
 The `*` is a *wildcard type* - that is, a type that's compatible with any other type. `List *` is compatible
 with any type of `List` - so, `List Str`, `List Bool`, and so on. So you can call
-`List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [True]`, and they will both work fine.
+`List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [Bool.true]`, and they will both work fine.
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another
 function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to
@@ -1000,7 +1048,7 @@ strings : List Str
 strings = List.reverse ["a", "b"]
 
 bools : List Bool
-bools = List.reverse [True, False]
+bools = List.reverse [Bool.true, Bool.false]
 ```
 
 In the `strings` example, we have `List.reverse` returning a `List Str`. In the `bools` example, it's returning a
@@ -1009,6 +1057,8 @@ In the `strings` example, we have `List.reverse` returning a `List Str`. In the 
 We saw that `List.isEmpty` has the type `List * -> Bool`, so we might think the type of `List.reverse` would be
 `reverse : List * -> List *`. However, remember that we also saw that the type of the empty list is `List *`?
 `List * -> List *` is actually the type of a function that always returns empty lists! That's not what we want.
+
+#### Type Variables
 
 What we want is something like one of these:
 
@@ -1187,6 +1237,8 @@ Here are the different fixed-size integer types that Roc supports:
 |  `-170_141_183_460_469_231_731_687_303_715_884_105_728`<br/>`170_141_183_460_469_231_731_687_303_715_884_105_727`  | `I128` | 16 Bytes |
 | `0`<br/>(over 340 undecillion) `340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` | 16 Bytes |
 
+#### Nat
+
 Roc also has one variable-size integer type: `Nat` (short for "natural number").
 The size of `Nat` is equal to the size of a memory address, which varies by system.
 For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`.
@@ -1298,11 +1350,184 @@ each bit. `0b0000_1000` evaluates to decimal `8`
 The integer type can be specified as a suffix to the binary literal,
 so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
 
-## Interface modules
+## Tests and expectations
 
-[This part of the tutorial has not been written yet. Coming soon!]
+You can write automated tests for your Roc code like so:
 
-## Builtin modules
+```swift
+pluralize = \singular, plural, count ->
+    countStr = Num.toStr count
+
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        "\(countStr) \(plural)"
+
+expect pluralize "cactus" "cacti" 1 == "1 cactus"
+
+expect pluralize "cactus" "cacti" 2 == "2 cacti"
+```
+
+If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect`
+expressions (that is, the two `pluralize` calls) and report any that returned `false`.
+
+### Inline `expect`s
+
+For example:
+
+```swift
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        expect count > 0
+
+        "\(countStr) \(plural)"
+```
+
+This `expect` will fail if you call `pluralize` passing a count of 0, and it will fail
+regardless of whether the inline `expect` is reached when running your program via `roc dev`
+or in the course of running a test (with `roc test`).
+
+So for example, if we added this top-level `expect`...
+
+```swift
+expect pluralize "cactus" "cacti" 0 == "0 cacti"
+```
+
+...it would hit the inline `expect count > 0`, which would then fail the test.
+
+Note that inline `expect`s do not halt the program! They are designed to inform, not to affect
+control flow. In fact, if you do `roc build`, they are not even included in the final binary.
+
+If you try this code out, you may note that when an `expect` fails (either a top-level or inline
+one), the failure message includes the values of any named variables - such as `count` here.
+This leads to a useful technique, which we will see next.
+
+### Quick debugging with inline `expect`s
+
+An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
+`expect` to do this. Here's an example:
+
+```elm
+\arg ->
+    x = arg - 1
+
+    # Reports the value of `x` without stopping the program
+    expect x != x
+
+    Num.abs x
+```
+
+The failure output will include both the value of `x` as well as the comment immediately above it,
+which lets you use that comment for extra context in your output.
+
+## Roc Modules
+
+Every `.roc` file is a *module*. There are three types of modules:
+    - builtin
+    - app
+    - interface
+
+### App module
+
+Let's take a closer look at the part of `Hello.roc` above `main`:
+
+```coffee
+app "hello"
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Program]
+    provides main to pf
+```
+
+This is known as a *module header*. We know this particular one is an *application module*
+(or *app module* for short) because it begins with the `app` keyword.
+Every Roc program has one app module.
+
+The line `app "hello"` states that this module defines a Roc application, and
+that building this application should produce an executable named `hello`. This
+means when you run `roc Hello.roc`, the Roc compiler will build an executable
+named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable
+without running it by running `roc build Hello.roc`.
+
+The remaining lines all involve the *platform* this application is built on:
+
+```coffee
+packages { pf: "examples/cli/cli-platform/main.roc" }
+imports [pf.Stdout, pf.Program]
+provides main to pf
+```
+
+The `packages { pf: "examples/cli/cli-platform/main.roc" }` part says two things:
+
+- We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/cli-platform/main.roc"`
+- We're going to name that package `pf` so we can refer to it more concisely in the future.
+
+The `imports [pf.Stdout, pf.Program]` line says that we want to import the `Stdout` and `Program` modules
+from the `pf` package, and make them available in the current module.
+
+This import has a direct interaction with our definition of `main`. Let's look
+at that again:
+
+```coffee
+main = Stdout.line "I'm a Roc application!" |> Program.quick
+```
+
+Here, `main` is calling a function called `Stdout.line`. More specifically, it's
+calling a function named `line` which is exposed by a module named
+`Stdout`.
+Then the result of that function call is passed to the `quick` function of the `Program` module,
+which effectively makes it a simple Roc program.
+
+When we write `imports [pf.Stdout, pf.Program]`, it specifies that the `Stdout`
+and `Program` modules come from the `pf` package.
+
+Since `pf` was the name we chose for the `examples/cli/cli-platform/main.roc`
+package (when we wrote `packages { pf: "examples/cli/cli-platform/main.roc" }`),
+this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
+should look for that `line` function in the `Stdout` module of the
+`examples/cli/cli-platform/main.roc` package.
+
+If we would like to include other modules in our application, say `AdditionalModule.roc` 
+and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+
+```coffee
+packages { pf: "examples/cli/cli-platform/main.roc" }
+imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
+provides main to pf
+```
+
+### Interface module
+
+Let's take a look at the following module header:
+
+```coffee
+interface Parser.Core
+    exposes [
+        Parser,
+        ParseResult,
+        buildPrimitiveParser
+    ]
+    imports []
+```
+
+This says that the current .roc file is an *interface module* because it begins with the `interface` keyword.
+We are naming this module when we write `interface Parser.Core`. It means that this file is in 
+a package `Parser` and the current module is named `core`.
+When we write `exposes [Parser, ParseResult, ...]`, it specifies the definitions we
+want to *expose*. Exposing makes them importable from other modules.
+
+Now lets import this interface from an *app module*:
+
+```coffee
+app 'interface-example'
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [Parser.Core.{ Parser, buildPrimitiveParser }]
+    provides main to pf
+```
+Here we are importing a type and a function from the 'Core' module from the package 'Parser'. Now we can use e.g.
+`buildPrimitiveParser` in this module without having to write `Parser.Core.buildPrimitiveParser`.
+
+### Builtin modules
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every
 Roc module. They are:
@@ -1326,67 +1551,35 @@ Besides being built into the compiler, the builtin modules are different from ot
 - They are always imported. You never need to add them to `imports`.
 - All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (and the same for all the other types in the `Num` module).
 
-## The app module header
+## Platforms
 
-Let's take a closer look at the part of `Hello.roc` above `main`:
+TODO
 
-```coffee
-app "hello"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
-    provides main to pf
-```
+## Comments
 
-This is known as a *module header*. Every `.roc` file is a *module*, and there
-are different types of modules. We know this particular one is an *application module*
-(or *app module* for short) because it begins with the `app` keyword.
-
-The line `app "hello"` states that this module defines a Roc application, and
-that building this application should produce an executable named `hello`. This
-means when you run `roc Hello.roc`, the Roc compiler will build an executable
-named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable
-without running it by running `roc build Hello.roc`.
-
-The remaining lines all involve the *platform* this application is built on:
+Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`. 
 
 ```coffee
-packages { pf: "examples/interactive/cli-platform/main.roc" }
-imports [pf.Stdout]
-provides main to pf
+## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2
 ```
 
-The `packages { pf: "examples/interactive/cli-platform/main.roc" }` part says two things:
-
-- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform/main.roc"`
-- We're going to name that package `pf` so we can refer to it more concisely in the future.
-
-The `imports [pf.Stdout]` line says that we want to import the `Stdout` module
-from the `pf` package, and make it available in the current module.
-
-This import has a direct interaction with our definition of `main`. Let's look
-at that again:
+Roc also supports inline comments and line comments with `#`. They can be used to add information that won't be included in documentation.
 
 ```coffee
-main = Stdout.line "I'm a Roc application!"
+# This is a line comment that won't appear in documentation.
+myFunction : U8 -> U8
+myFunction = \bit -> bit % 2 # this is an inline comment
 ```
 
-Here, `main` is calling a function called `Stdout.line`. More specifically, it's
-calling a function named `line` which is exposed by a module named
-`Stdout`.
-
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout`
-module comes from the `pf` package.
-
-Since `pf` was the name we chose for the `examples/interactive/cli-platform/main.roc`
-package (when we wrote `packages { pf: "examples/interactive/cli-platform/main.roc" }`),
-this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
-should look for that `line` function in the `Stdout` module of the
-`examples/interactive/cli-platform/main.roc` package.
+Roc does not have multiline comment syntax.
 
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in `examples/interactive/cli-platform/main.roc` as an example!
+platforms. Let's use the CLI platform in `examples/cli/cli-platform/main.roc` as an example!
 
 In the CLI platform, we have four operations we can do:
 
@@ -1401,12 +1594,13 @@ First, let's do a basic "Hello World" using the tutorial app.
 
 ```coffee
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Program]
     provides [main] to pf
 
 main =
     Stdout.line "Hello, World!"
+        |> Program.quick
 ```
 
 The `Stdout.line` function takes a `Str` and writes it to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)).
@@ -1438,11 +1632,13 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```swift
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stdin, pf.Task]
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
     provides [main] to pf
 
-main =
+main = Program.quick task
+
+task =
     Task.await Stdin.line \text ->
         Stdout.line "You just entered: \(text)"
 ```
@@ -1470,7 +1666,7 @@ we did in our `\text -> …` callback function here:
     Stdout.line "You just entered: \(text)"
 ```
 
-Notice that, just like before, we're still setting `main` to be a single `Task`. This is how we'll
+Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll
 always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting
 `main` to be that one big `Task`.
 
@@ -1478,7 +1674,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 the program isn't doing anything when we start it up:
 
 ```swift
-main =
+task =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
         Task.await Stdin.line \text ->
             Stdout.line "You just entered: \(text)"
@@ -1488,11 +1684,13 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```haskell
 app "cli-tutorial"
-    packages { pf: "examples/interactive/cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
     provides [main] to pf
 
-main =
+main = Program.quick task
+
+task =
     await (Stdout.line "Type something press Enter:") \_ ->
         await Stdin.line \text ->
             Stdout.line "You just entered: \(text)"
@@ -1509,12 +1707,14 @@ It's most common in Roc to call functions from other modules in a *qualified* wa
 for a function with an uncommon name (like "await") which often gets called repeatedly
 across a small number of lines of code.
 
+### Backpassing
+
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this
 code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we
-can rewrite `main` into this style which looks different but does the same thing:
+can rewrite `task` into this style which looks different but does the same thing:
 
 ```swift
-main =
+task =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
@@ -1587,11 +1787,11 @@ which is totally allowed! Since backpassing is nothing more than syntax sugar fo
 defining a function and passing back as an argument to another function, there's no
 reason we can't mix and match if we like.
 
-That said, the typical style in which this `main` would be written in Roc is using
+That said, the typical style in which this `task` would be written in Roc is using
 backpassing for all the `await` calls, like we had above:
 
 ```swift
-main =
+task =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
@@ -1609,6 +1809,14 @@ Some important things to note about backpassing and `await`:
 - `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+## What now?
+
+That's it, you can start writing Roc apps now!
+Modifying an example from the [examples folder](./examples) is probably a good place to start.
+[Advent of Code](https://adventofcode.com/2021) problems can also be fun to get to know Roc.
+
+If you are hungry for more, check out the Advanced Concepts below.
 
 ## Appendix: Advanced Concepts
 
@@ -1840,7 +2048,6 @@ colorToStr = \color ->
     when color is
         Red -> "red"
         Green -> "green"
-```
 
 Now let's compare to an *open union* version:
 

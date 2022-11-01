@@ -16,6 +16,8 @@ use roc_mono::layout::{
     Builtin, CapturesNiche, Layout, RawFunctionLayout, STLayoutInterner, UnionLayout,
 };
 
+use roc_error_macros::internal_error;
+
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
 
@@ -603,9 +605,10 @@ fn build_tuple_value(
 
     for field in symbols.iter() {
         let value_id = match env.symbols.get(field) {
-            None => panic!(
+            None => internal_error!(
                 "Symbol {:?} is not defined in environment {:?}",
-                field, &env.symbols
+                field,
+                &env.symbols
             ),
             Some(x) => *x,
         };

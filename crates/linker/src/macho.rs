@@ -10,7 +10,6 @@ use object::{
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use std::ffi::CStr;
-use std::fs;
 use std::mem;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -1189,6 +1188,7 @@ pub(crate) fn surgery_macho(
     // Make sure the final executable has permision to execute.
     #[cfg(target_family = "unix")]
     {
+        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let mut perms = fs::metadata(executable_path)

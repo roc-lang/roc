@@ -114,11 +114,13 @@ Defs(
                     [
                         @33-44 HasClause {
                             var: @33-34 "a",
-                            ability: @39-44 Apply(
-                                "",
-                                "Other",
-                                [],
-                            ),
+                            abilities: [
+                                @39-44 Apply(
+                                    "",
+                                    "Other",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),
@@ -157,11 +159,13 @@ Defs(
                     [
                         @70-81 HasClause {
                             var: @70-71 "a",
-                            ability: @76-81 Apply(
-                                "",
-                                "Other",
-                                [],
-                            ),
+                            abilities: [
+                                @76-81 Apply(
+                                    "",
+                                    "Other",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),
@@ -394,11 +398,13 @@ Defs(
                     [
                         @260-271 HasClause {
                             var: @260-261 "a",
-                            ability: @266-271 Apply(
-                                "",
-                                "Other",
-                                [],
-                            ),
+                            abilities: [
+                                @266-271 Apply(
+                                    "",
+                                    "Other",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),

@@ -288,8 +288,17 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string)
             }
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
-                buf.push_str(string);
+                for c in string.chars() {
+                    if c == '"' {
+                        buf.push_char_literal('"')
+                    } else {
+                        for escaped in c.escape_default() {
+                            buf.push_char_literal(escaped);
+                        }
+                    }
+                }
                 buf.push('\'');
             }
             &NonBase10Int {
@@ -1373,9 +1382,9 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::LessThanOrEq
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
-                    | BinOp::Or => true,
-                    BinOp::Pizza
-                    | BinOp::Assignment
+                    | BinOp::Or
+                    | BinOp::Pizza => true,
+                    BinOp::Assignment
                     | BinOp::IsAliasType
                     | BinOp::IsOpaqueType
                     | BinOp::Backpassing => false,

@@ -748,7 +748,9 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
-            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
+            Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
+            Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
+            Pattern::ListRest => Pattern::ListRest,
         }
     }
 }
@@ -795,7 +797,7 @@ impl<'a> RemoveSpaces<'a> for HasClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         HasClause {
             var: self.var.remove_spaces(arena),
-            ability: self.ability.remove_spaces(arena),
+            abilities: self.abilities.remove_spaces(arena),
         }
     }
 }

@@ -1,17 +1,21 @@
 use target_lexicon::Triple;
 
 mod elf64;
+mod macho;
 mod pe;
 
 #[cfg(test)]
 pub(crate) use pe::synthetic_dll;
+
+#[cfg(test)]
+pub(crate) use elf64::create_dylib_elf64;
 
 pub(crate) use pe::APP_DLL;
 
 pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(custom_names),
-        target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
+        target_lexicon::BinaryFormat::Macho => macho::create_dylib_macho(custom_names, target),
         target_lexicon::BinaryFormat::Coff => Ok(pe::synthetic_dll(custom_names)),
         other => unimplemented!("dylib creation for {:?}", other),
     }

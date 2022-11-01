@@ -1,11 +1,15 @@
 use roc_region::all::{Position, Region};
 use std::fmt;
 
+use crate::parser::Progress;
+
 /// A position in a source file.
+// NB: [Copy] is explicitly NOT derived to reduce the chance of bugs due to accidentally re-using
+// parser state.
 #[derive(Clone)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
-    /// Beware: original_bytes[0] always points the the start of the file.
+    /// Beware: original_bytes[0] always points at the start of the file.
     /// Use bytes()[0] to access the current byte the parser is inspecting
     original_bytes: &'a [u8],
 
@@ -14,6 +18,9 @@ pub struct State<'a> {
 
     /// Position of the start of the current line
     pub(crate) line_start: Position,
+
+    /// Position of the first non-whitespace character on the current line
+    pub(crate) line_start_after_whitespace: Position,
 }
 
 impl<'a> State<'a> {
@@ -22,6 +29,10 @@ impl<'a> State<'a> {
             original_bytes: bytes,
             offset: 0,
             line_start: Position::zero(),
+
+            // Technically not correct.
+            // We don't know the position of the first non-whitespace character yet.
+            line_start_after_whitespace: Position::zero(),
         }
     }
 
@@ -35,6 +46,24 @@ impl<'a> State<'a> {
 
     pub fn column(&self) -> u32 {
         self.pos().offset - self.line_start.offset
+    }
+
+    pub fn line_indent(&self) -> u32 {
+        self.line_start_after_whitespace.offset - self.line_start.offset
+    }
+
+    /// Check that the indent is at least `indent` spaces.
+    /// Return a new indent if the current indent is greater than `indent`.
+    pub fn check_indent<E>(
+        &self,
+        indent: u32,
+        e: impl Fn(Position) -> E,
+    ) -> Result<u32, (Progress, E, State<'a>)> {
+        if self.column() < indent {
+            Err((Progress::NoProgress, e(self.pos()), self.clone()))
+        } else {
+            Ok(std::cmp::max(indent, self.line_indent()))
+        }
     }
 
     /// Mutably advance the state by a given offset
@@ -68,6 +97,18 @@ impl<'a> State<'a> {
     pub(crate) const fn advance_newline(mut self) -> State<'a> {
         self.offset += 1;
         self.line_start = self.pos();
+
+        // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_ident LATER!
+        // We really need to be stricter about this.
+        self.line_start_after_whitespace = self.line_start;
+
+        self
+    }
+
+    #[must_use]
+    #[inline(always)]
+    pub(crate) const fn mark_current_indent(mut self) -> State<'a> {
+        self.line_start_after_whitespace = self.pos();
         self
     }
 

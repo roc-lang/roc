@@ -59,8 +59,6 @@ pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
 }
 
 fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
-    env_logger::init();
-
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
@@ -523,7 +521,7 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
-    let orig_platform_path = Path::new("./examples/hello-world").join(PLATFORM_DIR_NAME);
+    let orig_platform_path = Path::new("./examples/cli").join(PLATFORM_DIR_NAME);
 
     let roc_file_path = Path::new("./new-roc-project/main.roc");
 

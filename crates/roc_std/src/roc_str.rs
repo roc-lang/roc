@@ -109,6 +109,41 @@ impl RocStr {
         self.len() == 0
     }
 
+    pub fn is_unique(&self) -> bool {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.is_unique(),
+            RocStrInnerRef::SmallString(_) => true,
+        }
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.is_readonly(),
+            RocStrInnerRef::SmallString(_) => false,
+        }
+    }
+
+    /// Marks a str as readonly. This means that it will be leaked.
+    /// For constants passed in from platform to application, this may be reasonable.
+    ///
+    /// # Safety
+    ///
+    /// A value can be read-only in Roc for 3 reasons:
+    ///   1. The value is stored in read-only memory like a constant in the app.
+    ///   2. Our refcounting maxes out. When that happens, we saturate to read-only.
+    ///   3. This function is called
+    ///
+    /// Any value that is set to read-only will be leaked.
+    /// There is no way to tell how many references it has and if it is safe to free.
+    /// As such, only values that should have a static lifetime for the entire application run
+    /// should be considered for marking read-only.
+    pub unsafe fn set_readonly(&self) {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => unsafe { roc_list.set_readonly() },
+            RocStrInnerRef::SmallString(_) => {}
+        }
+    }
+
     /// Note that there is no way to convert directly to a String.
     ///
     /// This is because RocStr values are not allocated using the system allocator, so
@@ -624,6 +659,40 @@ impl Drop for RocStr {
                 ManuallyDrop::drop(&mut self.0.heap_allocated);
             }
         }
+    }
+}
+
+// This is a RocStr that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
+#[repr(transparent)]
+pub struct SendSafeRocStr(RocStr);
+
+unsafe impl Send for SendSafeRocStr {}
+
+impl Clone for SendSafeRocStr {
+    fn clone(&self) -> Self {
+        if self.0.is_readonly() {
+            SendSafeRocStr(self.0.clone())
+        } else {
+            // To keep self send safe, this must copy.
+            SendSafeRocStr(RocStr::from(self.0.as_str()))
+        }
+    }
+}
+
+impl From<RocStr> for SendSafeRocStr {
+    fn from(s: RocStr) -> Self {
+        if s.is_unique() || s.is_readonly() {
+            SendSafeRocStr(s)
+        } else {
+            // This is not unique, do a deep copy.
+            SendSafeRocStr(RocStr::from(s.as_str()))
+        }
+    }
+}
+
+impl From<SendSafeRocStr> for RocStr {
+    fn from(s: SendSafeRocStr) -> Self {
+        s.0
     }
 }
 

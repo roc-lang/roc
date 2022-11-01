@@ -1,20 +1,9 @@
 # Examples
 
-Run examples as follows:
+To run examples:
 
-1. Navigate to this `examples` folder
+```bash
+roc run examples/hello-world/main.roc
+```
 
-    ```bash
-    cd examples
-    ```
-
-2. Run a particular example, such as Hello World:
-
-    ```bash
-    roc run hello-world/main.roc
-    ```
-
-`examples/benchmarks/` contains some larger examples.
-
-Some examples like `examples/benchmarks/NQueens.roc` require input after running.
-For NQueens, input 10 in the terminal and press enter.
+[crates/cli_testing_examples/](https://github.com/roc-lang/roc/tree/main/crates/cli_testing_examples) has even more examples.

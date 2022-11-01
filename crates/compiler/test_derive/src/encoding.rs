@@ -294,7 +294,8 @@ fn tag_one_label_zero_args() {
               \#Derived.bytes, #Derived.fmt ->
                 Encode.appendWith
                   #Derived.bytes
-                  (when #Derived.tag is A -> Encode.tag "A" [])
+                  (when #Derived.tag is
+                    A -> Encode.tag "A" [])
                   #Derived.fmt
         "###
         )

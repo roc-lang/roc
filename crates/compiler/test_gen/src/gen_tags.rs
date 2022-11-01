@@ -1531,7 +1531,7 @@ fn polymorphic_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [Y U8]*
+            x : [Y U8]
             x = Y 3
             x
             "#
@@ -1695,7 +1695,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
+            foo : [Nil]
             foo = Nil
 
             it : Value
@@ -1723,7 +1723,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]*
+                foo : [Nil]
                 foo = Nil
 
                 it : Value
@@ -1750,7 +1750,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]*
+                foo : [Nil]
                 foo = Nil
 
                 v1 : Value
@@ -2001,6 +2001,24 @@ fn match_on_result_with_uninhabited_error_branch() {
             "#
         ),
         RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dispatch_tag_union_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            g = \b -> if b then H else J
+
+            when P ((g Bool.true) "") ((g Bool.false) "") is
+                P (H _) (J _) -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
         RocStr
     );
 }

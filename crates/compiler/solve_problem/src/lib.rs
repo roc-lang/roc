@@ -67,9 +67,15 @@ pub enum NotDerivableContext {
     UnboundVar,
     Opaque(Symbol),
     Decode(NotDerivableDecode),
+    Eq(NotDerivableEq),
 }
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum NotDerivableDecode {
     OptionalRecordField(Lowercase),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum NotDerivableEq {
+    FloatingPoint,
 }

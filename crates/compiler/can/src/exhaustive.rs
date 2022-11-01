@@ -253,7 +253,7 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
         }
         &FloatLiteral(_, _, _, f, _) => SP::Literal(Literal::Float(f64::to_bits(f))),
         StrLiteral(v) => SP::Literal(Literal::Str(v.clone())),
-        &SingleQuote(c) => SP::Literal(Literal::Byte(c as u8)),
+        &SingleQuote(_, _, c, _) => SP::Literal(Literal::Byte(c as u8)),
         RecordDestructure { destructs, .. } => {
             let tag_id = TagId(0);
             let mut patterns = std::vec::Vec::with_capacity(destructs.len());

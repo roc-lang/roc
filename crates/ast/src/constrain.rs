@@ -2199,7 +2199,7 @@ pub mod test_constrain {
                 Foo
                 "#
             ),
-            "[Foo]*",
+            "[Foo]",
         )
     }
 
@@ -2235,7 +2235,7 @@ pub mod test_constrain {
                 if True then Green else Red
                 "#
             ),
-            "[Green, Red]*",
+            "[Green, Red]",
         )
     }
 
@@ -2249,7 +2249,7 @@ pub mod test_constrain {
                     Red -> Purple
                 "#
             ),
-            "[Blue, Purple]*",
+            "[Blue, Purple]",
         )
     }
 
@@ -2302,7 +2302,7 @@ pub mod test_constrain {
                     \a, b -> Pair a b
                 "#
             ),
-            "a, b -> [Pair a b]*",
+            "a, b -> [Pair a b]",
         );
     }
 
@@ -2445,7 +2445,7 @@ pub mod test_constrain {
                     curryPair
                 "#
             ),
-            "a -> (b -> [Pair a b]*)",
+            "a -> (b -> [Pair a b])",
         );
     }
 
@@ -2658,7 +2658,7 @@ pub mod test_constrain {
                        B -> Y
                  "#
             ),
-            "[A, B] -> [X, Y]*",
+            "[A, B] -> [X, Y]",
         )
     }
 
@@ -2674,7 +2674,7 @@ pub mod test_constrain {
                        _ -> Z
                  "#
             ),
-            "[A, B]* -> [X, Y, Z]*",
+            "[A, B]* -> [X, Y, Z]",
         )
     }
 
@@ -2689,7 +2689,7 @@ pub mod test_constrain {
                        A N -> Y
                  "#
             ),
-            "[A [M, N]] -> [X, Y]*",
+            "[A [M, N]] -> [X, Y]",
         )
     }
 
@@ -2705,7 +2705,7 @@ pub mod test_constrain {
                        A _ -> Z
                  "#
             ),
-            "[A [M, N]] -> [X, Y, Z]*",
+            "[A [M, N]] -> [X, Y, Z]",
         )
     }
 
@@ -2737,7 +2737,7 @@ pub mod test_constrain {
                        A N -> X
                  "#
             ),
-            "[A [M, N], B] -> [X]*",
+            "[A [M, N], B] -> [X]",
         )
     }
 

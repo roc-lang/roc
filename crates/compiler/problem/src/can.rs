@@ -22,16 +22,17 @@ pub enum BadPattern {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShadowKind {
     Variable,
-    Alias,
-    Opaque,
-    Ability,
+    Alias(Symbol),
+    Opaque(Symbol),
+    Ability(Symbol),
 }
 
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
     UnusedDef(Symbol, Region),
-    UnusedImport(ModuleId, Region),
+    UnusedImport(Symbol, Region),
+    UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
@@ -116,6 +117,10 @@ pub enum Problem {
     IllegalHasClause {
         region: Region,
     },
+    DuplicateHasAbility {
+        ability: Symbol,
+        region: Region,
+    },
     AbilityMemberMissingHasClause {
         member: Symbol,
         ability: Symbol,
@@ -176,6 +181,9 @@ pub enum Problem {
         overload: Region,
         original_opaque: Symbol,
         ability_member: Symbol,
+    },
+    UnnecessaryOutputWildcard {
+        region: Region,
     },
 }
 

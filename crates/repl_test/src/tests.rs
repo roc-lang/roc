@@ -70,7 +70,7 @@ fn num_floor_division() {
 fn num_floor_checked_division_success() {
     expect_success(
         "Num.divTruncChecked 4 3",
-        "Ok 1 : Result (Int *) [DivByZero]*",
+        "Ok 1 : Result (Int *) [DivByZero]",
     );
 }
 
@@ -79,7 +79,7 @@ fn num_floor_checked_division_success() {
 fn num_floor_checked_division_divby_zero() {
     expect_success(
         "Num.divTruncChecked 4 0",
-        "Err DivByZero : Result (Int *) [DivByZero]*",
+        "Err DivByZero : Result (Int *) [DivByZero]",
     );
 }
 
@@ -94,52 +94,76 @@ fn num_ceil_division() {
 fn num_ceil_checked_division_success() {
     expect_success(
         "Num.divCeilChecked 4 3",
-        "Ok 2 : Result (Int *) [DivByZero]*",
+        "Ok 2 : Result (Int *) [DivByZero]",
     )
 }
 
 #[test]
 fn bool_in_record() {
-    expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
+    expect_success("{ x: 1 == 1 }", "{ x: Bool.true } : { x : Bool }");
     expect_success(
         "{ z: { y: { x: 1 == 1 } } }",
-        "{ z: { y: { x: True } } } : { z : { y : { x : Bool } } }",
+        "{ z: { y: { x: Bool.true } } } : { z : { y : { x : Bool } } }",
     );
-    expect_success("{ x: 1 != 1 }", "{ x: False } : { x : Bool }");
+    expect_success("{ x: 1 != 1 }", "{ x: Bool.false } : { x : Bool }");
     expect_success(
         "{ x: 1 == 1, y: 1 != 1 }",
-        "{ x: True, y: False } : { x : Bool, y : Bool }",
+        "{ x: Bool.true, y: Bool.false } : { x : Bool, y : Bool }",
     );
 }
 
 #[test]
 fn bool_basic_equality() {
-    expect_success("1 == 1", "True : Bool");
-    expect_success("1 != 1", "False : Bool");
+    expect_success("1 == 1", "Bool.true : Bool");
+    expect_success("1 != 1", "Bool.false : Bool");
+}
+
+#[test]
+fn bool_true() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.true
+            "#
+        ),
+        r#"Bool.true : Bool"#,
+    );
+}
+
+#[test]
+fn bool_false() {
+    expect_success(
+        indoc!(
+            r#"
+            Bool.false
+            "#
+        ),
+        r#"Bool.false : Bool"#,
+    );
 }
 
 #[test]
 fn arbitrary_tag_unions() {
-    expect_success("if 1 == 1 then Red else Green", "Red : [Green, Red]*");
-    expect_success("if 1 != 1 then Red else Green", "Green : [Green, Red]*");
+    expect_success("if 1 == 1 then Red else Green", "Red : [Green, Red]");
+    expect_success("if 1 != 1 then Red else Green", "Green : [Green, Red]");
 }
 
 #[test]
 fn tag_without_arguments() {
-    expect_success("True", "True : [True]*");
-    expect_success("False", "False : [False]*");
+    expect_success("True", "True : [True]");
+    expect_success("False", "False : [False]");
 }
 
 #[test]
 fn byte_tag_union() {
     expect_success(
         "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
-        "Red : [Blue, Green, Red]*",
+        "Red : [Blue, Green, Red]",
     );
 
     expect_success(
         "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
-        "{ y: { x: Red } } : { y : { x : [Blue, Green, Red]* } }",
+        "{ y: { x: Red } } : { y : { x : [Blue, Green, Red] } }",
     );
 }
 
@@ -147,24 +171,24 @@ fn byte_tag_union() {
 fn tag_in_record() {
     expect_success(
         "{ x: Foo 1 2 3, y : 4 }",
-        "{ x: Foo 1 2 3, y: 4 } : { x : [Foo (Num *) (Num *) (Num *)]*, y : Num * }",
+        "{ x: Foo 1 2 3, y: 4 } : { x : [Foo (Num *) (Num *) (Num *)], y : Num * }",
     );
     expect_success(
         "{ x: Foo 1 2 3 }",
-        "{ x: Foo 1 2 3 } : { x : [Foo (Num *) (Num *) (Num *)]* }",
+        "{ x: Foo 1 2 3 } : { x : [Foo (Num *) (Num *) (Num *)] }",
     );
-    expect_success("{ x: Unit }", "{ x: Unit } : { x : [Unit]* }");
+    expect_success("{ x: Unit }", "{ x: Unit } : { x : [Unit] }");
 }
 
 #[test]
 fn single_element_tag_union() {
-    expect_success("True 1", "True 1 : [True (Num *)]*");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]*");
+    expect_success("True 1", "True 1 : [True (Num *)]");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]");
 }
 
 #[test]
 fn newtype_of_unit() {
-    expect_success("Foo Bar", "Foo Bar : [Foo [Bar]*]*");
+    expect_success("Foo Bar", "Foo Bar : [Foo [Bar]]");
 }
 
 #[test]
@@ -178,7 +202,7 @@ fn newtype_of_big_data() {
                 A lefty
                 "#
         ),
-        r#"A (Left "loosey") : [A (Either Str Str)]*"#,
+        r#"A (Left "loosey") : [A (Either Str Str)]"#,
     )
 }
 
@@ -193,7 +217,7 @@ fn newtype_nested() {
                 A (B (C lefty))
                 "#
         ),
-        r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]*]*]*"#,
+        r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]]]"#,
     )
 }
 
@@ -208,17 +232,17 @@ fn newtype_of_big_of_newtype() {
                 A big
                 "#
         ),
-        r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]*"#,
+        r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]"#,
     )
 }
 
 #[test]
 fn tag_with_arguments() {
-    expect_success("True 1", "True 1 : [True (Num *)]*");
+    expect_success("True 1", "True 1 : [True (Num *)]");
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [False (Float *), True (Num *)]*",
+        "True 3 : [False (Float *), True (Num *)]",
     )
 }
 
@@ -356,30 +380,30 @@ fn num_mul_saturated() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
-    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]*");
+    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]");
     expect_success(
         "Num.addChecked Num.maxI64 1",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
-    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]*");
+    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]");
     expect_success(
         "Num.subChecked Num.minI64 1",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
-    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]*");
+    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]");
     expect_success(
         "Num.mulChecked Num.maxI64 2",
-        "Err Overflow : Result I64 [Overflow]*",
+        "Err Overflow : Result I64 [Overflow]",
     );
 }
 
@@ -395,9 +419,9 @@ fn list_concat() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn list_contains() {
-    expect_success("List.contains [] 0", "False : Bool");
-    expect_success("List.contains [1, 2, 3] 2", "True : Bool");
-    expect_success("List.contains [1, 2, 3] 4", "False : Bool");
+    expect_success("List.contains [] 0", "Bool.false : Bool");
+    expect_success("List.contains [1, 2, 3] 2", "Bool.true : Bool");
+    expect_success("List.contains [1, 2, 3] 4", "Bool.false : Bool");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -413,11 +437,11 @@ fn list_sum() {
 fn list_first() {
     expect_success(
         "List.first [12, 9, 6, 3]",
-        "Ok 12 : Result (Num *) [ListWasEmpty]*",
+        "Ok 12 : Result (Num *) [ListWasEmpty]",
     );
     expect_success(
         "List.first []",
-        "Err ListWasEmpty : Result a [ListWasEmpty]*",
+        "Err ListWasEmpty : Result a [ListWasEmpty]",
     );
 }
 
@@ -426,13 +450,10 @@ fn list_first() {
 fn list_last() {
     expect_success(
         "List.last [12, 9, 6, 3]",
-        "Ok 3 : Result (Num *) [ListWasEmpty]*",
+        "Ok 3 : Result (Num *) [ListWasEmpty]",
     );
 
-    expect_success(
-        "List.last []",
-        "Err ListWasEmpty : Result a [ListWasEmpty]*",
-    );
+    expect_success("List.last []", "Err ListWasEmpty : Result a [ListWasEmpty]");
 }
 
 #[test]
@@ -622,7 +643,7 @@ fn type_problem() {
 
                 But add needs its 2nd argument to be:
 
-                    Num a
+                    Num *
                 "#
         ),
     );
@@ -630,18 +651,18 @@ fn type_problem() {
 
 #[test]
 fn issue_2149() {
-    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]*");
+    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
     expect_success(
         r#"Str.toI8 "128""#,
-        "Err InvalidNumStr : Result I8 [InvalidNumStr]*",
+        "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
     expect_success(
         r#"Str.toI16 "32767""#,
-        "Ok 32767 : Result I16 [InvalidNumStr]*",
+        "Ok 32767 : Result I16 [InvalidNumStr]",
     );
     expect_success(
         r#"Str.toI16 "32768""#,
-        "Err InvalidNumStr : Result I16 [InvalidNumStr]*",
+        "Err InvalidNumStr : Result I16 [InvalidNumStr]",
     );
 }
 
@@ -862,7 +883,7 @@ fn function_in_unwrapped_record() {
 fn function_in_tag() {
     expect_success(
         r#"Adder (\x -> x + 1)"#,
-        r#"Adder <function> : [Adder (Num a -> Num a)]*"#,
+        r#"Adder <function> : [Adder (Num a -> Num a)]"#,
     )
 }
 
@@ -870,7 +891,7 @@ fn function_in_tag() {
 fn newtype_of_record_of_tag_of_record_of_tag() {
     expect_success(
         r#"A {b: C {d: 1}}"#,
-        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }]* }]*"#,
+        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]"#,
     )
 }
 
@@ -1065,7 +1086,7 @@ fn opaque_pattern_and_call() {
             f (@F (Package A {}))
             "#
         ),
-        r#"@F (Package {} A) : F {} [A]*"#,
+        r#"@F (Package {} A) : F {} [A]"#,
     )
 }
 
@@ -1131,7 +1152,7 @@ fn box_box_type_alias() {
 fn issue_2582_specialize_result_value() {
     expect_success(
         r#"\x, list -> if x > 0 then List.first list else Ok """#,
-        r"<function> : Num *, List Str -> Result Str [ListWasEmpty]*",
+        r"<function> : Num *, List Str -> Result Str [ListWasEmpty]",
     )
 }
 
@@ -1212,7 +1233,7 @@ fn dict_get_single() {
             Dict.single 0 {a: 1, c: 2} |> Dict.get 0
             "#
         ),
-        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]*"#,
+        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]"#,
     )
 }
 
@@ -1237,5 +1258,26 @@ fn record_of_poly_function_and_string() {
             "#
         ),
         r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
+    );
+}
+
+#[test]
+fn newtype_by_void_is_wrapped() {
+    expect_success(
+        indoc!(
+            r#"
+            Result.try (Err 42) (\x -> Err (x+1))
+            "#
+        ),
+        r#"Err 42 : Result b (Num *)"#,
+    );
+
+    expect_success(
+        indoc!(
+            r#"
+            Result.try (Ok 42) (\x -> Ok (x+1))
+            "#
+        ),
+        r#"Ok 43 : Result (Num *) err"#,
     );
 }

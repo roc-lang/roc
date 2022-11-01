@@ -15,10 +15,12 @@
 
 pub mod decoding;
 pub mod encoding;
+pub mod hash;
 mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
+use hash::{FlatHash, FlatHashKey};
 
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
@@ -37,6 +39,7 @@ pub enum DeriveError {
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
     Decoder(FlatDecodableKey),
+    Hash(FlatHashKey),
 }
 
 impl DeriveKey {
@@ -44,6 +47,7 @@ impl DeriveKey {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
+            DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
         }
     }
 }
@@ -52,7 +56,14 @@ impl DeriveKey {
 pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
+    ///
+    /// Immediates refer to ability members that are "inlined" at the derivation call site.
     Immediate(Symbol),
+    /// Like an [Derived::Immediate], but with the additional constraint that the immediate
+    /// symbol is statically known to have exactly one lamdba set.
+    /// This unlocks some optimization opportunities, as regioned lambda sets do not need to be
+    /// chased.
+    SingleLambdaSetImmediate(Symbol),
     /// Key of the derived implementation to use. This allows association of derived implementation
     /// names to a key, when the key is known ahead-of-time but the implementation (and it's name)
     /// is yet-to-be-made.
@@ -64,6 +75,8 @@ pub enum Derived {
 pub enum DeriveBuiltin {
     ToEncoder,
     Decoder,
+    Hash,
+    IsEq,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -73,6 +86,8 @@ impl TryFrom<Symbol> for DeriveBuiltin {
         match value {
             Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
+            Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
+            Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
             _ => Err(value),
         }
     }
@@ -93,6 +108,19 @@ impl Derived {
                 FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
                 FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
             },
+            DeriveBuiltin::Hash => match hash::FlatHash::from_var(subs, var)? {
+                FlatHash::SingleLambdaSetImmediate(imm) => {
+                    Ok(Derived::SingleLambdaSetImmediate(imm))
+                }
+                FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
+            },
+            DeriveBuiltin::IsEq => {
+                // If obligation checking passes, we always lower derived implementations of `isEq`
+                // to the `Eq` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::BOOL_STRUCTURAL_EQ,
+                ))
+            }
         }
     }
 }

@@ -22,7 +22,7 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
-pub fn run_roc<I, S>(args: I, stdin_vals: &[&str]) -> Out
+pub fn run_roc<I, S>(args: I, stdin_vals: &[&str], extra_env: &[(&str, &str)]) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -62,7 +62,7 @@ where
         }
     }
 
-    run_with_stdin(&roc_binary_path, args, stdin_vals)
+    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
 }
 
 pub fn run_glue<I, S>(args: I) -> Out
@@ -74,7 +74,7 @@ where
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
-    path_to_binary("roc")
+    path_to_binary(if cfg!(windows) { "roc.exe" } else { "roc" })
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {
@@ -122,10 +122,27 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_with_stdin_and_env(path, args, stdin_vals, &[])
+}
+
+pub fn run_with_stdin_and_env<I, S>(
+    path: &Path,
+    args: I,
+    stdin_vals: &[&str],
+    extra_env: &[(&str, &str)],
+) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = Command::new(path);
 
     for arg in args {
         cmd.arg(arg);
+    }
+
+    for (k, v) in extra_env {
+        cmd.env(k, v);
     }
 
     let mut child = cmd
@@ -161,15 +178,20 @@ where
     }
 }
 
-pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
+pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a str, &'a str)>>(
     cmd_name: &str,
     stdin_vals: I,
     args: &[String],
+    env: E,
 ) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
         cmd.arg(arg);
+    }
+
+    for (env, val) in env.into_iter() {
+        cmd.env(env, val);
     }
 
     let mut child = cmd
@@ -359,20 +381,31 @@ pub fn root_dir() -> PathBuf {
     path
 }
 
+// start the dir with crates/cli_testing_examples
 #[allow(dead_code)]
-pub fn examples_dir(dir_name: &str) -> PathBuf {
+pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     // Descend into examples/{dir_name}
-    path.push("examples");
+    path.push("crates");
+    path.push("cli_testing_examples");
     path.extend(dir_name.split("/")); // Make slashes cross-target
 
     path
 }
 
 #[allow(dead_code)]
-pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = examples_dir(dir_name);
+pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
+    let mut path = root_dir();
+
+    path.extend(dir_name.split("/")); // Make slashes cross-target
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn file_path_from_root(dir_name: &str, file_name: &str) -> PathBuf {
+    let mut path = dir_path_from_root(dir_name);
 
     path.push(file_name);
 

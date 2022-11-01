@@ -446,8 +446,22 @@ pre {
   cursor: pointer;
 }
 
-#search-link:hover {
+#search-link:hover #search-link-text {
   text-decoration: underline;
+}
+
+#search-link-hint {
+  margin-left: 1em;
+  opacity: 0.6;
+}
+
+#search-shortcut-key {
+  font-family: monospace;
+  border: 1px solid #666;
+  padding: 1px 3px 3px;
+  font-style: normal;
+  border-radius: 4px;
+  line-height: 15px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -474,6 +488,10 @@ pre {
 }
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
+  #search-link-hint {
+    display: none;
+  }
+
   .search-button {
     display: block; /* This is only visible in mobile. */
   }

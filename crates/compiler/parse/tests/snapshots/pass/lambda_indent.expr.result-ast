@@ -1,0 +1,15 @@
+Closure(
+    [
+        @1-2 Identifier(
+            "x",
+        ),
+    ],
+    @8-9 SpaceBefore(
+        Num(
+            "1",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

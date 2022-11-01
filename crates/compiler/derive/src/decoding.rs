@@ -357,7 +357,7 @@ fn decoder_record_step_field(
                                         name: "Ok".into(),
                                         arguments: vec![(
                                             field_var,
-                                            Loc::at_zero(Expr::Var(ok_val_symbol)),
+                                            Loc::at_zero(Expr::Var(ok_val_symbol, field_var)),
                                         )],
                                     })),
                                 },
@@ -417,7 +417,7 @@ fn decoder_record_step_field(
                                     name: "Err".into(),
                                     arguments: vec![(
                                         decode_err_var,
-                                        Loc::at_zero(Expr::Var(err_val_symbol)),
+                                        Loc::at_zero(Expr::Var(err_val_symbol, decode_err_var)),
                                     )],
                                 }),
                                 guard: None,
@@ -433,7 +433,7 @@ fn decoder_record_step_field(
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: rec_dot_result,
-                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
+                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
                                 field: "result".into(),
                             })),
                             cond_var: rec_dot_result,
@@ -462,7 +462,7 @@ fn decoder_record_step_field(
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: Variable::LIST_U8,
-                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol))),
+                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
                                 field: "rest".into(),
                             })),
                         },
@@ -499,12 +499,15 @@ fn decoder_record_step_field(
                 let condition_expr = Expr::Call(
                     Box::new((
                         this_decode_with_var,
-                        Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH)),
+                        Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
                         lambda_set_var,
                         rec_var,
                     )),
                     vec![
-                        (Variable::LIST_U8, Loc::at_zero(Expr::Var(bytes_arg_symbol))),
+                        (
+                            Variable::LIST_U8,
+                            Loc::at_zero(Expr::Var(bytes_arg_symbol, Variable::LIST_U8)),
+                        ),
                         (
                             decoder_var,
                             Loc::at_zero(Expr::AbilityMember(
@@ -513,7 +516,10 @@ fn decoder_record_step_field(
                                 decoder_var,
                             )),
                         ),
-                        (fmt_arg_var, Loc::at_zero(Expr::Var(fmt_arg_symbol))),
+                        (
+                            fmt_arg_var,
+                            Loc::at_zero(Expr::Var(fmt_arg_symbol, fmt_arg_var)),
+                        ),
                     ],
                     CalledVia::Space,
                 );
@@ -600,7 +606,7 @@ fn decoder_record_step_field(
             Expr::Call(
                 Box::new((
                     this_decode_custom_var,
-                    Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM)),
+                    Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
                     decode_custom_closure_var,
                     decode_custom_ret_var,
                 )),
@@ -676,7 +682,7 @@ fn decoder_record_step_field(
 
     // when field is
     let body = Expr::When {
-        loc_cond: Box::new(Loc::at_zero(Expr::Var(field_arg_symbol))),
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(field_arg_symbol, Variable::STR))),
         cond_var: Variable::STR,
         expr_var: keep_or_skip_var,
         region: Region::zero(),
@@ -764,7 +770,7 @@ fn decoder_record_finalizer(
 
         pattern_symbols.push(symbol);
 
-        let field_expr = Expr::Var(symbol);
+        let field_expr = Expr::Var(symbol, field_var);
         let field = Field {
             var: field_var,
             region: Region::zero(),
@@ -827,7 +833,7 @@ fn decoder_record_finalizer(
             record_var: state_record_var,
             ext_var: env.new_ext_var(ExtensionKind::Record),
             field_var: result_field_var,
-            loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol))),
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol, state_record_var))),
             field: field_name.clone(),
         };
 
@@ -1126,7 +1132,7 @@ fn wrap_in_decode_custom_decode_with(
         // ~ bytes,   Decoder (List elem) fmt, fmt -> DecoderResult (List val)
         env.unify(decode_with_type, this_decode_with_fn_var);
 
-        let decode_with_var = Var(Symbol::DECODE_DECODE_WITH);
+        let decode_with_var = Var(Symbol::DECODE_DECODE_WITH, this_decode_with_fn_var);
         let decode_with_fn = Box::new((
             this_decode_with_fn_var,
             Loc::at_zero(decode_with_var),
@@ -1137,9 +1143,9 @@ fn wrap_in_decode_custom_decode_with(
             decode_with_fn,
             vec![
                 // bytes inner_decoder fmt
-                (bytes_var, Loc::at_zero(Var(bytes_sym))),
+                (bytes_var, Loc::at_zero(Var(bytes_sym, bytes_var))),
                 (inner_decoder_var, Loc::at_zero(inner_decoder)),
-                (fmt_var, Loc::at_zero(Var(fmt_sym))),
+                (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
             ],
             CalledVia::Space,
         );
@@ -1231,7 +1237,7 @@ fn wrap_in_decode_custom_decode_with(
         // ~ (List U8, fmt -> DecodeResult (List elem)) -> Decoder (List elem) fmt
         env.unify(decode_custom_type, this_decode_custom_fn_var);
 
-        let decode_custom_var = Var(Symbol::DECODE_CUSTOM);
+        let decode_custom_var = Var(Symbol::DECODE_CUSTOM, this_decode_custom_fn_var);
         let decode_custom_fn = Box::new((
             this_decode_custom_fn_var,
             Loc::at_zero(decode_custom_var),

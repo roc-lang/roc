@@ -917,7 +917,7 @@ fn list_walk_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat
+        find : List a, a -> Option Nat | a has Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -954,6 +954,12 @@ fn list_walk_until_even_prefix_sum() {
         2 + 4 + 8,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_sum() {
+    assert_evals_to!(r#"List.walkFrom [1, 2, 3] 1 0 Num.add"#, 5, i64);
 }
 
 #[test]
@@ -1062,6 +1068,92 @@ fn list_keep_if_str_is_hello() {
         ),
         RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
         RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.countIf [] \_ -> Bool.true
+            "#
+        ),
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ ->
+                Bool.true
+
+            oneThroughEight : List I64
+            oneThroughEight =
+                [1,2,3,4,5,6,7,8]
+
+            List.countIf oneThroughEight alwaysTrue
+            "#
+        ),
+        8,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysFalse : I64 -> Bool
+            alwaysFalse = \_ ->
+                Bool.false
+
+            List.countIf [1,2,3,4,5,6,7,8] alwaysFalse
+            "#
+        ),
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_condition() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            intIsLessThanThree : I64 -> Bool
+            intIsLessThanThree = \i ->
+                i < 3
+
+            List.countIf [1,2,3,4,5,6,7,8] intIsLessThanThree
+            "#
+        ),
+        2,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_count_if_str() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.countIf ["x", "y", "x"] (\x -> x == "x")
+             "#
+        ),
+        2,
+        usize
     );
 }
 
@@ -2188,6 +2280,8 @@ fn gen_quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                app "test" provides [main] to "./platform"
+
                 quicksort : List (Num a) -> List (Num a)
                 quicksort = \list ->
                     n = List.len list
@@ -2244,7 +2338,7 @@ fn gen_quicksort() {
                     else
                         Pair i list
 
-                quicksort [7, 4, 21, 19]
+                main = quicksort [7, 4, 21, 19]
             "#
             ),
             RocList::from_slice(&[4, 7, 19, 21]),
@@ -2260,6 +2354,8 @@ fn quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2318,7 +2414,7 @@ fn quicksort() {
 
 
 
-                   quicksort [7, 4, 21, 19]
+                   main = quicksort [7, 4, 21, 19]
                "#
             ),
             RocList::from_slice(&[19, 7, 4, 21]),
@@ -2334,6 +2430,8 @@ fn quicksort_singleton() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2391,8 +2489,9 @@ fn quicksort_singleton() {
 
 
 
-                   when List.first (quicksort [0x1]) is
-                       _ -> 4
+                   main =
+                       when List.first (quicksort [0x1]) is
+                           _ -> 4
                "#
             ),
             4,
@@ -3393,5 +3492,89 @@ fn list_let_generalization() {
         ),
         1,
         usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_implements_position() {
+    assert_evals_to!(
+        r#"
+        Option a : [Some a, None]
+
+        find : List a, a -> Option Nat | a has Eq
+        find = \list, needle ->
+            findHelp list needle
+                |> .v
+
+        findHelp = \list, needle ->
+            List.walkBackwardsUntil list { n: 0, v: None } \{ n, v }, element ->
+                if element == needle then
+                    Break { n, v: Some n }
+                else
+                    Continue { n: n + 1, v }
+
+        when find [1, 2, 3] 3 is
+            None -> 0
+            Some v -> v
+        "#,
+        0,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_until_sum() {
+    assert_evals_to!(
+        r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_backwards_until_even_prefix_sum() {
+    assert_evals_to!(
+        r#"
+        helper = \a, b ->
+            if Num.isEven b then
+                Continue (a + b)
+
+            else
+                Break a
+
+        List.walkBackwardsUntil [9, 8, 4, 2] 0 helper"#,
+        2 + 4 + 8,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_until_sum() {
+    assert_evals_to!(
+        r#"List.walkFromUntil [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)"#,
+        7,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_walk_from_even_prefix_sum() {
+    assert_evals_to!(
+        r#"
+        helper = \a, b ->
+            if Num.isEven b then
+                Continue (a + b)
+
+            else
+                Break a
+
+        List.walkFromUntil [2, 4, 8, 9] 1 0 helper"#,
+        4 + 8,
+        i64
     );
 }
