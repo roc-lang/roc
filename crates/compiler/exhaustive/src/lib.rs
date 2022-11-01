@@ -273,7 +273,7 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
             let is_alt_exhaustive = |arity: ListArity| {
                 let new_matrix: Vec<_> = matrix
                     .iter()
-                    .filter_map(|row| specialize_row_by_list(arity, row))
+                    .filter_map(|row| specialize_row_by_list(arity, row.to_owned()))
                     .collect();
 
                 let rest = is_exhaustive(&new_matrix, arity.min_len() + n - 1);
@@ -470,69 +470,27 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
     }
 }
 
-// Largely derived from Rust's list-pattern exhaustiveness checking algorithm: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/thir/pattern/usefulness/index.html
-// Dual-licensed under MIT and Apache licenses.
-// Thank you, Rust contributors.
+// Specialize rows in the matrix that match a list's constructor(s).
+//
+// See the docs on [build_list_ctors_covering_patterns] for more information on how list
+// constructors are built up.
 fn specialize_matrix_by_list(
     spec_arity: ListArity,
     old_matrix: &mut PatternMatrix,
     spec_matrix: &mut PatternMatrix,
 ) {
-    for mut row in old_matrix.drain(..) {
-        let head = row.pop();
-        let mut row_patterns = row;
-
-        match head {
-            Some(List(this_arity, args)) => {
-                if this_arity.covers_arities_of(&spec_arity) {
-                    // This pattern covers the constructor we are specializing, so add on the
-                    // specialized fields of this pattern relative to the given constructor.
-                    if spec_arity.min_len() != this_arity.min_len() {
-                        // This list pattern covers the list we are specializing, so it must be
-                        // a variable-length slice, i.e. of the form `[before, .., after]`.
-                        //
-                        // Hence, the list we're specializing for must have at least a larger minimum length.
-                        // So we fill the middle part with enough wildcards to reach the length of
-                        // list constructor we're specializing for.
-                        debug_assert!(spec_arity.min_len() > this_arity.min_len());
-                        match this_arity {
-                            ListArity::Exact(_) => internal_error!("exact-sized lists cannot cover lists of other minimum length"),
-                            ListArity::Slice(before, after) => {
-                                let before = &args[..before];
-                                let after = &args[this_arity.min_len() - after..];
-                                let num_extra_wildcards = spec_arity.min_len() - this_arity.min_len();
-                                let extra_wildcards = std::iter::repeat(&Anything).take(num_extra_wildcards);
-
-                                let new_pats = (before.iter().chain(extra_wildcards).chain(after)).cloned();
-                                row_patterns.extend(new_pats);
-                                spec_matrix.push(row_patterns);
-                            }
-                        }
-                    } else {
-                        debug_assert_eq!(this_arity.min_len(), spec_arity.min_len());
-                        row_patterns.extend(args);
-                        spec_matrix.push(row_patterns);
-                    }
-                }
-            }
-            Some(Anything) => {
-                // The specialized fields for a `Anything` pattern with a list constructor is just
-                // `Anything` repeated for the number of times we want to see the list pattern.
-                row_patterns.extend(std::iter::repeat(Anything).take(spec_arity.min_len()));
-                spec_matrix.push(row_patterns);
-            }
-            Some(Ctor(..)) => internal_error!("After type checking, lists and constructors should never align in exhaustiveness checking"),
-            Some(Literal(..)) => internal_error!("After type checking, lists and literals should never align in exhaustiveness checking"),
-            None => internal_error!("Empty matrices should not get specialized"),
+    for row in old_matrix.drain(..) {
+        if let Some(spec_row) = specialize_row_by_list(spec_arity, row) {
+            spec_matrix.push(spec_row);
         }
     }
 }
 
-// Largely derived from Rust's list-pattern exhaustiveness checking algorithm: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_mir_build/thir/pattern/usefulness/index.html
-// Dual-licensed under MIT and Apache licenses.
-// Thank you, Rust contributors.
-fn specialize_row_by_list(spec_arity: ListArity, row: &RefRow) -> Option<Row> {
-    let mut row = row.to_owned();
+// Specialize a row that matches a list's constructor(s).
+//
+// See the docs on [build_list_ctors_covering_patterns] for more information on how list
+// constructors are built up.
+fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
     let head = row.pop();
     let row_patterns = row;
 
@@ -561,7 +519,6 @@ fn specialize_row_by_list(spec_arity: ListArity, row: &RefRow) -> Option<Row> {
 
                             let new_pats = (before.iter().chain(extra_wildcards).chain(after)).cloned();
 
-                    // TODO order!
                             specialized_pats.extend(new_pats);
                             specialized_pats.extend(row_patterns);
                         }
@@ -569,7 +526,6 @@ fn specialize_row_by_list(spec_arity: ListArity, row: &RefRow) -> Option<Row> {
                 } else {
                     debug_assert_eq!(this_arity.min_len(), spec_arity.min_len());
 
-                    // TODO order!
                     specialized_pats.extend(args);
                     specialized_pats.extend(row_patterns);
                 }
