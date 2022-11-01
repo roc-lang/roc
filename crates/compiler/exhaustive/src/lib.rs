@@ -250,7 +250,7 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
                 let is_alt_exhaustive = |Ctor { arity, tag_id, .. }| {
                     let new_matrix: Vec<_> = matrix
                         .iter()
-                        .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r))
+                        .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r.to_owned()))
                         .collect();
                     let rest: Vec<Vec<Pattern>> = is_exhaustive(&new_matrix, arity + n - 1);
 
@@ -304,8 +304,8 @@ fn recover_ctor(
     arity: usize,
     mut patterns: Vec<Pattern>,
 ) -> Vec<Pattern> {
-    let mut rest = patterns.split_off(arity);
-    let args = patterns;
+    let args = patterns.split_off(patterns.len() - arity);
+    let mut rest = patterns;
 
     rest.push(Ctor(union, tag_id, args));
 
@@ -313,8 +313,8 @@ fn recover_ctor(
 }
 
 fn recover_list(arity: ListArity, mut patterns: Vec<Pattern>) -> Vec<Pattern> {
-    let mut rest = patterns.split_off(arity.min_len());
-    let list_elems = patterns;
+    let list_elems = patterns.split_off(patterns.len() - arity.min_len());
+    let mut rest = patterns;
 
     rest.push(List(arity, list_elems));
 
@@ -343,7 +343,7 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                 match first_pattern {
                     // keep checking rows that start with this Ctor or Anything
                     Ctor(_, id, args) => {
-                        specialize_row_by_ctor2(id, args.len(), &mut old_matrix, &mut matrix);
+                        specialize_matrix_by_ctor(id, args.len(), &mut old_matrix, &mut matrix);
 
                         std::mem::swap(&mut old_matrix, &mut matrix);
 
@@ -414,7 +414,7 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
 
                                     let mut old_matrix = old_matrix.clone();
                                     let mut matrix = vec![];
-                                    specialize_row_by_ctor2(
+                                    specialize_matrix_by_ctor(
                                         tag_id,
                                         arity,
                                         &mut old_matrix,
@@ -492,13 +492,11 @@ fn specialize_matrix_by_list(
 // constructors are built up.
 fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
     let head = row.pop();
-    let row_patterns = row;
+    let mut spec_patterns = row;
 
     match head {
         Some(List(this_arity, args)) => {
             if this_arity.covers_arities_of(&spec_arity) {
-                let mut specialized_pats = Vec::with_capacity(row_patterns.len() + args.len());
-
                 // This pattern covers the constructor we are specializing, so add on the
                 // specialized fields of this pattern relative to the given constructor.
                 if spec_arity.min_len() != this_arity.min_len() {
@@ -519,17 +517,16 @@ fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
 
                             let new_pats = (before.iter().chain(extra_wildcards).chain(after)).cloned();
 
-                            specialized_pats.extend(new_pats);
-                            specialized_pats.extend(row_patterns);
+                            spec_patterns.extend(new_pats);
                         }
                     }
                 } else {
                     debug_assert_eq!(this_arity.min_len(), spec_arity.min_len());
 
-                    specialized_pats.extend(args);
-                    specialized_pats.extend(row_patterns);
+                    spec_patterns.extend(args);
                 }
-                Some(specialized_pats)
+
+                Some(spec_patterns)
             } else {
                 None
             }
@@ -537,8 +534,8 @@ fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
         Some(Anything) => {
             // The specialized fields for a `Anything` pattern with a list constructor is just
             // `Anything` repeated for the number of times we want to see the list pattern.
-            let specialized_pats = std::iter::repeat(Anything).take(spec_arity.min_len()).chain(row_patterns).collect();
-            Some(specialized_pats)
+            spec_patterns.extend(std::iter::repeat(Anything).take(spec_arity.min_len()));
+            Some(spec_patterns)
         }
         Some(Ctor(..)) => internal_error!("After type checking, lists and constructors should never align in exhaustiveness checking"),
         Some(Literal(..)) => internal_error!("After type checking, lists and literals should never align in exhaustiveness checking"),
@@ -547,63 +544,36 @@ fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
 }
 
 /// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
-fn specialize_row_by_ctor2(
+fn specialize_matrix_by_ctor(
     tag_id: TagId,
     arity: usize,
     old_matrix: &mut PatternMatrix,
     matrix: &mut PatternMatrix,
 ) {
-    for mut row in old_matrix.drain(..) {
-        let head = row.pop();
-        let mut patterns = row;
-
-        match head {
-            Some(Ctor(_, id, args)) => {
-                if id == tag_id {
-                    patterns.extend(args);
-                    matrix.push(patterns);
-                } else {
-                    // do nothing
-                }
-            }
-            Some(Anything) => {
-                // TODO order!
-                patterns.extend(std::iter::repeat(Anything).take(arity));
-                matrix.push(patterns);
-            }
-            Some(List(..)) => internal_error!("After type checking, constructors and lists should never align in exhaustiveness checking"),
-            Some(Literal(_)) => internal_error!("After type checking, constructors and literal should never align in pattern match exhaustiveness checks."),
-            None => internal_error!("Empty matrices should not get specialized."),
+    for row in old_matrix.drain(..) {
+        if let Some(spec_row) = specialize_row_by_ctor(tag_id, arity, row) {
+            matrix.push(spec_row);
         }
     }
 }
 
 /// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
-fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &RefRow) -> Option<Row> {
-    let mut row = row.to_vec();
-
+fn specialize_row_by_ctor(tag_id: TagId, arity: usize, mut row: Row) -> Option<Row> {
     let head = row.pop();
-    let patterns = row;
+    let mut spec_patterns = row;
 
     match head {
         Some(Ctor(_, id, args)) => {
             if id == tag_id {
-                // TODO order!
-                let mut new_patterns = Vec::new();
-                new_patterns.extend(args);
-                new_patterns.extend(patterns);
-                Some(new_patterns)
+                spec_patterns.extend(args);
+                Some(spec_patterns)
             } else {
                 None
             }
         }
         Some(Anything) => {
-            // TODO order!
-            let new_patterns = std::iter::repeat(Anything)
-                .take(arity)
-                .chain(patterns)
-                .collect();
-            Some(new_patterns)
+            spec_patterns.extend(std::iter::repeat(Anything).take(arity));
+            Some(spec_patterns)
         }
         Some(List(..)) => {
             internal_error!(r#"After type checking, a constructor can never align with a list"#)
