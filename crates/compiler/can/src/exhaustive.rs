@@ -25,6 +25,9 @@ pub struct ExhaustiveSummary {
     pub redundancies: Vec<RedundantMark>,
 }
 
+#[derive(Debug)]
+pub struct TypeError;
+
 /// Exhaustiveness-checks [sketched rows][SketchedRows] against an expected type.
 ///
 /// Returns an error if the sketch has a type error, in which case exhautiveness checking will not
@@ -34,7 +37,7 @@ pub fn check(
     real_var: Variable,
     sketched_rows: SketchedRows,
     context: ExhaustiveContext,
-) -> Result<ExhaustiveSummary, ()> {
+) -> Result<ExhaustiveSummary, TypeError> {
     let overall_region = sketched_rows.overall_region;
     let mut all_errors = Vec::with_capacity(1);
 
@@ -105,7 +108,7 @@ impl<'a> IndexCtor<'a> {
                         }
                     })
                     .expect("indexable tag ID must be known to alternatives");
-                Self::Tag(&tag_name)
+                Self::Tag(tag_name)
             }
             RenderAs::Opaque => Self::Opaque,
             RenderAs::Record(fields) => Self::Record(fields),
@@ -120,7 +123,7 @@ fn index_var(
     mut var: Variable,
     ctor: IndexCtor,
     render_as: &RenderAs,
-) -> Result<Vec<Variable>, ()> {
+) -> Result<Vec<Variable>, TypeError> {
     if matches!(ctor, IndexCtor::Guard) {
         // `A B if g` becomes Guard { [True, (A B)] }, so the arguments are a bool, and the type
         // of the pattern.
@@ -133,8 +136,8 @@ fn index_var(
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
-            | Content::RangedNumber(..) => return Err(()),
-            Content::Error => return Err(()),
+            | Content::RangedNumber(..) => return Err(TypeError),
+            Content::Error => return Err(TypeError),
             Content::RecursionVar {
                 structure,
                 opt_name: _,
@@ -142,8 +145,10 @@ fn index_var(
                 var = *structure;
             }
             Content::Structure(structure) => match structure {
-                FlatType::Func(_, _, _) | FlatType::FunctionOrTagUnion(_, _, _) => return Err(()),
-                FlatType::Erroneous(_) => return Err(()),
+                FlatType::Func(_, _, _) | FlatType::FunctionOrTagUnion(_, _, _) => {
+                    return Err(TypeError)
+                }
+                FlatType::Erroneous(_) => return Err(TypeError),
                 FlatType::Apply(Symbol::LIST_LIST, args) => {
                     match (subs.get_subs_slice(*args), ctor) {
                         ([elem_var], IndexCtor::List) => {
@@ -225,7 +230,7 @@ fn index_var(
 }
 
 impl SketchedPattern {
-    fn reify(self, subs: &Subs, real_var: Variable) -> Result<Pattern, ()> {
+    fn reify(self, subs: &Subs, real_var: Variable) -> Result<Pattern, TypeError> {
         match self {
             Self::Anything => Ok(Pattern::Anything),
             Self::Literal(lit) => Ok(Pattern::Literal(lit)),
@@ -287,7 +292,7 @@ impl SketchedRows {
         self,
         subs: &Subs,
         real_var: Variable,
-    ) -> Result<NonRedundantSummary, ()> {
+    ) -> Result<NonRedundantSummary, TypeError> {
         to_nonredundant_rows(subs, real_var, self)
     }
 }
@@ -511,7 +516,7 @@ fn to_nonredundant_rows(
     subs: &Subs,
     real_var: Variable,
     rows: SketchedRows,
-) -> Result<NonRedundantSummary, ()> {
+) -> Result<NonRedundantSummary, TypeError> {
     let SketchedRows {
         rows,
         overall_region,

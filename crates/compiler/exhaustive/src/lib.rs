@@ -371,7 +371,7 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                             vector.extend(args);
                         } else {
                             // TODO turn this into an iteration over the outer loop rather than bouncing
-                            vector.extend(args.clone());
+                            vector.extend(args);
                             for list_ctor in spec_list_ctors {
                                 let mut old_matrix = old_matrix.clone();
                                 let mut spec_matrix = Vec::with_capacity(old_matrix.len());
@@ -667,7 +667,7 @@ enum CollectedCtors {
     Ctors(MutMap<TagId, Union>),
 }
 
-fn collect_ctors<'a>(matrix: &'a RefPatternMatrix) -> CollectedCtors {
+fn collect_ctors(matrix: &RefPatternMatrix) -> CollectedCtors {
     if matrix.is_empty() {
         return CollectedCtors::NonExhaustiveAny;
     }
@@ -699,7 +699,7 @@ fn collect_ctors<'a>(matrix: &'a RefPatternMatrix) -> CollectedCtors {
             }
         }
     } else {
-        return CollectedCtors::NonExhaustiveAny;
+        CollectedCtors::NonExhaustiveAny
     }
 }
 
@@ -871,9 +871,7 @@ fn build_list_ctors_covering_patterns(
     }
 }
 
-fn filter_matrix_list_ctors<'a>(
-    matrix: &'a RefPatternMatrix,
-) -> impl Iterator<Item = ListArity> + 'a {
+fn filter_matrix_list_ctors(matrix: &RefPatternMatrix) -> impl Iterator<Item = ListArity> + '_ {
     matrix.iter().filter_map(|ctor| match ctor.last() {
         Some(List(ar, _)) => Some(*ar),
         _ => None,
