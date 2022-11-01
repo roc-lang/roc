@@ -323,7 +323,7 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #     # What we really want for preloading the JS array is an array of { rootId: string; nodeIds: number[] }
 #     { dict: viewDict, nodeList } =
 #         Dict.walk views { dict: Dict.empty, currentNodeId: 0 } \{ dict, currentNodeId }, k, v ->
-#             { node: staticNode, currentNodeId: nextNodeId } = v |> transformStatic |> indexNodes currentNodeId
+#             { node: staticNode, currentNodeId: nextNodeId } = v |> translateStatic |> indexNodes currentNodeId
 #             { dict: Dict.insert dict k staticNode,
 #               nodeList: newNodeList
 #             }
@@ -339,13 +339,25 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #             |> insertRocScript initDataJsJson initViewJsJson
 #             |> StaticApp
 #         Client ->
-# initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
-# initServerSide = \initData, app ->
-#     viewDict =
-#         initData
-#         |> app.initDynamic
-#         |> app.renderDynamic
-#         |> transformStatic
+
+initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
+initServerSide = \initData, app ->
+    # views : Dict HtmlId (Html []) # type annotation required to avoid type checker crash
+    views =
+        initData
+        |> app.initDynamic
+        |> app.renderDynamic
+        |> translateStatic
+
+    { views: remainingViews, siblings } =
+        populateViewContainers { views, siblings: [] } app.static
+
+    if Dict.len remainingViews != 0 then
+        Err (MissingHtmlIds (Dict.keys remainingViews))
+    else
+        List.first siblings
+        |> Result.mapErr (\e -> MissingHtmlIds []) # impossible
+
 populateViewContainers : { views : Dict HtmlId (Html []), siblings : List (Html []) }, Html [] -> { views : Dict HtmlId (Html []), siblings : List (Html []) }
 populateViewContainers = \walkState, oldTreeNode ->
     when oldTreeNode is
@@ -357,7 +369,7 @@ populateViewContainers = \walkState, oldTreeNode ->
                     when attr is
                         HtmlAttr "id" id ->
                             Dict.get views id
-                            |> Result.map (\view -> { view, id })
+                            |> Result.map \view -> { view, id }
                             |> Break
 
                         _ -> Err KeyNotFound |> Continue
