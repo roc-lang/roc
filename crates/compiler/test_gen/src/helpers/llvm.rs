@@ -12,6 +12,7 @@ use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
+use roc_utils::zig;
 use target_lexicon::Triple;
 
 #[cfg(feature = "gen-llvm-wasm")]
@@ -456,9 +457,7 @@ fn llvm_module_to_wasm_file(
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
-    use std::process::Command;
-
-    let output = Command::new(&crate::helpers::zig_executable())
+    let output = zig()
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",

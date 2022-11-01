@@ -1,9 +1,9 @@
 use roc_builtins::bitcode;
+use roc_utils::zig;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
@@ -113,13 +113,6 @@ fn build_wasm_test_host() {
     ]);
 }
 
-fn zig_executable() -> String {
-    match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    }
-}
-
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut outfile = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("o");
@@ -146,16 +139,25 @@ fn feature_is_enabled(feature_name: &str) -> bool {
 
 // Run cargo with -vv to see commands printed out
 fn run_zig(args: &[&str]) {
-    let zig = zig_executable();
-    println!("{} {}", zig, args.join(" "));
-    let output = Command::new(&zig).args(args).output().unwrap();
+    let mut zig_cmd = zig();
 
-    if !output.status.success() {
-        eprintln!("stdout:\n{}", String::from_utf8_lossy(&output.stdout));
-        eprintln!("stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-        panic!("zig call failed with status {:?}", output.status);
+    let full_zig_cmd = zig_cmd.args(args);
+    println!("{:?}", full_zig_cmd);
+
+    let zig_cmd_output = full_zig_cmd.output().unwrap();
+
+    if !zig_cmd_output.status.success() {
+        eprintln!(
+            "stdout:\n{}",
+            String::from_utf8_lossy(&zig_cmd_output.stdout)
+        );
+        eprintln!(
+            "stderr:\n{}",
+            String::from_utf8_lossy(&zig_cmd_output.stderr)
+        );
+        panic!("zig call failed with status {:?}", zig_cmd_output.status);
     }
 
-    assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
+    assert!(zig_cmd_output.stdout.is_empty(), "{:#?}", zig_cmd_output);
+    assert!(zig_cmd_output.stderr.is_empty(), "{:#?}", zig_cmd_output);
 }

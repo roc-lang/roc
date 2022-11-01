@@ -252,7 +252,9 @@ pub fn build_file<'a>(
     }
 
     let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
-        let rebuild_duration = rebuild_thread.join().unwrap();
+        let rebuild_duration = rebuild_thread
+            .join()
+            .expect("Failed to (re)build platform.");
         if emit_timings && !prebuilt {
             println!(
                 "Finished rebuilding the platform in {} ms\n",
@@ -304,7 +306,7 @@ pub fn build_file<'a>(
     }
 
     if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
-        let rebuild_duration = thread.join().unwrap();
+        let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
         if emit_timings && !prebuilt {
             println!(
                 "Finished rebuilding the platform in {} ms\n",
