@@ -11,10 +11,10 @@ interface Html.Internal
         none,
         translate,
         translateStatic,
+        initServerApp,
         insertHandler,
         replaceHandler,
         dispatchEvent,
-        # rocScript,
         appendRenderedStatic,
         nodeSize,
     ]
@@ -24,6 +24,7 @@ App state initData : {
     static : Html [],
     initDynamic : initData -> state,
     renderDynamic : state -> Dict HtmlId (Html state),
+    wasmUrl : Str,
 } | initData has Encoding
 
 HtmlId : Str
@@ -286,68 +287,15 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
             handler state eventData
 
 # -------------------------------
-#   SERVER SIDE RENDERING
+#   SERVER SIDE INIT
 # -------------------------------
-# rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
-# rocScript = \initData, dynamicRootIds, wasmUrl ->
-#     toJs = \data ->
-#         data
-#         |> Encode.toBytes Json.toUtf8
-#         |> Str.fromUtf8
-#     encInitData = toJs initData
-#     encDynamicRootIds = toJs dynamicRootIds
-#     encWasmUrl = toJs wasmUrl
-#     when { encInitData, encDynamicRootIds, encWasmUrl } is
-#         { encInitData: Ok jsInitData, encDynamicRootIds: Ok jsDynamicRootIds, encWasmUrl: Ok jsWasmUrl } ->
-#             elem : Html []
-#             elem = (element "script") [] [
-#                 Text
-#                     NoJsIndex
-#                     """
-#                     (function(){
-#                     \(hostJavaScript)
-#                     const initData = \(jsInitData);
-#                     const dynamicRootIds = \(jsDynamicRootIds);
-#                     const wasmUrl = \(jsWasmUrl);
-#                     window.roc = roc_init(initData, dynamicRootIds, wasmUrl);
-#                     })();
-#                     """,
-#             ]
-#             Ok elem
-#         _ ->
-#             Err InvalidUtf8
-# init : initData, side, App state initData -> InitializedApp state | initData has Encoding
-# init = \initData, side, app ->
-#     state = app.initDynamic initData
-#     dynamicViews = app.renderDynamic state
-#     # What we really want for preloading the JS array is an array of { rootId: string; nodeIds: number[] }
-#     { dict: viewDict, nodeList } =
-#         Dict.walk views { dict: Dict.empty, currentNodeId: 0 } \{ dict, currentNodeId }, k, v ->
-#             { node: staticNode, currentNodeId: nextNodeId } = v |> translateStatic |> indexNodes currentNodeId
-#             { dict: Dict.insert dict k staticNode,
-#               nodeList: newNodeList
-#             }
-#     when side is
-#         Server ->
-#             # Create some JS strings containing JSON data to insert into a <script> tag. Double encoding.
-#             toJsJson = \data -> data |> Encode.toBytes Json.toUtf8 |> Encode.toBytes Json.toUtf8
-#             initDataJsJson = initData |> toJsJson
-#             initViewJsJson = viewDict |> toJsJson
-#             # Probably only need the initData. If we serialize the initial view then we have it twice in the HTML file, bloating the dynamic part by 2x!
-#             app.template
-#             |> replaceNodes viewDict
-#             |> insertRocScript initDataJsJson initViewJsJson
-#             |> StaticApp
-#         Client ->
-
-initServerSide : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str)]
-initServerSide = \initData, app ->
-    # views : Dict HtmlId (Html []) # type annotation required to avoid type checker crash
+initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument]*
+initServerApp = \initData, app ->
     views =
         initData
         |> app.initDynamic
         |> app.renderDynamic
-        |> translateStatic
+        |> Dict.map translateStatic
 
     { views: remainingViews, siblings } =
         populateViewContainers { views, siblings: [] } app.static
@@ -355,8 +303,67 @@ initServerSide = \initData, app ->
     if Dict.len remainingViews != 0 then
         Err (MissingHtmlIds (Dict.keys remainingViews))
     else
-        List.first siblings
-        |> Result.mapErr (\e -> MissingHtmlIds []) # impossible
+        when List.first siblings is
+            Err _ ->
+                # error is impossible, since we know the List has exactly one entry
+                Err (MissingHtmlIds [])
+
+            Ok document ->
+                insertRocScript document initData (Dict.keys views) app.wasmUrl
+
+insertRocScript : Html [], initData, List HtmlId, Str -> Result (Html []) [InvalidDocument]* | initData has Encoding
+insertRocScript = \document, initData, viewIds, wasmUrl ->
+    # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
+    # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
+    jsInitData =
+        initData
+        |> Encode.toBytes Json.toUtf8
+        |> Str.fromUtf8
+        |> Encode.toBytes Json.toUtf8
+        |> Str.fromUtf8
+        |> Result.withDefault ""
+    jsViewIds = viewIds |> Encode.toBytes Json.toUtf8 |> Str.fromUtf8 |> Result.withDefault ""
+    jsWasmUrl = wasmUrl |> Encode.toBytes Json.toUtf8 |> Str.fromUtf8 |> Result.withDefault ""
+
+    script : Html []
+    script = (element "script") [] [
+        text
+            """
+            (function(){
+            \(hostJavaScript)
+            const initData = \(jsInitData);
+            const viewIds = \(jsViewIds);
+            const wasmUrl = \(jsWasmUrl);
+            window.roc = roc_init(initData, viewIds, wasmUrl);
+            })();
+            """,
+    ]
+
+    # append the <script> to the end of the <body>
+    when document is
+        Element "html" hIndex hSize hAttrs hChildren ->
+            empty = List.withCapacity (List.len hChildren)
+            walkResult =
+                List.walk hChildren { newHtmlChildren: empty, foundBody: Bool.false } \{ newHtmlChildren, foundBody }, hChild ->
+                    when hChild is
+                        Element "body" bIndex bSize bAttrs bChildren ->
+                            {
+                                newHtmlChildren: List.append newHtmlChildren (Element "body" bIndex bSize bAttrs (List.append bChildren script)),
+                                foundBody: Bool.true,
+                            }
+
+                        _ ->
+                            {
+                                newHtmlChildren: List.append newHtmlChildren hChild,
+                                foundBody,
+                            }
+
+            if walkResult.foundBody then
+                Ok (Element "html" hIndex hSize hAttrs walkResult.newHtmlChildren)
+            else
+                Err InvalidDocument
+
+        _ -> Err InvalidDocument
 
 populateViewContainers : { views : Dict HtmlId (Html []), siblings : List (Html []) }, Html [] -> { views : Dict HtmlId (Html []), siblings : List (Html []) }
 populateViewContainers = \walkState, oldTreeNode ->
@@ -365,7 +372,7 @@ populateViewContainers = \walkState, oldTreeNode ->
             { views, siblings } = walkState
 
             maybeFound =
-                List.walkUntil attrs (Err KeyNotFound) \maybe, attr ->
+                List.walkUntil attrs (Err KeyNotFound) \_, attr ->
                     when attr is
                         HtmlAttr "id" id ->
                             Dict.get views id
@@ -394,21 +401,9 @@ populateViewContainers = \walkState, oldTreeNode ->
         _ ->
             walkState
 
-# server side
-#    convert `initData` to `state`
-#    run dynamic view code
-#    merge dynamic views into template
-#    insert a JS <script> to initialize the Wasm app, including initData as JSON
-# client side
-#    JS
-#       run the JS version of indexNodes, inserting real DOM nodes into JS array
-#       call Wasm roc_alloc
-#       write initData JSON to Wasm memory
-#    Wasm
-#       convert `initData` to `state`
-#       run dynamic view code
-#       run the Roc version of indexNodes, inserting node indices into the virtual tree
-#           (uses the same algorithm as the JS version, to produce the same indices)
+# -------------------------------
+#   CLIENT SIDE INIT
+# -------------------------------
 indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
 indexNodes = \{ list, index }, node ->
     when node is
