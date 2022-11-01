@@ -3,7 +3,7 @@ use crate::expr::{constrain_expr, Env};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
-use roc_can::pattern::{DestructType, RecordDestruct};
+use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
@@ -99,6 +99,14 @@ fn headers_from_annotation_help(
             }
             Type::EmptyRec => destructs.is_empty(),
             _ => false,
+        },
+
+        List { .. } => {
+            // There are no interesting headers to introduce for list patterns, since the only
+            // exhaustive list pattern is
+            //   \[..] -> <body>
+            // which does not introduce any symbols.
+            false
         },
 
         AppliedTag {
@@ -501,6 +509,52 @@ pub fn constrain_pattern(
             state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
+
+        List {
+            list_var,
+            elem_var,
+            patterns:
+                ListPatterns {
+                    patterns,
+                    opt_rest: _,
+                },
+        } => {
+            for loc_pat in patterns.iter() {
+                let expected =
+                    PExpected::ForReason(PReason::ListElem, Type::Variable(*elem_var), region);
+
+                constrain_pattern(
+                    constraints,
+                    env,
+                    &loc_pat.value,
+                    loc_pat.region,
+                    expected,
+                    state,
+                );
+            }
+
+            let list_var_index = constraints.push_type(Type::Variable(*list_var));
+            let solved_list = constraints.push_type(Type::Apply(
+                Symbol::LIST_LIST,
+                vec![Loc::at(region, Type::Variable(*elem_var))],
+                region,
+            ));
+            let store_solved_list = constraints.store(solved_list, *list_var, file!(), line!());
+
+            let expected = constraints.push_pat_expected_type(expected);
+            let expected_constraint = constraints.pattern_presence(
+                list_var_index,
+                expected,
+                PatternCategory::List,
+                region,
+            );
+
+            state.vars.push(*list_var);
+            state.vars.push(*elem_var);
+            state.constraints.push(store_solved_list);
+            state.constraints.push(expected_constraint);
+        }
+
         AppliedTag {
             whole_var,
             ext_var,

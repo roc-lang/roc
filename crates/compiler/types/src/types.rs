@@ -2160,6 +2160,7 @@ pub enum PReason {
         tag_name: TagName,
         index: HumanIndex,
     },
+    ListElem,
     PatternGuard,
     OptionalField,
 }
@@ -2296,6 +2297,7 @@ pub enum Category {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
+    List,
     EmptyRecord,
     PatternGuard,
     PatternDefault,

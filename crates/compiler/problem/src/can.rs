@@ -185,6 +185,9 @@ pub enum Problem {
     UnnecessaryOutputWildcard {
         region: Region,
     },
+    MultipleListRestPattern {
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -375,4 +378,5 @@ pub enum MalformedPatternProblem {
     BadIdent(roc_parse::ident::BadIdent),
     EmptySingleQuote,
     MultipleCharsInSingleQuote,
+    DuplicateListRestPattern,
 }
