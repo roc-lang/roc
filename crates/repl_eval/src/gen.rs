@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
-use roc_reporting::report::{Palette, Severity};
+use roc_reporting::report::{parse_problem, Palette, RenderTarget, Severity, DEFAULT_PALETTE};
 use std::path::PathBuf;
 
 use roc_fmt::annotation::Formattable;
@@ -51,7 +51,7 @@ pub fn compile_to_mono<'a>(
     let filename = PathBuf::from("");
     let src_dir = PathBuf::from("fake/test/path");
 
-    let module_src = arena.alloc(promote_expr_to_module(src));
+    let module_src = arena.alloc(dbg!(promote_expr_to_module(src)));
 
     let exposed_types = Default::default();
     let loaded = roc_load::load_and_monomorphize_from_str(
@@ -68,7 +68,7 @@ pub fn compile_to_mono<'a>(
         },
     );
 
-    let mut loaded = match loaded {
+    let mut loaded = match dbg!(loaded) {
         Ok(v) => v,
         Err(LoadingProblem::FormattedReport(report)) => {
             return (
@@ -78,6 +78,27 @@ pub fn compile_to_mono<'a>(
                     warnings: Vec::new(),
                 },
             );
+        }
+        Err(LoadingProblem::ParsingFailed(problem)) => {
+            let lines = LineInfo::new(src);
+            let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+            let starting_line = 0;
+            let report = parse_problem(
+                &alloc,
+                &lines,
+                problem.filename.clone(),
+                starting_line,
+                problem,
+            );
+
+            let mut buf = String::new();
+            let palette = DEFAULT_PALETTE;
+
+            // Seems safe to assume that the REPL is in an actual terminal (e.g. as opposed to CI).
+            // If we want to be extra careful, we could try to detect whether colors are supported.
+            report.render(RenderTarget::ColorTerminal, &mut buf, &alloc, &palette);
+
+            buf
         }
         Err(e) => {
             todo!("error while loading module: {:?}", e)
@@ -97,24 +118,25 @@ pub fn compile_to_mono<'a>(
     let errors = &mut problems.errors;
     let warnings = &mut problems.warnings;
 
-    for (home, (module_path, src)) in sources.iter() {
+    for (home, (module_path, src)) in dbg!(sources).iter() {
         let can_probs = can_problems.remove(home).unwrap_or_default();
         let type_probs = type_problems.remove(home).unwrap_or_default();
-
         let error_count = can_probs.len() + type_probs.len();
 
         if error_count == 0 {
             continue;
         }
 
-        let line_info = LineInfo::new(module_src);
+        // Skip over the repl app module wrapper lines, so that line 1 becomes the first
+        // line of the expr you entered.
+        let line_info = LineInfo::new(dbg!(&module_src));
         let src_lines: Vec<&str> = src.split('\n').collect();
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
         for problem in can_probs.into_iter() {
-            let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
+            let report = can_problem(&alloc, &line_info, module_path.clone(), dbg!(problem));
             let severity = report.severity;
             let mut buf = String::new();
 
@@ -149,12 +171,24 @@ pub fn compile_to_mono<'a>(
         }
     }
 
-    (Some(loaded), problems)
+    (Some(loaded), dbg!(problems))
+}
+
+const REPL_APP_MODULE_WRAPPER: &str =
+    "app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n";
+
+const REPL_APP_MODULE_WRAPPER_LINES: usize = 3;
+
+#[test]
+fn repl_app_module_wrapper_lines() {
+    assert_eq!(
+        REPL_APP_MODULE_WRAPPER_LINES,
+        REPL_APP_MODULE_WRAPPER.lines().count()
+    );
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n");
+    let mut buffer = String::from(REPL_APP_MODULE_WRAPPER);
 
     for line in src.lines() {
         // indent the body!

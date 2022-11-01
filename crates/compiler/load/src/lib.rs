@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_can::module::{ExposedByModule, TypeState};
 use roc_collections::all::MutMap;
-use roc_module::symbol::ModuleId;
+use roc_module::symbol::{Interns, ModuleId};
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ fn load<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     load_config: LoadConfig,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     let cached_types = read_cached_types();
 
     roc_load_internal::file::load(arena, load_start, exposed_types, cached_types, load_config)
@@ -39,7 +39,7 @@ pub fn load_single_threaded<'a>(
     target_info: TargetInfo,
     render: RenderTarget,
     exec_mode: ExecutionMode,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     let cached_subs = read_cached_types();
 
     roc_load_internal::file::load_single_threaded(
@@ -84,7 +84,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
     load_config: LoadConfig,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
+) -> Result<MonomorphizedModule<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src, src_dir)?;

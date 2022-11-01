@@ -1193,7 +1193,7 @@ pub fn load_and_typecheck_str<'a>(
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
-) -> Result<LoadedModule, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, source, src_dir)?;
@@ -1255,7 +1255,7 @@ impl<'a> LoadStart<'a> {
                 root_start_time,
             );
 
-            match res_loaded {
+            match dbg!(res_loaded) {
                 Ok((module_id, msg)) => {
                     if let Msg::Header(ModuleHeader {
                         module_id: header_id,
@@ -1281,25 +1281,6 @@ impl<'a> LoadStart<'a> {
                     }
 
                     (module_id, msg)
-                }
-
-                Err(LoadingProblem::ParsingFailed(problem)) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
-
-                    // if parsing failed, this module did not add any identifiers
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_parse_problem_report(
-                        problem,
-                        module_ids,
-                        root_exposed_ident_ids,
-                        render,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
                 }
                 Err(LoadingProblem::FileProblem { filename, error }) => {
                     let buf = to_file_problem_report(&filename, error);
@@ -1363,7 +1344,7 @@ impl<'a> LoadStart<'a> {
         filename: PathBuf,
         src: &'a str,
         src_dir: PathBuf,
-    ) -> Result<Self, LoadingProblem<'a>> {
+    ) -> Result<Self, (LoadingProblem<'a>, ModuleId, Interns)> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -1461,7 +1442,7 @@ pub fn load<'a>(
     exposed_types: ExposedByModule,
     cached_types: MutMap<ModuleId, TypeState>,
     load_config: LoadConfig,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     enum Threads {
         Single,
         Many(usize),
@@ -1519,7 +1500,7 @@ pub fn load_single_threaded<'a>(
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     exec_mode: ExecutionMode,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
@@ -1651,17 +1632,7 @@ fn state_thread_step<'a>(
                     let buf = to_file_problem_report(&filename, error);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
-
-                Msg::FailedToParse(problem) => {
-                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                    let buf = to_parse_problem_report(
-                        problem,
-                        module_ids,
-                        state.constrained_ident_ids,
-                        state.render,
-                    );
-                    Err(LoadingProblem::FormattedReport(buf))
-                }
+                Msg::FailedToParse(problem) => Err(LoadingProblem::ParsingFailed(problem)),
                 Msg::IncorrectModuleName(FileError {
                     problem: SourceError { problem, bytes },
                     filename,
@@ -1768,7 +1739,7 @@ fn load_multi_threaded<'a>(
     render: RenderTarget,
     available_threads: usize,
     exec_mode: ExecutionMode,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+) -> Result<LoadResult<'a>, (LoadingProblem<'a>, ModuleId, Interns)> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
@@ -3424,7 +3395,7 @@ fn parse_header<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
     start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<(ModuleId, Msg<'a>), (LoadingProblem<'a>, ModuleId, Interns)> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
@@ -3436,7 +3407,7 @@ fn parse_header<'a>(
     module_timing.read_roc_file = read_file_duration;
     module_timing.parse_header = parse_header_duration;
 
-    match parsed {
+    match dbg!(parsed) {
         Ok((ast::Module::Interface { header }, parse_state)) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
 
@@ -3639,7 +3610,7 @@ fn load_filename<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<(ModuleId, Msg<'a>), (LoadingProblem<'a>, ModuleId, Interns)> {
     let file_io_start = Instant::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed();
@@ -3674,7 +3645,7 @@ fn load_from_str<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<(ModuleId, Msg<'a>), (LoadingProblem<'a>, ModuleId, Interns)> {
     let file_io_start = Instant::now();
     let file_io_duration = file_io_start.elapsed();
 
@@ -5862,12 +5833,8 @@ fn to_parse_problem_report<'a>(
 ) -> String {
     use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
 
-    // TODO this is not in fact safe
-    let src = unsafe { from_utf8_unchecked(problem.problem.bytes) };
+    let src = std::str::from_utf8(problem.problem.bytes).unwrap();
     let src_lines = src.lines().collect::<Vec<_>>();
-    // let mut src_lines: Vec<&str> = problem.prefix.lines().collect();
-    // src_lines.extend(src.lines().skip(1));
-
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
 
     let interns = Interns {
@@ -5877,9 +5844,7 @@ fn to_parse_problem_report<'a>(
 
     // Report parsing and canonicalization problems
     let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
     let starting_line = 0;
-
     let lines = LineInfo::new(src);
 
     let report = parse_problem(
