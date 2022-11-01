@@ -379,18 +379,22 @@ fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> 
     }
 }
 
-/// TODO: do this on Windows too. This may be trickier because it's unclear
-/// whether we want to use wide encoding (in which case we have to convert from
-/// &[u8] to &[u16] by converting UTF-8 to UTF-16) and then windows::OsStrExt::from_wide -
-/// https://doc.rust-lang.org/std/os/windows/ffi/trait.OsStringExt.html#tymethod.from_wide -
-/// or whether we want to try to set the Windows code page to UTF-8 instead.
-#[cfg(target_family = "unix")]
 fn path_from_roc_path(bytes: &RocList<u8>) -> &Path {
     Path::new(os_str_from_list(bytes))
 }
 
-pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
+#[cfg(target_family = "unix")]
+fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
     std::os::unix::ffi::OsStrExt::from_bytes(bytes.as_slice())
+}
+
+#[cfg(target_family = "windows")]
+fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
+    let bytes = bytes.as_slice();
+    assert_eq!(bytes.len() % 2, 0);
+    let characters: &[u16] =
+        unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 2) };
+    std::os::windows::ffi::OsStrExt::from_wide(characters)
 }
 
 #[no_mangle]
@@ -459,11 +463,19 @@ pub extern "C" fn roc_fx_dirList(
 }
 
 #[cfg(target_family = "unix")]
-/// TODO convert from EncodeWide to RocPath on Windows
 fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
     use std::os::unix::ffi::OsStrExt;
 
     RocList::from(os_str.as_bytes())
+}
+
+#[cfg(target_family = "windows")]
+fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let bytes = os_str.encode_wide().flat_map(|c| c.to_be_bytes()).collect();
+
+    RocList::from(&bytes)
 }
 
 #[no_mangle]
