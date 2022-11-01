@@ -70,8 +70,8 @@ fn exhaustiveness_problem() {
 
             This when does not cover all the possibilities:
 
-            6│>      when t is
-            7│>          A -> 1
+            7│>      when t is
+            8│>          A -> 1
 
             Other possibilities include:
 
