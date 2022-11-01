@@ -561,8 +561,7 @@ fn format_output(
 ) -> String {
     let mut buf = String::new();
 
-    // Only print errors; discard warnings.
-    for message in problems.errors.iter() {
+    for message in problems.errors.iter().chain(problems.warnings.iter()) {
         if !buf.is_empty() {
             buf.push_str("\n\n");
         }
