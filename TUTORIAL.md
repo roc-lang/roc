@@ -1118,27 +1118,14 @@ Tag unions can accumulate additional tags based on how they're used in the progr
 ```elm
 \str ->
     if Str.isEmpty str then
-        "it was empty"
-    else
-        ["it was not empty"]
-```
-
-This will be a type mismatch because the two branches have incompatible types: the first branch
-evaluates to a `Str`, but the `else` branch evaluates to a `List Str`!
-
-Now let's look at another example:
-
-```elm
-\str ->
-    if Str.isEmpty str then
         Ok "it was empty"
     else
         Err ["it was not empty"]
 ```
 
-This does not produce a type mismatch. Instead, Roc sees that the first branch has the type
-`[Ok Str]` and the `else` branch has the type `[Err (List Str)]`, so it concludes that the
-whole `if` expression evaluates to the combination of those two tag unions: `[Ok Str, Err (List Str)]`.
+Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has
+the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the
+combination of those two tag unions: `[Ok Str, Err (List Str)]`.
 
 This means the entire `\str -> …` funcion here has the type `Str -> [Ok Str, Err (List Str)]`.
 However, it would be most common to annotate it as `Result Str (List Str)` instead, because
@@ -1160,24 +1147,6 @@ when color is
 
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because
 those are the three possibilities this `when` handles.
-
-Just like how `{}` is the type of an empty record, `[]` is the type of an empty tag union.
-There is no way to create an empty tag union at runtime, since creating a tag union requires
-making an actual tag, and an empty tag union has no tags in it!
-
-This means if you have a function with the type `[] -> Str`, you can be sure that it will
-never execute. It requires an argument that can't be provided! Similarly, if you have a
-function with the type `Str -> []`, you can call it, but you can be sure it will not terminate
-normally. The only way to implement a function like that is using [infinite recursion](https://en.wikipedia.org/wiki/Infinite_loop#Infinite_recursion), which will either run indefinitely or else crash with a [stack overflow](https://en.wikipedia.org/wiki/Stack_overflow).
-
-> **Aside:** Empty tag unions can be useful as type parameters. For example, a function with the type
-> `List [] -> Str` can be successfully called, but only if you pass it an empty list. That's because
-> an empty list has the type `List *`, which means it can be used wherever any type of `List` is
-> needed - even a `List []`!
->
-> Taking this a step further, a function which accepts a `Result Str []` only accepts a "Result
-> which can never be `Err`" - and you could call that function passing something like `Ok "hello"`
-> with no problem.
 
 ## Numeric types
 
@@ -1809,6 +1778,30 @@ Some important things to note about backpassing and `await`:
 - `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+### Empty Tag Unions
+
+If you look up the type of [`Program.exit`](https://www.roc-lang.org/examples/cli/Program#exit),
+you may notice that it takes a `Task` where the error type is `[]`. What does that mean?
+
+Just like how `{}` is the type of an empty record, `[]` is the type of an empty tag union.
+There is no way to create an empty tag union at runtime, since creating a tag union requires
+making an actual tag, and an empty tag union has no tags in it!
+
+This means if you have a function with the type `[] -> Str`, you can be sure that it will
+never execute. It requires an argument that can't be provided! Similarly, if you have a
+function with the type `Str -> []`, you can call it, but you can be sure it will not terminate
+normally. The only way to implement a function like that is using [infinite recursion](https://en.wikipedia.org/wiki/Infinite_loop#Infinite_recursion), which will either run indefinitely or else crash with a [stack overflow](https://en.wikipedia.org/wiki/Stack_overflow).
+
+Empty tag unions can be useful as type parameters. For example, a function with the type
+`List [] -> Str` can be successfully called, but only if you pass it an empty list. That's because
+an empty list has the type `List *`, which means it can be used wherever any type of `List` is
+needed - even a `List []`!
+
+Similarly, a function which accepts a `Result Str []` only accepts a "Result which is always `Ok`" - so you could call that function passing something like `Ok "hello"` with no problem,
+but if you tried to give it an `Err`, you'd get a type mismatch.
+
+Applying this to `Task`, a task with `[]` for its error type is a "task which can never fail." The only way to obtain one is by obtaining a task with an error type of `*`, since that works with any task. You can get one of these "tasks that can never fail" by using [`Task.succeed`](https://www.roc-lang.org/examples/cli/Task#succeed) or, more commonly, by handling all possible errors using [`Task.attempt`](https://www.roc-lang.org/examples/cli/Task#attempt).
 
 ## What now?
 
