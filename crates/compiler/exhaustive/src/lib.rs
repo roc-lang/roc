@@ -93,7 +93,7 @@ impl ListArity {
     /// The trivially-exhaustive list pattern `[..]`
     const ANY: ListArity = ListArity::Slice(0, 0);
 
-    fn min_len(&self) -> usize {
+    pub fn min_len(&self) -> usize {
         match self {
             ListArity::Exact(n) => *n,
             ListArity::Slice(l, r) => l + r,

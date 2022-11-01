@@ -21,7 +21,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
+use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
 use roc_intern::Interner;
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
@@ -7289,6 +7289,24 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+
+        List {
+            arity,
+            element_layout,
+            elements,
+        } => {
+            return store_list_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                *arity,
+                *element_layout,
+                elements,
+                stmt,
+            )
+        }
+
         Voided { .. } => {
             return StorePattern::NotProductive(stmt);
         }
@@ -7359,6 +7377,96 @@ fn store_pattern_help<'a>(
     }
 
     StorePattern::Productive(stmt)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_list_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    list_sym: Symbol,
+    list_arity: ListArity,
+    element_layout: Layout<'a>,
+    elements: &[Pattern<'a>],
+    mut stmt: Stmt<'a>,
+) -> StorePattern<'a> {
+    use Pattern::*;
+
+    if matches!(list_arity, ListArity::Slice(_, n) if n > 0) {
+        todo!();
+    }
+
+    let mut is_productive = false;
+    let usize_layout = Layout::usize(env.target_info);
+
+    for (index, element) in elements.iter().enumerate().rev() {
+        let index_lit = Expr::Literal(Literal::Int((index as i128).to_ne_bytes()));
+        let index_sym = env.unique_symbol();
+
+        let load = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::ListGetUnsafe,
+                update_mode: env.next_update_mode_id(),
+            },
+            arguments: env.arena.alloc([list_sym, index_sym]),
+        });
+
+        let store_loaded = match element {
+            Identifier(symbol) => {
+                // Pattern can define only one specialization
+                let symbol = procs
+                    .symbol_specializations
+                    .remove_single(*symbol)
+                    .unwrap_or(*symbol);
+
+                // store immediately in the given symbol
+                Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt))
+            }
+            Underscore
+            | IntLiteral(_, _)
+            | FloatLiteral(_, _)
+            | DecimalLiteral(_)
+            | EnumLiteral { .. }
+            | BitLiteral { .. }
+            | StrLiteral(_) => {
+                // ignore
+                continue;
+            }
+            _ => {
+                // store the field in a symbol, and continue matching on it
+                let symbol = env.unique_symbol();
+
+                // first recurse, continuing to unpack symbol
+                match store_pattern_help(env, procs, layout_cache, element, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        stmt = new;
+                        // only if we bind one of its (sub)fields to a used name should we
+                        // extract the field
+                        Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt))
+                    }
+                    StorePattern::NotProductive(new) => {
+                        // do nothing
+                        stmt = new;
+                        continue;
+                    }
+                }
+            }
+        };
+
+        is_productive = true;
+        stmt = Stmt::Let(
+            index_sym,
+            index_lit,
+            usize_layout,
+            env.arena.alloc(store_loaded),
+        );
+    }
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8922,6 +9030,11 @@ pub enum Pattern<'a> {
         opaque: Symbol,
         argument: Box<(Pattern<'a>, Layout<'a>)>,
     },
+    List {
+        arity: ListArity,
+        element_layout: Layout<'a>,
+        elements: Vec<'a, Pattern<'a>>,
+    },
 }
 
 impl<'a> Pattern<'a> {
@@ -8958,6 +9071,7 @@ impl<'a> Pattern<'a> {
                     stack.extend(arguments.iter().map(|(t, _)| t))
                 }
                 Pattern::OpaqueUnwrap { argument, .. } => stack.push(&argument.0),
+                Pattern::List { elements, .. } => stack.extend(elements),
             }
         }
 
@@ -9709,7 +9823,34 @@ fn from_can_pattern_help<'a>(
             ))
         }
 
-        List { .. } => todo!(),
+        List {
+            list_var: _,
+            elem_var,
+            patterns,
+        } => {
+            let element_layout = match layout_cache.from_var(env.arena, *elem_var, env.subs) {
+                Ok(lay) => lay,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Err(RuntimeError::UnresolvedTypeVar)
+                }
+                Err(LayoutProblem::Erroneous) => return Err(RuntimeError::ErroneousType),
+            };
+
+            let arity = patterns.arity();
+
+            let mut mono_patterns = Vec::with_capacity_in(patterns.patterns.len(), env.arena);
+            for loc_pat in patterns.patterns.iter() {
+                let mono_pat =
+                    from_can_pattern_help(env, procs, layout_cache, &loc_pat.value, assignments)?;
+                mono_patterns.push(mono_pat);
+            }
+
+            Ok(Pattern::List {
+                arity,
+                element_layout,
+                elements: mono_patterns,
+            })
+        }
     }
 }
 
