@@ -57,7 +57,7 @@ CyclicStructureAccessor : [
 
 # If we are only exposing the functions then are we better off just turning everything into a Custom?
 # At some point we need a common format anyway. Wrapper lambda is irrelevant for perf in context of an event.
-Handler state : [
+Handler state := [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
 ]
@@ -204,19 +204,19 @@ translateAttr = \attr, parentToChild, childToParent ->
 translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
 translateHandler = \childHandler, parentToChild, childToParent ->
     when childHandler is
-        Normal childFn ->
+        @Handler (Normal childFn) ->
             parentFn = \parentState, jsons ->
                 parentState |> parentToChild |> childFn jsons |> Action.map childToParent
 
-            Normal parentFn
+            @Handler (Normal parentFn)
 
-        Custom childFn ->
+        @Handler (Custom childFn) ->
             parentFn = \parentState, jsons ->
                 { action, stopPropagation, preventDefault } = childFn (parentToChild parentState) jsons
 
                 { action: action |> Action.map childToParent, stopPropagation, preventDefault }
 
-            Custom parentFn
+            @Handler (Custom parentFn)
 
 translateStatic : Html state -> Html *
 translateStatic = \node ->
@@ -281,12 +281,12 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
         Err NoHandler ->
             { action: Action.none, stopPropagation: Bool.false, preventDefault: Bool.false }
 
-        Ok (Normal handler) ->
+        Ok (@Handler (Normal handler)) ->
             action = handler state eventData
 
             { action, stopPropagation: Bool.false, preventDefault: Bool.false }
 
-        Ok (Custom handler) ->
+        Ok (@Handler (Custom handler)) ->
             handler state eventData
 
 # -------------------------------
