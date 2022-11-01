@@ -1,6 +1,6 @@
 # Tutorial
 
-This is a tutorial to learn how to build Roc applications. 
+This is a tutorial to learn how to build Roc applications.
 It covers the REPL, basic types like strings, lists, tags, and functions, syntax like `when` and `if then else`, and more!
 
 Enjoy!
@@ -1487,8 +1487,8 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/cli/cli-platform/main.roc` package.
 
-If we would like to include other modules in our application, say `AdditionalModule.roc` 
-and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+If we would like to include other modules in our application, say `AdditionalModule.roc`
+and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
 
 ```coffee
 packages { pf: "examples/cli/cli-platform/main.roc" }
@@ -1511,7 +1511,7 @@ interface Parser.Core
 ```
 
 This says that the current .roc file is an *interface module* because it begins with the `interface` keyword.
-We are naming this module when we write `interface Parser.Core`. It means that this file is in 
+We are naming this module when we write `interface Parser.Core`. It means that this file is in
 a package `Parser` and the current module is named `core`.
 When we write `exposes [Parser, ParseResult, ...]`, it specifies the definitions we
 want to *expose*. Exposing makes them importable from other modules.
@@ -1557,7 +1557,7 @@ TODO
 
 ## Comments
 
-Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`. 
+Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`.
 
 ```coffee
 ## This is a comment for documentation, and includes a code block.
