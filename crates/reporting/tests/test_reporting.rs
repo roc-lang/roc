@@ -12190,4 +12190,116 @@ All branches in an `if` must have the same type!
     I would have to crash if I saw one of those! Add branches for them!
     "###
     );
+
+    test_report!(
+        list_match_redundant_exact_size,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [_] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+     6│       when l is
+     7│           [] -> ""
+     8│           [_] -> ""
+     9│>          [_] -> ""
+    10│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_any_slice,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [..] -> ""
+                ^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_suffix_slice_with_sized_prefix,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [.., _] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [.., _] -> ""
+                ^^^^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_based_on_ctors,
+        indoc!(
+            r#"
+            l : List {}
+
+            when l is
+                [{}, .., _] -> ""
+                [_, .., {}] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    6│       when l is
+    7│           [{}, .., _] -> ""
+    8│>          [_, .., {}] -> ""
+    9│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
 }
