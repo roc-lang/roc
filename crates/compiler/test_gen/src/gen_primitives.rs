@@ -2164,6 +2164,7 @@ fn case_jump() {
                     Pair Nil _ -> 1
                     Pair _ Nil -> 2
                     Pair (Cons a _) (Cons b _) -> a + b + 3
+                    Pair _ _ -> 4
             "#
         ),
         1,

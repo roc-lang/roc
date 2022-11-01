@@ -3,6 +3,7 @@ use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
+use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 
 use crate::abilities::PendingAbilitiesStore;
@@ -388,10 +389,11 @@ impl Scope {
         name: Symbol,
         region: Region,
         vars: Vec<Loc<AliasVar>>,
+        infer_ext_in_output_variables: Vec<Variable>,
         typ: Type,
         kind: AliasKind,
     ) {
-        let alias = create_alias(name, region, vars, typ, kind);
+        let alias = create_alias(name, region, vars, infer_ext_in_output_variables, typ, kind);
         self.aliases.insert(name, alias);
     }
 
@@ -447,6 +449,7 @@ pub fn create_alias(
     name: Symbol,
     region: Region,
     vars: Vec<Loc<AliasVar>>,
+    infer_ext_in_output_variables: Vec<Variable>,
     typ: Type,
     kind: AliasKind,
 ) -> Alias {
@@ -459,14 +462,16 @@ pub fn create_alias(
     debug_assert!({
         let mut hidden = type_variables;
 
-        for loc_var in vars.iter() {
-            hidden.remove(&loc_var.value.var);
+        for var in (vars.iter().map(|lv| lv.value.var))
+            .chain(infer_ext_in_output_variables.iter().copied())
+        {
+            hidden.remove(&var);
         }
 
         if !hidden.is_empty() {
             panic!(
-                "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
-                hidden, name, &vars, &typ
+                "Found unbound type variables {:?} \n in type alias {:?} {:?} {:?} : {:?}",
+                hidden, name, &vars, &infer_ext_in_output_variables, &typ
             )
         }
 
@@ -482,6 +487,7 @@ pub fn create_alias(
         region,
         type_variables: vars,
         lambda_set_variables,
+        infer_ext_in_output_variables,
         recursion_variables,
         typ,
         kind,

@@ -1,5 +1,5 @@
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
-use crate::annotation::canonicalize_annotation;
+use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
@@ -221,6 +221,7 @@ impl GeneratedInfo {
                         effect_symbol,
                         Region::zero(),
                         vec![Loc::at_zero(AliasVar::unbound("a".into(), a_var))],
+                        vec![],
                         actual,
                         AliasKind::Opaque,
                     );
@@ -282,6 +283,7 @@ pub fn canonicalize_module_defs<'a>(
             name,
             alias.region,
             alias.type_variables,
+            alias.infer_ext_in_output_variables,
             alias.typ,
             alias.kind,
         );
@@ -442,6 +444,7 @@ pub fn canonicalize_module_defs<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
+                AnnotationFor::Value,
             );
 
             ann.add_to(
@@ -893,6 +896,15 @@ fn fix_values_captured_in_closure_pattern(
                         closure_captures,
                     ),
                 }
+            }
+        }
+        List { patterns, .. } => {
+            for loc_pat in patterns.patterns.iter_mut() {
+                fix_values_captured_in_closure_pattern(
+                    &mut loc_pat.value,
+                    no_capture_symbols,
+                    closure_captures,
+                );
             }
         }
         Identifier(_)

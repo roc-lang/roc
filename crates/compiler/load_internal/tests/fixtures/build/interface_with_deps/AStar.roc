@@ -22,7 +22,7 @@ initialModel = \start ->
     }
 
 
-cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound]* | position has Eq
+cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound] | position has Eq
 cheapestOpen = \costFunction, model ->
 
     folder = \resSmallestSoFar, position ->
@@ -80,12 +80,12 @@ updateCost = \current, neighbour, model ->
                 model
 
 
-findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound]* | position has Eq
+findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound] | position has Eq
 findPath = \{ costFunction, moveFunction, start, end } ->
     astar costFunction moveFunction end (initialModel start)
 
 
-astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]* | position has Eq
+astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Eq
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\position -> costFn goal position) model is
         Err _ ->

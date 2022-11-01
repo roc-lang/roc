@@ -43,13 +43,16 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
 
     // Disallow valgrind on macOS by default, because it reports a ton
     // of false positives. For local development on macOS, feel free to
     // change this to true!
     #[cfg(target_os = "macos")]
+    const ALLOW_VALGRIND: bool = false;
+
+    #[cfg(windows)]
     const ALLOW_VALGRIND: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
@@ -82,6 +85,12 @@ mod cli_run {
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
         let err = format!("{}found in <ignored for test> ms.", before_first_digit);
 
+        // make paths consistent
+        let err = err.replace('\\', "/");
+
+        // consistency with typewriters, very important
+        let err = err.replace('\r', "");
+
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
@@ -110,6 +119,11 @@ mod cli_run {
 
         let ignorable = "🔨 Rebuilding platform...\n";
         let stderr = compile_out.stderr.replacen(ignorable, "", 1);
+
+        // for some reason, llvm prints out this warning when targeting windows
+        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
+        let stderr = stderr.replacen(ignorable, "", 1);
+
         let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
         if !(stderr.is_empty() || is_reporting_runtime) {
             panic!("`roc` command had unexpected stderr: {}", stderr);
@@ -149,7 +163,10 @@ mod cli_run {
             let flags = {
                 let mut vec = flags.to_vec();
 
-                vec.push("--max-threads=1");
+                // max-threads segfaults on windows right now
+                if !cfg!(windows) {
+                    vec.push("--max-threads=1");
+                }
 
                 vec.into_iter()
             };
@@ -397,6 +414,11 @@ mod cli_run {
         )
     }
 
+    #[cfg(windows)]
+    const LINE_ENDING: &str = "\r\n";
+    #[cfg(not(windows))]
+    const LINE_ENDING: &str = "\n";
+
     #[test]
     // uses C platform
     fn platform_switching_main() {
@@ -404,7 +426,7 @@ mod cli_run {
             "examples/platform-switching",
             "main.roc",
             "rocLovesPlatforms",
-            "Which platform am I running on now?\n",
+            &("Which platform am I running on now?".to_string() + LINE_ENDING),
             true,
         )
     }
@@ -991,11 +1013,11 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]*]* ?
+                    Task.Task {} * [Write [Stdout]]
 
                 But the type annotation on main says it should be:
 
-                    InternalProgram.InternalProgram ?
+                    InternalProgram.InternalProgram
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque
@@ -1012,11 +1034,11 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]*]* ?
+                    Task.Task {} * [Write [Stdout]]
 
                 But toEffect needs its 1st argument to be:
 
-                    InternalProgram.InternalProgram ?
+                    InternalProgram.InternalProgram
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque

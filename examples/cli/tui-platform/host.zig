@@ -1,5 +1,6 @@
 const std = @import("std");
 const str = @import("str");
+const builtin = @import("builtin");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -15,7 +16,6 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    const builtin = @import("builtin");
     if (builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
@@ -147,20 +147,17 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    var timer = std.time.Timer.start() catch unreachable;
 
     const program = roc__mainForHost_1_exposed();
 
     call_the_closure(program);
 
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
-
-    const delta = to_seconds(ts2) - to_seconds(ts1);
+    const nanos = timer.read();
+    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
     const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }
@@ -267,7 +264,9 @@ fn roc_fx_getInt_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
-    const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    // make sure to strip `\r` on windows
+    const raw_line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    const line = std.mem.trimRight(u8, raw_line, &std.ascii.spaces);
 
     return std.fmt.parseInt(i64, line, 10);
 }

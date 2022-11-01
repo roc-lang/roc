@@ -136,9 +136,14 @@ pub struct AbleVariable {
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
+    /// Explicit inference variables, i.e. `_`
     pub inferred: Vec<Loc<Variable>>,
+    /// Named type variables
     pub named: VecSet<NamedVariable>,
+    /// Named type variables bound to an ability
     pub able: VecSet<AbleVariable>,
+    /// Extension variables which should be inferred in output position.
+    pub infer_ext_in_output: Vec<Variable>,
     pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
@@ -150,6 +155,7 @@ impl IntroducedVariables {
             .chain(self.inferred.iter().map(|v| &v.value))
             .chain(self.named.iter().map(|nv| &nv.variable))
             .chain(self.able.iter().map(|av| &av.variable))
+            .chain(self.infer_ext_in_output.iter())
             .chain(self.host_exposed_aliases.values())
             .all(|&v| v != var));
     }
@@ -189,6 +195,11 @@ impl IntroducedVariables {
         self.inferred.push(var);
     }
 
+    pub fn insert_infer_ext_in_output(&mut self, var: Variable) {
+        self.debug_assert_not_already_present(var);
+        self.infer_ext_in_output.push(var);
+    }
+
     pub fn insert_lambda_set(&mut self, var: Variable) {
         self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
@@ -208,6 +219,8 @@ impl IntroducedVariables {
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());
+        self.infer_ext_in_output
+            .extend(other.infer_ext_in_output.iter().cloned());
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -217,7 +230,8 @@ impl IntroducedVariables {
         self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
-        self.able.extend(other.able.iter().cloned());
+        self.able.extend(other.able);
+        self.infer_ext_in_output.extend(other.infer_ext_in_output);
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
@@ -260,14 +274,21 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
+pub(crate) enum AnnotationFor {
+    Value,
+    Alias,
+    Opaque,
+}
+
 /// Canonicalizes a top-level type annotation.
-pub fn canonicalize_annotation(
+pub(crate) fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
     annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
+    annotation_for: AnnotationFor,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -301,8 +322,16 @@ pub fn canonicalize_annotation(
         annot => (annot, region),
     };
 
+    let pol = match annotation_for {
+        // Values always have positive polarity.
+        AnnotationFor::Value => CanPolarity::Pos,
+        AnnotationFor::Alias => CanPolarity::InAlias,
+        AnnotationFor::Opaque => CanPolarity::InOpaque,
+    };
+
     let typ = can_annotation_help(
         env,
+        pol,
         annotation,
         region,
         scope,
@@ -317,6 +346,32 @@ pub fn canonicalize_annotation(
         introduced_variables,
         references,
         aliases,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CanPolarity {
+    /// In an alias; polarity should be disregarded for now.
+    InAlias,
+    /// In an opaque type; polarity should be disregarded for now.
+    InOpaque,
+    Neg,
+    Pos,
+}
+
+impl CanPolarity {
+    fn set_neg(self) -> Self {
+        match self {
+            CanPolarity::InAlias | CanPolarity::InOpaque => self,
+            CanPolarity::Neg | CanPolarity::Pos => CanPolarity::Neg,
+        }
+    }
+
+    fn set_pos(self) -> Self {
+        match self {
+            CanPolarity::InAlias | CanPolarity::InOpaque => self,
+            CanPolarity::Neg | CanPolarity::Pos => CanPolarity::Pos,
+        }
     }
 }
 
@@ -472,6 +527,7 @@ fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase 
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
+    pol: CanPolarity,
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
     scope: &mut Scope,
@@ -489,6 +545,7 @@ fn can_annotation_help(
             for arg in *argument_types {
                 let arg_ann = can_annotation_help(
                     env,
+                    pol.set_neg(),
                     &arg.value,
                     arg.region,
                     scope,
@@ -503,6 +560,7 @@ fn can_annotation_help(
 
             let ret = can_annotation_help(
                 env,
+                pol.set_pos(),
                 &return_type.value,
                 return_type.region,
                 scope,
@@ -550,6 +608,7 @@ fn can_annotation_help(
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(
                     env,
+                    pol,
                     &arg.value,
                     arg.region,
                     scope,
@@ -600,10 +659,33 @@ fn can_annotation_help(
                         lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
                     }
 
+                    let mut infer_ext_in_output_types =
+                        Vec::with_capacity(alias.infer_ext_in_output_variables.len());
+                    for _ in 0..alias.infer_ext_in_output_variables.len() {
+                        // Unfortunately the polarity might still be undetermined at this point,
+                        // since this might be a delayed alias inside an alias. In these cases
+                        // generate fresh variables to hold the extension-variables-to-be-inferred,
+                        // which will be instantiated when the alias is used at a concrete site.
+                        // Otherwise, instantiate the variables with how they should behave based
+                        // on the polarity
+                        let typ = match pol {
+                            CanPolarity::InAlias | CanPolarity::Pos => {
+                                let var = var_store.fresh();
+                                introduced_variables.insert_infer_ext_in_output(var);
+                                Type::Variable(var)
+                            }
+                            // TODO: determine for opaques
+                            CanPolarity::InOpaque => Type::EmptyTagUnion,
+                            CanPolarity::Neg => Type::EmptyTagUnion,
+                        };
+                        infer_ext_in_output_types.push(typ);
+                    }
+
                     Type::DelayedAlias(AliasCommon {
                         symbol,
                         type_arguments: type_var_to_arg,
                         lambda_set_variables,
+                        infer_ext_in_output_types,
                     })
                 }
                 None => Type::Apply(symbol, args, region),
@@ -649,6 +731,7 @@ fn can_annotation_help(
 
             let inner_type = can_annotation_help(
                 env,
+                CanPolarity::InOpaque,
                 &loc_inner.value,
                 region,
                 scope,
@@ -748,10 +831,14 @@ fn can_annotation_help(
                 hidden_variables.remove(&loc_var.value.var);
             }
 
+            // TODO: handle implicit ext variables in `as` aliases
+            let infer_ext_in_output = vec![];
+
             scope.add_alias(
                 symbol,
                 region,
                 lowercase_vars,
+                infer_ext_in_output,
                 alias_actual,
                 AliasKind::Structural, // aliases in "as" are never opaque
             );
@@ -774,6 +861,11 @@ fn can_annotation_help(
                     symbol,
                     type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
                     lambda_set_variables: alias.lambda_set_variables.clone(),
+                    infer_ext_in_output_types: alias
+                        .infer_ext_in_output_variables
+                        .iter()
+                        .map(|v| Type::Variable(*v))
+                        .collect(),
                     actual: Box::new(alias.typ.clone()),
                     kind: alias.kind,
                 }
@@ -783,6 +875,7 @@ fn can_annotation_help(
         Record { fields, ext } => {
             let ext_type = can_extension_type(
                 env,
+                pol,
                 scope,
                 var_store,
                 introduced_variables,
@@ -806,6 +899,7 @@ fn can_annotation_help(
             } else {
                 let field_types = can_assigned_fields(
                     env,
+                    pol,
                     &fields.items,
                     region,
                     scope,
@@ -821,6 +915,7 @@ fn can_annotation_help(
         TagUnion { tags, ext, .. } => {
             let ext_type = can_extension_type(
                 env,
+                pol,
                 scope,
                 var_store,
                 introduced_variables,
@@ -844,6 +939,7 @@ fn can_annotation_help(
             } else {
                 let mut tag_types = can_tags(
                     env,
+                    pol,
                     tags.items,
                     region,
                     scope,
@@ -863,6 +959,7 @@ fn can_annotation_help(
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
             env,
+            pol,
             nested,
             region,
             scope,
@@ -989,6 +1086,7 @@ fn canonicalize_has_clause(
 #[allow(clippy::too_many_arguments)]
 fn can_extension_type<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
@@ -1013,15 +1111,16 @@ fn can_extension_type<'a>(
 
     use roc_problem::can::ExtensionTypeKind;
 
-    let (empty_ext_type, valid_extension_type): (_, fn(&Type) -> bool) = match ext_problem_kind {
-        ExtensionTypeKind::Record => (Type::EmptyRec, valid_record_ext_type),
-        ExtensionTypeKind::TagUnion => (Type::EmptyTagUnion, valid_tag_ext_type),
+    let valid_extension_type: fn(&Type) -> bool = match ext_problem_kind {
+        ExtensionTypeKind::Record => valid_record_ext_type,
+        ExtensionTypeKind::TagUnion => valid_tag_ext_type,
     };
 
     match opt_ext {
         Some(loc_ann) => {
             let ext_type = can_annotation_help(
                 env,
+                pol,
                 &loc_ann.value,
                 loc_ann.region,
                 scope,
@@ -1031,6 +1130,17 @@ fn can_extension_type<'a>(
                 references,
             );
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
+                if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
+                    && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
+                    && pol == CanPolarity::Pos
+                {
+                    // Wildcards are redundant in positive positions, since they will always be
+                    // inferred as necessary there!
+                    env.problem(roc_problem::can::Problem::UnnecessaryOutputWildcard {
+                        region: loc_ann.region,
+                    })
+                }
+
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred
@@ -1050,7 +1160,22 @@ fn can_extension_type<'a>(
                 Type::Variable(var)
             }
         }
-        None => empty_ext_type,
+        None => match ext_problem_kind {
+            ExtensionTypeKind::Record => Type::EmptyRec,
+            ExtensionTypeKind::TagUnion => {
+                // In negative positions a missing extension variable forces a closed tag union;
+                // otherwise, open-in-output-position means we give the tag an inference variable.
+                match pol {
+                    CanPolarity::Neg | CanPolarity::InOpaque => Type::EmptyTagUnion,
+                    CanPolarity::Pos | CanPolarity::InAlias => {
+                        let var = var_store.fresh();
+                        introduced_variables.insert_infer_ext_in_output(var);
+
+                        Type::Variable(var)
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -1180,6 +1305,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn can_assigned_fields<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     fields: &&[Loc<AssignedField<'a, TypeAnnotation<'a>>>],
     region: Region,
     scope: &mut Scope,
@@ -1209,6 +1335,7 @@ fn can_assigned_fields<'a>(
                 RequiredValue(field_name, _, annotation) => {
                     let field_type = can_annotation_help(
                         env,
+                        pol,
                         &annotation.value,
                         annotation.region,
                         scope,
@@ -1226,6 +1353,7 @@ fn can_assigned_fields<'a>(
                 OptionalValue(field_name, _, annotation) => {
                     let field_type = can_annotation_help(
                         env,
+                        pol,
                         &annotation.value,
                         annotation.region,
                         scope,
@@ -1293,6 +1421,7 @@ fn can_assigned_fields<'a>(
 #[allow(clippy::too_many_arguments)]
 fn can_tags<'a>(
     env: &mut Env,
+    pol: CanPolarity,
     tags: &'a [Loc<Tag<'a>>],
     region: Region,
     scope: &mut Scope,
@@ -1322,6 +1451,7 @@ fn can_tags<'a>(
                     for arg in args.iter() {
                         let ann = can_annotation_help(
                             env,
+                            pol,
                             &arg.value,
                             arg.region,
                             scope,

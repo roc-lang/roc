@@ -4824,7 +4824,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state) {
+    let parsed_defs = match module_defs().parse(arena, parse_state, 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
             return Err(LoadingProblem::ParsingFailed(
@@ -5999,6 +5999,7 @@ pub fn default_aliases() -> roc_solve::solve::Aliases {
             type_variables: vec![],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
+            infer_ext_in_output_variables: Default::default(),
             typ: Type::EmptyTagUnion,
             kind: AliasKind::Opaque,
         };

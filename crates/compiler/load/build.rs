@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 
+const ROC_SKIP_SUBS_CACHE: &str = "ROC_SKIP_SUBS_CACHE";
+
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
         Some(s) => s.len() == 1 && s.as_bytes()[0] == b'1',
@@ -95,6 +97,10 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
             panic!("build_file failed with error:\n{:?}", other);
         }
     };
+
+    if module.total_problems() > 0 {
+        panic!("Problems were found! Refusing to build cached subs.\nTry building with {}=1 to see them.", ROC_SKIP_SUBS_CACHE);
+    }
 
     let subs = module.solved.into_inner();
     let exposed_vars_by_symbol: Vec<_> = module.exposed_to_host.into_iter().collect();

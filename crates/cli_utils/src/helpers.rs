@@ -74,7 +74,7 @@ where
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
-    path_to_binary("roc")
+    path_to_binary(if cfg!(windows) { "roc.exe" } else { "roc" })
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {

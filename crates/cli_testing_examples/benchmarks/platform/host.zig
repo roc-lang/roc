@@ -1,5 +1,6 @@
 const std = @import("std");
 const str = @import("str");
+const builtin = @import("builtin");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -15,7 +16,6 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    const builtin = @import("builtin");
     if (builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
@@ -210,7 +210,9 @@ fn roc_fx_getInt_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
-    const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    // make sure to strip `\r` on windows
+    const raw_line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    const line = std.mem.trimRight(u8, raw_line, &std.ascii.spaces);
 
     return std.fmt.parseInt(i64, line, 10);
 }

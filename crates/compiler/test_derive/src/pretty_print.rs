@@ -387,6 +387,7 @@ fn pattern<'a>(
             )
             .append(f.text("}"))
             .group(),
+        List { .. } => todo!(),
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {
             f.text(&**n)
         }
