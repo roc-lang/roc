@@ -385,38 +385,41 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
 #         |> app.initDynamic
 #         |> app.renderDynamic
 #         |> transformStatic
-
-populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html []), siblings: List (Html []) }, Html [] -> { id: HtmlId, views: Dict HtmlId (Html []), siblings: List (Html []) }
+populateViewContainers : { views : Dict HtmlId (Html []), siblings : List (Html []) }, Html [] -> { views : Dict HtmlId (Html []), siblings : List (Html []) }
 populateViewContainers = \walkState, oldTreeNode ->
     when oldTreeNode is
         Element name jsIndex size attrs children ->
-            { id, views, siblings } =
-                walkState
-            maybeView =
-                if Result.isOk (List.findFirst attrs (\a -> isEqAttr a (HtmlAttr "id" id))) then
-                    Dict.get views id
-                else
-                    Err KeyNotFound
+            { views, siblings } = walkState
 
-            when maybeView is
-                Ok view ->
-                    { id,
-                      views: Dict.remove views id,
-                      siblings: List.append siblings (Element name jsIndex size attrs [view])
+            maybeFound =
+                List.walkUntil attrs (Err KeyNotFound) \maybe, attr ->
+                    when attr is
+                        HtmlAttr "id" id ->
+                            Dict.get views id
+                            |> Result.map (\view -> { view, id })
+                            |> Break
+
+                        _ -> Err KeyNotFound |> Continue
+
+            when maybeFound is
+                Ok { view, id } ->
+                    {
+                        views: Dict.remove views id,
+                        siblings: List.append siblings (Element name jsIndex size attrs [view]),
                     }
 
                 Err KeyNotFound ->
+                    emptyNewChildren = List.withCapacity (List.len children)
                     { views: newViews, siblings: newChildren } =
-                        List.walk children { id, views, siblings: List.withCapacity (List.len children) } populateViewContainers
+                        List.walk children { views, siblings: emptyNewChildren } populateViewContainers
 
-                    { id,
-                      views: newViews,
-                      siblings: List.append siblings (Element name jsIndex size attrs newChildren),
+                    {
+                        views: newViews,
+                        siblings: List.append siblings (Element name jsIndex size attrs newChildren),
                     }
 
         _ ->
             walkState
-
 
 # server side
 #    convert `initData` to `state`
