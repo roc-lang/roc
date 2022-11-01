@@ -404,6 +404,16 @@ mod test_reporting {
         }
     }
 
+    macro_rules! test_no_problem {
+        ($(#[$meta:meta])* $test_name: ident, $program:expr) => {
+            #[test]
+            $(#[$meta])*
+            fn $test_name() {
+                __new_report_problem_as(std::stringify!($test_name), $program, |golden| pretty_assertions::assert_eq!(golden, ""))
+            }
+        }
+    }
+
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
@@ -11874,6 +11884,310 @@ All branches in an `if` must have the same type!
         List Str
 
     The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        list_match_non_exhaustive_only_empty,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+
+    Other possibilities include:
+
+        [_, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_spread_exhaustive,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_non_exhaustive_infinite,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A] -> ""
+    9│>          [A, A] -> ""
+
+    Other possibilities include:
+
+        [_, _, _, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_unary_head,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+            "#
+        )
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+                [B, ..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A, ..] -> ""
+
+    Other possibilities include:
+
+        [B, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, B, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, B, ..] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, A, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+                [.., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [.., A] -> ""
+
+    Other possibilities include:
+
+        [.., B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [.., B, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [.., B, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [.., _, B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_exhaustive_big_sizes_but_not_small_sizes,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [A, A, A, .., A, A, A] -> ""
+                [A, A, A, .., A, A] -> ""
+                [A, A, .., A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, A, A, .., A, A, A] -> ""
+    8│>          [A, A, A, .., A, A] -> ""
+    9│>          [A, A, .., A, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, _]
+        [_, _, _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_nested_list_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [..]] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_nested_list_not_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A, B])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [.., B]] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [[]] -> ""
+     9│>          [[A, ..]] -> ""
+    10│>          [[..], .., [.., B]] -> ""
+
+    Other possibilities include:
+
+        [[B, ..]]
+        [_, .., []]
+        [[], .., [.., A]]
+        [[_, ..], .., [.., A]]
+
+    I would have to crash if I saw one of those! Add branches for them!
     "###
     );
 }

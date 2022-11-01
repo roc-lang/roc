@@ -197,7 +197,7 @@ fn index_var(
                     return Ok(vars);
                 }
                 FlatType::EmptyRecord => {
-                    debug_assert!(matches!(ctor, IndexCtor::Record(&[])));
+                    debug_assert!(matches!(ctor, IndexCtor::Record(..)));
                     // If there are optional record fields we don't unify them, but we need to
                     // cover them. Since optional fields correspond to "any" patterns, we can pass
                     // through arbitrary types.
