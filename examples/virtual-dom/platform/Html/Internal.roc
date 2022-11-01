@@ -187,7 +187,8 @@ translateLazy = \childCallback, parentToChild, childToParent ->
             state: childToParent state,
         }
 
-translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
+# translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
+translateAttr : Attribute _, (_ -> _), (_ -> _) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
     when attr is
         EventListener eventName accessors (Ok childHandler) ->
@@ -200,7 +201,8 @@ translateAttr = \attr, parentToChild, childToParent ->
         DomProp k v -> DomProp k v
         Style k v -> Style k v
 
-translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
+# translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
+translateHandler : Handler _, (_ -> _), (_ -> _) -> Handler _
 translateHandler = \childHandler, parentToChild, childToParent ->
     when childHandler is
         @Handler (Normal childFn) ->
