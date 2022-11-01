@@ -60,14 +60,31 @@ CyclicStructureAccessor : [
 Handler state := [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
-] has [Eq { isEq: isEqHandler }]
+] # has [Eq { isEq: isEqHandler }] TODO: compiler crash
 
-# ERROR: 'member signature lambda sets should contain only one unspecialized lambda set', crates/compiler/unify/src/unify.rs:1118:5
-# isEqHandler : Handler state, Handler state -> Bool
+# -------------------------------
+#   CUSTOM EQUALITY
+# -------------------------------
+
+isEqHandler : Handler state, Handler state -> Bool
 isEqHandler = \@Handler a, @Handler b ->
     when { a, b } is
         { a: Normal _, b: Normal _ } -> Bool.true
         { a: Custom _, b: Custom _ } -> Bool.true
+        _ -> Bool.false
+
+isEqAttr : Attribute state, Attribute state -> Bool
+isEqAttr = \a, b ->
+    when { a, b } is
+        { a: EventListener ea la ra, b: EventListener eb lb rb } ->
+            ea == eb && la == lb &&
+                when { ra, rb } is
+                    { ra: Ok ha, rb: Ok hb } -> isEqHandler ha hb
+                    { ra: Err ia, rb: Err ib } -> ia == ib
+                    _ -> Bool.false
+        { a: HtmlAttr ka va, b: HtmlAttr kb vb } -> ka == kb && va == vb
+        { a: DomProp ka va, b: DomProp kb vb } -> ka == kb && va == vb
+        { a: Style ka va, b: Style kb vb } -> ka == kb && va == vb
         _ -> Bool.false
 
 # -------------------------------
@@ -377,11 +394,10 @@ populateViewContainers = \walkState, oldTreeNode ->
                 walkState
             maybeView =
                 # TODO: swap Attribute for HtmlAttr and see if it hangs the compiler
-                # TODO: List.contains doesn't typecheck since we don't have Eq. Is that causing the compiler crash?
-                # if List.contains attrs (HtmlAttr "id" id) then
+                if Result.isOk (List.findFirst attrs (\a -> isEqAttr a (HtmlAttr "id" id))) then
                     Dict.get views id
-                # else
-                #     Err KeyNotFound
+                else
+                    Err KeyNotFound
 
             when maybeView is
                 Ok view ->
