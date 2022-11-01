@@ -45,6 +45,7 @@ impl Problems {
 pub fn compile_to_mono<'a>(
     arena: &'a Bump,
     src: &str,
+    filter_problems_before_offset: usize,
     target_info: TargetInfo,
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
@@ -113,19 +114,28 @@ pub fn compile_to_mono<'a>(
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
+        // Filter out all warnings and errors whose regions end before this,
+        // because they must be part of the defs (excluding the most renently added def,
+        // if that's the one being evaluated) and therefore not things we should show.
+        // This filters out things like shadowing warnings and unused def warnings.
+        let min_region = REPL_MODULE_WRAPPER.len() + INDENT.len() + filter_problems_before_offset;
+
         for problem in can_probs.into_iter() {
-            let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
+            // Filter it out of the region end wasn't at least min_region
+            if problem.region().unwrap_or_default().end().offset as usize >= min_region {
+                let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
+                let severity = report.severity;
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            match severity {
-                Severity::Warning => {
-                    warnings.push(buf);
-                }
-                Severity::RuntimeError => {
-                    errors.push(buf);
+                match severity {
+                    Severity::Warning => {
+                        warnings.push(buf);
+                    }
+                    Severity::RuntimeError => {
+                        errors.push(buf);
+                    }
                 }
             }
         }
@@ -152,13 +162,16 @@ pub fn compile_to_mono<'a>(
     (Some(loaded), problems)
 }
 
+const REPL_MODULE_WRAPPER: &str =
+    "app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n";
+const INDENT: &str = "    ";
+
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n");
+    let mut buffer = String::from(REPL_MODULE_WRAPPER);
 
     for line in src.lines() {
         // indent the body!
-        buffer.push_str("    ");
+        buffer.push_str(INDENT);
         buffer.push_str(line);
         buffer.push('\n');
     }

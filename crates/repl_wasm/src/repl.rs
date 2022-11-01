@@ -175,7 +175,16 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
+    // TODO use this to filter out problems and warnings in wrapped defs.
+    // See the variable by the same name in the CLI REPL for how to do this!
+    let filter_problems_before_offset = 0;
+    let mono = match compile_to_mono(
+        arena,
+        &src,
+        filter_problems_before_offset,
+        target_info,
+        DEFAULT_PALETTE_HTML,
+    ) {
         (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
         (_, problems) => {
             // TODO always report these, but continue if possible with the MonomorphizedModule if we have one.

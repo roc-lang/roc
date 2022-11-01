@@ -131,12 +131,15 @@ impl ReplState {
     pub fn eval_and_format(&mut self, src: &str) -> String {
         let arena = Bump::new();
         let mut opt_var_name;
+        let def_offset;
         let src = match parse_src(&arena, src) {
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
                 // become a SyntaxErr as soon as we evaluate it),
                 // proceed as normal and let the error reporting happen during eval.
                 opt_var_name = None;
+
+                def_offset = 0; // This isn't a def.
 
                 src
             }
@@ -171,6 +174,8 @@ impl ReplState {
                             },
                         ..
                     } => {
+                        def_offset = src.len();
+
                         self.add_past_def(ident.to_string(), src.to_string());
                         opt_var_name = Some(ident.to_string());
 
@@ -224,36 +229,51 @@ impl ReplState {
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
+        let wrapped_src = self.with_past_defs(src);
+
+        // If we're making a new def, don't include it in the filter offset. If we did,
+        // we'd filter out any errors that occurred in the new def!
+        debug_assert!(wrapped_src.len() >= def_offset);
+        let filter_problems_before_offset = wrapped_src.len().saturating_sub(def_offset);
+
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
-        let (output, problems) = match opt_var_name
-            .or_else(|| self.past_def_idents.get(src.trim()).cloned())
-        {
-            Some(existing_ident) => {
-                opt_var_name = Some(existing_ident);
+        let (output, problems) =
+            match opt_var_name.or_else(|| self.past_def_idents.get(src.trim()).cloned()) {
+                Some(existing_ident) => {
+                    opt_var_name = Some(existing_ident);
 
-                gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal)
-            }
-            None => {
-                let (output, problems) =
-                    gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal);
-
-                // Don't persist defs that have compile errors
-                if problems.errors.is_empty() {
-                    let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
-                    let src = format!("{var_name} = {}", src.trim_end());
-
-                    opt_var_name = Some(var_name.clone());
-
-                    self.add_past_def(var_name, src);
-                } else {
-                    opt_var_name = None;
+                    gen_and_eval_llvm(
+                        &wrapped_src,
+                        filter_problems_before_offset,
+                        Triple::host(),
+                        OptLevel::Normal,
+                    )
                 }
+                None => {
+                    let (output, problems) = gen_and_eval_llvm(
+                        &wrapped_src,
+                        filter_problems_before_offset,
+                        Triple::host(),
+                        OptLevel::Normal,
+                    );
 
-                (output, problems)
-            }
-        };
+                    // Don't persist defs that have compile errors
+                    if problems.errors.is_empty() {
+                        let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+                        let src = format!("{var_name} = {}", src.trim_end());
+
+                        opt_var_name = Some(var_name.clone());
+
+                        self.add_past_def(var_name, src);
+                    } else {
+                        opt_var_name = None;
+                    }
+
+                    (output, problems)
+                }
+            };
 
         format_output(output, problems, opt_var_name)
     }
