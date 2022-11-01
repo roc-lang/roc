@@ -20,16 +20,24 @@ interface Html.Internal
     ]
     imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
 
-JsIndex : [
-    JsIndex Nat, # Index of the corresponding real DOM node in a JavaScript array
-    NoJsIndex, # We don't have a JavaScript index for fresh nodes not yet diffed, or for static HTML
-]
+App state initData : {
+    static : Html [],
+    initDynamic : initData -> state,
+    renderDynamic : state -> Dict HtmlId (Html state),
+} | initData has Encoding
+
+HtmlId : Str
 
 Html state : [
     None,
     Text JsIndex Str,
     Element Str JsIndex Nat (List (Attribute state)) (List (Html state)),
     Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
+]
+
+JsIndex : [
+    JsIndex Nat, # Index of the corresponding real DOM node in a JavaScript array
+    NoJsIndex, # We don't have a JavaScript index for fresh nodes not yet diffed, or for static HTML
 ]
 
 LazyCallback state : Result { state, node : Html state } [NotCached] -> { state, node : Html state }
@@ -53,6 +61,10 @@ Handler state : [
     Normal (state, List (List U8) -> Action state),
     Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
 ]
+
+# -------------------------------
+#   VIEW FUNCTIONS
+# -------------------------------
 
 ## Define an HTML Element
 element : Str -> (List (Attribute state), List (Html state) -> Html state)
@@ -89,6 +101,10 @@ attrSize = \attr ->
         HtmlAttr key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
         DomProp _ _ -> 0
         Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
+
+# -------------------------------
+#   STATIC HTML
+# -------------------------------
 
 appendRenderedStatic : Str, Html [] -> Str
 appendRenderedStatic = \buffer, node ->
@@ -136,6 +152,10 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
         EventListener _ _ _ -> { buffer, styles }
         DomProp _ _ -> { buffer, styles }
 
+# -------------------------------
+#   TRANSLATE STATE TYPE
+# -------------------------------
+
 # translate : Html c, (p -> c), (c -> p) -> Html p # TODO: use this type signature when it no longer triggers a type checker bug
 translate : Html _, (_ -> _), (_ -> _) -> Html _
 translate = \node, parentToChild, childToParent ->
@@ -171,11 +191,11 @@ translateLazy = \childCallback, parentToChild, childToParent ->
 translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
     when attr is
-        EventListener eventName accesors (Ok childHandler) ->
-            EventListener eventName accesors (Ok (translateHandler childHandler parentToChild childToParent))
+        EventListener eventName accessors (Ok childHandler) ->
+            EventListener eventName accessors (Ok (translateHandler childHandler parentToChild childToParent))
 
-        EventListener eventName accesors (Err handlerId) ->
-            EventListener eventName accesors (Err handlerId)
+        EventListener eventName accessors (Err handlerId) ->
+            EventListener eventName accessors (Err handlerId)
 
         HtmlAttr k v -> HtmlAttr k v
         DomProp k v -> DomProp k v
@@ -226,6 +246,10 @@ keepStaticAttr = \attr ->
         DomProp _ _ -> Err {}
         Style k v -> Ok (Style k v)
 
+# -------------------------------
+#   EVENT HANDLING
+# -------------------------------
+
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, lookup : List (Result (Handler state) [NoHandler]) }
 insertHandler = \lookup, newHandler ->
     when List.findFirstIndex lookup Result.isErr is
@@ -265,13 +289,9 @@ dispatchEvent = \lookup, handlerId, eventData, state ->
         Ok (Custom handler) ->
             handler state eventData
 
-HtmlId : Str
-
-App state initData : {
-    static : Html [],
-    initDynamic : initData -> state,
-    renderDynamic : state -> Dict HtmlId (Html state),
-} | initData has Encoding
+# -------------------------------
+#   SERVER SIDE RENDERING
+# -------------------------------
 
 # rocScript : Str, List HtmlId, Str -> Result (Html []) [InvalidUtf8]*
 # rocScript = \initData, dynamicRootIds, wasmUrl ->
