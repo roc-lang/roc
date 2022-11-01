@@ -23,7 +23,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "windows-rust-cache-action-$env:GITHUB_RUNNER_CPU"
+          shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
 
       - name: download and install zig
         run: |
