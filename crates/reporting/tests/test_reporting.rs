@@ -12108,6 +12108,88 @@ All branches in an `if` must have the same type!
     "###
     );
 
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [B] -> ""
+                [A, .., A] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [_] -> ""
+     9│>          [A, .., B] -> ""
+    10│>          [B, .., A] -> ""
+
+    Other possibilities include:
+
+        [_, .., _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, .., B] -> ""
+    8│>          [B, .., A] -> ""
+    9│>          [B, .., B] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [A, .., A]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
     test_report!(
         list_match_exhaustive_big_sizes_but_not_small_sizes,
         indoc!(
