@@ -341,36 +341,35 @@ App state initData : {
 #         |> app.renderDynamic
 #         |> transformStatic
 
-# TODO: are the empty tag unions a problem?
-# populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html []), newTree: Html [] }, Html [] -> { id: HtmlId, views: Dict HtmlId (Html []), newTree: Html [] }
-populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html a), newTree: Html a }, Html a -> { id: HtmlId, views: Dict HtmlId (Html a), newTree: Html a }
+populateViewContainers : { id: HtmlId, views: Dict HtmlId (Html []), siblings: List (Html []) }, Html [] -> { id: HtmlId, views: Dict HtmlId (Html []), siblings: List (Html []) }
 populateViewContainers = \walkState, oldTreeNode ->
     when oldTreeNode is
         Element name jsIndex size attrs children ->
-            { id, views, newTree } =
+            { id, views, siblings } =
                 walkState
-            maybeView = Ok newTree
+            maybeView =
                 # TODO: swap Attribute for HtmlAttr and see if it hangs the compiler
                 # TODO: List.contains doesn't typecheck since we don't have Eq. Is that causing the compiler crash?
                 # if List.contains attrs (HtmlAttr "id" id) then
-                #     Dict.get views id
+                    Dict.get views id
                 # else
                 #     Err KeyNotFound
 
             when maybeView is
                 Ok view ->
                     { id,
-                      views, #: Dict.remove views id, # TODO: does missing the first argument cause the compiler stack overflow?
-                      newTree: Element name jsIndex size attrs [view], # TODO this causes compiler stack overflow
-                            #  Element Str JsIndex Nat (List (Attribute state)) (List (Html state))
-                    #   newTree: view, # this works fine
+                      views: Dict.remove views id,
+                      siblings: List.append siblings (Element name jsIndex size attrs [view])
                     }
+
                 Err KeyNotFound ->
-                    walkState
-                    # { id,
-                    #   views,
-                    #   newTree: Element name jsIndex size attrs (List.walk children walkState populateViewContainers),
-                    # }
+                    { views: newViews, siblings: newChildren } =
+                        List.walk children { id, views, siblings: List.withCapacity (List.len children) } populateViewContainers
+
+                    { id,
+                      views: newViews,
+                      siblings: List.append siblings (Element name jsIndex size attrs newChildren),
+                    }
 
         _ ->
             walkState
