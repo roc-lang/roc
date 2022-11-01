@@ -65,6 +65,7 @@ Handler state := [
 # -------------------------------
 #   VIEW FUNCTIONS
 # -------------------------------
+
 ## Define an HTML Element
 element : Str -> (List (Attribute state), List (Html state) -> Html state)
 element = \tagName ->
@@ -104,6 +105,7 @@ attrSize = \attr ->
 # -------------------------------
 #   STATIC HTML
 # -------------------------------
+
 appendRenderedStatic : Str, Html [] -> Str
 appendRenderedStatic = \buffer, node ->
     when node is
@@ -153,6 +155,7 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 # -------------------------------
 #   TRANSLATE STATE TYPE
 # -------------------------------
+
 # translate : Html c, (p -> c), (c -> p) -> Html p # TODO: use this type signature when it no longer triggers a type checker bug
 translate : Html _, (_ -> _), (_ -> _) -> Html _
 translate = \node, parentToChild, childToParent ->
@@ -246,6 +249,7 @@ keepStaticAttr = \attr ->
 # -------------------------------
 #   EVENT HANDLING
 # -------------------------------
+
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, lookup : List (Result (Handler state) [NoHandler]) }
 insertHandler = \lookup, newHandler ->
     when List.findFirstIndex lookup Result.isErr is
@@ -356,7 +360,9 @@ populateViewContainers = \walkState, oldTreeNode ->
                 List.walkUntil attrs (Err KeyNotFound) \maybe, attr ->
                     when attr is
                         HtmlAttr "id" id ->
-                            Dict.get views id |> Result.map \view -> { view, id } |> Break
+                            Dict.get views id
+                            |> Result.map (\view -> { view, id })
+                            |> Break
 
                         _ -> Err KeyNotFound |> Continue
 
