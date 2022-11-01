@@ -1896,6 +1896,11 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
                 stack.extend(subs.get_subs_slice(fields.variables()));
             }
 
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Open up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
+            }
+
             _ => {
                 // Everything else is not a structural type that can be opened
                 // (i.e. cannot be matched in a pattern-match)
@@ -1956,8 +1961,13 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
             }
 
             Structure(Record(fields, _)) => {
-                // Open up all nested tag unions.
+                // Close up all nested tag unions.
                 stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Close up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
             }
 
             Alias(_, _, real_var, _) => {
