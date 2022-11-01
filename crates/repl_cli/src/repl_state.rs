@@ -131,15 +131,12 @@ impl ReplState {
     pub fn eval_and_format(&mut self, src: &str) -> String {
         let arena = Bump::new();
         let mut opt_var_name;
-        let def_offset;
         let src = match parse_src(&arena, src) {
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
                 // become a SyntaxErr as soon as we evaluate it),
                 // proceed as normal and let the error reporting happen during eval.
                 opt_var_name = None;
-
-                def_offset = 0; // This isn't a def.
 
                 src
             }
@@ -174,13 +171,23 @@ impl ReplState {
                             },
                         ..
                     } => {
-                        def_offset = src.len();
-
                         self.add_past_def(ident.to_string(), src.to_string());
                         opt_var_name = Some(ident.to_string());
 
-                        // Eval the body of the def by adding a lookup to it
-                        *ident
+                        // Recreate the body of the def and then evaluate it as a lookup.
+                        // We do this so that any errors will get reported as part of this expr;
+                        // if we just did a lookup on the past def, then errors wouldn't get
+                        // reported because we filter out errors whose regions are in past defs.
+                        let mut buf = bumpalo::collections::string::String::with_capacity_in(
+                            ident.len() + src.len() + 1,
+                            &arena,
+                        );
+
+                        buf.push_str(src);
+                        buf.push('\n');
+                        buf.push_str(ident);
+
+                        buf.into_bump_str()
                     }
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
@@ -229,13 +236,6 @@ impl ReplState {
             ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
-        let wrapped_src = self.with_past_defs(src);
-
-        // If we're making a new def, don't include it in the filter offset. If we did,
-        // we'd filter out any errors that occurred in the new def!
-        debug_assert!(wrapped_src.len() >= def_offset);
-        let filter_problems_before_offset = wrapped_src.len().saturating_sub(def_offset);
-
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
@@ -245,16 +245,16 @@ impl ReplState {
                     opt_var_name = Some(existing_ident);
 
                     gen_and_eval_llvm(
-                        &wrapped_src,
-                        filter_problems_before_offset,
+                        self.past_defs.iter().map(|def| def.src.as_str()),
+                        src,
                         Triple::host(),
                         OptLevel::Normal,
                     )
                 }
                 None => {
                     let (output, problems) = gen_and_eval_llvm(
-                        &wrapped_src,
-                        filter_problems_before_offset,
+                        self.past_defs.iter().map(|def| def.src.as_str()),
+                        src,
                         Triple::host(),
                         OptLevel::Normal,
                     );
@@ -289,20 +289,6 @@ impl ReplState {
         existing_idents.insert(ident.clone());
 
         self.past_defs.push(PastDef { ident, src });
-    }
-
-    /// Wrap the given expresssion in the appropriate past defs
-    pub fn with_past_defs(&self, src: &str) -> String {
-        let mut buf = String::new();
-
-        for past_def in self.past_defs.iter() {
-            buf.push_str(past_def.src.as_str());
-            buf.push('\n');
-        }
-
-        buf.push_str(src);
-
-        buf
     }
 }
 

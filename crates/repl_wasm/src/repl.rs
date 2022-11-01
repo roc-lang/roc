@@ -177,11 +177,10 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let target_info = TargetInfo::default_wasm32();
     // TODO use this to filter out problems and warnings in wrapped defs.
     // See the variable by the same name in the CLI REPL for how to do this!
-    let filter_problems_before_offset = 0;
     let mono = match compile_to_mono(
         arena,
+        std::iter::empty(),
         &src,
-        filter_problems_before_offset,
         target_info,
         DEFAULT_PALETTE_HTML,
     ) {

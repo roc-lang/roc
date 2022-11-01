@@ -21,9 +21,9 @@ use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
 use target_lexicon::Triple;
 
-pub fn gen_and_eval_llvm(
+pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
+    defs: I,
     src: &str,
-    filter_errors_before_offset: usize,
     target: Triple,
     opt_level: OptLevel,
 ) -> (Option<ReplOutput>, Problems) {
@@ -33,13 +33,7 @@ pub fn gen_and_eval_llvm(
     let mut loaded;
     let problems;
 
-    match compile_to_mono(
-        &arena,
-        src,
-        filter_errors_before_offset,
-        target_info,
-        DEFAULT_PALETTE,
-    ) {
+    match compile_to_mono(&arena, defs, src, target_info, DEFAULT_PALETTE) {
         (Some(mono), probs) => {
             loaded = mono;
             problems = probs;
