@@ -7489,21 +7489,26 @@ fn store_list_pattern<'a>(
     let mut is_productive = false;
 
     for (index, element) in elements.iter().enumerate().rev() {
-        let list_index = ListIndex::from_pattern_index(index, list_arity);
+        let compute_element_load = |env: &mut Env<'a, '_>| {
+            let list_index = ListIndex::from_pattern_index(index, list_arity);
 
-        // TODO do this only lazily
-        let (index_sym, needed_stores) = build_list_index_probe(env, list_sym, &list_index);
+            let (index_sym, needed_stores) = build_list_index_probe(env, list_sym, &list_index);
 
-        let load = Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::ListGetUnsafe,
-                update_mode: env.next_update_mode_id(),
-            },
-            arguments: env.arena.alloc([list_sym, index_sym]),
-        });
+            let load = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListGetUnsafe,
+                    update_mode: env.next_update_mode_id(),
+                },
+                arguments: env.arena.alloc([list_sym, index_sym]),
+            });
 
-        let store_loaded = match element {
+            (load, needed_stores)
+        };
+
+        let (store_loaded, needed_stores) = match element {
             Identifier(symbol) => {
+                let (load, needed_stores) = compute_element_load(env);
+
                 // Pattern can define only one specialization
                 let symbol = procs
                     .symbol_specializations
@@ -7511,7 +7516,10 @@ fn store_list_pattern<'a>(
                     .unwrap_or(*symbol);
 
                 // store immediately in the given symbol
-                Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt))
+                (
+                    Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt)),
+                    needed_stores,
+                )
             }
             Underscore
             | IntLiteral(_, _)
@@ -7531,9 +7539,14 @@ fn store_list_pattern<'a>(
                 match store_pattern_help(env, procs, layout_cache, element, symbol, stmt) {
                     StorePattern::Productive(new) => {
                         stmt = new;
+                        let (load, needed_stores) = compute_element_load(env);
+
                         // only if we bind one of its (sub)fields to a used name should we
                         // extract the field
-                        Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt))
+                        (
+                            Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt)),
+                            needed_stores,
+                        )
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
