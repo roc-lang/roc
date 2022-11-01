@@ -4851,6 +4851,7 @@ mod test_reporting {
 
     I am partway through parsing a `when` expression, but got stuck here:
 
+    4│      when Just 4 is
     5│          Just when ->
                      ^
 
@@ -4886,6 +4887,8 @@ mod test_reporting {
 
     I was partway through parsing a `when` expression, but I got stuck here:
 
+    4│      when 5 is
+    5│          1 -> 2
     6│          _
                  ^
 
