@@ -1617,6 +1617,7 @@ fn stores_and_condition<'a>(
     tests
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_test<'a>(
     env: &mut Env<'a, '_>,
     ret_layout: Layout<'a>,
