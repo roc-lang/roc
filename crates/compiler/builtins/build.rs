@@ -212,7 +212,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     Err(_) => format!("Failed to run \"{}\"", command_str),
                 };
 
-                // flaky test error that only occurs sometimes inside MacOS ci run
+                // Flaky test errors that only occur sometimes on MacOS ci server.
                 if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
                 {
