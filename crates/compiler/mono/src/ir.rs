@@ -7379,6 +7379,100 @@ fn store_pattern_help<'a>(
     StorePattern::Productive(stmt)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListIndex(
+    /// Positive if we should index from the head, negative if we should index from the tail
+    /// 0 is lst[0]
+    /// -1 is lst[List.len lst - 1]
+    i64,
+);
+
+impl ListIndex {
+    pub fn from_pattern_index(index: usize, arity: ListArity) -> Self {
+        match arity {
+            ListArity::Exact(_) => ListIndex::nth_head(index as _),
+            ListArity::Slice(head, tail) => {
+                if index < head {
+                    ListIndex::nth_head(index as _)
+                } else {
+                    // Slice(2, 6)
+                    //
+                    // s t ... w y z x q
+                    // 0 1     2 3 4 5 6 index
+                    //         0 1 2 3 4 (index - head)
+                    //         4 3 2 1 0 tail - (index - head)
+                    ListIndex::nth_tail((tail - (index - head)) as _)
+                }
+            }
+        }
+    }
+
+    fn nth_head(offset: u64) -> Self {
+        Self(offset as _)
+    }
+
+    fn nth_tail(offset: u64) -> Self {
+        let offset = offset as i64;
+        Self(-1 - offset)
+    }
+}
+
+pub(crate) type Store<'a> = (Symbol, Layout<'a>, Expr<'a>);
+
+/// Builds the list index we should index into
+#[must_use]
+pub(crate) fn build_list_index_probe<'a>(
+    env: &mut Env<'a, '_>,
+    list_sym: Symbol,
+    list_index: &ListIndex,
+) -> (Symbol, impl DoubleEndedIterator<Item = Store<'a>>) {
+    let usize_layout = Layout::usize(env.target_info);
+
+    let list_index = list_index.0;
+    let index_sym = env.unique_symbol();
+
+    let (opt_len_store, opt_offset_store, index_store) = if list_index >= 0 {
+        let index_expr = Expr::Literal(Literal::Int((list_index as i128).to_ne_bytes()));
+
+        let index_store = (index_sym, usize_layout, index_expr);
+
+        (None, None, index_store)
+    } else {
+        let len_sym = env.unique_symbol();
+        let len_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::ListLen,
+                update_mode: env.next_update_mode_id(),
+            },
+            arguments: env.arena.alloc([list_sym]),
+        });
+
+        let offset = (list_index + 1).abs();
+        let offset_sym = env.unique_symbol();
+        let offset_expr = Expr::Literal(Literal::Int((offset as i128).to_ne_bytes()));
+
+        let index_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::NumSub,
+                update_mode: env.next_update_mode_id(),
+            },
+            arguments: env.arena.alloc([len_sym, offset_sym]),
+        });
+
+        let len_store = (len_sym, usize_layout, len_expr);
+        let offset_store = (offset_sym, usize_layout, offset_expr);
+        let index_store = (index_sym, usize_layout, index_expr);
+
+        (Some(len_store), Some(offset_store), index_store)
+    };
+
+    let stores = (opt_len_store.into_iter())
+        .chain(opt_offset_store)
+        .chain([index_store]);
+
+    (index_sym, stores)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn store_list_pattern<'a>(
     env: &mut Env<'a, '_>,
@@ -7392,16 +7486,13 @@ fn store_list_pattern<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    if matches!(list_arity, ListArity::Slice(_, n) if n > 0) {
-        todo!();
-    }
-
     let mut is_productive = false;
-    let usize_layout = Layout::usize(env.target_info);
 
     for (index, element) in elements.iter().enumerate().rev() {
-        let index_lit = Expr::Literal(Literal::Int((index as i128).to_ne_bytes()));
-        let index_sym = env.unique_symbol();
+        let list_index = ListIndex::from_pattern_index(index, list_arity);
+
+        // TODO do this only lazily
+        let (index_sym, needed_stores) = build_list_index_probe(env, list_sym, &list_index);
 
         let load = Expr::Call(Call {
             call_type: CallType::LowLevel {
@@ -7454,12 +7545,11 @@ fn store_list_pattern<'a>(
         };
 
         is_productive = true;
-        stmt = Stmt::Let(
-            index_sym,
-            index_lit,
-            usize_layout,
-            env.arena.alloc(store_loaded),
-        );
+
+        stmt = store_loaded;
+        for (sym, lay, expr) in needed_stores.rev() {
+            stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
+        }
     }
 
     if is_productive {

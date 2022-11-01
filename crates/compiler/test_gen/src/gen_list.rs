@@ -3653,27 +3653,60 @@ mod pattern_match {
     }
 
     #[test]
+    fn ranged_matches_tail() {
+        assert_evals_to!(
+            r#"
+            helper = \l -> when l is
+                [] -> 1u8
+                [A] -> 2u8
+                [.., A, A] -> 3u8
+                [.., B, A] -> 4u8
+                [.., B] -> 5u8
+
+            [
+                helper [],
+                helper [A],
+                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, //
+                2, //
+                3, 3, 3, 3, //
+                4, 4, 4, 4, //
+                5, 5, 5, 5, //
+            ]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
     fn bind_variables() {
         assert_evals_to!(
             r#"
-            helper : List U8 -> U8
+            helper : List U16 -> U16
             helper = \l -> when l is
-                [] -> 1u8
+                [] -> 1
                 [x] -> x
+                [.., w, x, y, z] -> w * x * y * z
                 [x, y, ..] -> x * y
 
             [
                 helper [],
                 helper [5],
-                helper [3, 5], helper [3, 5, 7], helper [3, 5, 7, 11],
+                helper [3, 5], helper [3, 5, 7],
+                helper [2, 3, 5, 7], helper [11, 2, 3, 5, 7], helper [13, 11, 2, 3, 5, 7],
             ]
             "#,
             RocList::from_slice(&[
                 1, //
                 5, //
-                15, 15, 15 //
+                15, 15, //
+                210, 210, 210, //
             ]),
-            RocList<u8>
+            RocList<u16>
         )
     }
 }

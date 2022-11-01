@@ -1,6 +1,6 @@
 use crate::ir::{
-    BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern,
-    Procs, Stmt,
+    build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
+    ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -808,15 +808,14 @@ fn to_relevant_branch_help<'a>(
                     }
                 }) =>
             {
-                if matches!(my_arity, ListArity::Slice(_, n) if n > 0) {
-                    todo!();
-                }
-
                 let sub_positions = elements.into_iter().enumerate().map(|(index, elem_pat)| {
                     let mut new_path = path.to_vec();
+
+                    let probe_index = ListIndex::from_pattern_index(index, my_arity);
+
                     let next_instr = PathInstruction::ListIndex {
                         // TODO index into back as well
-                        index: index as _,
+                        index: probe_index as _,
                     };
                     new_path.push(next_instr);
 
@@ -1348,15 +1347,8 @@ pub fn optimize_when<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathInstruction {
     NewType,
-    TagIndex {
-        index: u64,
-        tag_id: TagIdIntType,
-    },
-    ListIndex {
-        // Positive if it should be indexed from the front, negative otherwise
-        // (-1 means the last index)
-        index: i64,
-    },
+    TagIndex { index: u64, tag_id: TagIdIntType },
+    ListIndex { index: ListIndex },
 }
 
 fn path_to_expr_help<'a>(
@@ -1429,17 +1421,12 @@ fn path_to_expr_help<'a>(
 
             PathInstruction::ListIndex { index } => {
                 let list_sym = symbol;
-                let usize_layout = Layout::usize(env.target_info);
-
-                if index < &0 {
-                    todo!();
-                }
 
                 match layout {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
-                        let index_sym = env.unique_symbol();
-                        let index_expr =
-                            Expr::Literal(Literal::Int((*index as i128).to_ne_bytes()));
+                        let (index_sym, new_stores) = build_list_index_probe(env, list_sym, index);
+
+                        stores.extend(new_stores);
 
                         let load_sym = env.unique_symbol();
                         let load_expr = Expr::Call(Call {
@@ -1450,7 +1437,6 @@ fn path_to_expr_help<'a>(
                             arguments: env.arena.alloc([list_sym, index_sym]),
                         });
 
-                        stores.push((index_sym, usize_layout, index_expr));
                         stores.push((load_sym, *elem_layout, load_expr));
 
                         layout = *elem_layout;
