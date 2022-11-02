@@ -2737,14 +2737,14 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
-                    Proc::insert_refcount_operations(
-                        arena,
-                        &layout_interner,
-                        module_id,
-                        ident_ids,
-                        &mut update_mode_ids,
-                        &mut state.procedures,
-                    );
+                    //                    Proc::insert_refcount_operations(
+                    //                        arena,
+                    //                        &layout_interner,
+                    //                        module_id,
+                    //                        ident_ids,
+                    //                        &mut update_mode_ids,
+                    //                        &mut state.procedures,
+                    //                    );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 

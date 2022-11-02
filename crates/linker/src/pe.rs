@@ -249,6 +249,8 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
 }
 
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
+    #[cfg(unix)]
+    std::fs::write("/tmp/roc/app.obj", roc_app_bytes);
     let md = PeMetadata::read_from_file(metadata_path);
 
     let app_obj_sections = AppSections::from_data(roc_app_bytes);
@@ -362,6 +364,10 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     relocation,
                     address,
                 } = app_relocation;
+
+                crate::dbg_hex!(name, address, relocation);
+
+                crate::dbg_hex!(&md.exports);
 
                 if let Some(destination) = md.exports.get(name) {
                     match relocation.kind() {
@@ -633,6 +639,8 @@ impl Preprocessor {
         dummy_dll_symbols: usize,
         extra_sections: &[[u8; 8]],
     ) -> MmapMut {
+        #[cfg(unix)]
+        std::fs::write("/tmp/roc/host.exe", data);
         let this = Self::new(data, dummy_dll_symbols, extra_sections);
         let mut result = open_mmap_mut(
             output_path,

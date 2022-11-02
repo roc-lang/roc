@@ -634,7 +634,8 @@ pub fn rebuild_host(
 
         let cargo_out_dir = cargo_dir.join("target").join(
             if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
-                "release"
+                //"release"
+                "debug"
             } else {
                 "debug"
             },
@@ -647,8 +648,12 @@ pub fn rebuild_host(
             cargo_cmd.arg("--release");
         }
 
+        // -fdll-export-fns
         let source_file = if shared_lib_path.is_some() {
-            cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
+            cargo_cmd.env(
+                "RUSTFLAGS",
+                "-C link-dead-code -C link-arg=-Wl,--export-all-symbols",
+            );
             cargo_cmd.args(&["--bin", "host"]);
             "src/main.rs"
         } else {
@@ -656,11 +661,17 @@ pub fn rebuild_host(
             "src/lib.rs"
         };
 
+        cargo_cmd.args(&["--target", "x86_64-pc-windows-gnu"]);
+
         run_build_command(cargo_cmd, source_file);
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
-            let mut exe_path = cargo_out_dir.join("host");
+            let mut exe_path = host_input_path
+                .parent()
+                .unwrap()
+                .join("target/x86_64-pc-windows-gnu/release/host.exe");
+            dbg!(&exe_path);
             exe_path.set_extension(executable_extension);
             std::fs::copy(&exe_path, &host_dest).unwrap();
         } else {
