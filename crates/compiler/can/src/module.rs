@@ -1056,7 +1056,8 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | Accessor { .. } => {}
+        | Accessor { .. }
+        | Crash => {}
 
         List { loc_elems, .. } => {
             for elem in loc_elems.iter_mut() {

@@ -185,6 +185,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::Var(..) => { /* terminal */ }
         Expr::AbilityMember(..) => { /* terminal */ }
+        Expr::Crash => { /* terminal */ }
         Expr::If {
             cond_var,
             branches,

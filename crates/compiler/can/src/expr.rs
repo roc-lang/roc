@@ -166,6 +166,9 @@ pub enum Expr {
     /// Empty record constant
     EmptyRecord,
 
+    /// The "crash" keyword
+    Crash,
+
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
         record_var: Variable,
@@ -309,6 +312,7 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
+            Self::Crash => Category::Crash,
 
             Self::Dbg { .. } => Category::Expect,
 
@@ -874,6 +878,7 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::Crash => (Crash, Output::default()),
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
@@ -1720,7 +1725,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
-        | other @ OpaqueWrapFunction(_) => other,
+        | other @ OpaqueWrapFunction(_)
+        | other @ Crash => other,
 
         List {
             elem_var,
@@ -2828,7 +2834,8 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
-            | Expr::OpaqueWrapFunction(_) => {}
+            | Expr::OpaqueWrapFunction(_)
+            | Expr::Crash => {}
         }
     }
 

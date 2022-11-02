@@ -376,6 +376,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 *called_via,
             )
         }
+        Crash => Crash,
         RunLowLevel { op, args, ret_var } => RunLowLevel {
             op: *op,
             args: args
