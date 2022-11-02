@@ -362,7 +362,7 @@ impl std::ops::Neg for Polarity {
 }
 
 #[allow(dead_code)]
-struct AliasShared {
+pub struct AliasShared {
     symbol: Symbol,
     type_argument_abilities: Slice<Option<AbilitySet>>,
     type_argument_regions: Slice<Region>,
@@ -371,8 +371,7 @@ struct AliasShared {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-enum TypeTag {
+pub enum TypeTag {
     EmptyRecord,
     EmptyTagUnion,
     Function(Index<TypeTag>, Index<TypeTag>),
@@ -421,8 +420,7 @@ enum TypeTag {
     Record(RecordFields),
 }
 
-#[allow(dead_code)]
-struct Types {
+pub struct Types {
     // main storage. Each type is represented by a tag, which is identified by its index.
     // `tags_slices` is a parallel array (so these two vectors always have the same size), that
     // allows storing a slice of types. This is used for storing the function argument types, or
@@ -450,10 +448,24 @@ struct Types {
     single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
 }
 
-#[allow(dead_code)]
 impl Types {
-    const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
-    const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+
+    pub fn new() -> Self {
+        Self {
+            tags: vec![TypeTag::EmptyRecord, TypeTag::EmptyTagUnion],
+            tags_slices: Default::default(),
+            regions: Default::default(),
+            tag_names: Default::default(),
+            field_types: Default::default(),
+            field_names: Default::default(),
+            type_arg_abilities: Default::default(),
+            aliases: Default::default(),
+            problems: Default::default(),
+            single_tag_union_tag_names: Default::default(),
+        }
+    }
 
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
         use std::iter::repeat;
@@ -472,14 +484,6 @@ impl Types {
         self.tags_slices.push(Slice::default());
 
         Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
-    }
-
-    fn push_type_tag(&mut self, tag: TypeTag, type_slice: Slice<TypeTag>) -> Index<TypeTag> {
-        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
-
-        self.tags_slices.push(type_slice);
-
-        Index::push_new(&mut self.tags, tag)
     }
 
     fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {

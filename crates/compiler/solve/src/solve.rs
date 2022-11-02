@@ -34,7 +34,7 @@ use roc_types::subs::{
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar,
-    Polarity, Reason, RecordField, TypeExtension, Uls,
+    Polarity, Reason, RecordField, TypeExtension, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -300,6 +300,7 @@ impl Aliases {
         abilities_store: &AbilitiesStore,
         obligation_cache: &mut ObligationCache,
         arena: &bumpalo::Bump,
+        types: &Types,
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> (Variable, AliasKind) {
@@ -425,6 +426,7 @@ impl Aliases {
                 obligation_cache,
                 arena,
                 self,
+                types,
                 &typ,
                 false,
             );
@@ -450,6 +452,7 @@ impl Aliases {
                 obligation_cache,
                 arena,
                 self,
+                types,
                 &t,
                 false,
             );
@@ -2368,6 +2371,7 @@ pub(crate) fn type_to_var(
         *var
     } else {
         let mut arena = take_scratchpad();
+        let types = Types::new();
 
         let var = type_to_variable(
             subs,
@@ -2378,6 +2382,7 @@ pub(crate) fn type_to_var(
             obligation_cache,
             &arena,
             aliases,
+            &types,
             typ,
             false,
         );
@@ -2536,6 +2541,7 @@ fn type_to_variable<'a>(
     obligation_cache: &mut ObligationCache,
     arena: &'a bumpalo::Bump,
     aliases: &mut Aliases,
+    types: &Types,
     typ: &Type,
     // Helpers for instantiating ambient functions of lambda set variables from type aliases.
     is_alias_lambda_set_arg: bool,
@@ -2813,6 +2819,7 @@ fn type_to_variable<'a>(
                             obligation_cache,
                             arena,
                             aliases,
+                            types,
                             &ls.0,
                             true,
                         );
@@ -2842,6 +2849,7 @@ fn type_to_variable<'a>(
                     abilities_store,
                     obligation_cache,
                     arena,
+                    types,
                     *symbol,
                     alias_variables,
                 );
@@ -2946,6 +2954,7 @@ fn type_to_variable<'a>(
                             obligation_cache,
                             arena,
                             aliases,
+                            types,
                             &ls.0,
                             true,
                         );
@@ -2970,6 +2979,7 @@ fn type_to_variable<'a>(
                     obligation_cache,
                     arena,
                     aliases,
+                    types,
                     alias_type,
                     false,
                 );
