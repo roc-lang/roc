@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          # ref: "main" # TODO set this to main once merged, can't do this now because main does not yet have the right files.
+          ref: "main"
           clean: "true"
 
       - name: on main; prepare a self-contained benchmark folder
