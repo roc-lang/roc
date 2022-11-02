@@ -2961,27 +2961,6 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            Crash => {
-                let magic_return = subs.fresh(Descriptor {
-                    content: Content::FlexVar(None),
-                    rank,
-                    mark: Mark::NONE,
-                    copy: OptVariable::NONE,
-                });
-                let magic_lambda_set = subs.fresh(Descriptor {
-                    content: Content::FlexVar(None),
-                    rank,
-                    mark: Mark::NONE,
-                    copy: OptVariable::NONE,
-                });
-                let magic_crash = Content::Structure(FlatType::Func(
-                    Subs::STR_SLICE,
-                    magic_lambda_set,
-                    magic_return,
-                ));
-
-                register_with_known_var(subs, destination, rank, pools, magic_crash)
-            }
         };
     }
 

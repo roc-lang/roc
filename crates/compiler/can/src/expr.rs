@@ -167,7 +167,10 @@ pub enum Expr {
     EmptyRecord,
 
     /// The "crash" keyword
-    Crash,
+    Crash {
+        msg: Box<Loc<Expr>>,
+        ret_var: Variable,
+    },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
@@ -312,7 +315,7 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
-            Self::Crash => Category::Crash,
+            Self::Crash { .. } => Category::Crash,
 
             Self::Dbg { .. } => Category::Expect,
 
@@ -788,6 +791,47 @@ pub fn canonicalize_expr<'a>(
                         }
                     }
                 }
+            } else if let ast::Expr::Crash = loc_fn.value {
+                // We treat crash specially, since crashing must be applied with one argument.
+
+                debug_assert!(!args.is_empty());
+
+                let mut args = Vec::new();
+                let mut output = Output::default();
+
+                for loc_arg in loc_args.iter() {
+                    let (arg_expr, arg_out) =
+                        canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+
+                    args.push(arg_expr);
+                    output.references.union_mut(&arg_out.references);
+                }
+
+                let crash = if args.len() > 1 {
+                    let args_region = Region::span_across(
+                        &loc_args.first().unwrap().region,
+                        &loc_args.last().unwrap().region,
+                    );
+                    env.problem(Problem::OverAppliedCrash {
+                        region: args_region,
+                    });
+                    // Still crash, just with our own message, and drop the references.
+                    Crash {
+                        msg: Box::new(Loc::at(
+                            region,
+                            Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                        )),
+                        ret_var: var_store.fresh(),
+                    }
+                } else {
+                    let msg = args.pop().unwrap();
+                    Crash {
+                        msg: Box::new(msg),
+                        ret_var: var_store.fresh(),
+                    }
+                };
+
+                (crash, output)
             } else {
                 // Canonicalize the function expression and its arguments
                 let (fn_expr, fn_expr_output) =
@@ -878,7 +922,22 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::Crash => (Crash, Output::default()),
+        ast::Expr::Crash => {
+            // Naked crashes aren't allowed; we'll admit this with our own message, but yield an
+            // error.
+            env.problem(Problem::UnappliedCrash { region });
+
+            (
+                Crash {
+                    msg: Box::new(Loc::at(
+                        region,
+                        Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                    )),
+                    ret_var: var_store.fresh(),
+                },
+                Output::default(),
+            )
+        }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
@@ -1726,7 +1785,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
-        | other @ Crash => other,
+        | other @ Crash { .. } => other,
 
         List {
             elem_var,
@@ -2834,8 +2893,7 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
-            | Expr::OpaqueWrapFunction(_)
-            | Expr::Crash => {}
+            | Expr::OpaqueWrapFunction(_) => {}
         }
     }
 

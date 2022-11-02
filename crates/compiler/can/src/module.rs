@@ -981,6 +981,14 @@ fn fix_values_captured_in_closure_expr(
             );
         }
 
+        Crash { msg, ret_var: _ } => {
+            fix_values_captured_in_closure_expr(
+                &mut msg.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
         Closure(ClosureData {
             captured_symbols,
             name,
@@ -1056,8 +1064,7 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | Accessor { .. }
-        | Crash => {}
+        | Accessor { .. } => {}
 
         List { loc_elems, .. } => {
             for elem in loc_elems.iter_mut() {

@@ -185,7 +185,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::Var(..) => { /* terminal */ }
         Expr::AbilityMember(..) => { /* terminal */ }
-        Expr::Crash => { /* terminal */ }
         Expr::If {
             cond_var,
             branches,
@@ -203,6 +202,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         Expr::Call(f, args, _called_via) => {
             let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
             walk_call(visitor, *fn_var, loc_fn, args);
+        }
+        Expr::Crash { msg, .. } => {
+            visitor.visit_expr(&msg.value, msg.region, Variable::STR);
         }
         Expr::RunLowLevel {
             op: _,
