@@ -6,7 +6,7 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
-use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
+use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::expr::PendingDerives;
 use roc_can::expr::{Declarations, ExpectLookup};
 use roc_can::module::{
@@ -4262,10 +4262,11 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
 pub fn add_imports(
     my_module: ModuleId,
+    constraints: &mut Constraints,
     subs: &mut Subs,
     mut pending_abilities: PendingAbilitiesStore,
     exposed_for_module: &ExposedForModule,
-    def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
+    def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
     use roc_types::types::Type;
@@ -4294,10 +4295,11 @@ pub fn add_imports(
                     };
 
                     let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
+                    let copied_import_index = constraints.push_type(Type::Variable(copied_import.variable));
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(Type::Variable(copied_import.variable)),
+                        Loc::at_zero(copied_import_index),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -4327,12 +4329,10 @@ pub fn add_imports(
     // Patch used symbols from circular dependencies.
     if my_module == ModuleId::NUM {
         // Num needs List.len, but List imports Num.
-        let list_len_type = synth_list_len_type(subs);
-        def_types.push((
-            Symbol::LIST_LEN,
-            Loc::at_zero(Type::Variable(list_len_type)),
-        ));
-        import_variables.push(list_len_type);
+        let list_len_type_var = synth_list_len_type(subs);
+        let list_len_type_index = constraints.push_type(Type::Variable(list_len_type_var));
+        def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
+        import_variables.push(list_len_type_var);
     }
 
     // Fill in the implementation information of the abilities from the modules we import, which we
@@ -4418,12 +4418,13 @@ fn run_solve_solve(
     } = module;
 
     let mut rigid_vars: Vec<Variable> = Vec::new();
-    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<TypeOrVar>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
     let (import_variables, abilities_store) = add_imports(
         module.module_id,
+        &mut constraints,
         &mut subs,
         pending_abilities,
         &exposed_for_module,

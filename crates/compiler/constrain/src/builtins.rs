@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use roc_can::constraint::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints, TypeOrVar};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
@@ -30,7 +30,7 @@ pub fn add_numeric_bound_constr(
             num_num(Variable(num_var))
         }
         NumericBound::FloatExact(width) => {
-            let actual_type = Variable(float_width_to_variable(width));
+            let actual_type = constraints.push_type(Variable(float_width_to_variable(width)));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let type_index = constraints.push_type(Variable(num_var));
             let expected_index = constraints.push_expected_type(expected);
@@ -42,7 +42,7 @@ pub fn add_numeric_bound_constr(
             Variable(num_var)
         }
         NumericBound::IntExact(width) => {
-            let actual_type = Variable(int_lit_width_to_variable(width));
+            let actual_type = constraints.push_type(Variable(int_lit_width_to_variable(width)));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let type_index = constraints.push_type(Variable(num_var));
             let expected_index = constraints.push_expected_type(expected);
@@ -54,11 +54,10 @@ pub fn add_numeric_bound_constr(
             Variable(num_var)
         }
         NumericBound::Range(range) => {
-            let actual_type = Variable(precision_var);
-            let expected = Expected::NoExpectation(RangedNumber(range));
-            let type_index = constraints.push_type(actual_type);
+            let precision_type = constraints.push_type(Variable(precision_var));
+            let expected = Expected::NoExpectation(constraints.push_type(RangedNumber(range)));
             let expected_index = constraints.push_expected_type(expected);
-            let constr = constraints.equal_types(type_index, expected_index, category, region);
+            let constr = constraints.equal_types(precision_type, expected_index, category, region);
 
             num_constraints.extend([constr]);
 
@@ -72,7 +71,7 @@ pub fn int_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type>,
+    expected: Expected<TypeOrVar>,
     region: Region,
     bound: IntBound,
 ) -> Constraint {
@@ -91,11 +90,10 @@ pub fn int_literal(
     );
 
     let num_type_index = constraints.push_type(num_type);
-    let expect_precision_var = constraints.push_expected_type(ForReason(
-        reason,
-        num_int(Type::Variable(precision_var)),
-        region,
-    ));
+    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, int_precision_type, region));
 
     constrs.extend([
         constraints.equal_types(num_type_index, expect_precision_var, Category::Int, region),
@@ -114,7 +112,7 @@ pub fn single_quote_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type>,
+    expected: Expected<TypeOrVar>,
     region: Region,
     bound: SingleQuoteBound,
 ) -> Constraint {
@@ -133,11 +131,10 @@ pub fn single_quote_literal(
     );
 
     let num_type_index = constraints.push_type(num_type);
-    let expect_precision_var = constraints.push_expected_type(ForReason(
-        reason,
-        num_int(Type::Variable(precision_var)),
-        region,
-    ));
+    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, int_precision_type, region));
 
     constrs.extend([
         constraints.equal_types(
@@ -161,7 +158,7 @@ pub fn float_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type>,
+    expected: Expected<TypeOrVar>,
     region: Region,
     bound: FloatBound,
 ) -> Constraint {
@@ -179,11 +176,10 @@ pub fn float_literal(
     );
 
     let num_type_index = constraints.push_type(num_type);
-    let expect_precision_var = constraints.push_expected_type(ForReason(
-        reason,
-        num_float(Type::Variable(precision_var)),
-        region,
-    ));
+    let float_precision_type = constraints.push_type(num_float(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, float_precision_type, region));
 
     constrs.extend([
         constraints.equal_types(num_type_index, expect_precision_var, Category::Frac, region),
@@ -201,7 +197,7 @@ pub fn float_literal(
 pub fn num_literal(
     constraints: &mut Constraints,
     num_var: Variable,
-    expected: Expected<Type>,
+    expected: Expected<TypeOrVar>,
     region: Region,
     bound: NumBound,
 ) -> Constraint {
