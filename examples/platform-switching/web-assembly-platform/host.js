@@ -17,7 +17,9 @@ async function roc_web_platform_run(wasm_filename, callback) {
         }
         exit_code = code;
       },
-      fd_write: (x) => { console.error(`fd_write not supported: ${x}`); }
+      fd_write: (x) => {
+        console.error(`fd_write not supported: ${x}`);
+      },
     },
     env: {
       js_display_roc_string,
@@ -27,14 +29,15 @@ async function roc_web_platform_run(wasm_filename, callback) {
     },
   };
 
+  const fetchPromise = fetch(wasm_filename);
+
   let wasm;
-
-  const response = await fetch(wasm_filename);
-
   if (WebAssembly.instantiateStreaming) {
     // streaming API has better performance if available
-    wasm = await WebAssembly.instantiateStreaming(response, importObj);
+    // It can start compiling Wasm before it has fetched all of the bytes, so we don't `await` the request!
+    wasm = await WebAssembly.instantiateStreaming(fetchPromise, importObj);
   } else {
+    const response = await fetchPromise;
     const module_bytes = await response.arrayBuffer();
     wasm = await WebAssembly.instantiate(module_bytes, importObj);
   }

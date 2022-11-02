@@ -3,20 +3,25 @@
 To run this website, first compile either of these identical apps:
 
 ```bash
-# Option A: Compile examples/platform-switching/rocLovesWebAssembly.roc
-cargo run -- build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
-
-# Option B: Compile examples/platform-switching/main.roc with `pf: "web-assembly-platform/main.roc"` and move the result
-cargo run -- build --target=wasm32 examples/platform-switching/main.roc
-(cd examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWebAssembly.wasm)
+# Build roc compiler if you have not done so already
+cargo build
+# Compile the app that uses the Wasm platform
+target/debug/roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+# Go to the directory where index.html is
+cd examples/platform-switching/web-assembly-platform/
+# Move the .wasm file so that it's beside index.html
+mv ../rocLovesWebAssembly.wasm .
 ```
 
-Then `cd` into the website directory
-and run any web server that can handle WebAssembly.
-For example, with `http-server`:
+In the directory where index.html is, run any web server on localhost.
 
+For example if you have Python3 on your system, you can use `http.server`:
 ```bash
-cd examples/platform-switching/web-assembly-platform
+python3 -m http.server 8080
+```
+
+Or if you have npm, you can use `http-server`
+```bash
 npm install -g http-server
 http-server
 ```
