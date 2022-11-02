@@ -532,12 +532,11 @@ pub fn constrain_pattern(
                     opt_rest: _,
                 },
         } => {
+            let elem_var_index = constraints.push_type(Type::Variable(*elem_var));
+
             for loc_pat in patterns.iter() {
-                let expected = PExpected::ForReason(
-                    PReason::ListElem,
-                    Type::Variable(*elem_var),
-                    loc_pat.region,
-                );
+                let expected =
+                    PExpected::ForReason(PReason::ListElem, elem_var_index, loc_pat.region);
 
                 constrain_pattern(
                     constraints,
