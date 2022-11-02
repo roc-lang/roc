@@ -3,7 +3,7 @@ nixpkgsSource ? builtins.fetchTarball {
   url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
   sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
 }, pkgs ? import nixpkgsSource { }
-, cargoSha256 ? "sha256-F6UOJZ5oDOZ+80z70A21VzDR0YtmgD0dnEcjPgpicpo=", }:
+, cargoSha256 ? "sha256-Qmriwe+xSL5/pU8oqqj5Qw6H179KYqOljWl0rpPD6MY=", }:
 # we only this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
