@@ -2000,3 +2000,19 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
         "#
     )
 }
+
+#[mono_test]
+fn match_list() {
+    indoc!(
+        r#"
+        l = [A, B]
+
+        when l is
+            [] -> "A"
+            [A] -> "B"
+            [A, A, ..] -> "C"
+            [A, B, ..] -> "D"
+            [B, ..] -> "E"
+        "#
+    )
+}

@@ -6,6 +6,7 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -188,6 +189,17 @@ impl ListPatterns {
     /// Is this list pattern the trivially-exhaustive pattern `[..]`?
     fn surely_exhaustive(&self) -> bool {
         self.patterns.is_empty() && matches!(self.opt_rest, Some(0))
+    }
+
+    pub fn arity(&self) -> ListArity {
+        match self.opt_rest {
+            Some(i) => {
+                let before = i;
+                let after = self.patterns.len() - before;
+                ListArity::Slice(before, after)
+            }
+            None => ListArity::Exact(self.patterns.len()),
+        }
     }
 }
 

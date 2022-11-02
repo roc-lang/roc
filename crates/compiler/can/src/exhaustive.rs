@@ -1,5 +1,5 @@
 use crate::expr::{self, IntValue, WhenBranch};
-use crate::pattern::{DestructType, ListPatterns};
+use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
@@ -344,23 +344,19 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
         }
 
         List {
-            patterns: ListPatterns { patterns, opt_rest },
+            patterns,
             list_var: _,
             elem_var: _,
         } => {
-            let list_arity = match opt_rest {
-                Some(i) => {
-                    let before = *i;
-                    let after = patterns.len() - before;
-                    ListArity::Slice(before, after)
-                }
-                None => ListArity::Exact(patterns.len()),
-            };
+            let arity = patterns.arity();
 
-            let sketched_elem_patterns =
-                patterns.iter().map(|p| sketch_pattern(&p.value)).collect();
+            let sketched_elem_patterns = patterns
+                .patterns
+                .iter()
+                .map(|p| sketch_pattern(&p.value))
+                .collect();
 
-            SP::List(list_arity, sketched_elem_patterns)
+            SP::List(arity, sketched_elem_patterns)
         }
 
         AppliedTag {

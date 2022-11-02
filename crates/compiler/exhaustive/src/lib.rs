@@ -93,7 +93,7 @@ impl ListArity {
     /// The trivially-exhaustive list pattern `[..]`
     const ANY: ListArity = ListArity::Slice(0, 0);
 
-    fn min_len(&self) -> usize {
+    pub fn min_len(&self) -> usize {
         match self {
             ListArity::Exact(n) => *n,
             ListArity::Slice(l, r) => l + r,
@@ -102,22 +102,19 @@ impl ListArity {
 
     /// Could this list pattern include list pattern arity `other`?
     fn covers_arities_of(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ListArity::Exact(l), ListArity::Exact(r)) => l == r,
-            (ListArity::Exact(this_exact), ListArity::Slice(other_left, other_right)) => {
-                // [_, _, _] can only cover [_, _, .., _]
-                *this_exact == (other_left + other_right)
+        self.covers_length(other.min_len())
+    }
+
+    pub fn covers_length(&self, length: usize) -> bool {
+        match self {
+            ListArity::Exact(l) => {
+                // [_, _, _] can only cover [_, _, _]
+                *l == length
             }
-            (ListArity::Slice(this_left, this_right), ListArity::Exact(other_exact)) => {
-                // [_, _, .., _] can cover [_, _, _], [_, _, _, _], [_, _, _, _, _], and so on
-                (this_left + this_right) <= *other_exact
-            }
-            (
-                ListArity::Slice(this_left, this_right),
-                ListArity::Slice(other_left, other_right),
-            ) => {
-                // [_, _, .., _] can cover [_, _, .., _], [_, .., _, _], [_, _, .., _, _], [_, _, _, .., _, _], and so on
-                (this_left + this_right) <= (other_left + other_right)
+            ListArity::Slice(head, tail) => {
+                // [_, _, .., _] can cover infinite arities >=3 , including
+                // [_, _, .., _], [_, .., _, _], [_, _, .., _, _], [_, _, _, .., _, _], and so on
+                head + tail <= length
             }
         }
     }
