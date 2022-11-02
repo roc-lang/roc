@@ -666,6 +666,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
             ),
+            Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => {
                 let mut defs = a.clone();
                 defs.space_before = vec![Default::default(); defs.len()];
