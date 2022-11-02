@@ -703,6 +703,7 @@ pub struct MonomorphizedModule<'a> {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
+    pub glue_layouts: Vec<Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -1642,8 +1643,13 @@ fn state_thread_step<'a>(
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized =
-                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
+                    let monomorphized = finish_specialization(
+                        arena,
+                        state,
+                        subs,
+                        layout_interner,
+                        exposed_to_host,
+                    )?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -2891,9 +2897,10 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
 }
 
 fn finish_specialization<'a>(
+    arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    layout_interner: STLayoutInterner<'a>,
+    mut layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
@@ -2925,12 +2932,13 @@ fn finish_specialization<'a>(
 
     let State {
         toplevel_expects,
-        procedures,
+        mut procedures,
         module_cache,
         output_path,
         platform_path,
         platform_data,
         exec_mode,
+        ident_ids_by_module,
         ..
     } = state;
 
@@ -3004,6 +3012,30 @@ fn finish_specialization<'a>(
         }
     };
 
+    let mut glue_layouts = Vec::new();
+
+    if let EntryPoint::Executable { symbol, layout, .. } = &entry_point {
+        let mut locked = ident_ids_by_module.lock();
+
+        let ident_ids = locked.get_mut(&symbol.module_id()).unwrap();
+
+        let result = &layout.result;
+        let it = layout.arguments.iter().chain([result]);
+
+        for layout in it {
+            let glue_procs = roc_mono::ir::generate_glue_procs(
+                symbol.module_id(),
+                ident_ids,
+                arena,
+                &mut layout_interner,
+                *layout,
+            );
+
+            procedures.extend(glue_procs.procs);
+            glue_layouts.extend(glue_procs.layouts);
+        }
+    }
+
     let output_path = match output_path {
         Some(path_str) => Path::new(path_str).into(),
         None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
@@ -3024,6 +3056,7 @@ fn finish_specialization<'a>(
         sources,
         timings: state.timings,
         toplevel_expects,
+        glue_layouts,
     })
 }
 

@@ -10761,3 +10761,169 @@ where
         remainder: env.arena.alloc(switch),
     }
 }
+
+pub fn layout_contains_function(arena: &Bump, layout: Layout) -> bool {
+    let mut stack = Vec::new_in(arena);
+
+    stack.push(layout);
+
+    while let Some(layout) = stack.pop() {
+        match layout {
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(_)
+                | Builtin::Float(_)
+                | Builtin::Bool
+                | Builtin::Decimal
+                | Builtin::Str => { /* do nothing */ }
+                Builtin::List(element) => stack.push(*element),
+            },
+            Layout::Struct { field_layouts, .. } => stack.extend(field_layouts),
+            Layout::Boxed(boxed) => stack.push(*boxed),
+            Layout::Union(tag_union) => match tag_union {
+                UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                    for tag in tags {
+                        stack.extend(tag.iter());
+                    }
+                }
+                UnionLayout::NonNullableUnwrapped(fields) => {
+                    stack.extend(fields);
+                }
+                UnionLayout::NullableWrapped { other_tags, .. } => {
+                    for tag in other_tags {
+                        stack.extend(tag.iter());
+                    }
+                }
+                UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                    stack.extend(other_fields);
+                }
+            },
+            Layout::LambdaSet(_) => return true,
+            Layout::RecursivePointer => {
+                /* do nothing, we've already generated for this type through the Union(_) */
+            }
+        }
+    }
+
+    false
+}
+
+pub struct GlueProcs<'a> {
+    pub procs: Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
+    pub layouts: Vec<'a, Layout<'a>>,
+}
+
+pub fn generate_glue_procs<'a>(
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: Layout<'a>,
+) -> GlueProcs<'a> {
+    let mut stack = Vec::new_in(arena);
+    let mut procs = Vec::new_in(arena);
+    let mut layouts = Vec::new_in(arena);
+
+    stack.push(layout);
+
+    while let Some(layout) = stack.pop() {
+        match layout {
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(_)
+                | Builtin::Float(_)
+                | Builtin::Bool
+                | Builtin::Decimal
+                | Builtin::Str => { /* do nothing */ }
+                Builtin::List(element) => stack.push(*element),
+            },
+            Layout::Struct { field_layouts, .. } => {
+                if layout_contains_function(arena, layout) {
+                    layouts.push(layout);
+
+                    generate_glue_procs_for_fields(
+                        home,
+                        ident_ids,
+                        arena,
+                        layout,
+                        field_layouts,
+                        &mut procs,
+                    );
+
+                    stack.extend(field_layouts);
+                }
+            }
+            Layout::Boxed(boxed) => stack.push(*boxed),
+            Layout::Union(tag_union) => match tag_union {
+                UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                    for tag in tags {
+                        stack.extend(tag.iter());
+                    }
+                }
+                UnionLayout::NonNullableUnwrapped(fields) => {
+                    stack.extend(fields);
+                }
+                UnionLayout::NullableWrapped { other_tags, .. } => {
+                    for tag in other_tags {
+                        stack.extend(tag.iter());
+                    }
+                }
+                UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                    stack.extend(other_fields);
+                }
+            },
+            Layout::LambdaSet(lambda_set) => {
+                stack.push(lambda_set.runtime_representation(layout_interner))
+            }
+            Layout::RecursivePointer => {
+                /* do nothing, we've already generated for this type through the Union(_) */
+            }
+        }
+    }
+
+    GlueProcs { procs, layouts }
+}
+
+fn generate_glue_procs_for_fields<'a>(
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    struct_layout: Layout<'a>,
+    field_layouts: &'a [Layout<'a>],
+    output: &mut Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
+) {
+    output.reserve(field_layouts.len());
+
+    for (index, field) in field_layouts.iter().enumerate() {
+        let symbol = Symbol::new(home, ident_ids.gen_unique());
+        let argument = Symbol::new(home, ident_ids.gen_unique());
+        let result = Symbol::new(home, ident_ids.gen_unique());
+
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([struct_layout]),
+            result: *field,
+            captures_niche: CapturesNiche::no_niche(),
+        };
+
+        let expr = Expr::StructAtIndex {
+            index: index as u64,
+            field_layouts,
+            structure: argument,
+        };
+
+        let ret_stmt = arena.alloc(Stmt::Ret(result));
+
+        let body = Stmt::Let(result, expr, *field, ret_stmt);
+
+        let proc = Proc {
+            name: LambdaName::no_niche(symbol),
+            args: arena.alloc([(struct_layout, argument)]),
+            body,
+            closure_data_layout: None,
+            ret_layout: *field,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        output.push(((symbol, proc_layout), proc));
+    }
+}

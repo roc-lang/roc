@@ -297,6 +297,7 @@ fn gen_from_mono_module_llvm(
         &env,
         opt_level,
         loaded.procedures,
+        &loaded.glue_layouts,
         opt_entry_point,
         Some(&app_ll_file),
     );
