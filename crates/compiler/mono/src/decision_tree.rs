@@ -164,7 +164,6 @@ impl<'a> Hash for Test<'a> {
                 num_alts.hash(state);
             }
             IsDecimal(v) => {
-                // TODO: Is this okay?
                 state.write_u8(6);
                 v.hash(state);
             }
@@ -803,7 +802,6 @@ fn to_relevant_branch_help<'a>(
                     let probe_index = ListIndex::from_pattern_index(index, my_arity);
 
                     let next_instr = PathInstruction::ListIndex {
-                        // TODO index into back as well
                         index: probe_index as _,
                     };
                     new_path.push(next_instr);

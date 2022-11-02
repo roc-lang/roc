@@ -7390,30 +7390,21 @@ pub(crate) struct ListIndex(
 impl ListIndex {
     pub fn from_pattern_index(index: usize, arity: ListArity) -> Self {
         match arity {
-            ListArity::Exact(_) => ListIndex::nth_head(index as _),
+            ListArity::Exact(_) => Self(index as _),
             ListArity::Slice(head, tail) => {
                 if index < head {
-                    ListIndex::nth_head(index as _)
+                    Self(index as _)
                 } else {
-                    // Slice(2, 6)
+                    // Slice(head=2, tail=5)
                     //
                     // s t ... w y z x q
                     // 0 1     2 3 4 5 6 index
                     //         0 1 2 3 4 (index - head)
-                    //         4 3 2 1 0 tail - (index - head)
-                    ListIndex::nth_tail((tail - (index - head)) as _)
+                    //         5 4 3 2 1 (tail - (index - head))
+                    Self(-((tail - (index - head)) as i64))
                 }
             }
         }
-    }
-
-    fn nth_head(offset: u64) -> Self {
-        Self(offset as _)
-    }
-
-    fn nth_tail(offset: u64) -> Self {
-        let offset = offset as i64;
-        Self(-1 - offset)
     }
 }
 
@@ -7447,7 +7438,7 @@ pub(crate) fn build_list_index_probe<'a>(
             arguments: env.arena.alloc([list_sym]),
         });
 
-        let offset = (list_index + 1).abs();
+        let offset = list_index.abs();
         let offset_sym = env.unique_symbol();
         let offset_expr = Expr::Literal(Literal::Int((offset as i128).to_ne_bytes()));
 
