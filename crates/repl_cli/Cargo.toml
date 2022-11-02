@@ -23,7 +23,6 @@ rustyline = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
 rustyline-derive = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
 target-lexicon = "0.12.2"
 unicode-segmentation = "1.10.0"
-termsize = "0.1.6"
 
 roc_build = {path = "../compiler/build"}
 roc_builtins = {path = "../compiler/builtins"}

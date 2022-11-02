@@ -17,7 +17,6 @@ use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
 use target_lexicon::Triple;
-use termsize::Size;
 
 pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
@@ -92,7 +91,7 @@ impl ReplState {
         }
     }
 
-    pub fn step(&mut self, line: &str) -> Result<String, i32> {
+    pub fn step(&mut self, line: &str, dimensions: Option<(usize, usize)>) -> Result<String, i32> {
         let arena = Bump::new();
 
         match parse_src(&arena, line) {
@@ -103,7 +102,7 @@ impl ReplState {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck
                     // in a perpetual Incomplete state due to a syntax error.
-                    Ok(self.eval_and_format(line))
+                    Ok(self.eval_and_format(line, dimensions))
                 } else {
                     // The previous line wasn't blank, but the line isn't empty either.
                     // This could mean that, for example, you're writing a multiline `when`
@@ -119,7 +118,7 @@ impl ReplState {
             | ParseOutcome::ValueDef(_)
             | ParseOutcome::TypeDef(_)
             | ParseOutcome::SyntaxErr
-            | ParseOutcome::Incomplete => Ok(self.eval_and_format(line)),
+            | ParseOutcome::Incomplete => Ok(self.eval_and_format(line, dimensions)),
             ParseOutcome::Help => {
                 // TODO add link to repl tutorial(does not yet exist).
                 Ok(TIPS.to_string())
@@ -128,7 +127,7 @@ impl ReplState {
         }
     }
 
-    pub fn eval_and_format(&mut self, src: &str) -> String {
+    pub fn eval_and_format(&mut self, src: &str, dimensions: Option<(usize, usize)>) -> String {
         let arena = Bump::new();
         let mut opt_var_name;
         let src = match parse_src(&arena, src) {
@@ -255,7 +254,7 @@ impl ReplState {
             }
         };
 
-        format_output(output, problems, opt_var_name)
+        format_output(output, problems, opt_var_name, dimensions)
     }
 
     fn next_auto_ident(&mut self) -> u64 {
@@ -538,6 +537,7 @@ fn format_output(
     opt_output: Option<ReplOutput>,
     problems: Problems,
     opt_var_name: Option<String>,
+    dimensions: Option<(usize, usize)>,
 ) -> String {
     let mut buf = String::new();
 
@@ -576,10 +576,10 @@ fn format_output(
                 use unicode_segmentation::UnicodeSegmentation;
 
                 const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
-                const VAR_NAME_COLUMN_MAX: u16 = 80; // Right-align the var_name at this column
+                const VAR_NAME_COLUMN_MAX: usize = 80; // Right-align the var_name at this column
 
-                let term_width = match termsize::get() {
-                    Some(Size { cols, rows: _ }) => cols.min(VAR_NAME_COLUMN_MAX) as usize,
+                let term_width = match dimensions {
+                    Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
                     None => VAR_NAME_COLUMN_MAX as usize,
                 };
 

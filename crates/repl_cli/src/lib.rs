@@ -42,9 +42,10 @@ pub fn main() -> i32 {
             Ok(line) => {
                 editor.add_history_entry(line.trim());
 
+                let dimensions = editor.dimensions();
                 let repl_helper = editor.helper_mut().expect("Editor helper was not set");
 
-                match repl_helper.step(&line) {
+                match repl_helper.step(&line, dimensions) {
                     Ok(output) => {
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
