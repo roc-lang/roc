@@ -1,5 +1,5 @@
 use crate::cli_gen::gen_and_eval_llvm;
-use crate::colors::{BLUE, END_COL, GRAY, GREEN, PINK};
+use crate::colors::{BLUE, END_COL, GREEN, PINK};
 use bumpalo::Bump;
 use const_format::concatcp;
 use roc_collections::MutSet;
@@ -576,7 +576,7 @@ fn format_output(
                 use unicode_segmentation::UnicodeSegmentation;
 
                 const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
-                const VAR_NAME_COLUMN_MAX: usize = 80; // Right-align the var_name at this column
+                const VAR_NAME_COLUMN_MAX: usize = 32; // Right-align the var_name at this column
 
                 let term_width = match dimensions {
                     Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
@@ -608,13 +608,6 @@ fn format_output(
                 buf.push_str(GREEN);
                 buf.push_str(VAR_NAME_PREFIX);
                 buf.push_str(&var_name);
-                buf.push_str("\n\n");
-                buf.push_str(GRAY);
-
-                for _ in 0..term_width {
-                    buf.push('─');
-                }
-
                 buf.push_str(END_COL);
                 buf.push('\n');
             }
