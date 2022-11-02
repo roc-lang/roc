@@ -88,7 +88,7 @@ fn exhaustiveness_problem() {
 #[test]
 fn tips() {
     assert!(!is_incomplete(""));
-    assert_eq!(ReplState::new().step(""), Ok(TIPS.to_string()));
+    assert_eq!(ReplState::new().step("", None), Ok(TIPS.to_string()));
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn standalone_annotation() {
 
     incomplete(&mut input);
     assert!(!is_incomplete(&input));
-    assert_eq!(state.step(&input), Ok(String::new()));
+    assert_eq!(state.step(&input, None), Ok(String::new()));
 
     assert_eq!(&state.with_past_defs("test"), "x : Str\n\ntest");
 }
@@ -110,7 +110,7 @@ fn standalone_annotation() {
 fn complete(input: &str, state: &mut ReplState, expected_step_result: Result<(&str, &str), i32>) {
     assert!(!is_incomplete(input));
 
-    match state.step(input) {
+    match state.step(input, None) {
         Ok(string) => {
             let escaped =
                 std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
@@ -148,7 +148,7 @@ fn incomplete(input: &mut String) {
 fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
     assert!(!is_incomplete(input));
 
-    let escaped = state.step(input).map(|string| {
+    let escaped = state.step(input, None).map(|string| {
         std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap()).unwrap()
     });
 
