@@ -1,5 +1,7 @@
 use snafu::OptionExt;
-use std::{collections::HashMap, path::PathBuf, process::Command, slice::SliceIndex};
+use std::{
+    collections::HashMap, env::VarError, path::PathBuf, process::Command, slice::SliceIndex,
+};
 use util_error::{IndexOfFailedSnafu, KeyNotFoundSnafu, OutOfBoundsSnafu, UtilResult};
 
 pub mod util_error;
@@ -163,20 +165,15 @@ pub fn zig() -> Command {
 
 fn check_command_available(command_name: &str) -> bool {
     if cfg!(target_family = "unix") {
-        let mut cmd = Command::new("which");
+        let unparsed_path = match std::env::var("PATH") {
+            Ok(var) => var,
+            Err(VarError::NotPresent) => return false,
+            Err(VarError::NotUnicode(_)) => {
+                panic!("found PATH, but it included invalid unicode data!")
+            }
+        };
 
-        cmd.args([command_name]);
-
-        let cmd_str = format!("{:?}", cmd);
-
-        let cmd_out = cmd.output().unwrap_or_else(|err| {
-            panic!(
-                "Failed to execute `{}` to check if {} is available:\n    {}",
-                cmd_str, command_name, err
-            )
-        });
-
-        cmd_out.status.success()
+        std::env::split_paths(&unparsed_path).any(|dir| dir.join(command_name).exists())
     } else if cfg!(target = "windows") {
         let mut cmd = Command::new("Get-Command");
 
