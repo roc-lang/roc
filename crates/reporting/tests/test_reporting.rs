@@ -12420,4 +12420,59 @@ All branches in an `if` must have the same type!
     to be more general?
     "###
     );
+
+    test_report!(
+        crash_given_non_string,
+        indoc!(
+            r#"
+            crash {}
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to this function has an unexpected type:
+
+    4│      crash {}
+                  ^^
+
+    The argument is a record of type:
+
+        {}
+
+    But this function needs its 1st argument to be:
+
+        Str
+    "###
+    );
+
+    test_report!(
+        crash_unapplied,
+        indoc!(
+            r#"
+            crash
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        crash_overapplied,
+        indoc!(
+            r#"
+            crash "" ""
+            "#
+        ),
+    @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This function expects 1 argument, but it got 2 instead:
+
+    4│      crash "" ""
+            ^^^^^
+
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
 }

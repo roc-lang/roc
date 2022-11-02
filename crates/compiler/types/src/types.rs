@@ -994,6 +994,7 @@ impl Types {
                 self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
             }
             Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
+            Type::Crash => todo!(),
         }
     }
 
@@ -1668,6 +1669,7 @@ pub enum Type {
     Apply(Symbol, Vec<Loc<Type>>, Region),
     Variable(Variable),
     RangedNumber(NumericRange),
+    Crash, // Str -> a
     /// A type error, which will code gen to a runtime error
     Error,
 }
@@ -1710,6 +1712,7 @@ impl Clone for Type {
         match self {
             Self::EmptyRec => Self::EmptyRec,
             Self::EmptyTagUnion => Self::EmptyTagUnion,
+            Self::Crash => Self::Crash,
             Self::Function(arg0, arg1, arg2) => {
                 Self::Function(arg0.clone(), arg1.clone(), arg2.clone())
             }
@@ -2078,6 +2081,7 @@ impl fmt::Debug for Type {
             Type::RangedNumber(range_vars) => {
                 write!(f, "Ranged({:?})", range_vars)
             }
+            Type::Crash => write!(f, "Crash"),
             Type::UnspecializedLambdaSet { unspecialized } => {
                 write!(f, "{:?}", unspecialized)
             }
@@ -2241,7 +2245,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Crash | Error => {}
             }
         }
     }
@@ -2371,7 +2375,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Crash | Error => {}
             }
         }
     }
@@ -2474,7 +2478,7 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Crash => Ok(()),
         }
     }
 
@@ -2536,7 +2540,7 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Crash => false,
         }
     }
 
@@ -2592,7 +2596,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Error => false,
+            EmptyRec | EmptyTagUnion | Error | Crash => false,
         }
     }
 
@@ -2966,7 +2970,7 @@ impl Type {
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Crash => {}
         }
     }
 
@@ -3102,7 +3106,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Crash => {}
         }
     }
 
@@ -3218,7 +3222,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(actual, accum);
         }
-        RangedNumber(_) => {}
+        RangedNumber(_) | Crash => {}
         Apply(_, args, _) => {
             for x in args {
                 variables_help(&x.value, accum);
@@ -3246,7 +3250,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Error => (),
+        EmptyRec | EmptyTagUnion | Error | Crash => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -4373,6 +4377,7 @@ fn instantiate_lambda_sets_as_unspecialized(
         match typ {
             Type::EmptyRec => {}
             Type::EmptyTagUnion => {}
+            Type::Crash => {}
             Type::Function(args, lambda_set, ret) => {
                 debug_assert!(
                     matches!(**lambda_set, Type::Variable(..)),

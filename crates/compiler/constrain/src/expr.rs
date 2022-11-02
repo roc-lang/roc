@@ -482,6 +482,12 @@ pub fn constrain_expr(
             let and_constraint = constraints.and_constraint(and_cons);
             constraints.exists(vars, and_constraint)
         }
+        Expr::Crash => {
+            let crash_type_index = constraints.push_type(Type::Crash);
+            let expected_index = constraints.push_expected_type(expected);
+
+            constraints.equal_types(crash_type_index, expected_index, Category::Crash, region)
+        }
         Var(symbol, variable) => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
             let expected_type = *constraints[expected].get_type_ref();

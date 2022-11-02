@@ -1680,6 +1680,10 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
+        Crash => {
+            internal_error!("calls to crash should be unconditionally admitted in any context, unexpected reachability!");
+        }
+
         Storage(..) | Unknown => (
             alloc.concat([this_is, alloc.text(" a value")]),
             alloc.text(" of type:"),
