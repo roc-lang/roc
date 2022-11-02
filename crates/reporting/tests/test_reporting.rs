@@ -12266,8 +12266,7 @@ All branches in an `if` must have the same type!
 
         [[B, ..]]
         [_, .., []]
-        [[], .., [.., A]]
-        [[_, ..], .., [.., A]]
+        [_, .., [.., A]]
 
     I would have to crash if I saw one of those! Add branches for them!
     "###
@@ -12383,5 +12382,19 @@ All branches in an `if` must have the same type!
     Any value of this shape will be handled by a previous pattern, so this
     one should be removed.
     "###
+    );
+
+    test_no_problem!(
+        list_match_with_guard,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [ A, .. ] if Bool.true -> ""
+                [ A, .. ] -> ""
+                _ -> ""
+            "#
+        )
     );
 }
