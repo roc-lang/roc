@@ -2,8 +2,9 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
-use roc_exhaustive::CtorName;
+use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -15,7 +16,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Polarity, Reason, RecordField,
+    TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -1943,8 +1945,35 @@ fn to_pattern_report<'b>(
                     severity: Severity::RuntimeError,
                 }
             }
+            PReason::ListElem => {
+                let doc = alloc.stack([
+                    alloc.concat([alloc.reflow("This list element doesn't match the types of other elements in the pattern:")]),
+                    alloc.region(lines.convert_region(region)),
+                    pattern_type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        add_pattern_category(
+                            alloc,
+                            alloc.text("It matches"),
+                            &category,
+                        ),
+                        alloc.concat([
+                            alloc.text("But the other elements in this list pattern match")
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity: Severity::RuntimeError,
+                }
+            }
             PReason::TagArg { .. } | PReason::PatternGuard => {
-                unreachable!("I didn't think this could trigger. Please tell Folkert about it!")
+                internal_error!("We didn't think this could trigger. Please tell us about it on Zulip if it does!")
             }
         },
     }
@@ -1991,6 +2020,7 @@ fn add_pattern_category<'b>(
         PatternDefault => alloc.reflow(" an optional field of type:"),
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
+        List => alloc.reflow(" lists of type:"),
         Ctor(tag_name) => alloc.concat([
             alloc.reflow(" a "),
             alloc.tag_name(tag_name.clone()),
@@ -2199,11 +2229,46 @@ pub struct Diff<T> {
     right_able: AbleVariables,
 }
 
-fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDocBuilder<'b>> {
+fn tag_ext_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
+    gen_usages: &VecMap<Lowercase, usize>,
+    ext: TypeExt,
+) -> Option<RocDocBuilder<'b>> {
     use TypeExt::*;
 
     match ext {
         Closed => None,
+        FlexOpen(lowercase) if is_generated_name(&lowercase) => {
+            let &usages = gen_usages.get(&lowercase).unwrap_or(&1);
+
+            if usages > 1 {
+                Some(alloc.type_variable(display_generated_name(&lowercase).into()))
+            } else {
+                match pol {
+                    Polarity::Neg => Some(alloc.type_variable(WILDCARD.into())),
+                    Polarity::Pos => {
+                        // Wildcard in output position is irrelevant and is elided.
+                        None
+                    }
+                }
+            }
+        }
+        FlexOpen(lowercase) | RigidOpen(lowercase) => Some(alloc.type_variable(lowercase)),
+    }
+}
+
+fn record_ext_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    ext: TypeExt,
+) -> Option<RocDocBuilder<'b>> {
+    use TypeExt::*;
+
+    match ext {
+        Closed => None,
+        FlexOpen(lowercase) if is_generated_name(&lowercase) => {
+            Some(alloc.type_variable(display_generated_name(&lowercase).into()))
+        }
         FlexOpen(lowercase) | RigidOpen(lowercase) => Some(alloc.type_variable(lowercase)),
     }
 }
@@ -2222,13 +2287,24 @@ pub fn to_doc<'b>(
 ) -> (RocDocBuilder<'b>, AbleVariables) {
     let mut ctx = Context::default();
 
-    let doc = to_doc_help(&mut ctx, alloc, parens, tipe);
+    let mut generated_name_usages = VecMap::default();
+    count_generated_name_usages(&mut generated_name_usages, [&tipe]);
+    let doc = to_doc_help(&mut ctx, &generated_name_usages, alloc, parens, tipe);
 
     (doc, ctx.able_variables)
 }
 
+fn is_generated_name(name: &Lowercase) -> bool {
+    name.as_str().starts_with('#')
+}
+
+fn display_generated_name(name: &Lowercase) -> &str {
+    &name.as_str()[1..]
+}
+
 fn to_doc_help<'b>(
     ctx: &mut Context,
+    gen_usages: &VecMap<Lowercase, usize>,
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     tipe: ErrorType,
@@ -2240,13 +2316,24 @@ fn to_doc_help<'b>(
             alloc,
             parens,
             args.into_iter()
-                .map(|arg| to_doc_help(ctx, alloc, Parens::InFn, arg))
+                .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InFn, arg))
                 .collect(),
-            to_doc_help(ctx, alloc, Parens::InFn, *ret),
+            to_doc_help(ctx, gen_usages, alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
 
+        FlexVar(lowercase) if is_generated_name(&lowercase) => {
+            let &usages = gen_usages
+                .get(&lowercase)
+                .expect("flex var appears, but not captured here");
+
+            if usages > 1 {
+                alloc.type_variable(display_generated_name(&lowercase).into())
+            } else {
+                alloc.type_variable(WILDCARD.into())
+            }
+        }
         FlexVar(lowercase) | RigidVar(lowercase) => alloc.type_variable(lowercase),
         FlexAbleVar(lowercase, ability) | RigidAbleVar(lowercase, ability) => {
             ctx.able_variables.push((lowercase.clone(), ability));
@@ -2258,7 +2345,7 @@ fn to_doc_help<'b>(
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -2279,7 +2366,7 @@ fn to_doc_help<'b>(
                 parens,
                 alloc.symbol_foreign_qualified(symbol),
                 args.into_iter()
-                    .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                    .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InTypeParam, arg))
                     .collect(),
             )
         }
@@ -2289,7 +2376,7 @@ fn to_doc_help<'b>(
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -2307,24 +2394,27 @@ fn to_doc_help<'b>(
                             match value {
                                 RecordField::Optional(v) => RecordField::Optional(to_doc_help(
                                     ctx,
+                                    gen_usages,
                                     alloc,
                                     Parens::Unnecessary,
                                     v,
                                 )),
                                 RecordField::RigidOptional(v) => RecordField::RigidOptional(
-                                    to_doc_help(ctx, alloc, Parens::Unnecessary, v),
+                                    to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, v),
                                 ),
                                 RecordField::Required(v) => RecordField::Required(to_doc_help(
                                     ctx,
+                                    gen_usages,
                                     alloc,
                                     Parens::Unnecessary,
                                     v,
                                 )),
                                 RecordField::RigidRequired(v) => RecordField::RigidRequired(
-                                    to_doc_help(ctx, alloc, Parens::Unnecessary, v),
+                                    to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, v),
                                 ),
                                 RecordField::Demanded(v) => RecordField::Demanded(to_doc_help(
                                     ctx,
+                                    gen_usages,
                                     alloc,
                                     Parens::Unnecessary,
                                     v,
@@ -2333,18 +2423,20 @@ fn to_doc_help<'b>(
                         )
                     })
                     .collect(),
-                ext_to_doc(alloc, ext),
+                record_ext_to_doc(alloc, ext),
             )
         }
 
-        TagUnion(tags_map, ext) => {
+        TagUnion(tags_map, ext, pol) => {
             let mut tags = tags_map
                 .into_iter()
                 .map(|(name, args)| {
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                            .map(|arg| {
+                                to_doc_help(ctx, gen_usages, alloc, Parens::InTypeParam, arg)
+                            })
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -2356,18 +2448,20 @@ fn to_doc_help<'b>(
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
-                ext_to_doc(alloc, ext),
+                tag_ext_to_doc(alloc, pol, gen_usages, ext),
             )
         }
 
-        RecursiveTagUnion(rec_var, tags_map, ext) => {
+        RecursiveTagUnion(rec_var, tags_map, ext, pol) => {
             let mut tags = tags_map
                 .into_iter()
                 .map(|(name, args)| {
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                            .map(|arg| {
+                                to_doc_help(ctx, gen_usages, alloc, Parens::InTypeParam, arg)
+                            })
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -2376,20 +2470,94 @@ fn to_doc_help<'b>(
 
             report_text::recursive_tag_union(
                 alloc,
-                to_doc_help(ctx, alloc, Parens::Unnecessary, *rec_var),
+                to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
-                ext_to_doc(alloc, ext),
+                tag_ext_to_doc(alloc, pol, gen_usages, ext),
             )
         }
 
         Range(range_types) => {
             let range_types = range_types
                 .into_iter()
-                .map(|arg| to_doc_help(ctx, alloc, Parens::Unnecessary, arg))
+                .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, arg))
                 .collect();
             report_text::range(alloc, range_types)
+        }
+    }
+}
+
+fn count_generated_name_usages<'a>(
+    usages: &mut VecMap<Lowercase, usize>,
+    types: impl IntoIterator<Item = &'a ErrorType>,
+) {
+    let mut stack = types.into_iter().collect::<Vec<_>>();
+
+    let mut ext_stack = vec![];
+
+    use ErrorType::*;
+    while let Some(tipe) = stack.pop() {
+        match tipe {
+            FlexVar(name) | FlexAbleVar(name, _) => {
+                if is_generated_name(name) {
+                    let count = usages.get_or_insert(name.clone(), || 0);
+                    *count += 1;
+                }
+            }
+            RigidVar(name) | RigidAbleVar(name, _) => {
+                debug_assert!(!is_generated_name(name));
+            }
+            Type(_, tys) => {
+                stack.extend(tys);
+            }
+            Record(fields, ext) => {
+                stack.extend(fields.values().map(|f| f.as_inner()));
+                ext_stack.push(ext);
+            }
+            TagUnion(tags, ext, _) => {
+                stack.extend(tags.values().flatten());
+                ext_stack.push(ext);
+            }
+            RecursiveTagUnion(rec, tags, ext, _) => {
+                stack.push(rec);
+                stack.extend(tags.values().flatten());
+                ext_stack.push(ext);
+            }
+            Function(args, _lset, ret) => {
+                stack.extend(args);
+                stack.push(ret);
+            }
+            Alias(_, _args, real, _) => {
+                // Since the arguments should always be captured in the real type,
+                // only look at the real type. Otherwise we might think a variable appears twice
+                // when it doesn't.
+                stack.push(real);
+            }
+            Infinite | Error => {}
+            Range(_) => {}
+        }
+    }
+
+    count_generated_name_usages_in_exts(usages, ext_stack);
+}
+
+fn count_generated_name_usages_in_exts<'a>(
+    usages: &mut VecMap<Lowercase, usize>,
+    exts: impl IntoIterator<Item = &'a TypeExt>,
+) {
+    for ext in exts {
+        match ext {
+            TypeExt::FlexOpen(name) => {
+                if is_generated_name(name) {
+                    let count = usages.get_or_insert(name.clone(), || 0);
+                    *count += 1;
+                }
+            }
+            TypeExt::RigidOpen(name) => {
+                debug_assert!(!is_generated_name(name));
+            }
+            TypeExt::Closed => {}
         }
     }
 }
@@ -2606,7 +2774,7 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _)) | (TagUnion(tags, _), Alias(Symbol::BOOL_BOOL, _, _, _))
+        (Alias(Symbol::BOOL_BOOL, _, _, _), TagUnion(tags, _, _)) | (TagUnion(tags, _, _), Alias(Symbol::BOOL_BOOL, _, _, _))
             if tags.len() == 1
                 && tags.keys().all(|t| t.0.as_str() == "True" || t.0.as_str() == "False") =>
         {
@@ -2658,11 +2826,11 @@ fn to_diff<'b>(
             diff_record(alloc, fields1, ext1, fields2, ext2)
         }
 
-        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            diff_tag_union(alloc, &tags1, ext1, &tags2, ext2)
+        (TagUnion(tags1, ext1, pol), TagUnion(tags2, ext2, _)) => {
+            diff_tag_union(alloc, pol, &tags1, ext1, &tags2, ext2)
         }
 
-        (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
+        (RecursiveTagUnion(_rec1, _tags1, _ext1, _), RecursiveTagUnion(_rec2, _tags2, _ext2, _)) => {
             // TODO do a better job here
             let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
             let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
@@ -2900,7 +3068,7 @@ fn diff_record<'b>(
         (false, false) => Status::Similar,
     };
 
-    let ext_diff = ext_to_diff(alloc, ext1, ext2);
+    let ext_diff = record_ext_to_diff(alloc, ext1, ext2);
 
     let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>> =
         Diff {
@@ -2997,11 +3165,25 @@ fn same_tag_name_overlap_diff<'b>(
 
 fn diff_tag_union<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
     fields1: &SendMap<TagName, Vec<ErrorType>>,
     ext1: TypeExt,
     fields2: &SendMap<TagName, Vec<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
+    let gen_usages1 = {
+        let mut usages = VecMap::default();
+        count_generated_name_usages(&mut usages, fields1.values().flatten());
+        count_generated_name_usages_in_exts(&mut usages, [&ext1]);
+        usages
+    };
+    let gen_usages2 = {
+        let mut usages = VecMap::default();
+        count_generated_name_usages(&mut usages, fields2.values().flatten());
+        count_generated_name_usages_in_exts(&mut usages, [&ext2]);
+        usages
+    };
+
     let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
         same_tag_name_overlap_diff(alloc, field, t1, t2)
     };
@@ -3037,7 +3219,8 @@ fn diff_tag_union<'b>(
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
-        (true, true) => match (left.peek(), right.peek()) {
+        (false, false) => Status::Similar,
+        _ => match (left.peek(), right.peek()) {
             (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
@@ -3056,24 +3239,9 @@ fn diff_tag_union<'b>(
             }
             (None, None) => Status::Similar,
         },
-        (false, true) => match left.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
-                f.clone(),
-                fields2.keys().cloned().collect(),
-            )]),
-            None => Status::Similar,
-        },
-        (true, false) => match right.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
-                f.clone(),
-                fields1.keys().cloned().collect(),
-            )]),
-            None => Status::Similar,
-        },
-        (false, false) => Status::Similar,
     };
 
-    let ext_diff = ext_to_diff(alloc, ext1, ext2);
+    let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages1, &gen_usages2);
 
     let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         left: vec![],
@@ -3131,14 +3299,45 @@ fn diff_tag_union<'b>(
     }
 }
 
-fn ext_to_diff<'b>(
+fn tag_ext_to_diff<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    pol: Polarity,
+    ext1: TypeExt,
+    ext2: TypeExt,
+    gen_usages1: &VecMap<Lowercase, usize>,
+    gen_usages2: &VecMap<Lowercase, usize>,
+) -> Diff<Option<RocDocBuilder<'b>>> {
+    let status = ext_to_status(&ext1, &ext2);
+    let ext_doc_1 = tag_ext_to_doc(alloc, pol, gen_usages1, ext1);
+    let ext_doc_2 = tag_ext_to_doc(alloc, pol, gen_usages2, ext2);
+
+    match &status {
+        Status::Similar => Diff {
+            left: ext_doc_1,
+            right: ext_doc_2,
+            status,
+            left_able: vec![],
+            right_able: vec![],
+        },
+        Status::Different(_) => Diff {
+            // NOTE elm colors these differently at this point
+            left: ext_doc_1,
+            right: ext_doc_2,
+            status,
+            left_able: vec![],
+            right_able: vec![],
+        },
+    }
+}
+
+fn record_ext_to_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
     ext1: TypeExt,
     ext2: TypeExt,
 ) -> Diff<Option<RocDocBuilder<'b>>> {
     let status = ext_to_status(&ext1, &ext2);
-    let ext_doc_1 = ext_to_doc(alloc, ext1);
-    let ext_doc_2 = ext_to_doc(alloc, ext2);
+    let ext_doc_1 = record_ext_to_doc(alloc, ext1);
+    let ext_doc_2 = record_ext_to_doc(alloc, ext2);
 
     match &status {
         Status::Similar => Diff {
@@ -3286,7 +3485,7 @@ mod report_text {
         fs: Vec<(Lowercase, RecordField<ErrorType>)>,
         ext: TypeExt,
     ) -> RocDocBuilder<'b> {
-        use crate::error::r#type::{ext_to_doc, to_doc};
+        use crate::error::r#type::{record_ext_to_doc, to_doc};
 
         let entry_to_doc = |(name, tipe): (Lowercase, RecordField<ErrorType>)| {
             (
@@ -3300,7 +3499,7 @@ mod report_text {
 
         let fields = selection.into_iter().map(entry_to_doc).collect();
 
-        vertical_record(alloc, fields, ext_to_doc(alloc, ext))
+        vertical_record(alloc, fields, record_ext_to_doc(alloc, ext))
             .annotate(Annotation::TypeBlock)
             .indent(4)
     }
@@ -3686,7 +3885,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
-                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     rigid_able_vs_concrete(x, alloc.reflow("a tag value"))
                 }
                 Alias(symbol, _, _, _) | Type(symbol, _) => rigid_able_vs_concrete(
@@ -3774,7 +3973,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
-                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))
                 }
                 Alias(symbol, _, _, _) | Type(symbol, _) => bad_rigid_var(
@@ -4181,6 +4380,37 @@ fn pattern_to_doc_help<'b>(
             Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
             Str(s) => alloc.string(s.into()),
         },
+        List(arity, patterns) => {
+            let inner = match arity {
+                ListArity::Exact(_) => alloc.intersperse(
+                    patterns
+                        .into_iter()
+                        .map(|p| pattern_to_doc_help(alloc, p, false)),
+                    alloc.text(",").append(alloc.space()),
+                ),
+                ListArity::Slice(num_before, num_after) => {
+                    let mut all_patterns = patterns
+                        .into_iter()
+                        .map(|p| pattern_to_doc_help(alloc, p, in_type_param));
+
+                    let spread = alloc.text("..");
+                    let comma_space = alloc.text(",").append(alloc.space());
+
+                    let mut list = alloc.intersperse(
+                        all_patterns.by_ref().take(num_before).chain([spread]),
+                        comma_space.clone(),
+                    );
+
+                    if num_after > 0 {
+                        let after = all_patterns;
+                        list = alloc.intersperse([list].into_iter().chain(after), comma_space);
+                    }
+
+                    list
+                }
+            };
+            alloc.concat([alloc.text("["), inner, alloc.text("]")])
+        }
         Ctor(union, tag_id, args) => {
             match union.render_as {
                 RenderAs::Guard => {
@@ -4206,7 +4436,7 @@ fn pattern_to_doc_help<'b>(
                             Anything => {
                                 arg_docs.push(alloc.text(label.to_string()));
                             }
-                            Literal(_) | Ctor(_, _, _) => {
+                            Literal(_) | Ctor(_, _, _) | List(..) => {
                                 arg_docs.push(
                                     alloc
                                         .text(label.to_string())

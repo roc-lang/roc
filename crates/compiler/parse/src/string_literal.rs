@@ -1,7 +1,9 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
-use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser};
+use crate::parser::{
+    allocated, loc, reset_min_indent, specialize_ref, word1, BadInputError, EString, Parser,
+};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -9,7 +11,7 @@ use bumpalo::Bump;
 /// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
 /// which must consist entirely of ASCII hex digits.)
 fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
-    move |arena, mut state: State<'a>| {
+    move |arena, mut state: State<'a>, _min_indent: u32| {
         let mut buf = bumpalo::collections::String::new_in(arena);
 
         for &byte in state.bytes().iter() {
@@ -30,7 +32,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
 }
 
 pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
-    move |arena: &'a Bump, mut state: State<'a>| {
+    move |arena: &'a Bump, mut state: State<'a>, _min_indent: u32| {
         if state.consume_mut("\'") {
             // we will be parsing a single-quote-string
         } else {
@@ -165,7 +167,7 @@ fn utf8<'a>(
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     use StrLiteral::*;
 
-    move |arena: &'a Bump, mut state: State<'a>| {
+    move |arena: &'a Bump, mut state: State<'a>, min_indent: u32| {
         let is_multiline;
 
         let indent = state.column();
@@ -368,10 +370,13 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = skip_second!(
-                                specialize_ref(EString::Format, loc(allocated(expr::expr_help(0)))),
+                                specialize_ref(
+                                    EString::Format,
+                                    loc(allocated(reset_min_indent(expr::expr_help())))
+                                ),
                                 word1(b')', EString::FormatEnd)
                             )
-                            .parse(arena, state)?;
+                            .parse(arena, state, min_indent)?;
 
                             // Advance the iterator past the expr we just parsed.
                             for _ in 0..(original_byte_count - new_state.bytes().len()) {
@@ -398,7 +403,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                                 loc(ascii_hex_digits()),
                                 word1(b')', EString::CodePtEnd)
                             )
-                            .parse(arena, state)?;
+                            .parse(arena, state, min_indent)?;
 
                             // Advance the iterator past the expr we just parsed.
                             for _ in 0..(original_byte_count - new_state.bytes().len()) {

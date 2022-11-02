@@ -152,6 +152,7 @@ impl<'a> Formattable for Pattern<'a> {
             }
             StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
                 buf.push_str(string);
                 buf.push('\'');

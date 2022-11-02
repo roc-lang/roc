@@ -8,6 +8,7 @@
 # Our website deployment script downloads that zipfile and copies the files into www/build/repl/
 # We use this two-step process because Netlify times out if we try to build the Web REPL there.
 
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
 if ! which wasm-pack

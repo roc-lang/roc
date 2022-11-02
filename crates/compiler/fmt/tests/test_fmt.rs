@@ -86,7 +86,7 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(arena, state) {
+        match module_defs().parse(arena, state, 0) {
             Ok((_, loc_defs, _)) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
@@ -3862,6 +3862,17 @@ mod test_fmt {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn when_with_single_quote_char() {
+        expr_formats_same(indoc!(
+            r#"
+                when x is
+                    '0' -> 0
+                    '1' -> 1
+                "#
+        ));
     }
 
     // NEWLINES

@@ -4,6 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
+use roc_utils::cargo;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -48,7 +49,7 @@ where
             vec!["build", "--release", "--bin", "roc"]
         };
 
-        let output = Command::new("cargo")
+        let output = cargo()
             .current_dir(root_project_dir)
             .args(args)
             .output()
@@ -74,7 +75,7 @@ where
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
-    path_to_binary("roc")
+    path_to_binary(if cfg!(windows) { "roc.exe" } else { "roc" })
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {

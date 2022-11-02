@@ -1,7 +1,7 @@
 use crate::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranchPattern},
-    pattern::{DestructType, Pattern, RecordDestruct},
+    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct},
 };
 use roc_module::{
     ident::{Lowercase, TagName},
@@ -706,6 +706,18 @@ fn deep_copy_pattern_help<C: CopyEnv>(
                     )
                 })
                 .collect(),
+        },
+        List {
+            list_var,
+            elem_var,
+            patterns: ListPatterns { patterns, opt_rest },
+        } => List {
+            list_var: sub!(*list_var),
+            elem_var: sub!(*elem_var),
+            patterns: ListPatterns {
+                patterns: patterns.iter().map(|lp| lp.map(|p| go_help!(p))).collect(),
+                opt_rest: *opt_rest,
+            },
         },
         NumLiteral(var, s, n, bound) => NumLiteral(sub!(*var), s.clone(), *n, *bound),
         IntLiteral(v1, v2, s, n, bound) => IntLiteral(sub!(*v1), sub!(*v2), s.clone(), *n, *bound),

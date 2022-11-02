@@ -2280,6 +2280,8 @@ fn gen_quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                app "test" provides [main] to "./platform"
+
                 quicksort : List (Num a) -> List (Num a)
                 quicksort = \list ->
                     n = List.len list
@@ -2336,7 +2338,7 @@ fn gen_quicksort() {
                     else
                         Pair i list
 
-                quicksort [7, 4, 21, 19]
+                main = quicksort [7, 4, 21, 19]
             "#
             ),
             RocList::from_slice(&[4, 7, 19, 21]),
@@ -2352,6 +2354,8 @@ fn quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2410,7 +2414,7 @@ fn quicksort() {
 
 
 
-                   quicksort [7, 4, 21, 19]
+                   main = quicksort [7, 4, 21, 19]
                "#
             ),
             RocList::from_slice(&[19, 7, 4, 21]),
@@ -2426,6 +2430,8 @@ fn quicksort_singleton() {
         assert_evals_to!(
             indoc!(
                 r#"
+                   app "test" provides [main] to "./platform"
+
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
                        quicksortHelp list 0 (List.len list - 1)
@@ -2483,8 +2489,9 @@ fn quicksort_singleton() {
 
 
 
-                   when List.first (quicksort [0x1]) is
-                       _ -> 4
+                   main =
+                       when List.first (quicksort [0x1]) is
+                           _ -> 4
                "#
             ),
             4,
@@ -3570,4 +3577,136 @@ fn list_walk_from_even_prefix_sum() {
         4 + 8,
         i64
     );
+}
+
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+mod pattern_match {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    use super::RocList;
+
+    #[test]
+    fn unary_exact_size_match() {
+        assert_evals_to!(
+            r#"
+            helper = \l -> when l is
+                [] -> 1u8
+                _ -> 2u8
+
+            [ helper [], helper [{}] ]
+            "#,
+            RocList::from_slice(&[1, 2]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn many_exact_size_match() {
+        assert_evals_to!(
+            r#"
+            helper = \l -> when l is
+                [] -> 1u8
+                [_] -> 2u8
+                [_, _] -> 3u8
+                [_, _, _] -> 4u8
+                _ -> 5u8
+
+            [ helper [], helper [{}], helper [{}, {}], helper [{}, {}, {}], helper [{}, {}, {}, {}] ]
+            "#,
+            RocList::from_slice(&[1, 2, 3, 4, 5]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn ranged_matches_head() {
+        assert_evals_to!(
+            r#"
+            helper = \l -> when l is
+                [] -> 1u8
+                [A] -> 2u8
+                [A, A, ..] -> 3u8
+                [A, B, ..] -> 4u8
+                [B, ..] -> 5u8
+
+            [
+                helper [],
+                helper [A],
+                helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
+                helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
+                helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, //
+                2, //
+                3, 3, 3, 3, //
+                4, 4, 4, 4, //
+                5, 5, 5, 5, //
+            ]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn ranged_matches_tail() {
+        assert_evals_to!(
+            r#"
+            helper = \l -> when l is
+                [] -> 1u8
+                [A] -> 2u8
+                [.., A, A] -> 3u8
+                [.., B, A] -> 4u8
+                [.., B] -> 5u8
+
+            [
+                helper [],
+                helper [A],
+                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, //
+                2, //
+                3, 3, 3, 3, //
+                4, 4, 4, 4, //
+                5, 5, 5, 5, //
+            ]),
+            RocList<u8>
+        )
+    }
+
+    #[test]
+    fn bind_variables() {
+        assert_evals_to!(
+            r#"
+            helper : List U16 -> U16
+            helper = \l -> when l is
+                [] -> 1
+                [x] -> x
+                [.., w, x, y, z] -> w * x * y * z
+                [x, y, ..] -> x * y
+
+            [
+                helper [],
+                helper [5],
+                helper [3, 5], helper [3, 5, 7],
+                helper [2, 3, 5, 7], helper [11, 2, 3, 5, 7], helper [13, 11, 2, 3, 5, 7],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, //
+                5, //
+                15, 15, //
+                210, 210, 210, //
+            ]),
+            RocList<u16>
+        )
+    }
 }

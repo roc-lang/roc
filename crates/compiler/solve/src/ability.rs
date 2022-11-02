@@ -13,7 +13,7 @@ use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
     Variable,
 };
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -191,7 +191,8 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    let (error_type, _moar_ghosts_n_stuff) =
+                        subs.var_to_error_type(var, Polarity::OF_VALUE);
                     problems.push(TypeError::BadExprMissingAbility(
                         region,
                         category,
@@ -208,7 +209,8 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    let (error_type, _moar_ghosts_n_stuff) =
+                        subs.var_to_error_type(var, Polarity::OF_PATTERN);
                     problems.push(TypeError::BadPatternMissingAbility(
                         region,
                         category,
@@ -309,14 +311,15 @@ impl ObligationCache {
             })) => Some(if failure_var == var {
                 UnderivableReason::SurfaceNotDerivable(context)
             } else {
-                let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
+                let (error_type, _skeletons) =
+                    subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
                 UnderivableReason::NestedNotDerivable(error_type, context)
             }),
             None => Some(UnderivableReason::NotABuiltin),
         };
 
         if let Some(underivable_reason) = opt_underivable {
-            let (error_type, _skeletons) = subs.var_to_error_type(var);
+            let (error_type, _skeletons) = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
             Err(Unfulfilled::AdhocUnderivable {
                 typ: error_type,
@@ -1222,6 +1225,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
         specialization_var,
         signature_var,
         Mode::EQ,
+        Polarity::Pos,
     )
     .expect_success(
         "If resolving a specialization, the specialization must be known to typecheck.",

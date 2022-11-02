@@ -143,7 +143,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Structural))
          }
@@ -154,7 +154,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Opaque))
          }
@@ -291,6 +291,7 @@ fn assemble_derived_golden(
             DebugPrint {
                 print_lambda_sets: true,
                 print_only_under_alias,
+                ..DebugPrint::NOTHING
             },
         );
         subs.rollback_to(snapshot);
@@ -374,6 +375,7 @@ fn check_derived_typechecks_and_golden(
     let mut rigid_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
         test_module,
+        &mut constraints,
         &mut test_subs,
         pending_abilities,
         &exposed_for_module,

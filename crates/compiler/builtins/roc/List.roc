@@ -219,7 +219,7 @@ isEmpty = \list ->
 # but will cause a reference count increment on the value it got out of the list
 getUnsafe : List a, Nat -> a
 
-get : List a, Nat -> Result a [OutOfBounds]*
+get : List a, Nat -> Result a [OutOfBounds]
 get = \list, index ->
     if index < List.len list then
         Ok (List.getUnsafe list index)
@@ -298,7 +298,7 @@ reserve : List a, Nat -> List a
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-last : List a -> Result a [ListWasEmpty]*
+last : List a -> Result a [ListWasEmpty]
 last = \list ->
     when List.get list (Num.subSaturated (List.len list) 1) is
         Ok v -> Ok v
@@ -683,7 +683,7 @@ sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
 swap : List a, Nat, Nat -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
-first : List a -> Result a [ListWasEmpty]*
+first : List a -> Result a [ListWasEmpty]
 first = \list ->
     when List.get list 0 is
         Ok v -> Ok v
@@ -776,7 +776,7 @@ drop = \list, n ->
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-min : List (Num a) -> Result (Num a) [ListWasEmpty]*
+min : List (Num a) -> Result (Num a) [ListWasEmpty]
 min = \list ->
     when List.first list is
         Ok initial ->
@@ -793,7 +793,7 @@ minHelp = \list, initial ->
         else
             bestSoFar
 
-max : List (Num a) -> Result (Num a) [ListWasEmpty]*
+max : List (Num a) -> Result (Num a) [ListWasEmpty]
 max = \list ->
     when List.first list is
         Ok initial ->
@@ -820,7 +820,7 @@ joinMap = \list, mapper ->
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]
 findFirst = \list, pred ->
     callback = \_, elem ->
         if pred elem then
@@ -834,7 +834,7 @@ findFirst = \list, pred ->
 
 ## Returns the last element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findLast : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findLast : List elem, (elem -> Bool) -> Result elem [NotFound]
 findLast = \list, pred ->
     callback = \_, elem ->
         if pred elem then
@@ -849,7 +849,7 @@ findLast = \list, pred ->
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
 findFirstIndex = \list, matcher ->
     foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
@@ -864,7 +864,7 @@ findFirstIndex = \list, matcher ->
 ## Returns the last index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
 findLastIndex = \list, matches ->
     foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
         if matches elem then
@@ -962,7 +962,7 @@ split = \elements, userSplitIndex ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
-splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -977,7 +977,7 @@ splitFirst = \list, delimiter ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
-splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]* | elem has Eq
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->

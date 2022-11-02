@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError,
-    TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorType, Polarity, Problem, RecordField,
+    RecordFieldsError, TypeExt, Uls,
 };
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
@@ -802,12 +802,12 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             };
             write!(f, "Flex({})", name)
         }
-        Content::FlexAbleVar(name, symbol) => {
+        Content::FlexAbleVar(name, symbols) => {
             let name = match name {
                 Some(index) => subs[*index].as_str(),
                 None => "_",
             };
-            write!(f, "FlexAble({}, {:?})", name, symbol)
+            write!(f, "FlexAble({}, {:?})", name, subs.get_subs_slice(*symbols))
         }
         Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
         Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
@@ -1437,7 +1437,7 @@ fn integer_type(
 
     // define the type `Num.Integer Num.Signed64 := Num.Signed64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [signed64], [], []);
         subs.set_content(integer_signed64, {
             Content::Alias(Symbol::NUM_INTEGER, vars, signed64, AliasKind::Opaque)
         });
@@ -1445,7 +1445,7 @@ fn integer_type(
 
     // define the type `Num.Num (Num.Integer Num.Signed64) := Num.Integer Num.Signed64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], [], []);
         subs.set_content(num_integer_signed64, {
             Content::Alias(Symbol::NUM_NUM, vars, integer_signed64, AliasKind::Opaque)
         });
@@ -1605,7 +1605,7 @@ fn float_type(
 
     // define the type `Num.Float Num.Binary64 := Num.Binary64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [binary64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [binary64], [], []);
         subs.set_content(float_binary64, {
             Content::Alias(Symbol::NUM_FLOATINGPOINT, vars, binary64, AliasKind::Opaque)
         });
@@ -1613,7 +1613,7 @@ fn float_type(
 
     // define the type `Num.Num (Num.Float Num.Binary64) := Num.Float Num.Binary64`
     {
-        let vars = AliasVariables::insert_into_subs(subs, [float_binary64], []);
+        let vars = AliasVariables::insert_into_subs(subs, [float_binary64], [], []);
         subs.set_content(num_float_binary64, {
             Content::Alias(Symbol::NUM_NUM, vars, float_binary64, AliasKind::Opaque)
         });
@@ -2050,14 +2050,19 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<Problem>) {
-        self.var_to_error_type_contextual(var, ErrorTypeContext::None)
+    pub fn var_to_error_type(
+        &mut self,
+        var: Variable,
+        observed_pol: Polarity,
+    ) -> (ErrorType, Vec<Problem>) {
+        self.var_to_error_type_contextual(var, ErrorTypeContext::None, observed_pol)
     }
 
     pub fn var_to_error_type_contextual(
         &mut self,
         var: Variable,
         context: ErrorTypeContext,
+        observed_pol: Polarity,
     ) -> (ErrorType, Vec<Problem>) {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
@@ -2074,7 +2079,10 @@ impl Subs {
             recursive_tag_unions_seen: Vec::new(),
         };
 
-        (var_to_err_type(self, &mut state, var), state.problems)
+        (
+            var_to_err_type(self, &mut state, var, observed_pol),
+            state.problems,
+        )
     }
 
     pub fn len(&self) -> usize {
@@ -2261,8 +2269,8 @@ impl From<Content> for Descriptor {
 }
 
 roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
-roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 2 * 8 + 4);
-roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
+roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 8 + 12 + 4);
+roc_error_macros::assert_sizeof_all!(AliasVariables, 12);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(LambdaSet, 3 * 8 + 4);
 
@@ -2350,8 +2358,11 @@ pub struct LambdaSet {
 pub struct AliasVariables {
     pub variables_start: u32,
     pub all_variables_len: u16,
+    pub lambda_set_variables_len: u16,
 
-    /// an alias has type variables and lambda set variables
+    /// an alias has type variables, lambda set variables, and infer-ext-in-output-position variables.
+    /// They are arranged as
+    /// [ type variables  |  lambda set variables  |  infer ext variables ]
     pub type_variables_len: u16,
 }
 
@@ -2365,10 +2376,16 @@ impl AliasVariables {
     }
 
     pub const fn lambda_set_variables(&self) -> VariableSubsSlice {
-        SubsSlice::new(
-            self.variables_start + self.type_variables_len as u32,
-            self.all_variables_len - self.type_variables_len,
-        )
+        let start = self.variables_start + self.type_variables_len as u32;
+        SubsSlice::new(start, self.lambda_set_variables_len)
+    }
+
+    pub const fn infer_ext_in_output_variables(&self) -> VariableSubsSlice {
+        let infer_ext_vars_offset =
+            self.type_variables_len as u32 + self.lambda_set_variables_len as u32;
+        let start = self.variables_start + infer_ext_vars_offset;
+        let infer_ext_vars_len = self.all_variables_len - infer_ext_vars_offset as u16;
+        SubsSlice::new(start, infer_ext_vars_len)
     }
 
     pub const fn len(&self) -> usize {
@@ -2399,20 +2416,23 @@ impl AliasVariables {
             .take(self.type_variables_len as usize)
     }
 
-    pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+    pub fn iter_lambda_set_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
         self.all_variables()
             .into_iter()
             .skip(self.type_variables_len as usize)
+            .take(self.lambda_set_variables_len as _)
     }
 
-    pub fn insert_into_subs<I1, I2>(
+    pub fn insert_into_subs<I1, I2, I3>(
         subs: &mut Subs,
         type_arguments: I1,
-        unnamed_arguments: I2,
+        lambda_set_vars: I2,
+        infer_ext_in_output_vars: I3,
     ) -> Self
     where
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
+        I3: IntoIterator<Item = Variable>,
     {
         let variables_start = subs.variables.len() as u32;
 
@@ -2420,15 +2440,47 @@ impl AliasVariables {
 
         let type_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
 
-        subs.variables.extend(unnamed_arguments);
+        let lambda_set_variables_len = {
+            let start = subs.variables.len() as u32;
+
+            subs.variables.extend(lambda_set_vars);
+
+            (subs.variables.len() as u32 - start) as u16
+        };
+
+        let _infer_ext_in_output_vars_len = {
+            let start = subs.variables.len() as u32;
+
+            subs.variables.extend(infer_ext_in_output_vars);
+
+            (subs.variables.len() as u32 - start) as u16
+        };
 
         let all_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
+
+        debug_assert_eq!(
+            type_variables_len + lambda_set_variables_len + _infer_ext_in_output_vars_len,
+            all_variables_len
+        );
 
         Self {
             variables_start,
             type_variables_len,
+            lambda_set_variables_len,
             all_variables_len,
         }
+    }
+
+    /// Checks whether any inferred ext var in this alias has been resolved to a material type.
+    pub fn any_infer_ext_var_is_material(&self, subs: &Subs) -> bool {
+        subs.get_subs_slice(self.infer_ext_in_output_variables())
+            .iter()
+            .any(|v| {
+                !matches!(
+                    subs.get_content_unchecked(*v),
+                    Content::FlexVar(None) | Content::Structure(FlatType::EmptyTagUnion)
+                )
+            })
     }
 }
 
@@ -3678,7 +3730,12 @@ where
     }
 }
 
-fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
+fn var_to_err_type(
+    subs: &mut Subs,
+    state: &mut ErrorTypeState,
+    var: Variable,
+    pol: Polarity,
+) -> ErrorType {
     let desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
@@ -3686,7 +3743,7 @@ fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -
     } else {
         subs.set_mark(var, Mark::OCCURS);
 
-        let err_type = content_to_err_type(subs, state, var, desc.content);
+        let err_type = content_to_err_type(subs, state, var, desc.content, pol);
 
         subs.set_mark(var, desc.mark);
 
@@ -3699,18 +3756,19 @@ fn content_to_err_type(
     state: &mut ErrorTypeState,
     var: Variable,
     content: Content,
+    pol: Polarity,
 ) -> ErrorType {
     use self::Content::*;
 
     match content {
-        Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type),
+        Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type, pol),
 
         FlexVar(opt_name) => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -3732,7 +3790,7 @@ fn content_to_err_type(
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -3758,7 +3816,7 @@ fn content_to_err_type(
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
-                    let name = get_fresh_var_name(state);
+                    let name = get_fresh_error_var_name(state);
                     let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
@@ -3770,12 +3828,12 @@ fn content_to_err_type(
             if state.recursive_tag_unions_seen.contains(&var) {
                 ErrorType::FlexVar(name)
             } else {
-                var_to_err_type(subs, state, structure)
+                var_to_err_type(subs, state, structure, pol)
             }
         }
 
         Alias(symbol, args, aliased_to, kind) => {
-            let err_type = var_to_err_type(subs, state, aliased_to);
+            let err_type = var_to_err_type(subs, state, aliased_to, pol);
 
             // Lift RangedNumber up if needed.
             if let (Symbol::NUM_INT | Symbol::NUM_NUM | Symbol::NUM_INTEGER, ErrorType::Range(_)) =
@@ -3786,10 +3844,10 @@ fn content_to_err_type(
 
             let mut err_args = Vec::with_capacity(args.len());
 
-            for var_index in args.into_iter() {
+            for var_index in args.type_variables() {
                 let var = subs[var_index];
 
-                let arg = var_to_err_type(subs, state, var);
+                let arg = var_to_err_type(subs, state, var, pol);
 
                 err_args.push(arg);
             }
@@ -3806,14 +3864,14 @@ fn content_to_err_type(
             if state.context == ErrorTypeContext::ExpandRanges {
                 let mut types = Vec::new();
                 for var in range.variable_slice() {
-                    types.push(var_to_err_type(subs, state, *var));
+                    types.push(var_to_err_type(subs, state, *var, pol));
                 }
                 ErrorType::Range(types)
             } else {
                 let content = FlexVar(None);
                 subs.set_content(var, content);
                 subs.set_mark(var, Mark::NONE);
-                var_to_err_type(subs, state, var)
+                var_to_err_type(subs, state, var, pol)
             }
         }
 
@@ -3825,6 +3883,7 @@ fn flat_type_to_err_type(
     subs: &mut Subs,
     state: &mut ErrorTypeState,
     flat_type: FlatType,
+    pol: Polarity,
 ) -> ErrorType {
     use self::FlatType::*;
 
@@ -3834,7 +3893,7 @@ fn flat_type_to_err_type(
                 .into_iter()
                 .map(|index| {
                     let arg_var = subs[index];
-                    var_to_err_type(subs, state, arg_var)
+                    var_to_err_type(subs, state, arg_var, pol)
                 })
                 .collect();
 
@@ -3846,18 +3905,18 @@ fn flat_type_to_err_type(
                 .into_iter()
                 .map(|index| {
                     let arg_var = subs[index];
-                    var_to_err_type(subs, state, arg_var)
+                    var_to_err_type(subs, state, arg_var, Polarity::Neg)
                 })
                 .collect();
 
-            let ret = var_to_err_type(subs, state, ret_var);
-            let closure = var_to_err_type(subs, state, closure_var);
+            let ret = var_to_err_type(subs, state, ret_var, Polarity::Pos);
+            let closure = var_to_err_type(subs, state, closure_var, pol);
 
             ErrorType::Function(args, Box::new(closure), Box::new(ret))
         }
 
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
-        EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed),
+        EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed, pol),
 
         Record(vars_by_field, ext_var) => {
             let mut err_fields = SendMap::default();
@@ -3867,7 +3926,7 @@ fn flat_type_to_err_type(
                 let var = subs[i2];
                 let record_field = subs[i3];
 
-                let error_type = var_to_err_type(subs, state, var);
+                let error_type = var_to_err_type(subs, state, var, pol);
 
                 use RecordField::*;
                 let err_record_field = match record_field {
@@ -3881,7 +3940,7 @@ fn flat_type_to_err_type(
                 err_fields.insert(label, err_record_field);
             }
 
-            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
+            match var_to_err_type(subs, state, ext_var, pol).unwrap_structural_alias() {
                 ErrorType::Record(sub_fields, sub_ext) => {
                     ErrorType::Record(sub_fields.union(err_fields), sub_ext)
                 }
@@ -3900,22 +3959,22 @@ fn flat_type_to_err_type(
         }
 
         TagUnion(tags, ext_var) => {
-            let err_tags = union_tags_to_err_tags(subs, state, tags);
+            let err_tags = union_tags_to_err_tags(subs, state, tags, pol);
 
-            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
-                ErrorType::TagUnion(sub_tags, sub_ext) => {
-                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+            match var_to_err_type(subs, state, ext_var, pol).unwrap_structural_alias() {
+                ErrorType::TagUnion(sub_tags, sub_ext, pol) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext, pol)
                 }
-                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext) => {
-                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext, pol) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext, pol)
                 }
 
                 ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
-                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
+                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var), pol)
                 }
 
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
-                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
+                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
 
                 other =>
@@ -3930,20 +3989,20 @@ fn flat_type_to_err_type(
 
             err_tags.extend(tag_names.iter().map(|t| (t.clone(), vec![])));
 
-            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
-                ErrorType::TagUnion(sub_tags, sub_ext) => {
-                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+            match var_to_err_type(subs, state, ext_var, pol).unwrap_structural_alias() {
+                ErrorType::TagUnion(sub_tags, sub_ext, pol) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext, pol)
                 }
-                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext) => {
-                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext, pol) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext, pol)
                 }
 
                 ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
-                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
+                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var), pol)
                 }
 
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
-                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
+                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
 
                 other =>
@@ -3954,26 +4013,26 @@ fn flat_type_to_err_type(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             state.recursive_tag_unions_seen.push(rec_var);
 
-            let err_tags = union_tags_to_err_tags(subs, state, tags);
+            let err_tags = union_tags_to_err_tags(subs, state, tags, pol);
 
-            let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var));
+            let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var, pol));
 
-            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
-                ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext) => {
+            match var_to_err_type(subs, state, ext_var, pol).unwrap_structural_alias() {
+                ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext, pol) => {
                     debug_assert!(rec_var == rec_error_type);
-                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext, pol)
                 }
 
-                ErrorType::TagUnion(sub_tags, sub_ext) => {
-                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
+                ErrorType::TagUnion(sub_tags, sub_ext, pol) => {
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext, pol)
                 }
 
                 ErrorType::FlexVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var), pol)
                 }
 
                 ErrorType::RigidVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
 
                 other =>
@@ -3995,6 +4054,7 @@ fn union_tags_to_err_tags(
     subs: &mut Subs,
     state: &mut ErrorTypeState,
     tags: UnionTags,
+    pol: Polarity,
 ) -> SendMap<TagName, Vec<ErrorType>> {
     let mut err_tags = SendMap::default();
 
@@ -4004,7 +4064,7 @@ fn union_tags_to_err_tags(
         let slice = subs[slice_index];
         for var_index in slice {
             let var = subs[var_index];
-            err_vars.push(var_to_err_type(subs, state, var));
+            err_vars.push(var_to_err_type(subs, state, var, pol));
         }
 
         let tag = subs[name_index].clone();
@@ -4014,7 +4074,12 @@ fn union_tags_to_err_tags(
     err_tags
 }
 
-fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
+fn get_fresh_error_var_name(state: &mut ErrorTypeState) -> Lowercase {
+    // Auto-generated unbound variable names in error types start with `#`, so we can see later
+    // that they are auto-generated, and decide whether they should become wildcards contextually.
+    //
+    // We want to claim both the "#name" and "name" forms, because if "#name" appears multiple
+    // times during error type reporting, we'll use "name" for display.
     let (name, new_index) =
         name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
             var.as_str() == str
@@ -4022,9 +4087,15 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
 
     state.letters_used = new_index;
 
-    state.taken.insert(name.clone());
+    let mut gen_name = String::with_capacity(name.as_str().len() + 1);
+    gen_name.push('#');
+    gen_name.push_str(name.as_str());
+    let gen_name = Lowercase::from(gen_name);
 
-    name
+    state.taken.insert(name);
+    state.taken.insert(gen_name.clone());
+
+    gen_name
 }
 
 /// Exposed types in a module, captured in a storage subs. Includes

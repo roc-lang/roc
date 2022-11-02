@@ -147,7 +147,7 @@ toHelpHelper = \@Parser parser, configs ->
             List.append configs (Positional config)
             |> Config
 
-findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newlyTaken : Taken } [NotFound]*
+findOneArg : Str, Str, MarkedArgs -> Result { val : Str, newlyTaken : Taken } [NotFound]
 findOneArg = \long, short, { args, taken } ->
     argMatches = \{ index, found: _ }, arg ->
         if Set.contains taken index || Set.contains taken (index + 1) then

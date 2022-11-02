@@ -14,6 +14,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_reporting = { path = "../reporting" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
+roc_utils = { path = "../utils" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 serde = { version = "1.0.130", features = ["derive"] }
