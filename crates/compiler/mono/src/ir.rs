@@ -6485,7 +6485,7 @@ pub fn from_can<'a>(
             stmt = with_hole(
                 env,
                 loc_condition.value,
-                variable,
+                Variable::BOOL,
                 procs,
                 layout_cache,
                 cond_symbol,
@@ -6541,7 +6541,7 @@ pub fn from_can<'a>(
             stmt = with_hole(
                 env,
                 loc_condition.value,
-                variable,
+                Variable::BOOL,
                 procs,
                 layout_cache,
                 cond_symbol,
