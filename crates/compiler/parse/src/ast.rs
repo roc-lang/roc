@@ -196,6 +196,9 @@ pub enum Expr<'a> {
 
     Underscore(&'a str),
 
+    // The "crash" keyword
+    Crash,
+
     // Tags
     Tag(&'a str),
 
