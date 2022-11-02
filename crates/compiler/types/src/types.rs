@@ -862,6 +862,14 @@ impl Polarity {
     }
 }
 
+impl std::ops::Index<Index<TypeTag>> for Types {
+    type Output = TypeTag;
+
+    fn index(&self, index: Index<TypeTag>) -> &Self::Output {
+        &self.tags[index.index()]
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum Type {
     EmptyRec,
