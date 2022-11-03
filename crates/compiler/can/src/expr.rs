@@ -1546,7 +1546,6 @@ fn canonicalize_field<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
-    region: Region,
 ) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
@@ -1576,7 +1575,7 @@ fn canonicalize_field<'a>(
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
-            canonicalize_field(env, var_store, scope, sub_field, region)
+            canonicalize_field(env, var_store, scope, sub_field)
         }
 
         Malformed(_string) => {
