@@ -113,7 +113,7 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
         memcpy(&ret, bytes, len);
 
         // Record the string's length in the last byte of the stack allocation
-        ((uint8_t *)&ret)[sizeof(RocStr) - 1] = (uint8_t)len | 0b10000000;
+        ((uint8_t *)&ret)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
 
         return ret;
     }
@@ -171,28 +171,28 @@ VALUE hello(VALUE self, VALUE rb_arg)
     struct RocStr arg = init_rocstr((uint8_t *)RSTRING_PTR(rb_arg), RSTRING_LEN(rb_arg));
     struct RocStr ret;
 
+    // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
     // Determine str_len and the str_bytes pointer,
     // taking into account the small string optimization.
     size_t str_len = roc_str_len(ret);
-    VALUE ruby_str;
 
     if (is_small_str(ret))
     {
         // Create a rb_utf8_str from the (small) RocStr's stack-allocated bytes
-        ruby_str = rb_utf8_str_new((char *)&ret, str_len);
+        return rb_utf8_str_new((char *)&ret, str_len);
     }
     else
     {
         // Create a rb_utf8_str from the (large) RocStr's heap-allocated bytes
-        ruby_str = rb_utf8_str_new((char *)ret.bytes, str_len);
+        VALUE ruby_str = rb_utf8_str_new((char *)ret.bytes, str_len);
 
         // Now that we've created our Ruby string, we're no longer referencing the RocStr.
         decref((void *)&ret, alignof(uint8_t *));
-    }
 
-    return ruby_str;
+        return ruby_str;
+    }
 }
 
 void Init_demo()
