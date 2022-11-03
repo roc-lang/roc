@@ -1380,11 +1380,12 @@ macro_rules! and {
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
+            let original_state = state.clone();
 
             match $p1.parse(arena, state, min_indent) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-                Err((NoProgress, _, state)) => $p2.parse(arena, state, min_indent),
+                Err((NoProgress, _, _)) => $p2.parse(arena, original_state, min_indent),
             }
         }
     };
