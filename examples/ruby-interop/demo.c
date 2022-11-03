@@ -38,7 +38,9 @@ void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 // stored in readonly memory in the binary, and we must not
 // attempt to increment or decrement it; if we do, we'll segfault!
 const ssize_t REFCOUNT_READONLY = 0;
-const ssize_t REFCOUNT_ONE = SSIZE_T_MIN;
+const ssize_t SSIZE_MIN = (ssize_t)SIZE_MAX << ((sizeof(ssize_t) * 8) - 1);
+const ssize_t REFCOUNT_ONE = SSIZE_MIN;
+const size_t MASK = (size_t)SSIZE_MIN;
 
 // Increment reference count, given a pointer to the first element in a collection.
 // We don't need to check for overflow because in order to overflow a usize worth of refcounts,
@@ -61,7 +63,7 @@ void decref(uint8_t* bytes, uint32_t alignment)
         return;
     }
 
-    size_t extra_bytes = max((size_t)alignment, size_of(size_t));
+    size_t extra_bytes = (sizeof(size_t) >= (size_t)alignment) ? sizeof(size_t) : (size_t)alignment;
     ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
     ssize_t refcount = *refcount_ptr;
 
@@ -69,7 +71,7 @@ void decref(uint8_t* bytes, uint32_t alignment)
         *refcount_ptr = refcount - 1;
 
         if (refcount == REFCOUNT_ONE) {
-            void *original_allocation = (void *)(refcount_ptr - (extra_bytes - size_of(size_t)));
+            void *original_allocation = (void *)(refcount_ptr - (extra_bytes - sizeof(size_t)));
 
             roc_dealloc(original_allocation, alignment);
         }
@@ -85,25 +87,50 @@ struct RocStr
 
 struct RocStr init_rocstr(uint8_t *bytes, size_t len)
 {
-    struct RocStr ret;
-
-    if (len < sizeof(struct RocStr))
+    if (len == 0)
     {
-        // This is a small string. TODO do small string things.
+        struct RocStr ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
+
+        return ret;
+    }
+    else if (len < sizeof(struct RocStr))
+    {
+        // Start out with zeroed memory, so that
+        // if we end up comparing two small RocStr values
+        // for equality, we won't risk memory garbage resulting
+        // in two equal strings appearing unequal.
+        struct RocStr ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
+
+        // Copy the bytes into the stack allocation
+        memcpy(&ret, bytes, len);
+
+        // Record the string's length in the last byte of the stack allocation
+        (uint8_t *)(&ret)[sizeof(RocStr) - 1] = (uint8_t)len | 0b10000000;
+
+        return ret;
     }
     else
     {
+        struct RocStr ret;
         size_t refcount_size = sizeof(size_t);
         uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
 
-        roc_memcpy(new_content, bytes, len);
+        memcpy(new_content, bytes, len);
 
         ret.bytes = new_content;
         ret.len = len;
         ret.capacity = len;
-    }
 
-    return ret;
+        return ret;
+    }
 }
 
 bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
@@ -141,7 +168,7 @@ VALUE hello(VALUE self, VALUE rb_arg)
         rb_raise(rb_eTypeError, "`hello` only accepts strings.");
     }
 
-    struct RocStr arg = init_rocstr(RSTRING_PTR(rb_arg), RSTRING_LEN(rb_arg));
+    struct RocStr arg = init_rocstr((uint8_t *)RSTRING_PTR(rb_arg), RSTRING_LEN(rb_arg));
     struct RocStr ret;
 
     roc__mainForHost_1_exposed_generic(&ret, &arg);
@@ -154,15 +181,15 @@ VALUE hello(VALUE self, VALUE rb_arg)
     if (is_small_str(ret))
     {
         // Create a rb_utf8_str from the (small) RocStr's stack-allocated bytes
-        ruby_str = rb_utf8_str_new((uint8_t *)&ret, str_len);
+        ruby_str = rb_utf8_str_new((char *)&ret, str_len);
     }
     else
     {
         // Create a rb_utf8_str from the (large) RocStr's heap-allocated bytes
-        ruby_str = rb_utf8_str_new(ret.bytes, str_len);
+        ruby_str = rb_utf8_str_new((char *)ret.bytes, str_len);
 
         // Now that we've created our Ruby string, we're no longer referencing the RocStr.
-        decref(ret, alignof(uint8_t *));
+        decref((void *)&ret, alignof(uint8_t *));
     }
 
     return ruby_str;
