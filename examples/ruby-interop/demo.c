@@ -19,7 +19,7 @@ void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
 
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-    char *msg = (char *)ptr;
+    uint8_t *msg = (uint8_t *)ptr;
     fprintf(stderr,
             "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
     exit(0);
@@ -34,31 +34,23 @@ void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
 struct RocStr
 {
-    char *bytes;
+    uint8_t *bytes;
     size_t len;
     size_t capacity;
 };
 
-struct RocStr init_rocstr(char *bytes, size_t len)
+struct RocStr init_rocstr(uint8_t *bytes, size_t len)
 {
     struct RocStr ret;
 
     if (len < sizeof(struct RocStr))
     {
         // This is a small string. TODO do small string things.
-        size_t refcount_size = sizeof(size_t);
-        char *new_content = (char *)roc_alloc(len + refcount_size, alignof(size_t)) - refcount_size;
-
-        roc_memcpy(new_content, bytes, len);
-
-        ret.bytes = new_content;
-        ret.len = len;
-        ret.capacity = len;
     }
     else
     {
         size_t refcount_size = sizeof(size_t);
-        char *new_content = (char *)roc_alloc(len + refcount_size, alignof(size_t)) - refcount_size;
+        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
 
         roc_memcpy(new_content, bytes, len);
 
@@ -76,9 +68,9 @@ bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
 // account the small string optimization
 size_t roc_str_len(struct RocStr str)
 {
-    char *bytes = (char *)&str;
-    char last_byte = bytes[sizeof(str) - 1];
-    char last_byte_xored = last_byte ^ 0b10000000;
+    uint8_t *bytes = (uint8_t *)&str;
+    uint8_t last_byte = bytes[sizeof(str) - 1];
+    uint8_t last_byte_xored = last_byte ^ 0b10000000;
     size_t small_len = (size_t)(last_byte_xored);
     size_t big_len = str.len;
 
@@ -117,10 +109,12 @@ VALUE hello(VALUE self, VALUE rb_arg)
 
     if (is_small_str(ret))
     {
-        ruby_str = rb_utf8_str_new((char *)&ret, str_len);
+        // Create a rb_utf8_str from the (small) RocStr's stack-allocated bytes
+        ruby_str = rb_utf8_str_new((uint8_t *)&ret, str_len);
     }
     else
     {
+        // Create a rb_utf8_str from the (large) RocStr's heap-allocated bytes
         ruby_str = rb_utf8_str_new(ret.bytes, str_len);
 
         // TODO decrement refcount and then only dealloc if that was the last reference
