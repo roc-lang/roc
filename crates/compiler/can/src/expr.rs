@@ -1652,7 +1652,7 @@ fn canonicalize_var_lookup(
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
-pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> Expr {
+pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
     use Expr::*;
 
     match expr {
@@ -1681,7 +1681,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let mut new_elems = Vec::with_capacity(loc_elems.len());
 
             for loc_elem in loc_elems {
-                let value = inline_calls(var_store, scope, loc_elem.value);
+                let value = inline_calls(var_store, loc_elem.value);
 
                 new_elems.push(Loc {
                     value,
@@ -1706,20 +1706,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
-                value: inline_calls(var_store, scope, loc_cond.value),
+                value: inline_calls(var_store, loc_cond.value),
             });
 
             let mut new_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
                 let value = Loc {
-                    value: inline_calls(var_store, scope, branch.value.value),
+                    value: inline_calls(var_store, branch.value.value),
                     region: branch.value.region,
                 };
                 let guard = match branch.guard {
                     Some(loc_expr) => Some(Loc {
                         region: loc_expr.region,
-                        value: inline_calls(var_store, scope, loc_expr.value),
+                        value: inline_calls(var_store, loc_expr.value),
                     }),
                     None => None,
                 };
@@ -1753,12 +1753,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             for (loc_cond, loc_expr) in branches {
                 let loc_cond = Loc {
-                    value: inline_calls(var_store, scope, loc_cond.value),
+                    value: inline_calls(var_store, loc_cond.value),
                     region: loc_cond.region,
                 };
 
                 let loc_expr = Loc {
-                    value: inline_calls(var_store, scope, loc_expr.value),
+                    value: inline_calls(var_store, loc_expr.value),
                     region: loc_expr.region,
                 };
 
@@ -1767,7 +1767,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let final_else = Box::new(Loc {
                 region: final_else.region,
-                value: inline_calls(var_store, scope, final_else.value),
+                value: inline_calls(var_store, final_else.value),
             });
 
             If {
@@ -1785,12 +1785,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
-                value: inline_calls(var_store, scope, loc_condition.value),
+                value: inline_calls(var_store, loc_condition.value),
             };
 
             let loc_continuation = Loc {
                 region: loc_continuation.region,
-                value: inline_calls(var_store, scope, loc_continuation.value),
+                value: inline_calls(var_store, loc_continuation.value),
             };
 
             Expect {
@@ -1807,12 +1807,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
-                value: inline_calls(var_store, scope, loc_condition.value),
+                value: inline_calls(var_store, loc_condition.value),
             };
 
             let loc_continuation = Loc {
                 region: loc_continuation.region,
-                value: inline_calls(var_store, scope, loc_continuation.value),
+                value: inline_calls(var_store, loc_continuation.value),
             };
 
             ExpectFx {
@@ -1830,7 +1830,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     loc_pattern: def.loc_pattern,
                     loc_expr: Loc {
                         region: def.loc_expr.region,
-                        value: inline_calls(var_store, scope, def.loc_expr.value),
+                        value: inline_calls(var_store, def.loc_expr.value),
                     },
                     expr_var: def.expr_var,
                     pattern_vars: def.pattern_vars,
@@ -1840,7 +1840,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let loc_expr = Loc {
                 region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
             };
 
             LetRec(new_defs, Box::new(loc_expr), mark)
@@ -1851,7 +1851,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 loc_pattern: def.loc_pattern,
                 loc_expr: Loc {
                     region: def.loc_expr.region,
-                    value: inline_calls(var_store, scope, def.loc_expr.value),
+                    value: inline_calls(var_store, def.loc_expr.value),
                 },
                 expr_var: def.expr_var,
                 pattern_vars: def.pattern_vars,
@@ -1860,7 +1860,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let loc_expr = Loc {
                 region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
             };
 
             LetNonRec(Box::new(def), Box::new(loc_expr))
@@ -1878,7 +1878,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         }) => {
             let loc_expr = *loc_body;
             let loc_expr = Loc {
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
                 region: loc_expr.region,
             };
 
@@ -1938,7 +1938,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (var, loc_expr) = *argument;
             let argument = Box::new((
                 var,
-                loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                loc_expr.map_owned(|expr| inline_calls(var_store, expr)),
             ));
 
             OpaqueRef {
