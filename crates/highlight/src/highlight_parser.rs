@@ -232,7 +232,8 @@ pub mod highlight_tests {
 
         node_to_string_w_children(
             *highlight_defs("a = 0", &mut mark_node_pool)
-                .unwrap().first()
+                .unwrap()
+                .first()
                 .unwrap(),
             &mut str_buffer,
             &mark_node_pool,
