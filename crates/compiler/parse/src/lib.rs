@@ -1,4 +1,4 @@
-//! Implements the Roc parser, which transforms a textual representation of a 
+//! Implements the Roc parser, which transforms a textual representation of a
 //! Roc program to an [abstract syntax tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree).
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.

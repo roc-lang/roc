@@ -149,5 +149,4 @@ Provides a Rust wrapper for the WebAssembly test platform built on libc and is p
 
 Below is a simplified diagram to illustrate how a Roc application and host are combined to build an executable file. 
 
-![Alt text](./building_a_roc_application.svg)
-<img src="./building_a_roc_application.svg">
+![Illustration of the process to build a Roc Application using Rust](./building_a_roc_application.svg)

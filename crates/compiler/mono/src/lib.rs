@@ -1,7 +1,7 @@
-//! Roc's main intermediate representation (IR), which is responsible for 
-//! [monomorphization](https://en.wikipedia.org/wiki/Monomorphization), 
-//! defunctionalization, inserting [ref-count](https://en.wikipedia.org/wiki/Reference_counting) 
-//! instructions, and transforming a Roc program into a form that is easy to 
+//! Roc's main intermediate representation (IR), which is responsible for
+//! [monomorphization](https://en.wikipedia.org/wiki/Monomorphization),
+//! defunctionalization, inserting [ref-count](https://en.wikipedia.org/wiki/Reference_counting)
+//! instructions, and transforming a Roc program into a form that is easy to
 //! consume by a backend.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.

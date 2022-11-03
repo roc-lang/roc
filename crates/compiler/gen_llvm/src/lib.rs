@@ -1,4 +1,4 @@
-//! Provides the LLVM backend to generate Roc binaries. Used to generate a 
+//! Provides the LLVM backend to generate Roc binaries. Used to generate a
 //! binary with the fastest possible execution speed.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.

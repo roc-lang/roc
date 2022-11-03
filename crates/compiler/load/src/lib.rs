@@ -1,4 +1,4 @@
-//! Used to load a .roc file and coordinate the compiler pipeline, including 
+//! Used to load a .roc file and coordinate the compiler pipeline, including
 //! parsing, type checking, and [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)).
 use bumpalo::Bump;
 use roc_can::module::{ExposedByModule, TypeState};

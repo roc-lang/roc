@@ -1,4 +1,4 @@
-//! Provides a Rust wrapper for the WebAssembly test platform built on libc and 
+//! Provides a Rust wrapper for the WebAssembly test platform built on libc and
 //! is primarily used for testing purposes.
 // Rust's libc crate doesn't support Wasm, so we provide an implementation from Zig
 // We define Rust signatures here as we need them, rather than trying to cover all of libc
