@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
 #include <ruby.h>
@@ -38,9 +39,8 @@ void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 // stored in readonly memory in the binary, and we must not
 // attempt to increment or decrement it; if we do, we'll segfault!
 const ssize_t REFCOUNT_READONLY = 0;
-const ssize_t SSIZE_MIN = (ssize_t)SIZE_MAX << ((sizeof(ssize_t) * 8) - 1);
-const ssize_t REFCOUNT_ONE = SSIZE_MIN;
-const size_t MASK = (size_t)SSIZE_MIN;
+const ssize_t REFCOUNT_ONE = (ssize_t)PTRDIFF_MIN;
+const size_t MASK = (size_t)PTRDIFF_MIN;
 
 // Increment reference count, given a pointer to the first element in a collection.
 // We don't need to check for overflow because in order to overflow a usize worth of refcounts,
