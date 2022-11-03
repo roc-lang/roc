@@ -75,6 +75,45 @@ void decref(uint8_t* bytes, uint32_t alignment)
     }
 }
 
+// RocBytes (List U8)
+
+struct RocBytes
+{
+    uint8_t *bytes;
+    size_t len;
+    size_t capacity;
+};
+
+struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
+{
+    if (len == 0)
+    {
+        struct RocBytes ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
+
+        return ret;
+    }
+    else
+    {
+        struct RocBytes ret;
+        size_t refcount_size = sizeof(size_t);
+        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
+
+        memcpy(new_content, bytes, len);
+
+        ret.bytes = new_content;
+        ret.len = len;
+        ret.capacity = len;
+
+        return ret;
+    }
+}
+
+// RocStr
+
 struct RocStr
 {
     uint8_t *bytes;
@@ -116,15 +155,14 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
     }
     else
     {
-        struct RocStr ret;
-        size_t refcount_size = sizeof(size_t);
-        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
+        // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
+        struct RocBytes roc_bytes = init_rocbytes(bytes, len);
 
-        memcpy(new_content, bytes, len);
-
-        ret.bytes = new_content;
-        ret.len = len;
-        ret.capacity = len;
+        struct RocStr ret = {
+            .len = roc_bytes.len,
+            .bytes = roc_bytes.bytes,
+            .capacity = roc_bytes.capacity,
+        };
 
         return ret;
     }
@@ -157,6 +195,35 @@ size_t roc_str_len(struct RocStr str)
 
 extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
 
+// Receive a value from Ruby, JSON serialized it and pass it to Roc as a List U8
+// (at which point the Roc platform will decode it and crash if it's invalid,
+// which roc_panic will translate into a Ruby exception), then get some JSON back from Roc
+// - also as a List U8 - and have Ruby JSON.parse it into a plain Ruby value to return.
+VALUE call_roc(VALUE self, VALUE rb_arg)
+{
+    // Turn the given Ruby value into a JSON string.
+    VALUE json_arg = rb_funcall(rb_arg, rb_intern("to_json"), 0);
+
+    struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(json_arg), RSTRING_LEN(json_arg));
+    struct RocBytes ret;
+
+    // Call the Roc function to populate `ret`'s bytes.
+    roc__mainForHost_1_exposed_generic(&ret, &arg);
+
+    // Create a rb_utf8_str from the heap-allocated JSON bytes the Roc function returned.
+    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, str_len);
+
+    // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
+    decref((void *)&ret, alignof(uint8_t *));
+
+    // Call JSON.parse on the returned JSON, so we return a normal Ruby value - most likely a hash.
+    return rb_funcall(rb_require("json"), rb_intern("parse"), 1, returned_json);
+}
+
+// Receive some JSON from Ruby, pass it to Roc as a List U8, and get some JSON back
+// from Roc - also as a List U8.
+// (at which point the Roc platform will decode it and crash if it's invalid,
+// which roc_panic will translate into a Ruby exception)
 VALUE hello(VALUE self, VALUE rb_arg)
 {
     // Verify the argument is a Ruby string; raise a type error if not.
