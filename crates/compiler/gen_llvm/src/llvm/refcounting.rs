@@ -1366,7 +1366,7 @@ fn union_layout_tags<'a>(
     match union_layout {
         NullableWrapped {
             other_tags: tags, ..
-        } => *tags,
+        } => tags,
         NullableUnwrapped { other_fields, .. } => arena.alloc([*other_fields]),
         NonNullableUnwrapped(fields) => arena.alloc([*fields]),
         Recursive(tags) => tags,

@@ -546,7 +546,7 @@ fn numeric_negate_expression<'a, T>(
     expr: Loc<Expr<'a>>,
     spaces: &'a [CommentOrNewline<'a>],
 ) -> Loc<Expr<'a>> {
-    debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
+    debug_assert_eq!(state.bytes().first(), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
     let start = state.pos();
     let region = Region::new(start, expr.region.end());
@@ -941,7 +941,7 @@ fn parse_defs_end<'a>(
                                             ann_type: arena.alloc(*ann_type),
                                             comment,
                                             body_pattern: arena.alloc(loc_pattern),
-                                            body_expr: *arena.alloc(loc_def_expr),
+                                            body_expr: arena.alloc(loc_def_expr),
                                         };
 
                                         let region =
@@ -980,7 +980,7 @@ fn parse_defs_end<'a>(
                                             ann_type: arena.alloc(*ann_type),
                                             comment,
                                             body_pattern: arena.alloc(loc_pattern),
-                                            body_expr: *arena.alloc(loc_def_expr),
+                                            body_expr: arena.alloc(loc_def_expr),
                                         };
 
                                         let region =
@@ -1904,7 +1904,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
-        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(*string)),
+        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
     }
 }

@@ -1654,7 +1654,7 @@ pub fn solve_trivial(api_program: Program) -> Result<Solutions> {
 // solutions
 fn hash_bstr(hasher: &mut Sha256, bstr: &[u8]) {
     let header = (bstr.len() as u64).to_le_bytes();
-    hasher.update(&header);
+    hasher.update(header);
     hasher.update(bstr);
 }
 

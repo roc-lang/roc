@@ -166,8 +166,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
             Function(args, result) => {
-                (&result.value).is_multiline()
-                    || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
+                result.value.is_multiline()
+                    || args.iter().any(|loc_arg| loc_arg.value.is_multiline())
             }
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, _) => lhs.value.is_multiline(),
@@ -226,7 +226,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                         buf.newline();
                     }
 
-                    (&argument.value).format_with_options(
+                    argument.value.format_with_options(
                         buf,
                         Parens::InFunctionType,
                         Newlines::No,
@@ -251,7 +251,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.push_str("->");
                 buf.spaces(1);
 
-                (&ret.value).format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
+                ret.value.format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
 
                 if needs_parens {
                     buf.push(')')
@@ -275,7 +275,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
                 for argument in *arguments {
                     buf.spaces(1);
-                    (&argument.value).format_with_options(
+                    argument.value.format_with_options(
                         buf,
                         Parens::InApply,
                         Newlines::No,
@@ -497,7 +497,7 @@ impl<'a> Formattable for Tag<'a> {
         use self::Tag::*;
 
         match self {
-            Apply { args, .. } => args.iter().any(|arg| (&arg.value).is_multiline()),
+            Apply { args, .. } => args.iter().any(|arg| arg.value.is_multiline()),
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => true,
             Malformed(text) => text.chars().any(|c| c == '\n'),
         }

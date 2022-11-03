@@ -8,13 +8,13 @@ use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub enum VirtualOffset {
     Absolute,
     Relative(u64),
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct SurgeryEntry {
     pub file_offset: u64,
     pub virtual_offset: VirtualOffset,

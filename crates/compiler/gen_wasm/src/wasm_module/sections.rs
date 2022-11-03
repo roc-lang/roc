@@ -551,7 +551,7 @@ impl Parse<()> for RefType {
         }
     }
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TableType {
     pub ref_type: RefType,
     pub limits: Limits,
@@ -659,7 +659,7 @@ impl Serialize for TableSection {
  *
  *******************************************************************/
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Limits {
     Min(u32),
     MinMax(u32, u32),
@@ -749,7 +749,7 @@ section_impl!(MemorySection, SectionId::Memory);
  *
  *******************************************************************/
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct GlobalType {
     pub value_type: ValueType,
     pub is_mutable: bool,

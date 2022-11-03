@@ -65,7 +65,7 @@ impl Output {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub enum IntValue {
     I128([u8; 16]),
     U128([u8; 16]),
@@ -345,7 +345,7 @@ pub struct ClosureData {
 ///
 /// We distinguish them from closures so we can have better error messages
 /// during constraint generation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessorData {
     pub name: Symbol,
     pub function_var: Variable,
@@ -485,7 +485,7 @@ pub struct Field {
     pub loc_expr: Box<Loc<Expr>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recursive {
     NotRecursive = 0,
     Recursive = 1,
@@ -888,7 +888,7 @@ pub fn canonicalize_expr<'a>(
                         var_store,
                         inner_scope,
                         region,
-                        *branch,
+                        branch,
                         &mut output,
                     )
                 });
@@ -2737,7 +2737,7 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::ExpectFx {
                 loc_continuation, ..
             } => {
-                stack.push(&(*loc_continuation).value);
+                stack.push(&loc_continuation.value);
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!

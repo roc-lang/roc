@@ -126,7 +126,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
@@ -973,7 +973,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
-                let ptr = define_global_str_literal_ptr(env, *str_literal);
+                let ptr = define_global_str_literal_ptr(env, str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
                 let alloca =
@@ -4554,7 +4554,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 fn_val.print_to_stderr();
 
                 if let Some(app_ll_file) = debug_output_file {
-                    env.module.print_to_file(&app_ll_file).unwrap();
+                    env.module.print_to_file(app_ll_file).unwrap();
 
                     panic!(
                         r"😱 LLVM errors when defining function {:?}; I wrote the full LLVM IR to {:?}",
