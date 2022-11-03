@@ -113,7 +113,7 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
         memcpy(&ret, bytes, len);
 
         // Record the string's length in the last byte of the stack allocation
-        (uint8_t *)(&ret)[sizeof(RocStr) - 1] = (uint8_t)len | 0b10000000;
+        ((uint8_t *)&ret)[sizeof(RocStr) - 1] = (uint8_t)len | 0b10000000;
 
         return ret;
     }
