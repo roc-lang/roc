@@ -737,6 +737,7 @@ pub trait Parser<'a, Output, Error> {
     ) -> ParseResult<'a, Output, Error>;
 
     #[cfg(not(feature = "parse_debug_trace"))]
+    #[inline(always)]
     fn trace(self, _message: &'static str) -> Self
     where
         Self: Sized,
@@ -789,7 +790,7 @@ impl<'a, O: std::fmt::Debug, E: std::fmt::Debug, P: Parser<'a, O, E>> Parser<'a,
 where
     E: 'a,
 {
-    fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, O, E> {
+    fn parse(&self, arena: &'a Bump, state: State<'a>, min_indent: u32) -> ParseResult<'a, O, E> {
         use std::cell::RefCell;
 
         thread_local! {
@@ -803,7 +804,7 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "{:>5?}: {}{:<50}",
+            "{:<5?}: {}{:<50}",
             state.pos(),
             &indent_text[..cur_indent * 2],
             self.message
