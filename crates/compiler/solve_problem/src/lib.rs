@@ -31,7 +31,7 @@ pub enum TypeError {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Unfulfilled {
     /// No claimed implementation of an ability for an opaque type.
     OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },

@@ -1895,7 +1895,7 @@ impl UpdateModeIds {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallType<'a> {
     ByName {
         name: LambdaName<'a>,

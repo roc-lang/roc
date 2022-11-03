@@ -8,7 +8,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
 use std::fmt;
 use std::fmt::Write;
@@ -2518,15 +2518,14 @@ impl ErrorType {
     }
 }
 
-pub fn write_error_type(home: ModuleId, interns: &Interns, error_type: ErrorType) -> String {
+pub fn write_error_type(interns: &Interns, error_type: ErrorType) -> String {
     let mut buf = String::new();
-    write_error_type_help(home, interns, error_type, &mut buf, Parens::Unnecessary);
+    write_error_type_help(interns, error_type, &mut buf, Parens::Unnecessary);
 
     buf
 }
 
 fn write_error_type_help(
-    home: ModuleId,
     interns: &Interns,
     error_type: ErrorType,
     buf: &mut String,
@@ -2550,7 +2549,7 @@ fn write_error_type_help(
             for arg in arguments {
                 buf.push(' ');
 
-                write_error_type_help(home, interns, arg, buf, Parens::InTypeParam);
+                write_error_type_help(interns, arg, buf, Parens::InTypeParam);
             }
 
             if write_parens {
@@ -2576,7 +2575,7 @@ fn write_error_type_help(
                         buf.push('(');
                     }
                     buf.push_str("Num ");
-                    write_error_type_help(home, interns, other, buf, Parens::InTypeParam);
+                    write_error_type_help(interns, other, buf, Parens::InTypeParam);
 
                     if write_parens {
                         buf.push(')');
@@ -2594,7 +2593,7 @@ fn write_error_type_help(
             let mut it = arguments.into_iter().peekable();
 
             while let Some(arg) = it.next() {
-                write_error_type_help(home, interns, arg, buf, Parens::InFn);
+                write_error_type_help(interns, arg, buf, Parens::InFn);
                 if it.peek().is_some() {
                     buf.push_str(", ");
                 }
@@ -2602,7 +2601,7 @@ fn write_error_type_help(
 
             buf.push_str(" -> ");
 
-            write_error_type_help(home, interns, *result, buf, Parens::InFn);
+            write_error_type_help(interns, *result, buf, Parens::InFn);
 
             if write_parens {
                 buf.push(')');
@@ -2627,7 +2626,7 @@ fn write_error_type_help(
                     }
                 };
 
-                write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
+                write_error_type_help(interns, content, buf, Parens::Unnecessary);
             }
 
             buf.push('}');

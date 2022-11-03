@@ -327,8 +327,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
     arg_val.set_name(arg_symbol.as_str(&env.interns));
 
-    let parent = fn_val;
-
     let wrapper_struct = arg_val.into_struct_value();
 
     for (i, field_layout) in layouts.iter().enumerate() {
@@ -347,7 +345,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
@@ -362,42 +359,32 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
 pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     inc_amount: u64,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
     let amount = env.ptr_int().const_int(inc_amount, false);
-    increment_n_refcount_layout(env, parent, layout_ids, amount, value, layout);
+    increment_n_refcount_layout(env, layout_ids, amount, value, layout);
 }
 
 pub fn increment_n_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     amount: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
-    modify_refcount_layout(
-        env,
-        parent,
-        layout_ids,
-        CallMode::Inc(amount),
-        value,
-        layout,
-    );
+    modify_refcount_layout(env, layout_ids, CallMode::Inc(amount), value, layout);
 }
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
-    modify_refcount_layout(env, parent, layout_ids, CallMode::Dec, value, layout);
+    modify_refcount_layout(env, layout_ids, CallMode::Dec, value, layout);
 }
 
 fn modify_refcount_builtin<'a, 'ctx, 'env>(
@@ -435,7 +422,6 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
 
 fn modify_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -443,7 +429,6 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
 ) {
     modify_refcount_layout_help(
         env,
-        parent,
         layout_ids,
         call_mode,
         &WhenRecursive::Unreachable,
@@ -460,7 +445,6 @@ enum WhenRecursive<'a> {
 
 fn modify_refcount_layout_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
     when_recursive: &WhenRecursive<'a>,
@@ -474,7 +458,6 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
 
     let function = match modify_refcount_layout_build_function(
         env,
-        parent,
         layout_ids,
         mode,
         when_recursive,
@@ -538,7 +521,6 @@ fn call_help<'a, 'ctx, 'env>(
 
 fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
@@ -603,7 +585,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
                 let function = modify_refcount_layout_build_function(
                     env,
-                    parent,
                     layout_ids,
                     mode,
                     when_recursive,
@@ -615,7 +596,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         },
         LambdaSet(lambda_set) => modify_refcount_layout_build_function(
             env,
-            parent,
             layout_ids,
             mode,
             when_recursive,
@@ -731,7 +711,6 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
         let loop_fn = |_index, element| {
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
@@ -1302,7 +1281,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         for (field, field_layout) in deferred_nonrec {
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(decrement_fn),
                 when_recursive,
@@ -1687,7 +1665,6 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
                 modify_refcount_layout_help(
                     env,
-                    parent,
                     layout_ids,
                     mode.to_call_mode(fn_val),
                     when_recursive,
@@ -1709,7 +1686,6 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
                 modify_refcount_layout_help(
                     env,
-                    parent,
                     layout_ids,
                     mode.to_call_mode(fn_val),
                     when_recursive,

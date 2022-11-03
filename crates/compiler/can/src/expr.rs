@@ -1493,7 +1493,7 @@ fn canonicalize_fields<'a>(
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        match canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region) {
+        match canonicalize_field(env, var_store, scope, &loc_field.value) {
             Ok((label, field_expr, field_out, field_var)) => {
                 let field = Field {
                     var: field_var,

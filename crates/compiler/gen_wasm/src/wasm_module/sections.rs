@@ -303,7 +303,7 @@ impl<'a> Serialize for TypeSection<'a> {
  *
  *******************************************************************/
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ImportDesc {
     Func { signature_index: u32 },
     Table { ty: TableType },
@@ -359,7 +359,7 @@ impl Serialize for ImportDesc {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Import<'a> {
     pub module: &'a str,
     pub name: &'a str,

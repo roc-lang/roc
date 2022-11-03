@@ -2723,14 +2723,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let layout = *layout;
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        increment_refcount_layout(
-                            env,
-                            parent,
-                            layout_ids,
-                            *inc_amount,
-                            value,
-                            &layout,
-                        );
+                        increment_refcount_layout(env, layout_ids, *inc_amount, value, &layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -2739,7 +2732,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        decrement_refcount_layout(env, parent, layout_ids, value, layout);
+                        decrement_refcount_layout(env, layout_ids, value, layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -3847,12 +3840,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                             arg_type.into_pointer_type().get_element_type(),
                         );
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
-                        let param_index = (i
-                            + (if matches!(cc_return, CCReturn::ByPointer) {
-                                1
-                            } else {
-                                0
-                            })) as u32;
+                        let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
+                        let param_index = i as u32 + returns_pointer as u32;
+
                         c_function.add_attribute(AttributeLoc::Param(param_index), byval);
                         c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
                     }
@@ -6209,14 +6199,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let element_layout = list_element_layout!(list_layout);
 
-            list_get_unsafe(
-                env,
-                layout_ids,
-                parent,
-                element_layout,
-                elem_index,
-                wrapper_struct,
-            )
+            list_get_unsafe(env, layout_ids, element_layout, elem_index, wrapper_struct)
         }
         ListReplaceUnsafe => {
             let list = load_symbol(scope, &args[0]);

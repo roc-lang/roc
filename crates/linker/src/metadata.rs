@@ -25,7 +25,7 @@ pub struct SurgeryEntry {
 // I think a number of them can be combined to reduce string duplication.
 // Also I think a few of them aren't need.
 // For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
-#[derive(Default, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct Metadata {
     pub app_functions: Vec<String>,
     // offset followed by address.

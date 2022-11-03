@@ -122,10 +122,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
     }
 }
 
-fn consume_indent<'a>(
-    mut state: State<'a>,
-    mut indent: u32,
-) -> Result<State, (Progress, EString<'a>, State<'a>)> {
+fn consume_indent(mut state: State, mut indent: u32) -> Result<State, (Progress, EString, State)> {
     while indent > 0 {
         match state.bytes().first() {
             Some(b' ') => {

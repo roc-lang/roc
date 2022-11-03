@@ -99,14 +99,11 @@ impl DerivedModule {
         exposed_by_module: &ExposedByModule,
         key: DeriveKey,
     ) -> &(Symbol, Def, SpecializationLambdaSets) {
-        match self.map.get(&key) {
-            Some(entry) => {
-                // rustc won't let us return an immutable reference *and* continue using
-                // `self.map` immutably below, but this is safe, because we are not returning
-                // an immutable reference to the entry.
-                return unsafe { std::mem::transmute(entry) };
-            }
-            None => {}
+        if let Some(entry) = self.map.get(&key) {
+            // rustc won't let us return an immutable reference *and* continue using
+            // `self.map` immutably below, but this is safe, because we are not returning
+            // an immutable reference to the entry.
+            return unsafe { std::mem::transmute(entry) };
         }
 
         let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
