@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend."
 
 [dependencies]
 roc_collections = { path = "../collections" }

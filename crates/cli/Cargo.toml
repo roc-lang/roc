@@ -5,7 +5,7 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/roc-lang/roc"
 edition = "2021"
-description = "A CLI for Roc"
+description = "The Roc binary that brings together all functionality in the Roc toolset."
 default-run = "roc"
 
 [[bin]]

@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "The entry point of Roc's type inference system. Implements type inference and specialization of abilities."
 
 [dependencies]
 roc_collections = { path = "../collections" }

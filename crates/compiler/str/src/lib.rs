@@ -1,3 +1,4 @@
+//! provides `Roc` styled collection [reference counting](https://en.wikipedia.org/wiki/Reference_counting).
 #![crate_type = "lib"]
 #![no_std]
 

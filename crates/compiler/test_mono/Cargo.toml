@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Tests Roc's generation of the mono intermediate representation."
 
 [[test]]
 name = "test_mono"

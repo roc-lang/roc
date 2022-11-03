@@ -4,6 +4,7 @@ name = "roc_repl_cli"
 version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Command Line Interface(CLI) functionality for the Read-Evaluate-Print-Loop (REPL)."
 
 
 [features]

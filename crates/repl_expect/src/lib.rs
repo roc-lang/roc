@@ -1,3 +1,4 @@
+//! Supports evaluating `expect` and printing contextual information when they fail.
 #[cfg(not(windows))]
 use {
     roc_intern::GlobalInterner,

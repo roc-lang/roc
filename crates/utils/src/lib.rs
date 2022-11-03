@@ -1,3 +1,4 @@
+//! Provides utility functions used all over the code base.
 use snafu::OptionExt;
 use std::{
     collections::HashMap, env::VarError, path::PathBuf, process::Command, slice::SliceIndex,

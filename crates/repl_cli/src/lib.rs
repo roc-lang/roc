@@ -1,3 +1,4 @@
+//! Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;

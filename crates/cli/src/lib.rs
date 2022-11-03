@@ -1,4 +1,4 @@
-//! Provides the core CLI functionality for the `roc` binary
+//! Provides the core CLI functionality for the Roc binary.
 
 #[macro_use]
 extern crate const_format;
