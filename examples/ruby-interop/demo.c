@@ -32,6 +32,50 @@ void *roc_memcpy(void *dest, const void *src, size_t n)
 
 void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
+// Reference counting
+
+// If the refcount is set to this, that means the allocation is
+// stored in readonly memory in the binary, and we must not
+// attempt to increment or decrement it; if we do, we'll segfault!
+const ssize_t REFCOUNT_READONLY = 0;
+const ssize_t REFCOUNT_ONE = SSIZE_T_MIN;
+
+// Increment reference count, given a pointer to the first element in a collection.
+// We don't need to check for overflow because in order to overflow a usize worth of refcounts,
+// you'd need to somehow have more pointers in memory than the OS's virtual address space can hold.
+void incref(uint8_t* bytes, uint32_t alignment)
+{
+    ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
+    ssize_t refcount = *refcount_ptr;
+
+    if (refcount != REFCOUNT_READONLY) {
+        *refcount_ptr = refcount + 1;
+    }
+}
+
+// Decrement reference count, given a pointer to the first element in a collection.
+// Then call roc_dealloc if nothing is referencing this collection anymore.
+void decref(uint8_t* bytes, uint32_t alignment)
+{
+    if (bytes == NULL) {
+        return;
+    }
+
+    size_t extra_bytes = max((size_t)alignment, size_of(size_t));
+    ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
+    ssize_t refcount = *refcount_ptr;
+
+    if (refcount != REFCOUNT_READONLY) {
+        *refcount_ptr = refcount - 1;
+
+        if (refcount == REFCOUNT_ONE) {
+            void *original_allocation = (void *)(refcount_ptr - (extra_bytes - size_of(size_t)));
+
+            roc_dealloc(original_allocation, alignment);
+        }
+    }
+}
+
 struct RocStr
 {
     uint8_t *bytes;
@@ -117,8 +161,8 @@ VALUE hello(VALUE self, VALUE rb_arg)
         // Create a rb_utf8_str from the (large) RocStr's heap-allocated bytes
         ruby_str = rb_utf8_str_new(ret.bytes, str_len);
 
-        // TODO decrement refcount and then only dealloc if that was the last reference
-        roc_dealloc(ret.bytes - sizeof(size_t), alignof(char *));
+        // Now that we've created our Ruby string, we're no longer referencing the RocStr.
+        decref(ret, alignof(uint8_t *));
     }
 
     return ruby_str;
