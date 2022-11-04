@@ -1,11 +1,12 @@
 app "libhello"
     packages { pf: "platform/main.roc" }
     imports []
-    provides [makeItRoc] to pf
+    provides [main] to pf
 
-makeItRoc : Str -> Str
-makeItRoc = \str ->
-    if Str.isEmpty str then
-        "I need a string here!"
+main : List U8 -> List U8
+main = \json ->
+    if List.isEmpty json then
+        "I need some JSON here!" |> Str.toUtf8
     else
-        "\(str), OH YEAH!!! 🤘🤘"
+        str = Str.fromUtf8 json |> Result.withDefault "Invalid UTF-8 in JSON from Ruby"
+        "\(str), OH YEAH!!! 🤘🤘" |> Str.toUtf8

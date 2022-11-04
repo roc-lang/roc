@@ -1,9 +1,9 @@
 platform "hello-world"
-    requires {} { makeItRoc : Str -> Str }
+    requires {} { main : List U8 -> List U8 }
     exposes []
     packages {}
     imports []
     provides [mainForHost]
 
-mainForHost : Str -> Str
-mainForHost = \str -> makeItRoc str
+mainForHost : List U8 -> List U8
+mainForHost = \json -> main json

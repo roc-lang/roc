@@ -193,7 +193,7 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
+extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
 // Receive a value from Ruby, JSON serialized it and pass it to Roc as a List U8
 // (at which point the Roc platform will decode it and crash if it's invalid,
@@ -201,7 +201,11 @@ extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr
 // - also as a List U8 - and have Ruby JSON.parse it into a plain Ruby value to return.
 VALUE call_roc(VALUE self, VALUE rb_arg)
 {
+    // This must be required before the to_json method will exist on String.
+    rb_require("json");
+
     // Turn the given Ruby value into a JSON string.
+    // TODO should we defensively encode it as UTF-8 first?
     VALUE json_arg = rb_funcall(rb_arg, rb_intern("to_json"), 0);
 
     struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(json_arg), RSTRING_LEN(json_arg));
@@ -211,52 +215,27 @@ VALUE call_roc(VALUE self, VALUE rb_arg)
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
     // Create a rb_utf8_str from the heap-allocated JSON bytes the Roc function returned.
-    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, str_len);
+    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, ret.len);
 
     // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
     decref((void *)&ret, alignof(uint8_t *));
 
+    // return the JSON string, so the Ruby code can call JSON.parse on it.
+    // I'd love to call JSON.parse on it here, but after a couple hours of trying unsuccessfully
+    // to call JSON.parse from C, I decided it's better to just require that the caller do it.
+    // This JSON approach is temporary anyway; it will all be replaced by proper glue in the future.
+    return returned_json;
+
     // Call JSON.parse on the returned JSON, so we return a normal Ruby value - most likely a hash.
-    return rb_funcall(rb_require("json"), rb_intern("parse"), 1, returned_json);
-}
-
-// Receive some JSON from Ruby, pass it to Roc as a List U8, and get some JSON back
-// from Roc - also as a List U8.
-// (at which point the Roc platform will decode it and crash if it's invalid,
-// which roc_panic will translate into a Ruby exception)
-VALUE hello(VALUE self, VALUE rb_arg)
-{
-    // Verify the argument is a Ruby string; raise a type error if not.
-    if (TYPE(rb_arg) != T_STRING)
-    {
-        rb_raise(rb_eTypeError, "`hello` only accepts strings.");
-    }
-
-    struct RocStr arg = init_rocstr((uint8_t *)RSTRING_PTR(rb_arg), RSTRING_LEN(rb_arg));
-    struct RocStr ret;
-
-    // Call the Roc function to populate `ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&ret, &arg);
-
-    // Determine str_len and the str_bytes pointer,
-    // taking into account the small string optimization.
-    size_t str_len = roc_str_len(ret);
-
-    if (is_small_str(ret))
-    {
-        // Create a rb_utf8_str from the (small) RocStr's stack-allocated bytes
-        return rb_utf8_str_new((char *)&ret, str_len);
-    }
-    else
-    {
-        // Create a rb_utf8_str from the (large) RocStr's heap-allocated bytes
-        VALUE ruby_str = rb_utf8_str_new((char *)ret.bytes, str_len);
-
-        // Now that we've created our Ruby string, we're no longer referencing the RocStr.
-        decref((void *)&ret, alignof(uint8_t *));
-
-        return ruby_str;
-    }
+    // return rb_funcall(rb_mJSON, rb_intern("parse"), 1, returned_json);
+    // TODO this doesn't work because rb_mJSON is not defined. Neither is mJSON, although
+    // it gets defined here - https://github.com/ruby/ruby/blob/62849b337988268b4209c58b6de02d0002c78988/ext/json/parser/parser.rl#L935
+    // if I could only figure out how to include parser.h in here!
+    //
+    // Seems like some combination of GET_PARSER, which creates a `json` variable - https://github.com/ruby/ruby/blob/1d170fdc6d0af128c9e5ea2d6082790d5885a4ae/ext/json/parser/parser.h#L53
+    // - and JSON_parse_value - https://github.com/ruby/ruby/blob/1d170fdc6d0af128c9e5ea2d6082790d5885a4ae/ext/json/parser/parser.h#L66
+    // wich is implemented in https://github.com/ruby/ruby/blob/62849b337988268b4209c58b6de02d0002c78988/ext/json/parser/parser.rl
+    // should work...but I can't figure out how to include parser.h here.
 }
 
 void Init_demo()
@@ -264,5 +243,5 @@ void Init_demo()
     printf("Ruby just required Roc. Let's get READY TO ROC.\n");
 
     VALUE roc_stuff = rb_define_module("RocStuff");
-    rb_define_module_function(roc_stuff, "hello", &hello, 1);
+    rb_define_module_function(roc_stuff, "call_roc", &call_roc, 1);
 }
