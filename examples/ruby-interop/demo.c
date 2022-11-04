@@ -220,9 +220,7 @@ VALUE call_roc(VALUE self, VALUE rb_arg)
     // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
     decref((void *)&ret, alignof(uint8_t *));
 
-    VALUE json_module = rb_define_module("JSON");
-
-    return rb_funcall(json_module, rb_intern("parse"), 1, returned_json);
+    return rb_funcall(rb_define_module("JSON"), rb_intern("parse"), 1, returned_json);
 }
 
 void Init_demo()
