@@ -121,7 +121,6 @@ pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
 pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
     element_layout: &Layout<'a>,
     elem_index: IntValue<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -140,7 +139,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
 
     let result = load_roc_value(env, *element_layout, elem_ptr, "list_get_load_element");
 
-    increment_refcount_layout(env, parent, layout_ids, 1, result, element_layout);
+    increment_refcount_layout(env, layout_ids, 1, result, element_layout);
 
     result
 }

@@ -1597,7 +1597,7 @@ mod tests {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-obj",
                 "app.zig",
                 "-fPIC",
@@ -1637,7 +1637,7 @@ mod tests {
         // now we can compile the host (it uses libapp.so, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
                 "libapp.so",
                 "host.zig",
@@ -1672,7 +1672,7 @@ mod tests {
         std::fs::copy(&dir.join("preprocessedhost"), &dir.join("final")).unwrap();
 
         surgery_elf(
-            &*roc_app,
+            &roc_app,
             &dir.join("metadata"),
             &dir.join("final"),
             false,

@@ -47,7 +47,7 @@ pub fn create_dylib_macho(
     }
 
     std::fs::write(
-        &dummy_obj_file,
+        dummy_obj_file,
         out_object.write().expect("failed to build output object"),
     )
     .expect("failed to write object to file");
@@ -67,7 +67,7 @@ pub fn create_dylib_macho(
 
     let output = Command::new("ld")
         .args(ld_prefix_args)
-        .args(&[
+        .args([
             ld_flag_soname,
             dummy_lib_file.file_name().unwrap().to_str().unwrap(),
             dummy_obj_file.to_str().unwrap(),

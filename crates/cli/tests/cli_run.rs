@@ -1154,7 +1154,7 @@ fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     //        .unwrap();
 
     let store = Store::default();
-    let module = Module::from_file(&store, &wasm_path).unwrap();
+    let module = Module::from_file(&store, wasm_path).unwrap();
 
     let mut fake_stdin = wasmer_wasi::Pipe::new();
     let fake_stdout = wasmer_wasi::Pipe::new();

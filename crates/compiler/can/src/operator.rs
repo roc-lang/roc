@@ -79,7 +79,7 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             ann_pattern,
             ann_type,
             comment: *comment,
-            body_pattern: *body_pattern,
+            body_pattern,
             body_expr: desugar_expr(arena, body_expr),
         },
         Expect {

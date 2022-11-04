@@ -226,7 +226,7 @@ fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
     // > https://github.com/messense/implib-rs
     let output = std::process::Command::new(&zig)
         .current_dir(stub_lib_path.parent().unwrap())
-        .args(&[
+        .args([
             "dlltool",
             "-d",
             def_filename.to_str().unwrap(),

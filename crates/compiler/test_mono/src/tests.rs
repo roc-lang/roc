@@ -174,7 +174,7 @@ fn verify_procedures<'a>(
     use std::process::Command;
 
     let is_tracked = Command::new("git")
-        .args(&["ls-files", "--error-unmatch", &path])
+        .args(["ls-files", "--error-unmatch", &path])
         .output()
         .unwrap();
 
@@ -186,7 +186,7 @@ fn verify_procedures<'a>(
     }
 
     let has_changes = Command::new("git")
-        .args(&["diff", "--color=always", &path])
+        .args(["diff", "--color=always", &path])
         .output()
         .unwrap();
 
