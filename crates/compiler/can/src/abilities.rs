@@ -28,7 +28,7 @@ pub struct MemberVariables {
 
 /// The member and its signature is defined locally, in the module the store is created for.
 /// We need to instantiate and introduce this during solving.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMemberType(Variable);
 
 /// Member type information that needs to be resolved from imports.
@@ -56,7 +56,7 @@ impl ResolvePhase for Pending {
     type MemberType = PendingMemberType;
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved;
 impl ResolvePhase for Resolved {
     type MemberType = ResolvedMemberType;
@@ -127,7 +127,6 @@ pub struct ImplKey {
 #[derive(Clone, Debug)]
 pub enum ResolvedImpl {
     Impl(MemberSpecializationInfo<Resolved>),
-    Derived,
     Error,
 }
 
@@ -452,7 +451,7 @@ impl IAbilitiesStore<Resolved> {
 
                     Ok(())
                 }
-                MemberImpl::Derived | MemberImpl::Error => Err(MarkError::ImplIsNotCustom),
+                MemberImpl::Error => Err(MarkError::ImplIsNotCustom),
             },
             None => Err(MarkError::NoDeclaredImpl),
         }
@@ -498,7 +497,6 @@ impl IAbilitiesStore<Pending> {
                 self.import_specialization(specialization);
                 MemberImpl::Impl(specialization.symbol)
             }
-            ResolvedImpl::Derived => MemberImpl::Derived,
             ResolvedImpl::Error => MemberImpl::Error,
         };
 
@@ -957,14 +955,12 @@ mod serialize {
     #[repr(C)]
     enum SerMemberImpl {
         Impl(Symbol),
-        Derived,
         Error,
     }
     impl From<&MemberImpl> for SerMemberImpl {
         fn from(k: &MemberImpl) -> Self {
             match k {
                 MemberImpl::Impl(s) => Self::Impl(*s),
-                MemberImpl::Derived => Self::Derived,
                 MemberImpl::Error => Self::Error,
             }
         }
@@ -973,7 +969,6 @@ mod serialize {
         fn from(k: &SerMemberImpl) -> Self {
             match k {
                 SerMemberImpl::Impl(s) => Self::Impl(*s),
-                SerMemberImpl::Derived => Self::Derived,
                 SerMemberImpl::Error => Self::Error,
             }
         }
@@ -1134,14 +1129,12 @@ mod serialize {
     #[repr(C)]
     enum SerResolvedImpl {
         Impl(SerMemberSpecInfo),
-        Derived,
         Error,
     }
     impl SerResolvedImpl {
         fn num_regions(&self) -> usize {
             match self {
                 SerResolvedImpl::Impl(spec) => spec.1.len(),
-                SerResolvedImpl::Derived => 0,
                 SerResolvedImpl::Error => 0,
             }
         }
@@ -1186,7 +1179,6 @@ mod serialize {
                             );
                             SerResolvedImpl::Impl(SerMemberSpecInfo(*symbol, regions, vars))
                         }
-                        ResolvedImpl::Derived => SerResolvedImpl::Derived,
                         ResolvedImpl::Error => SerResolvedImpl::Error,
                     };
 
@@ -1237,7 +1229,6 @@ mod serialize {
                             });
                             ResolvedImpl::Impl(spec_info)
                         }
-                        SerResolvedImpl::Derived => ResolvedImpl::Derived,
                         SerResolvedImpl::Error => ResolvedImpl::Error,
                     };
 
@@ -1310,7 +1301,7 @@ mod test {
 
             store.register_declared_implementations(
                 Symbol::ATTR_ATTR,
-                [(Symbol::ARG_5, MemberImpl::Derived)],
+                [(Symbol::ARG_5, MemberImpl::Error)],
             );
 
             store

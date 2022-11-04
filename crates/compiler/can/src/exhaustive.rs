@@ -4,11 +4,14 @@ use roc_collections::all::HumanIndex;
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{
-    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
+    is_useful, Ctor, CtorName, Error, Guard, ListArity, Literal, Pattern, RenderAs, TagId, Union,
 };
-use roc_module::ident::{TagIdIntType, TagName};
+use roc_module::ident::{Lowercase, TagIdIntType, TagName};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{Content, FlatType, RedundantMark, Subs, SubsFmtContent, Variable};
+use roc_types::subs::{
+    Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
+};
 use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
@@ -22,12 +25,19 @@ pub struct ExhaustiveSummary {
     pub redundancies: Vec<RedundantMark>,
 }
 
+#[derive(Debug)]
+pub struct TypeError;
+
+/// Exhaustiveness-checks [sketched rows][SketchedRows] against an expected type.
+///
+/// Returns an error if the sketch has a type error, in which case exhautiveness checking will not
+/// have been performed.
 pub fn check(
     subs: &Subs,
     real_var: Variable,
     sketched_rows: SketchedRows,
     context: ExhaustiveContext,
-) -> ExhaustiveSummary {
+) -> Result<ExhaustiveSummary, TypeError> {
     let overall_region = sketched_rows.overall_region;
     let mut all_errors = Vec::with_capacity(1);
 
@@ -35,7 +45,7 @@ pub fn check(
         non_redundant_rows,
         errors,
         redundancies,
-    } = sketched_rows.reify_to_non_redundant(subs, real_var);
+    } = sketched_rows.reify_to_non_redundant(subs, real_var)?;
     all_errors.extend(errors);
 
     let exhaustive = match roc_exhaustive::check(overall_region, context, non_redundant_rows) {
@@ -46,11 +56,11 @@ pub fn check(
         }
     };
 
-    ExhaustiveSummary {
+    Ok(ExhaustiveSummary {
         errors: all_errors,
         exhaustive,
         redundancies,
-    }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +70,8 @@ enum SketchedPattern {
     /// A constructor whose expected union is not yet known.
     /// We'll know the whole union when reifying the sketched pattern against an expected case type.
     Ctor(TagName, Vec<SketchedPattern>),
-    KnownCtor(Union, IndexCtor<'static>, TagId, Vec<SketchedPattern>),
+    KnownCtor(Union, TagId, Vec<SketchedPattern>),
+    List(ListArity, Vec<SketchedPattern>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -68,12 +79,42 @@ enum IndexCtor<'a> {
     /// Index an opaque type. There should be one argument.
     Opaque,
     /// Index a record type. The arguments are the types of the record fields.
-    Record,
+    Record(&'a [Lowercase]),
     /// Index a guard constructor. The arguments are a faux guard pattern, and then the real
     /// pattern being guarded. E.g. `A B if g` becomes Guard { [True, (A B)] }.
     Guard,
     /// Index a tag union with the given tag constructor.
     Tag(&'a TagName),
+    /// Index a list type. The argument is the element type.
+    List,
+}
+
+impl<'a> IndexCtor<'a> {
+    fn of_union(un: &'a Union, tag_id: TagId) -> Self {
+        let Union {
+            alternatives,
+            render_as,
+        } = un;
+
+        match render_as {
+            RenderAs::Tag => {
+                let tag_name = alternatives
+                    .iter()
+                    .find(|ctor| ctor.tag_id == tag_id)
+                    .map(|Ctor { name, .. }| match name {
+                        CtorName::Tag(tag) => tag,
+                        CtorName::Opaque(_) => {
+                            internal_error!("tag union should never have opaque alternative")
+                        }
+                    })
+                    .expect("indexable tag ID must be known to alternatives");
+                Self::Tag(tag_name)
+            }
+            RenderAs::Opaque => Self::Opaque,
+            RenderAs::Record(fields) => Self::Record(fields),
+            RenderAs::Guard => Self::Guard,
+        }
+    }
 }
 
 /// Index a variable as a certain constructor, to get the expected argument types of that constructor.
@@ -82,11 +123,11 @@ fn index_var(
     mut var: Variable,
     ctor: IndexCtor,
     render_as: &RenderAs,
-) -> Vec<Variable> {
+) -> Result<Vec<Variable>, TypeError> {
     if matches!(ctor, IndexCtor::Guard) {
         // `A B if g` becomes Guard { [True, (A B)] }, so the arguments are a bool, and the type
         // of the pattern.
-        return vec![Variable::BOOL, var];
+        return Ok(vec![Variable::BOOL, var]);
     }
     loop {
         match subs.get_content_without_compacting(var) {
@@ -95,10 +136,8 @@ fn index_var(
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
-            | Content::RangedNumber(..) => internal_error!("not a indexable constructor"),
-            Content::Error => {
-                internal_error!("errors should not be reachable during exhautiveness checking")
-            }
+            | Content::RangedNumber(..) => return Err(TypeError),
+            Content::Error => return Err(TypeError),
             Content::RecursionVar {
                 structure,
                 opt_name: _,
@@ -106,14 +145,19 @@ fn index_var(
                 var = *structure;
             }
             Content::Structure(structure) => match structure {
-                FlatType::Apply(_, _)
-                | FlatType::Func(_, _, _)
-                | FlatType::FunctionOrTagUnion(_, _, _) => {
-                    internal_error!("not an indexable constructor")
+                FlatType::Func(_, _, _) | FlatType::FunctionOrTagUnion(_, _, _) => {
+                    return Err(TypeError)
                 }
-                FlatType::Erroneous(_) => {
-                    internal_error!("errors should not be reachable during exhautiveness checking")
+                FlatType::Erroneous(_) => return Err(TypeError),
+                FlatType::Apply(Symbol::LIST_LIST, args) => {
+                    match (subs.get_subs_slice(*args), ctor) {
+                        ([elem_var], IndexCtor::List) => {
+                            return Ok(vec![*elem_var]);
+                        }
+                        _ => internal_error!("list types can only be indexed by list patterns"),
+                    }
                 }
+                FlatType::Apply(..) => internal_error!("not an indexable constructor"),
                 FlatType::Record(fields, ext) => {
                     let fields_order = match render_as {
                         RenderAs::Record(fields) => fields,
@@ -137,7 +181,7 @@ fn index_var(
                         })
                         .collect();
 
-                    return field_types;
+                    return Ok(field_types);
                 }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     let tag_ctor = match ctor {
@@ -155,10 +199,10 @@ fn index_var(
                         }
                     });
                     let vars = opt_vars.expect("constructor must be known in the indexable type if we are exhautiveness checking");
-                    return vars;
+                    return Ok(vars);
                 }
                 FlatType::EmptyRecord => {
-                    debug_assert!(matches!(ctor, IndexCtor::Record));
+                    debug_assert!(matches!(ctor, IndexCtor::Record(..)));
                     // If there are optional record fields we don't unify them, but we need to
                     // cover them. Since optional fields correspond to "any" patterns, we can pass
                     // through arbitrary types.
@@ -168,7 +212,7 @@ fn index_var(
                             "record constructors must always be rendered as records"
                         ),
                     };
-                    return std::iter::repeat(Variable::NULL).take(num_fields).collect();
+                    return Ok(std::iter::repeat(Variable::NULL).take(num_fields).collect());
                 }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")
@@ -176,7 +220,7 @@ fn index_var(
             },
             Content::Alias(_, _, var, AliasKind::Opaque) => {
                 debug_assert!(matches!(ctor, IndexCtor::Opaque));
-                return vec![*var];
+                return Ok(vec![*var]);
             }
             Content::Alias(_, _, inner, AliasKind::Structural) => {
                 var = *inner;
@@ -186,35 +230,44 @@ fn index_var(
 }
 
 impl SketchedPattern {
-    fn reify(self, subs: &Subs, real_var: Variable) -> Pattern {
+    fn reify(self, subs: &Subs, real_var: Variable) -> Result<Pattern, TypeError> {
         match self {
-            Self::Anything => Pattern::Anything,
-            Self::Literal(lit) => Pattern::Literal(lit),
-            Self::KnownCtor(union, index_ctor, tag_id, patterns) => {
-                let arg_vars = index_var(subs, real_var, index_ctor, &union.render_as);
+            Self::Anything => Ok(Pattern::Anything),
+            Self::Literal(lit) => Ok(Pattern::Literal(lit)),
+            Self::KnownCtor(union, tag_id, patterns) => {
+                let index_ctor = IndexCtor::of_union(&union, tag_id);
+                let arg_vars = index_var(subs, real_var, index_ctor, &union.render_as)?;
 
                 debug_assert!(arg_vars.len() == patterns.len());
                 let args = (patterns.into_iter())
                     .zip(arg_vars)
-                    .map(|(pat, var)| {
-                        // FIXME
-                        pat.reify(subs, var)
-                    })
-                    .collect();
+                    .map(|(pat, var)| pat.reify(subs, var))
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                Pattern::Ctor(union, tag_id, args)
+                Ok(Pattern::Ctor(union, tag_id, args))
             }
             Self::Ctor(tag_name, patterns) => {
-                let arg_vars = index_var(subs, real_var, IndexCtor::Tag(&tag_name), &RenderAs::Tag);
+                let arg_vars =
+                    index_var(subs, real_var, IndexCtor::Tag(&tag_name), &RenderAs::Tag)?;
                 let (union, tag_id) = convert_tag(subs, real_var, &tag_name);
 
                 debug_assert!(arg_vars.len() == patterns.len());
                 let args = (patterns.into_iter())
                     .zip(arg_vars)
                     .map(|(pat, var)| pat.reify(subs, var))
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                Pattern::Ctor(union, tag_id, args)
+                Ok(Pattern::Ctor(union, tag_id, args))
+            }
+            Self::List(arity, patterns) => {
+                let elem_var = index_var(subs, real_var, IndexCtor::List, &RenderAs::Tag)?[0];
+
+                let patterns = patterns
+                    .into_iter()
+                    .map(|pat| pat.reify(subs, elem_var))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(Pattern::List(arity, patterns))
             }
         }
     }
@@ -235,7 +288,11 @@ pub struct SketchedRows {
 }
 
 impl SketchedRows {
-    fn reify_to_non_redundant(self, subs: &Subs, real_var: Variable) -> NonRedundantSummary {
+    fn reify_to_non_redundant(
+        self,
+        subs: &Subs,
+        real_var: Variable,
+    ) -> Result<NonRedundantSummary, TypeError> {
         to_nonredundant_rows(subs, real_var, self)
     }
 }
@@ -283,7 +340,23 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
                 }],
             };
 
-            SP::KnownCtor(union, IndexCtor::Record, tag_id, patterns)
+            SP::KnownCtor(union, tag_id, patterns)
+        }
+
+        List {
+            patterns,
+            list_var: _,
+            elem_var: _,
+        } => {
+            let arity = patterns.arity();
+
+            let sketched_elem_patterns = patterns
+                .patterns
+                .iter()
+                .map(|p| sketch_pattern(&p.value))
+                .collect();
+
+            SP::List(arity, sketched_elem_patterns)
         }
 
         AppliedTag {
@@ -315,12 +388,7 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
                 }],
             };
 
-            SP::KnownCtor(
-                union,
-                IndexCtor::Opaque,
-                tag_id,
-                vec![sketch_pattern(&argument.value)],
-            )
+            SP::KnownCtor(union, tag_id, vec![sketch_pattern(&argument.value)])
         }
 
         // Treat this like a literal so we mark it as non-exhaustive
@@ -390,7 +458,6 @@ pub fn sketch_when_branches(region: Region, patterns: &[expr::WhenBranch]) -> Sk
 
                 vec![SP::KnownCtor(
                     union,
-                    IndexCtor::Guard,
                     tag_id,
                     // NB: ordering the guard pattern first seems to be better at catching
                     // non-exhaustive constructors in the second argument; see the paper to see if
@@ -445,7 +512,7 @@ fn to_nonredundant_rows(
     subs: &Subs,
     real_var: Variable,
     rows: SketchedRows,
-) -> NonRedundantSummary {
+) -> Result<NonRedundantSummary, TypeError> {
     let SketchedRows {
         rows,
         overall_region,
@@ -468,7 +535,7 @@ fn to_nonredundant_rows(
         let next_row: Vec<Pattern> = patterns
             .into_iter()
             .map(|pattern| pattern.reify(subs, real_var))
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         let redundant_err = if !is_inhabited_row(&next_row) {
             Some(Error::Unmatchable {
@@ -499,11 +566,11 @@ fn to_nonredundant_rows(
         }
     }
 
-    NonRedundantSummary {
+    Ok(NonRedundantSummary {
         non_redundant_rows: checked_rows,
         redundancies,
         errors,
-    }
+    })
 }
 
 fn is_inhabited_row(patterns: &[Pattern]) -> bool {
@@ -518,8 +585,14 @@ fn is_inhabited_pattern(pat: &Pattern) -> bool {
             Pattern::Literal(_) => {}
             Pattern::Ctor(union, id, pats) => {
                 if !union.alternatives.iter().any(|alt| alt.tag_id == *id) {
+                    // The tag ID was dropped from the union, which means that this tag ID is one
+                    // that is not material to the union, and so is uninhabited!
                     return false;
                 }
+                stack.extend(pats);
+            }
+            Pattern::List(_, pats) => {
+                // List is uninhabited if any element is uninhabited.
                 stack.extend(pats);
             }
         }

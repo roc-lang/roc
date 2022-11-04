@@ -45,11 +45,13 @@ Defs(
                     [
                         @24-34 HasClause {
                             var: @24-25 "a",
-                            ability: @30-34 Apply(
-                                "",
-                                "Hash",
-                                [],
-                            ),
+                            abilities: [
+                                @30-34 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
+                            ],
                         },
                         @42-50 HasClause {
                             var: @42-43 SpaceBefore(
@@ -58,11 +60,13 @@ Defs(
                                     Newline,
                                 ],
                             ),
-                            ability: @48-50 Apply(
-                                "",
-                                "Eq",
-                                [],
-                            ),
+                            abilities: [
+                                @48-50 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                            ],
                         },
                         @58-67 HasClause {
                             var: @58-59 SpaceBefore(
@@ -71,11 +75,13 @@ Defs(
                                     Newline,
                                 ],
                             ),
-                            ability: @64-67 Apply(
-                                "",
-                                "Ord",
-                                [],
-                            ),
+                            abilities: [
+                                @64-67 Apply(
+                                    "",
+                                    "Ord",
+                                    [],
+                                ),
+                            ],
                         },
                     ],
                 ),

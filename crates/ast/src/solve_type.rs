@@ -13,7 +13,7 @@ use roc_types::subs::{
     Subs, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory, Polarity,
     RecordField,
 };
 use roc_unify::unify::unify;
@@ -228,7 +228,13 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+            match unify(
+                &mut UEnv::new(subs),
+                actual,
+                expected,
+                Mode::EQ,
+                Polarity::OF_VALUE,
+            ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -327,7 +333,13 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+                    match unify(
+                        &mut UEnv::new(subs),
+                        actual,
+                        expected,
+                        Mode::EQ,
+                        Polarity::OF_VALUE,
+                    ) {
                         Success {
                             vars,
                             must_implement_ability: _,
@@ -404,7 +416,13 @@ fn solve<'a>(
             );
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
-            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
+            match unify(
+                &mut UEnv::new(subs),
+                actual,
+                expected,
+                Mode::EQ,
+                Polarity::OF_PATTERN,
+            ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -718,7 +736,13 @@ fn solve<'a>(
             );
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
+            match unify(
+                &mut UEnv::new(subs),
+                actual,
+                includes,
+                Mode::PRESENT,
+                Polarity::OF_PATTERN,
+            ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -834,6 +858,15 @@ fn type_to_variable<'a>(
                         cached,
                         mempool.get(*type_id),
                     )),
+                    RigidRequired(type_id) => RigidRequired(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
+                    )),
                     Optional(type_id) => Optional(type_to_variable(
                         arena,
                         mempool,
@@ -925,7 +958,7 @@ fn type_to_variable<'a>(
                 arg_vars.push(arg_var);
             }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, [], []);
 
             let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
 
@@ -1182,7 +1215,7 @@ fn circular_error(
     loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
-    let (error_type, _) = subs.var_to_error_type(var);
+    let (error_type, _) = subs.var_to_error_type(var, Polarity::Pos);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);

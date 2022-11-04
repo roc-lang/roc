@@ -1,7 +1,7 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
@@ -10,9 +10,10 @@ use roc_solve_problem::{
 };
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, Variable,
+    instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
+    Variable,
 };
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -30,7 +31,7 @@ pub enum AbilityImplError {
 }
 
 /// Indexes a requested deriving of an ability for an opaque type.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct RequestedDeriveKey {
     pub opaque: Symbol,
     pub ability: Symbol,
@@ -190,7 +191,8 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    let (error_type, _moar_ghosts_n_stuff) =
+                        subs.var_to_error_type(var, Polarity::OF_VALUE);
                     problems.push(TypeError::BadExprMissingAbility(
                         region,
                         category,
@@ -207,7 +209,8 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    let (error_type, _moar_ghosts_n_stuff) =
+                        subs.var_to_error_type(var, Polarity::OF_PATTERN);
                     problems.push(TypeError::BadPatternMissingAbility(
                         region,
                         category,
@@ -308,14 +311,15 @@ impl ObligationCache {
             })) => Some(if failure_var == var {
                 UnderivableReason::SurfaceNotDerivable(context)
             } else {
-                let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
+                let (error_type, _skeletons) =
+                    subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
                 UnderivableReason::NestedNotDerivable(error_type, context)
             }),
             None => Some(UnderivableReason::NotABuiltin),
         };
 
         if let Some(underivable_reason) = opt_underivable {
-            let (error_type, _skeletons) = subs.var_to_error_type(var);
+            let (error_type, _skeletons) = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
             Err(Unfulfilled::AdhocUnderivable {
                 typ: error_type,
@@ -486,6 +490,7 @@ struct Descend(bool);
 
 trait DerivableVisitor {
     const ABILITY: Symbol;
+    const ABILITY_SLICE: SubsSlice<Symbol>;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
@@ -493,20 +498,8 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_flex_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
-    fn visit_rigid_able(var: Variable, ability: Symbol) -> Result<(), NotDerivable> {
-        if ability != Self::ABILITY {
+    fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
+        if abilities != [Self::ABILITY] {
             Err(NotDerivable {
                 var,
                 context: NotDerivableContext::NoContext,
@@ -636,7 +629,7 @@ trait DerivableVisitor {
             match *content {
                 FlexVar(opt_name) => {
                     // Promote the flex var to be bound to the ability.
-                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY));
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, Self::ABILITY_SLICE));
                 }
                 RigidVar(_) => {
                     return Err(NotDerivable {
@@ -644,8 +637,18 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
-                FlexAbleVar(_, ability) => Self::visit_flex_able(var, ability)?,
-                RigidAbleVar(_, ability) => Self::visit_rigid_able(var, ability)?,
+                FlexAbleVar(opt_name, abilities) => {
+                    // This flex var inherits the ability.
+                    let merged_abilites = roc_unify::unify::merged_ability_slices(
+                        subs,
+                        abilities,
+                        Self::ABILITY_SLICE,
+                    );
+                    subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
+                }
+                RigidAbleVar(_, abilities) => {
+                    Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?
+                }
                 RecursionVar {
                     structure,
                     opt_name: _,
@@ -771,6 +774,7 @@ trait DerivableVisitor {
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_ENCODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -849,6 +853,7 @@ impl DerivableVisitor for DeriveEncoding {
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_DECODING;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -938,6 +943,7 @@ impl DerivableVisitor for DeriveDecoding {
 struct DeriveHash;
 impl DerivableVisitor for DeriveHash {
     const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_HASH;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -1027,6 +1033,7 @@ impl DerivableVisitor for DeriveHash {
 struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
     const ABILITY: Symbol = Symbol::BOOL_EQ;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -1218,6 +1225,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
         specialization_var,
         signature_var,
         Mode::EQ,
+        Polarity::Pos,
     )
     .expect_success(
         "If resolving a specialization, the specialization must be known to typecheck.",
@@ -1237,9 +1245,6 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
             match resolver.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(spec_symbol)
-                }
-                roc_types::types::MemberImpl::Derived => {
-                    todo_abilities!("get type from obligated opaque")
                 }
                 // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
                 // which will make this simpler.

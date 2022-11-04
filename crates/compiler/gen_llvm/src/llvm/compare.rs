@@ -147,6 +147,8 @@ fn build_eq<'a, 'ctx, 'env>(
     rhs_layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
+    let lhs_layout = &lhs_layout.runtime_representation(env.layout_interner);
+    let rhs_layout = &rhs_layout.runtime_representation(env.layout_interner);
     if lhs_layout != rhs_layout {
         panic!(
             "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",

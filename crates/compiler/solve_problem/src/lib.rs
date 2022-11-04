@@ -31,7 +31,7 @@ pub enum TypeError {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Unfulfilled {
     /// No claimed implementation of an ability for an opaque type.
     OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },
@@ -51,7 +51,7 @@ pub enum Unfulfilled {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum UnderivableReason {
     NotABuiltin,
     /// The surface type is not derivable
@@ -60,7 +60,7 @@ pub enum UnderivableReason {
     NestedNotDerivable(ErrorType, NotDerivableContext),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableContext {
     NoContext,
     Function,
@@ -70,12 +70,12 @@ pub enum NotDerivableContext {
     Eq(NotDerivableEq),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableDecode {
     OptionalRecordField(Lowercase),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableEq {
     FloatingPoint,
 }

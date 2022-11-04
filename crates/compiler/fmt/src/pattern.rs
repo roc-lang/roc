@@ -40,7 +40,10 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
-            | Pattern::QualifiedIdentifier { .. } => false,
+            | Pattern::QualifiedIdentifier { .. }
+            | Pattern::ListRest => false,
+
+            Pattern::List(patterns) => patterns.iter().any(|p| p.is_multiline()),
         }
     }
 
@@ -149,6 +152,7 @@ impl<'a> Formattable for Pattern<'a> {
             }
             StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
                 buf.push_str(string);
                 buf.push('\'');
@@ -157,6 +161,26 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push('_');
                 buf.push_str(name);
+            }
+            List(loc_patterns) => {
+                buf.indent(indent);
+                buf.push_str("[");
+
+                let mut it = loc_patterns.iter().peekable();
+                while let Some(loc_pattern) = it.next() {
+                    loc_pattern.format(buf, indent);
+
+                    if it.peek().is_some() {
+                        buf.push_str(",");
+                        buf.spaces(1);
+                    }
+                }
+
+                buf.push_str("]");
+            }
+            ListRest => {
+                buf.indent(indent);
+                buf.push_str("..");
             }
 
             // Space

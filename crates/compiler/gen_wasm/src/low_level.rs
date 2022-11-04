@@ -304,6 +304,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
+            StrGraphemes => self.load_args_and_call_zig(backend, bitcode::STR_GRAPHEMES),
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {

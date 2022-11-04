@@ -4,6 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
+use roc_utils::cargo;
 use roc_utils::root_dir;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
@@ -55,21 +56,20 @@ pub fn build_roc_bin_cached() -> PathBuf {
             vec!["build", "--release", "--bin", "roc"]
         };
 
-        let run_command = "cargo";
+        let mut cargo_cmd = cargo();
 
-        let output = Command::new(run_command)
-            .current_dir(root_project_dir)
-            .args(&args)
-            .output()
-            .unwrap();
+        cargo_cmd.current_dir(root_project_dir).args(&args);
 
-        if !output.status.success() {
+        let cargo_cmd_str = format!("{:?}", cargo_cmd);
+
+        let cargo_output = cargo_cmd.output().unwrap();
+
+        if !cargo_output.status.success() {
             panic!(
-                "{} {} failed:\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
-                run_command,
-                args.join(" "),
-                String::from_utf8(output.stdout).unwrap(),
-                String::from_utf8(output.stderr).unwrap()
+                "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
+                cargo_cmd_str,
+                String::from_utf8(cargo_output.stdout).unwrap(),
+                String::from_utf8(cargo_output.stderr).unwrap()
             );
         }
     }
@@ -86,7 +86,7 @@ where
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
-    path_to_binary("roc")
+    path_to_binary(if cfg!(windows) { "roc.exe" } else { "roc" })
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {

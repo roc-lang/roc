@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::process::Command;
 use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
@@ -63,6 +62,7 @@ use roc_solve::module::Solved;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use roc_types::subs::{Subs, VarStore, Variable};
+use roc_utils::cargo;
 use snafu::OptionExt;
 use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
@@ -622,7 +622,7 @@ impl<'a> EdModel<'a> {
 
         let roc_file_str = path_to_string(self.file_path);
 
-        let cmd_out = Command::new("cargo")
+        let cmd_out = cargo()
             .arg("run")
             .arg("--release")
             .arg("check")
@@ -643,7 +643,7 @@ impl<'a> EdModel<'a> {
 
         let roc_file_str = path_to_string(self.file_path);
 
-        Command::new("cargo")
+        cargo()
             .arg("run")
             .arg("--release")
             .arg(roc_file_str)

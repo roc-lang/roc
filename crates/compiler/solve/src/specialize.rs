@@ -20,7 +20,7 @@ use roc_types::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
         OptVariable, Rank, Subs, SubsSlice, UlsOfVar, Variable,
     },
-    types::{AliasKind, MemberImpl, Uls},
+    types::{AliasKind, MemberImpl, Polarity, Uls},
 };
 use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
 
@@ -584,6 +584,7 @@ fn compact_lambda_set<P: Phase>(
         t_f1,
         t_f2,
         Mode::LAMBDA_SET_SPECIALIZATION,
+        Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
     trace_compact!(3iter_end. subs, t_f1);
@@ -638,7 +639,7 @@ fn make_specialization_decision<P: Phase>(
                             // Doesn't specialize; an error will already be reported for this.
                             SpecializeDecision::Drop
                         }
-                        Some(MemberImpl::Error | MemberImpl::Derived) => {
+                        Some(MemberImpl::Error) => {
                             // TODO: probably not right, we may want to choose a derive decision!
                             SpecializeDecision::Specialize(Opaque(*opaque))
                         }
@@ -743,7 +744,6 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                                     .expect("lambda set region not resolved");
                                 Ok(specialized_lambda_set)
                             }
-                            MemberImpl::Derived => todo_abilities!(),
                             MemberImpl::Error => todo_abilities!(),
                         },
                     }

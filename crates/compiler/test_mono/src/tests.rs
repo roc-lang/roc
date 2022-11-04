@@ -143,7 +143,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
 }
 
-#[cfg(debug_assertions)]
 fn verify_procedures<'a>(
     test_name: &str,
     interner: STLayoutInterner<'a>,
@@ -174,7 +173,7 @@ fn verify_procedures<'a>(
     use std::process::Command;
 
     let is_tracked = Command::new("git")
-        .args(&["ls-files", "--error-unmatch", &path])
+        .args(["ls-files", "--error-unmatch", &path])
         .output()
         .unwrap();
 
@@ -186,7 +185,7 @@ fn verify_procedures<'a>(
     }
 
     let has_changes = Command::new("git")
-        .args(&["diff", "--color=always", &path])
+        .args(["diff", "--color=always", &path])
         .output()
         .unwrap();
 
@@ -199,19 +198,6 @@ fn verify_procedures<'a>(
         println!("{}", std::str::from_utf8(&has_changes.stdout).unwrap());
         panic!("Output changed: resolve conflicts and `git add` the file.");
     }
-}
-
-// NOTE because the Show instance of module names is different in --release mode,
-// these tests would all fail. In the future, when we do interesting optimizations,
-// we'll likely want some tests for --release too.
-#[cfg(not(debug_assertions))]
-fn verify_procedures(
-    _expected: &str,
-    _interner: STLayoutInterner<'_>,
-    _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
-    _main_fn_symbol: Symbol,
-) {
-    // Do nothing
 }
 
 #[mono_test]
@@ -1997,6 +1983,22 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
             thunk = provideThunk x
 
             thunk {}
+        "#
+    )
+}
+
+#[mono_test]
+fn match_list() {
+    indoc!(
+        r#"
+        l = [A, B]
+
+        when l is
+            [] -> "A"
+            [A] -> "B"
+            [A, A, ..] -> "C"
+            [A, B, ..] -> "D"
+            [B, ..] -> "E"
         "#
     )
 }

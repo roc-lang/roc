@@ -2164,6 +2164,7 @@ fn case_jump() {
                     Pair Nil _ -> 1
                     Pair _ Nil -> 2
                     Pair (Cons a _) (Cons b _) -> a + b + 3
+                    Pair _ _ -> 4
             "#
         ),
         1,
@@ -4078,6 +4079,46 @@ fn pattern_match_char() {
 
             when c is
                 'A' -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4348() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            str = "z"
+            (\_ ->
+                when str is
+                    "z" -> "okay"
+                    _ -> "") "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4349() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ir = Ok ""
+            res =
+                Result.try ir \_ ->
+                    when ir is
+                        Ok "" -> Ok ""
+                        _ -> Err Bad
+            when res is
+                Ok _ -> "okay"
                 _ -> "FAIL"
             "#
         ),

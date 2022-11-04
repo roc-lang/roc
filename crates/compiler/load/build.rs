@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 
+const ROC_SKIP_SUBS_CACHE: &str = "ROC_SKIP_SUBS_CACHE";
+
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
         Some(s) => s.len() == 1 && s.as_bytes()[0] == b'1',
@@ -42,7 +44,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     println!("cargo:rerun-if-changed={}", filepath.to_str().unwrap());
 
     let mut output_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    output_path.extend(&[filename]);
+    output_path.extend([filename]);
     output_path.set_extension("dat");
 
     #[cfg(not(windows))]
@@ -62,7 +64,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
 
 fn write_types_for_module_dummy(output_path: &Path) {
     // write out a dummy file
-    std::fs::write(output_path, &[]).unwrap();
+    std::fs::write(output_path, []).unwrap();
 }
 
 #[cfg(not(windows))]
@@ -96,12 +98,16 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         }
     };
 
+    if module.total_problems() > 0 {
+        panic!("Problems were found! Refusing to build cached subs.\nTry building with {}=1 to see them.", ROC_SKIP_SUBS_CACHE);
+    }
+
     let subs = module.solved.into_inner();
     let exposed_vars_by_symbol: Vec<_> = module.exposed_to_host.into_iter().collect();
     let abilities = module.abilities_store;
     let solved_implementations = module.resolved_implementations;
 
-    let mut file = std::fs::File::create(&output_path).unwrap();
+    let mut file = std::fs::File::create(output_path).unwrap();
 
     let type_state = TypeState {
         subs,

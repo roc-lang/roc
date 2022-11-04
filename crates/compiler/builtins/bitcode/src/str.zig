@@ -1,5 +1,6 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
+const grapheme = @import("helpers/grapheme.zig");
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
@@ -1212,7 +1213,6 @@ test "countSegments: string equals delimiter" {
 }
 
 // Str.countGraphemeClusters
-const grapheme = @import("helpers/grapheme.zig");
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
@@ -1248,59 +1248,76 @@ pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     return count;
 }
 
-test "countGraphemeClusters: empty string" {
-    const count = countGraphemeClusters(RocStr.empty());
-    try expectEqual(count, 0);
+// Str.graphemes
+pub fn strGraphemes(roc_str: RocStr) callconv(.C) RocList {
+    var break_state: ?grapheme.BoundClass = null;
+    var opt_last_codepoint: ?u21 = null;
+    var index: usize = 0;
+    var last_codepoint_len: u8 = 0;
+
+    var result = RocList.allocate(@alignOf(RocStr), countGraphemeClusters(roc_str), @sizeOf(RocStr));
+    const graphemes = result.elements(RocStr) orelse return result;
+    var slice = roc_str.asSlice();
+    var iter = (unicode.Utf8View.init(slice) catch unreachable).iterator();
+
+    while (iter.nextCodepoint()) |cur_codepoint| {
+        const cur_codepoint_len = unicode.utf8CodepointSequenceLength(cur_codepoint) catch unreachable;
+        if (opt_last_codepoint) |last_codepoint| {
+            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, &break_state);
+            if (did_break) {
+                graphemes[index] = RocStr.fromSlice(slice[0..last_codepoint_len]);
+                slice = slice[last_codepoint_len..];
+                index += 1;
+                break_state = null;
+                last_codepoint_len = 0;
+            }
+        }
+        last_codepoint_len += cur_codepoint_len;
+        opt_last_codepoint = cur_codepoint;
+    }
+    // Append last grapheme
+    graphemes[index] = RocStr.fromSlice(slice);
+    return result;
 }
 
-test "countGraphemeClusters: ascii characters" {
-    const bytes_arr = "abcd";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
+// these test both countGraphemeClusters() and strGraphemes()
+fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
+    const rocstr = RocStr.fromSlice(input);
+    defer rocstr.deinit();
+    const count = countGraphemeClusters(rocstr);
+    try expectEqual(expected.len, count);
 
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 4);
+    const graphemes = strGraphemes(rocstr);
+    defer graphemes.deinit(u8);
+    if (input.len == 0) return; // empty string
+    const elems = graphemes.elements(RocStr) orelse unreachable;
+    for (expected) |g, i| {
+        try std.testing.expectEqualStrings(g, elems[i].asSlice());
+    }
 }
 
-test "countGraphemeClusters: utf8 characters" {
-    const bytes_arr = "ãxā";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 3);
+test "graphemes: empty string" {
+    try graphemesTest("", &.{});
 }
 
-test "countGraphemeClusters: emojis" {
-    const bytes_arr = "🤔🤔🤔";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 3);
+test "graphemes: ascii characters" {
+    try graphemesTest("abcd", &.{ "a", "b", "c", "d" });
 }
 
-test "countGraphemeClusters: emojis and ut8 characters" {
-    const bytes_arr = "🤔å🤔¥🤔ç";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
-
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 6);
+test "graphemes: utf8 characters" {
+    try graphemesTest("ãxā", &.{ "ã", "x", "ā" });
 }
 
-test "countGraphemeClusters: emojis, ut8, and ascii characters" {
-    const bytes_arr = "6🤔å🤔e¥🤔çpp";
-    const bytes_len = bytes_arr.len;
-    const str = RocStr.init(bytes_arr, bytes_len);
-    defer str.deinit();
+test "graphemes: emojis" {
+    try graphemesTest("🤔🤔🤔", &.{ "🤔", "🤔", "🤔" });
+}
 
-    const count = countGraphemeClusters(str);
-    try expectEqual(count, 10);
+test "graphemes: emojis and ut8 characters" {
+    try graphemesTest("🤔å🤔¥🤔ç", &.{ "🤔", "å", "🤔", "¥", "🤔", "ç" });
+}
+
+test "graphemes: emojis, ut8, and ascii characters" {
+    try graphemesTest("6🤔å🤔e¥🤔çpp", &.{ "6", "🤔", "å", "🤔", "e", "¥", "🤔", "ç", "p", "p" });
 }
 
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {

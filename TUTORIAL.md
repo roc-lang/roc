@@ -1,8 +1,7 @@
 # Tutorial
 
-This is a tutorial for how to build Roc applications. It covers the REPL, basic
-types (strings, lists, tags, and functions), syntax (`when`, `if then else`)
-and more!
+This is a tutorial to learn how to build Roc applications.
+It covers the REPL, basic types like strings, lists, tags, and functions, syntax like `when` and `if then else`, and more!
 
 Enjoy!
 
@@ -10,7 +9,7 @@ Enjoy!
 
 Learn how to install roc on your machine [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation).
 
-## Strings and Numbers
+## REPL (Read - Eval - Print - Loop)
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
 short. Run this in a terminal:
@@ -34,12 +33,14 @@ Try typing this in and pressing enter:
 
 Congratulations! You've just written your first Roc code!
 
-Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
+## Strings and Numbers
+
+Previously you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
 expression's type. We'll talk about types later; for now, we'll ignore the `:`
 and whatever comes after it whenever the REPL prints them.
 
-Let's try putting in a more complicated expression:
+Let's try a more complicated expression:
 
 ```coffee
 >> 1 + 1
@@ -111,7 +112,7 @@ to use them for more than that anyway!
 
 Let's move out of the REPL and create our first Roc application.
 
-Create a new file called `Hello.roc` and put this inside it:
+Create a new file called `Hello.roc` and put the following code inside it:
 
 ```coffee
 app "hello"
@@ -195,7 +196,7 @@ you like, and everything will still work the same way!
 This works because Roc expressions don't have *side effects*. We'll talk more
 about side effects later.
 
-## Functions and `if`
+## Functions
 
 So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`.
 Next let's try defining a function of our own.
@@ -218,6 +219,10 @@ calls `Num.toStr` on the result, and returns that. The `\num1, num2 ->` syntax
 defines a function's arguments, and the expression after the `->` is the body
 of the function. The expression at the end of the body (`Num.toStr (num1 + num2)`
 in this case) is returned automatically.
+
+Note that there is no separate syntax for named and anonymous functions in Roc.
+
+## if then else
 
 Let's modify the function to return an empty string if the numbers add to zero.
 
@@ -348,6 +353,7 @@ a function that takes a record and returns its `x` field. You can do this with a
 For example:
 
 ```elm
+# function returnFoo takes a Record and returns the 'foo' field of that record.
 returnFoo = .foo
 
 returnFoo { foo: "hi!", bar: "blah" }
@@ -447,7 +453,8 @@ stoplightStr =
         "yellow"
 ```
 
-We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
+### Pattern matching
+We can express the same logic more concisely using `when`/`is` instead of `if`/`then`:
 
 ```elm
 stoplightStr =
@@ -465,7 +472,7 @@ conditions are specified; here, we specify between `when` and `is` that we're ma
 Besides being more concise, there are other advantages to using `when` here.
 
 1. We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
+2. We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in the `stoplightColor` definition we made earlier.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing "else", we write
 "_ ->" like so:
@@ -778,7 +785,7 @@ List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
 
 `List.walk` walks through each element of the list, building up a state as it goes. At the end,
 it returns the final state - whatever it ended up being after processing the last element. The `\state, elem ->`
-function it takes as its last argument accepts both the current state as well as the current list element
+function that `List.walk` takes as its last argument accepts both the current state as well as the current list element
 it's looking at, and then returns the new state based on whatever it decides to do with that element.
 
 In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds`
@@ -801,7 +808,7 @@ the initial state gets returned immediately.)
 > **Note:** Other languages give this operation different names, such as "fold," "reduce," "accumulate,"
 > "aggregate," "compress," and "inject."
 
-### Getting an individual element from a list
+### Getting an element from a List
 
 Another thing we can do with a list is to get an individual element out of it. `List.get` is a common way to do this;
 it takes a list and an index, and then returns the element at that index...if there is one. But what if there isn't?
@@ -940,6 +947,8 @@ accuracy. If the annotation ever doesn't fit with the implementation, we'll get 
 The annotation `fullName : Str, Str -> Str` says "`fullName` is a function that takes two strings as
 arguments and returns a string."
 
+#### Strings
+
 We can give type annotations to any value, not just functions. For example:
 
 ```coffee
@@ -952,6 +961,8 @@ lastName = "Lee"
 
 These annotations say that both `firstName` and `lastName` have the type `Str`.
 
+#### Records
+
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
 ```coffee
@@ -962,7 +973,9 @@ jen : { firstName : Str, lastName : Str }
 jen = { firstName: "Jen", lastName: "Majura" }
 ```
 
-When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
+#### Type Aliasing
+
+When we have a recurring type annotation like before, it can be nice to give it its own name. We do this like
 so:
 
 ```coffee
@@ -980,6 +993,8 @@ instead of to a value. Just like how you can read `name : Str` as "`name` has th
 you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type
 `{ firstName : Str, lastName : Str }`."
 
+#### Tag Unions
+
 We can also give type annotations to tag unions:
 
 ```coffee
@@ -993,6 +1008,8 @@ colorFromStr = \string ->
 
 You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
 
+#### List
+
 When we annotate a list type, we have to specify the type of its elements:
 
 ```coffee
@@ -1004,6 +1021,8 @@ You can read `List Str` as "a list of strings." Here, `Str` is a *type parameter
 `List` we're dealing with. `List` is a *parameterized type*, which means it's a type that requires a type
 parameter; there's no way to give something a type of `List` without a type parameter - you have to specify
 what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
+
+#### Wildcard type
 
 There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty`
 has this type:
@@ -1039,6 +1058,8 @@ We saw that `List.isEmpty` has the type `List * -> Bool`, so we might think the 
 `reverse : List * -> List *`. However, remember that we also saw that the type of the empty list is `List *`?
 `List * -> List *` is actually the type of a function that always returns empty lists! That's not what we want.
 
+#### Type Variables
+
 What we want is something like one of these:
 
 ```coffee
@@ -1069,6 +1090,63 @@ of the type annotation, or even the function's implementation! The only way to h
 
 Similarly, the only way to have a function whose type is `a -> a` is if the function's implementation returns
 its argument without modifying it in any way. This is known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
+
+## Tag Unions
+
+We can also annotate types that include tags:
+
+```coffee
+colorFromStr : Str -> [Red, Green, Yellow]
+colorFromStr = \string ->
+    when string is
+        "red" -> Red
+        "green" -> Green
+        _ -> Yellow
+```
+
+You can read the type `[Red, Green, Yellow]` as "a *tag union* of the tags `Red`, `Green`, and `Yellow`."
+
+Some tag unions have only one tag in them. For example:
+
+```coffee
+redTag : [Red]
+redTag = Red
+```
+
+Tag unions can accumulate additional tags based on how they're used in the program. Consider this `if` expression:
+
+```elm
+\str ->
+    if Str.isEmpty str then
+        Ok "it was empty"
+    else
+        Err ["it was not empty"]
+```
+
+Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has
+the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the
+combination of those two tag unions: `[Ok Str, Err (List Str)]`.
+
+This means the entire `\str -> …` funcion here has the type `Str -> [Ok Str, Err (List Str)]`.
+However, it would be most common to annotate it as `Result Str (List Str)` instead, because
+the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type
+alias for a tag union with `Ok` and `Err` tags that each have one payload:
+
+```haskell
+Result ok err : [Ok ok, Err err]
+```
+
+We just saw how tag unions get combined when different branches of a conditional return different tags. Another way tag unions can get combined is through pattern matching. For example:
+
+```coffeescript
+when color is
+    Red -> "red"
+    Yellow -> "yellow"
+    Green -> "green"
+```
+
+Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because
+those are the three possibilities this `when` handles.
 
 ## Numeric types
 
@@ -1127,6 +1205,8 @@ Here are the different fixed-size integer types that Roc supports:
 |   `0`<br/>(over 18 quintillion) `18_446_744_073_709_551_615` | `U64` | 8 Bytes  |
 |  `-170_141_183_460_469_231_731_687_303_715_884_105_728`<br/>`170_141_183_460_469_231_731_687_303_715_884_105_727`  | `I128` | 16 Bytes |
 | `0`<br/>(over 340 undecillion) `340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` | 16 Bytes |
+
+#### Nat
 
 Roc also has one variable-size integer type: `Nat` (short for "natural number").
 The size of `Nat` is equal to the size of a memory address, which varies by system.
@@ -1310,35 +1390,14 @@ An age-old debugging technique is printing out a variable to the terminal. In Ro
 The failure output will include both the value of `x` as well as the comment immediately above it,
 which lets you use that comment for extra context in your output.
 
-## Interface modules
+## Roc Modules
 
-[This part of the tutorial has not been written yet. Coming soon!]
+Every `.roc` file is a *module*. There are three types of modules:
+    - builtin
+    - app
+    - interface
 
-## Builtin modules
-
-There are several modules that are built into the Roc compiler, which are imported automatically into every
-Roc module. They are:
-
-1. `Bool`
-2. `Str`
-3. `Num`
-4. `List`
-5. `Result`
-6. `Dict`
-7. `Set`
-
-You may have noticed that we already used the first five - for example, when we wrote `Str.concat` and `Num.isEven`,
-we were referencing functions stored in the `Str` and `Num` modules.
-
-These modules are not ordinary `.roc` files that live on your filesystem. Rather, they are built directly into the
-Roc compiler. That's why they're called "builtins!"
-
-Besides being built into the compiler, the builtin modules are different from other modules in that:
-
-- They are always imported. You never need to add them to `imports`.
-- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (and the same for all the other types in the `Num` module).
-
-## The app module header
+### App module
 
 Let's take a closer look at the part of `Hello.roc` above `main`:
 
@@ -1349,9 +1408,9 @@ app "hello"
     provides main to pf
 ```
 
-This is known as a *module header*. Every `.roc` file is a *module*, and there
-are different types of modules. We know this particular one is an *application module*
+This is known as a *module header*. We know this particular one is an *application module*
 (or *app module* for short) because it begins with the `app` keyword.
+Every Roc program has one app module.
 
 The line `app "hello"` states that this module defines a Roc application, and
 that building this application should produce an executable named `hello`. This
@@ -1397,13 +1456,94 @@ this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
 should look for that `line` function in the `Stdout` module of the
 `examples/cli/cli-platform/main.roc` package.
 
-If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:  
+If we would like to include other modules in our application, say `AdditionalModule.roc`
+and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
 
 ```coffee
 packages { pf: "examples/cli/cli-platform/main.roc" }
 imports [pf.Stdout, pf.Program, AdditionalModule, AnotherModule]
 provides main to pf
 ```
+
+### Interface module
+
+Let's take a look at the following module header:
+
+```coffee
+interface Parser.Core
+    exposes [
+        Parser,
+        ParseResult,
+        buildPrimitiveParser
+    ]
+    imports []
+```
+
+This says that the current .roc file is an *interface module* because it begins with the `interface` keyword.
+We are naming this module when we write `interface Parser.Core`. It means that this file is in
+a package `Parser` and the current module is named `core`.
+When we write `exposes [Parser, ParseResult, ...]`, it specifies the definitions we
+want to *expose*. Exposing makes them importable from other modules.
+
+Now lets import this interface from an *app module*:
+
+```coffee
+app 'interface-example'
+    packages { pf: "examples/cli/cli-platform/main.roc" }
+    imports [Parser.Core.{ Parser, buildPrimitiveParser }]
+    provides main to pf
+```
+Here we are importing a type and a function from the 'Core' module from the package 'Parser'. Now we can use e.g.
+`buildPrimitiveParser` in this module without having to write `Parser.Core.buildPrimitiveParser`.
+
+### Builtin modules
+
+There are several modules that are built into the Roc compiler, which are imported automatically into every
+Roc module. They are:
+
+1. `Bool`
+2. `Str`
+3. `Num`
+4. `List`
+5. `Result`
+6. `Dict`
+7. `Set`
+
+You may have noticed that we already used the first five - for example, when we wrote `Str.concat` and `Num.isEven`,
+we were referencing functions stored in the `Str` and `Num` modules.
+
+These modules are not ordinary `.roc` files that live on your filesystem. Rather, they are built directly into the
+Roc compiler. That's why they're called "builtins!"
+
+Besides being built into the compiler, the builtin modules are different from other modules in that:
+
+- They are always imported. You never need to add them to `imports`.
+- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (and the same for all the other types in the `Num` module).
+
+## Platforms
+
+TODO
+
+## Comments
+
+Comments that begin with `##` will be included in generated documentation (```roc docs```). They require a single space after the `##`, and can include code blocks by adding five spaces after `##`.
+
+```coffee
+## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2
+```
+
+Roc also supports inline comments and line comments with `#`. They can be used to add information that won't be included in documentation.
+
+```coffee
+# This is a line comment that won't appear in documentation.
+myFunction : U8 -> U8
+myFunction = \bit -> bit % 2 # this is an inline comment
+```
+
+Roc does not have multiline comment syntax.
 
 ## Tasks
 
@@ -1536,6 +1676,8 @@ It's most common in Roc to call functions from other modules in a *qualified* wa
 for a function with an uncommon name (like "await") which often gets called repeatedly
 across a small number of lines of code.
 
+### Backpassing
+
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this
 code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we
 can rewrite `task` into this style which looks different but does the same thing:
@@ -1636,6 +1778,38 @@ Some important things to note about backpassing and `await`:
 - `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+### Empty Tag Unions
+
+If you look up the type of [`Program.exit`](https://www.roc-lang.org/examples/cli/Program#exit),
+you may notice that it takes a `Task` where the error type is `[]`. What does that mean?
+
+Just like how `{}` is the type of an empty record, `[]` is the type of an empty tag union.
+There is no way to create an empty tag union at runtime, since creating a tag union requires
+making an actual tag, and an empty tag union has no tags in it!
+
+This means if you have a function with the type `[] -> Str`, you can be sure that it will
+never execute. It requires an argument that can't be provided! Similarly, if you have a
+function with the type `Str -> []`, you can call it, but you can be sure it will not terminate
+normally. The only way to implement a function like that is using [infinite recursion](https://en.wikipedia.org/wiki/Infinite_loop#Infinite_recursion), which will either run indefinitely or else crash with a [stack overflow](https://en.wikipedia.org/wiki/Stack_overflow).
+
+Empty tag unions can be useful as type parameters. For example, a function with the type
+`List [] -> Str` can be successfully called, but only if you pass it an empty list. That's because
+an empty list has the type `List *`, which means it can be used wherever any type of `List` is
+needed - even a `List []`!
+
+Similarly, a function which accepts a `Result Str []` only accepts a "Result which is always `Ok`" - so you could call that function passing something like `Ok "hello"` with no problem,
+but if you tried to give it an `Err`, you'd get a type mismatch.
+
+Applying this to `Task`, a task with `[]` for its error type is a "task which can never fail." The only way to obtain one is by obtaining a task with an error type of `*`, since that works with any task. You can get one of these "tasks that can never fail" by using [`Task.succeed`](https://www.roc-lang.org/examples/cli/Task#succeed) or, more commonly, by handling all possible errors using [`Task.attempt`](https://www.roc-lang.org/examples/cli/Task#attempt).
+
+## What now?
+
+That's it, you can start writing Roc apps now!
+Modifying an example from the [examples folder](./examples) is probably a good place to start.
+[Advent of Code](https://adventofcode.com/2021) problems can also be fun to get to know Roc.
+
+If you are hungry for more, check out the Advanced Concepts below.
 
 ## Appendix: Advanced Concepts
 
@@ -1857,200 +2031,65 @@ type that accumulates more and more fields as it progresses through a series of 
 
 ### Open and Closed Tag Unions
 
-Just like how Roc has open records and closed records, it also has open and closed tag unions.
+Just like how Roc has open records and closed records, it also has open and closed tag unions.  Similarly to how an open record can have other fields besides the ones explicitly listed, an open tag union can have other tags beyond the ones explicitly listed.
 
-The *open tag union* (or *open union* for short) `[Foo Str, Bar Bool]*` represents a tag that might
-be `Foo Str` and might be `Bar Bool`, but might also be some other tag whose type isn't known at compile time.
-
-Because an open union represents possibilities that are impossible to know ahead of time, any `when` I use on a
-`[Foo Str, Bar Bool]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those
-unknown tags were to come up, the `when` would not know what to do with it! For example:
+For example, here `[Red, Green]` is a closed union like the ones we saw earlier:
 
 ```coffee
-example : [Foo Str, Bar Bool]* -> Bool
-example = \tag ->
-    when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
-        _ -> Bool.false
-```
+colorToStr : [Red, Green] -> String
+colorToStr = \color ->
+    when color is
+        Red -> "red"
+        Green -> "green"
 
-In contrast, a *closed tag union* (or *closed union*) like `[Foo Str, Bar Bool]` (without the `*`)
-represents an exhaustive set of possible tags. If I use a `when` on one of these, I can match on `Foo`
-only and then on `Bar` only, with no need for a catch-all branch. For example:
+Now let's compare to an *open union* version:
 
 ```coffee
-example : [Foo Str, Bar Bool] -> Bool
-example = \tag ->
-    when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
+colorOrOther : [Red, Green]* -> String
+colorOrOther = \color ->
+    when color is
+        Red -> "red"
+        Green -> "green"
+        _ -> "other"
 ```
 
-If we were to remove the type annotations from the previous two code examples, Roc would infer the same
-types for them anyway.
+Two things have changed compared to the first example.
+1. The `when color is` now has an extra branch: `_ -> "other"`
+2. Since this branch matches any tag, the type annotation for the `color` argument changed from the closed union `[Red, Green]` to the _open union_ `[Red, Green]*`.
 
-It would infer `tag : [Foo Str, Bar Bool]` for the latter example because the `when tag is` expression
-only includes a `Foo Str` branch and a `Bar Bool` branch, and nothing else. Since the `when` doesn't handle
-any other possibilities, these two tags must be the only possible ones the `tag` argument could be.
-
-It would infer `tag : [Foo Str, Bar Bool]*` for the former example because the `when tag is` expression
-includes a `Foo Str` branch and a `Bar Bool` branch - meaning we know about at least those two specific
-possibilities - but also a `_ ->` branch, indicating that there may be other tags we don't know about. Since
-the `when` is flexible enough to handle all possible tags, `tag` gets inferred as an open union.
-
-Putting these together, whether a tag union is inferred to be open or closed depends on which possibilities
-the implementation actually handles.
-
-> **Aside:** As with open and closed records, we can use type annotations to make tag union types less flexible
-> than what would be inferred. If we added a `_ ->` branch to the second example above, the compiler would still
-> accept `example : [Foo Str, Bar Bool] -> Bool` as the type annotation, even though the catch-all branch
-> would permit the more flexible `example : [Foo Str, Bar Bool]* -> Bool` annotation instead.
-
-### Combining Open Unions
-
-When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`,
-the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred
-to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
-
-This is because open unions can accumulate additional tags based on how they're used in the program,
-whereas closed unions cannot. For example, let's look at this conditional:
-
-```elm
-if x > 5 then
-    "foo"
-else
-    7
-```
-
-This will be a type mismatch because the two branches have incompatible types. Strings and numbers are not
-type-compatible! Now let's look at another example:
-
-```elm
-if x > 5 then
-    Ok "foo"
-else
-    Err "bar"
-```
-
-This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both
-tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be
-the closed union `[Ok Str]`, and likewise for `Err "bar"` and `[Err Str]`, then this would have to be
-a type mismatch - because those two closed unions are incompatible.
-
-Instead, the compiler infers `Ok "foo"` to be the open union `[Ok Str]*`, and `Err "bar"` to be the open
-union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional
-becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in
-a `when` work the same way with open unions.)
-
-Earlier we saw how a function which accepts an open union must account for more possibilities, by including
-catch-all `_ ->` patterns in its `when` expressions. So *accepting* an open union means you have more requirements.
-In contrast, when you already *have* a value which is an open union, you have fewer requirements. A value
-which is an open union (like `Ok "foo"`, which has the type `[Ok Str]*`) can be provided to anything that's
-expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least
-the tags in the open union you're providing.
-
-So if I have an `[Ok Str]*` value, I can pass it to functions with any of these types (among others):
-
-- `[Ok Str]* -> Bool`
-- `[Ok Str] -> Bool`
-- `[Ok Str, Err Bool]* -> Bool`
-- `[Ok Str, Err Bool] -> Bool`
-- `[Ok Str, Err Bool, Whatever]* -> Bool`
-- `[Ok Str, Err Bool, Whatever] -> Bool`
-- `Result Str Bool -> Bool`
-- `[Err Bool, Whatever]* -> Bool`
-
-That last one works because a function accepting an open union can accept any unrecognized tag, including
-`Ok Str` - even though it is not mentioned as one of the tags in `[Err Bool, Whatever]*`! Remember, when
-a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch,
-which is the branch that will end up handling the `Ok Str` value we pass in.
-
-However, I could not pass an `[Ok Str]*` to a function with a *closed* tag union argument that did not
-mention `Ok Str` as one of its tags. So if I tried to pass `[Ok Str]*` to a function with the type
-`[Err Bool, Whatever] -> Str`, I would get a type mismatch - because a `when` in that function could
-be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have
-a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
-
-> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles
-> "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it
-> `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might
-> have the branch `Ok str ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked,
-> then that assumption would be false and things would break!
->
-> So `[Ok Str]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag,
-> but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
-
-In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
-
-- If you *have* a closed union, that means it has all the tags it ever will, and can't accumulate more.
-- If you *have* an open union, that means it can accumulate more tags through conditional branches.
-- If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
-- If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
-
-### Type Variables in Tag Unions
-
-Earlier we saw these two examples, one with an open tag union and the other with a closed one:
+Also like with open records, you can name the type variable in an open tag union. For example:
 
 ```coffee
-example : [Foo Str, Bar Bool]* -> Bool
-example = \tag ->
-    when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
-        _ -> Bool.false
-```
-
-```coffee
-example : [Foo Str, Bar Bool] -> Bool
-example = \tag ->
-    when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
-```
-
-Similarly to how there are open records with a `*`, closed records with nothing,
-and constrained records with a named type variable, we can also have *constrained tag unions*
-with a named type variable. Here's an example:
-
-```coffee
-example : [Foo Str, Bar Bool]a -> [Foo Str, Bar Bool]a
-example = \tag ->
-    when tag is
-        Foo str -> Bar (Str.isEmpty str)
-        Bar _ -> Bar Bool.false
+stopGoOther : [Red, Green]a -> [Stop, Go]a
+stopGoOther = \color ->
+    when color is
+        Red -> Stop
+        Green -> Go
         other -> other
 ```
 
-This type says that the `example` function will take either a `Foo Str` tag, or a `Bar Bool` tag,
-or possibly another tag we don't know about at compile time - and it also says that the function's
-return type is the same as the type of its argument.
+You can read this type annotation as "`stopGoOther` takes either a `Red` tag, a `Green` tag, or some other tag. It returns either a `Stop` tag, a `Go` tag, or any one of the tags it received in its argument."
 
-So if we give this function a `[Foo Str, Bar Bool, Baz (List Str)]` argument, then it will be guaranteed
-to return a `[Foo Str, Bar Bool, Baz (List Str)]` value. This is more constrained than a function that
-returned `[Foo Str, Bar Bool]*` because that would say it could return *any* other tag (in addition to
-the `Foo Str` and `Bar Bool` we already know about).
+So let's say you called this `stopGoOther` function passing `Foo "hello"`. Then the `a` type variable would be the closed union `[Foo Str]`, and `stopGoOther` would return a union with the type `[Stop, Go][Foo Str]` - which is equivalent to `[Stop, Go, Foo Str]`.
 
-If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway.
-This may be surprising if you look closely at the body of the function, because:
+Just like with records, you can replace the type variable in tag union types with a concrete type.
+For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
 
-- The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
-- The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+Also just like with records, you can use this to compose tag union type aliases. For example, you can write `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`.
 
-The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question:
-"What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one
-type before the `->` and another type after it; whenever you see a named value in Roc, it is guaranteed to have
-the same type everywhere it appears in that scope.
+Note that that a function which accepts an open union does not accept "all possible tags."
+For example, if I have a function `[Ok Str]* -> Bool` and I pass it
+`Ok 5`, that will still be a type mismatch. A `when` on that function's argument might
+have the branch `Ok str ->` which assumes there's a string inside that `Ok`,
+and if `Ok 5` type-checked, then that assumption would be false and things would break!
 
-For this reason, any time you see a function that only runs a `when` on its only argument, and that `when`
-includes a branch like `x -> x` or `other -> other`, the function's argument type and return type must necessarily
-be equivalent.
+So `[Ok Str]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag, but if it _is_ an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
 
-> **Note:** Just like with records, you can also replace the type variable in tag union types with a concrete type.
-> For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
->
-> Also just like with records, you can use this to compose tag union type aliases. For example, you can write
-> `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
+> **Note:** As with open and closed records, we can use type annotations to make tag union types less flexible
+> than what the compiler would infer. For example, if we changed the type of the second
+> `colorOrOther` function from the open `[Red, Green]*` to the closed `[Red, Green]`, Roc's compiler
+> would accept it as a valid annotation, but it would give a warning that the `_ -> "other"`
+> branch had become unreachable.
 
 ### Phantom Types
 

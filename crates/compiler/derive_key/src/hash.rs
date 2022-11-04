@@ -123,19 +123,19 @@ impl FlatHash {
                     Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U128))
                 }
                 Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_I8))
+                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I8))
                 }
                 Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_I16))
+                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I16))
                 }
                 Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_I32))
+                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I32))
                 }
                 Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_I64))
+                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I64))
                 }
                 Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_I128))
+                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I128))
                 }
                 // NB: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.

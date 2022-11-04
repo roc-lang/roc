@@ -1,6 +1,6 @@
 # Building the Roc compiler from source
 
-Installation should be a smooth process, let us now if anything does not work perfectly on [Roc Zulip](https://roc.zulipchat.com) or by creating an issue.
+If you run into any problems getting Roc built from source, please ask for help in the `#beginners` channel on [Roc Zulip](https://roc.zulipchat.com) (the fastest way), or create an issue in this repo!
 
 ## Using Nix
 

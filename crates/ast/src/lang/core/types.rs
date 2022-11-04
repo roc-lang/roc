@@ -414,24 +414,7 @@ pub fn to_type2<'a>(
             for (node_id, (label, field)) in field_types.iter_node_ids().zip(field_types_map) {
                 let poolstr = PoolStr::new(label.as_str(), env.pool);
 
-                let rec_field = match field {
-                    RecordField::Optional(_) => {
-                        let field_id = env.pool.add(field.into_inner());
-                        RecordField::Optional(field_id)
-                    }
-                    RecordField::RigidOptional(_) => {
-                        let field_id = env.pool.add(field.into_inner());
-                        RecordField::RigidOptional(field_id)
-                    }
-                    RecordField::Demanded(_) => {
-                        let field_id = env.pool.add(field.into_inner());
-                        RecordField::Demanded(field_id)
-                    }
-                    RecordField::Required(_) => {
-                        let field_id = env.pool.add(field.into_inner());
-                        RecordField::Required(field_id)
-                    }
-                };
+                let rec_field = field.map_owned(|field| env.pool.add(field));
                 env.pool[node_id] = (poolstr, rec_field);
             }
 

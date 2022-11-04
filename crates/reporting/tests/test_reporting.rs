@@ -404,6 +404,16 @@ mod test_reporting {
         }
     }
 
+    macro_rules! test_no_problem {
+        ($(#[$meta:meta])* $test_name: ident, $program:expr) => {
+            #[test]
+            $(#[$meta])*
+            fn $test_name() {
+                __new_report_problem_as(std::stringify!($test_name), $program, |golden| pretty_assertions::assert_eq!(golden, ""))
+            }
+        }
+    }
+
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
@@ -811,7 +821,7 @@ mod test_reporting {
 
     Right now it’s a number of type:
 
-        Num a
+        Num *
 
     But I need every `if` guard condition to evaluate to a Bool—either
     `Bool.true` or `Bool.false`.
@@ -839,7 +849,7 @@ mod test_reporting {
 
     but the `then` branch has the type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -866,7 +876,7 @@ mod test_reporting {
 
     But all the previous branches have type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -925,7 +935,7 @@ mod test_reporting {
 
     However, the preceding elements in the list all have the type:
 
-        Num a
+        Num *
 
     Every element in a list must have the same type!
     "###
@@ -948,11 +958,11 @@ mod test_reporting {
 
     Its 3rd element is an integer of type:
 
-        Int a
+        Int *
 
     However, the preceding elements in the list all have the type:
 
-        Frac a
+        Frac *
 
     Every element in a list must have the same type!
 
@@ -1038,7 +1048,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
     "###
     );
 
@@ -1064,7 +1074,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
 
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -1077,7 +1087,7 @@ mod test_reporting {
     parts of the type that repeat something already printed out
     infinitely.
 
-        List ∞ -> a
+        List ∞ -> *
     "###
     );
 
@@ -1162,20 +1172,20 @@ mod test_reporting {
             f
             "#
         ),
-        @r#"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> f [x]
-                ^
+    5│      f = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> a
-        "#
+        List ∞ -> *
+    "###
     );
 
     test_report!(
@@ -1189,19 +1199,19 @@ mod test_reporting {
             "#
         ),
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> f [x]
-                ^
+    5│      f = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1227,32 +1237,32 @@ mod test_reporting {
         // against that extra variable, rather than possibly having to translate a `Type`
         // again.
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        5│      f = \x -> g x
-                ^
+    5│      f = \x -> g x
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
+        List ∞ -> List *
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `g`:
 
-        6│      g = \x -> f [x]
-                ^
+    6│      g = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1267,32 +1277,32 @@ mod test_reporting {
             "#
         ),
         @r###"
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `f`:
+    I'm inferring a weird self-referential type for `f`:
 
-        4│      f = \x -> g x
-                ^
+    4│      f = \x -> g x
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
+        List ∞ -> List *
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `g`:
+    I'm inferring a weird self-referential type for `g`:
 
-        6│      g = \x -> f [x]
-                ^
+    6│      g = \x -> f [x]
+            ^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            List ∞ -> List a
-        "###
+        List ∞ -> List *
+    "###
     );
 
     test_report!(
@@ -1317,7 +1327,7 @@ mod test_reporting {
 
     This `bar` value is a:
 
-        { bar : Int a }
+        { bar : Int * }
 
     But `f` needs its 1st argument to be:
 
@@ -1351,7 +1361,7 @@ mod test_reporting {
 
     This `Blue` tag has the type:
 
-        [Blue]a
+        [Blue]
 
     But `f` needs its 1st argument to be:
 
@@ -1385,7 +1395,7 @@ mod test_reporting {
 
     This `Blue` tag application has the type:
 
-        [Blue (Frac a)]b
+        [Blue (Frac *)]
 
     But `f` needs its 1st argument to be:
 
@@ -1420,7 +1430,7 @@ mod test_reporting {
 
     The 1st branch is a fraction of type:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1455,7 +1465,7 @@ mod test_reporting {
 
     This `when` expression produces:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1487,7 +1497,7 @@ mod test_reporting {
 
     The body is a fraction of type:
 
-        Frac a
+        Frac *
 
     But the type annotation on `x` says it should be:
 
@@ -1583,7 +1593,7 @@ mod test_reporting {
 
     The `when` condition is a number of type:
 
-        Num a
+        Num *
 
     But the branch patterns have type:
 
@@ -1616,7 +1626,7 @@ mod test_reporting {
 
     But all the previous branches match:
 
-        Num a
+        Num *
     "###
     );
 
@@ -1638,7 +1648,7 @@ mod test_reporting {
 
     The `when` condition is a record of type:
 
-        { foo : Num a }
+        { foo : Num * }
 
     But the branch patterns have type:
 
@@ -1751,7 +1761,7 @@ mod test_reporting {
 
     The 2nd pattern is trying to match numbers:
 
-        Num a
+        Num *
 
     But all the previous branches match:
 
@@ -1779,11 +1789,11 @@ mod test_reporting {
 
     It is a number of type:
 
-        Num a
+        Num *
 
     But you are trying to use it as:
 
-        [Foo a]
+        [Foo *]
     "###
     );
 
@@ -1808,7 +1818,7 @@ mod test_reporting {
 
     The body is a record of type:
 
-        { x : Frac a }
+        { x : Frac * }
 
     But the type annotation says it should be:
 
@@ -1945,7 +1955,7 @@ mod test_reporting {
 
     The body is a record of type:
 
-        { b : Frac a }
+        { b : Frac * }
 
     But the type annotation on `x` says it should be:
 
@@ -2025,7 +2035,7 @@ mod test_reporting {
 
     This `Foo` tag has the type:
 
-        [Foo]a
+        [Foo]
 
     But the type annotation on `f` says it should be:
 
@@ -2060,7 +2070,7 @@ mod test_reporting {
 
     The body is an integer of type:
 
-        Int a
+        Int *
 
     But the type annotation on `f` says it should be:
 
@@ -2140,7 +2150,7 @@ mod test_reporting {
 
     This `Ok` tag has the type:
 
-        [Ok]a
+        [Ok]
 
     But the type annotation on `f` says it should be:
 
@@ -2166,8 +2176,8 @@ mod test_reporting {
     4│      f = f
             ^^^^^
 
-    Since Roc evaluates values strict, running this program would create
-    an infinite number of `f` values!
+    Roc evaluates values strictly, so running this program would enter an
+    infinite loop!
 
     Hint: Did you mean to define `f` as a function?
     "###
@@ -2246,8 +2256,8 @@ mod test_reporting {
     There may be a typo. These `x` fields are the most similar:
 
         {
-            fo : Num b,
-            bar : Num a,
+            fo : Num *,
+            bar : Num *,
         }
 
     Maybe `foo:` should be `fo:` instead?
@@ -2307,10 +2317,10 @@ mod test_reporting {
     There may be a typo. These `x` fields are the most similar:
 
         {
-            fo : Num c,
-            foobar : Num d,
-            bar : Num a,
-            baz : Num b,
+            fo : Num *,
+            foobar : Num *,
+            bar : Num *,
+            baz : Num *,
             …
         }
 
@@ -2340,7 +2350,7 @@ mod test_reporting {
 
     But `add` needs its 2nd argument to be:
 
-        Int a
+        Int *
     "###
     );
 
@@ -2361,11 +2371,11 @@ mod test_reporting {
 
     The argument is a fraction of type:
 
-        Frac a
+        Frac *
 
     But `add` needs its 2nd argument to be:
 
-        Int a
+        Int *
 
     Tip: You can convert between Int and Frac using functions like
     `Num.toFrac` and `Num.round`.
@@ -2389,11 +2399,11 @@ mod test_reporting {
 
     This `True` tag has the type:
 
-        [True]a
+        [True]
 
     But `add` needs its 2nd argument to be:
 
-        Num a
+        Num *
     "###
     );
 
@@ -2525,7 +2535,7 @@ mod test_reporting {
 
     But you are trying to use it as:
 
-        [Left a]
+        [Left *]
 
     Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -2775,7 +2785,7 @@ mod test_reporting {
 
     The argument is a record of type:
 
-        { y : Frac a }
+        { y : Frac * }
 
     But `f` needs its 1st argument to be:
 
@@ -3270,7 +3280,7 @@ mod test_reporting {
 
     This `Cons` tag application has the type:
 
-        [Cons {} [Cons Str [Cons {} a, Nil] as a, Nil], Nil]
+        [Cons {} [Cons Str [Cons {} a, Nil]b as a, Nil]b, Nil]b
 
     But the type annotation on `x` says it should be:
 
@@ -3308,7 +3318,7 @@ mod test_reporting {
     This `ACons` tag application has the type:
 
         [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-        ANil] as ∞, BNil], ANil], BNil], ANil]
+        ANil]b as ∞, BNil]c, ANil]b, BNil]c, ANil]b
 
     But the type annotation on `x` says it should be:
 
@@ -3678,7 +3688,7 @@ mod test_reporting {
 
     This `y` value is a:
 
-        [True]a
+        [True]
 
     But `add` needs its 2nd argument to be:
 
@@ -4730,7 +4740,7 @@ mod test_reporting {
 
     This `insert` call produces:
 
-        Dict Str (Num a)
+        Dict Str (Num *)
 
     But the type annotation on `myDict` says it should be:
 
@@ -4837,14 +4847,27 @@ mod test_reporting {
             "#
         ),
         @r###"
-    ── MISSING EXPRESSION ───────────────────── tmp/pattern_binds_keyword/Test.roc ─
+    ── MISSING ARROW ────────────────────────── tmp/pattern_binds_keyword/Test.roc ─
 
-    I am partway through parsing a `when` expression, but I got stuck here:
+    I am partway through parsing a `when` expression, but got stuck here:
 
     5│          Just when ->
-                           ^
+                     ^
 
-    I was expecting to see an expression like 42 or "hello".
+    I was expecting to see an arrow next.
+
+    Note: Sometimes I get confused by indentation, so try to make your `when`
+    look something like this:
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
     "###
     );
 
@@ -5299,7 +5322,7 @@ mod test_reporting {
 
     but the `then` branch has the type:
 
-        Num a
+        Num *
 
     All branches in an `if` must have the same type!
     "###
@@ -5653,11 +5676,11 @@ All branches in an `if` must have the same type!
     4│      main = 5 -> 3
                      ^^
 
-    The arrow -> is only used to define cases in a `when`.
+    Looks like you are trying to define a function. 
 
-        when color is
-            Red -> "stop!"
-            Green -> "go!"
+    In roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
     "###
     );
 
@@ -5897,7 +5920,7 @@ All branches in an `if` must have the same type!
 
     This `map` call produces:
 
-        List [Foo (Num a)]
+        List [Foo (Num *)]
 
     But the type annotation on `x` says it should be:
 
@@ -6064,11 +6087,11 @@ All branches in an `if` must have the same type!
 
     The argument is an anonymous function of type:
 
-        Num a -> Num a
+        Num * -> Num *
 
     But `map` needs its 2nd argument to be:
 
-        Str -> Num a
+        Str -> Num *
     "###
     );
 
@@ -6477,7 +6500,7 @@ All branches in an `if` must have the same type!
 
     This `Name` tag application has the type:
 
-        [Name Str]a
+        [Name Str]
 
     But `isEmpty` needs its 1st argument to be:
 
@@ -6513,7 +6536,7 @@ All branches in an `if` must have the same type!
 
     The argument is a number of type:
 
-        Num a
+        Num *
 
     But `c` needs its 1st argument to be:
 
@@ -6657,7 +6680,7 @@ All branches in an `if` must have the same type!
 
     But the type annotation on `job` says it should be:
 
-        [Job { inputs : List a }] as a
+        [Job { inputs : List a }]a as a
     "###
     );
 
@@ -7713,7 +7736,7 @@ All branches in an `if` must have the same type!
 
     The argument is a pattern that matches a `Age` tag of type:
 
-        [Age a]
+        [Age *]
 
     But the annotation on `f` says the 1st argument should be:
 
@@ -8516,7 +8539,7 @@ All branches in an `if` must have the same type!
 
     This value is a declared specialization of type:
 
-        a -> U64
+        * -> U64
 
     But the type annotation on `hash` says it must match:
 
@@ -8587,7 +8610,7 @@ All branches in an `if` must have the same type!
 
     This value is a declared specialization of type:
 
-        You, AndI -> [False]a
+        You, AndI -> [False]
 
     But the type annotation on `eq` says it must match:
 
@@ -8678,7 +8701,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `MHash` ability for
 
-        [A (Num a)]b
+        [A (Num *)]
 
     Only builtin abilities can have generated implementations!
 
@@ -8751,11 +8774,11 @@ All branches in an `if` must have the same type!
 
         a | a has MHash
 
-    Tip: The type annotation uses the type variable `a` to say that this
-    definition can produce any value implementing the `MHash` ability. But
-    in the body I see that it will only produce a `Id` value of a single
-    specific type. Maybe change the type annotation to be more specific?
-    Maybe change the code to be more general?
+    Note: The type variable `a` says it can take on any value that has the
+    ability `MHash`.
+
+    But, I see that the type is only ever used as a a `Id` value. Can you
+    replace `a` with a more specific type?
     "###
     );
 
@@ -9671,7 +9694,7 @@ All branches in an `if` must have the same type!
 
     But you are trying to use it as:
 
-        a -> Str
+        * -> Str
     "###
     );
 
@@ -10390,7 +10413,7 @@ All branches in an `if` must have the same type!
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) a]
+        [Bad [DecodeProblem], Good (List U8) *]
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -10501,7 +10524,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        a -> b
+        * -> *
 
     Note: `Decoding` cannot be generated for functions.
     "###
@@ -10773,7 +10796,7 @@ All branches in an `if` must have the same type!
             app "test" imports [] provides [main] to "./platform"
 
             main =
-                if Bool.true then \{} -> {} else main
+                if Bool.true then {} else main
             "#
         ),
     @r###"
@@ -10782,10 +10805,10 @@ All branches in an `if` must have the same type!
     `main` is defined directly in terms of itself:
 
     3│>  main =
-    4│>      if Bool.true then \{} -> {} else main
+    4│>      if Bool.true then {} else main
 
-    Since Roc evaluates values strict, running this program would create
-    an infinite number of `main` values!
+    Roc evaluates values strictly, so running this program would enter an
+    infinite loop!
 
     Hint: Did you mean to define `main` as a function?
     "###
@@ -10808,7 +10831,7 @@ All branches in an `if` must have the same type!
 
     This `True` tag has the type:
 
-        [True]a
+        [True]
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10834,7 +10857,7 @@ All branches in an `if` must have the same type!
 
     This `False` tag has the type:
 
-        [False]a
+        [False]
 
     But I need every `if` condition to evaluate to a Bool—either `Bool.true`
     or `Bool.false`.
@@ -10996,7 +11019,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Hash` ability for
 
-        [A (a -> a) [B]a]b
+        [A (a -> a) [B]a]
 
     In particular, an implementation for
 
@@ -11332,7 +11355,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Eq` ability for
 
-        [A (a -> a) [B]a]b
+        [A (a -> a) [B]a]
 
     In particular, an implementation for
 
@@ -11456,5 +11479,935 @@ All branches in an `if` must have the same type!
 
     Note: `Hash` cannot be generated for functions.
     "###
+    );
+
+    test_report!(
+        demanded_vs_optional_record_field,
+        indoc!(
+            r#"
+            foo : { a : Str } -> Str
+            foo = \{ a ? "" } -> a
+            foo
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `foo` is weird:
+
+    5│      foo = \{ a ? "" } -> a
+                   ^^^^^^^^^^
+
+    The argument is a pattern that matches record values of type:
+
+        { a ? Str }
+
+    But the annotation on `foo` says the 1st argument should be:
+
+        { a : Str }
+    "###
+    );
+
+    test_report!(
+        underivable_opaque_doesnt_error_for_derived_bodies,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            F := U8 -> U8 has [Hash, Eq, Encoding]
+
+            main = ""
+            "#
+        ),
+    @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Hash` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                           ^^^^
+
+    Note: `Hash` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Hash` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Eq` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                 ^^
+
+    Note: `Eq` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Eq` for `F`.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    I can't derive an implementation of the `Encoding` ability for `F`:
+
+    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
+                                     ^^^^^^^^
+
+    Note: `Encoding` cannot be generated for functions.
+
+    Tip: You can define a custom implementation of `Encoding` for `F`.
+    "###
+    );
+
+    test_report!(
+        duplicate_ability_in_has_clause,
+        indoc!(
+            r#"
+            f : a -> {} | a has Hash & Hash
+
+            f
+            "#
+        ),
+    @r###"
+    ── DUPLICATE BOUND ABILITY ─────────────────────────────── /code/proj/Main.roc ─
+
+    I already saw that this type variable is bound to the `Hash` ability
+    once before:
+
+    4│      f : a -> {} | a has Hash & Hash
+                                       ^^^^
+
+    Abilities only need to bound to a type variable once in a `has` clause!
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_multiple,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            g : x -> x | x has Decoding & Encoding & Hash
+
+            main : x -> x | x has Encoding
+            main = \x -> g x
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    6│  main = \x -> g x
+                       ^
+
+    This `x` value is a:
+
+        x | x has Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Hash & Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the ability `Encoding`.
+
+    But, I see that it's also used as if it has the abilities `Hash` and
+    `Decoding`. Can you use `x` without those abilities? If not, consider
+    adding them to the `has` clause of `x`.
+    "###
+    );
+
+    test_report!(
+        rigid_able_bounds_must_be_a_superset_of_flex_bounds_with_indirection,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            f : x -> x | x has Hash
+            g : x -> x | x has Decoding & Encoding
+
+            main : x -> x | x has Hash & Encoding
+            main = \x -> g (f x)
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `g` has an unexpected type:
+
+    7│  main = \x -> g (f x)
+                        ^^^
+
+    This `f` call produces:
+
+        x | x has Hash & Encoding
+
+    But `g` needs its 1st argument to be:
+
+        x | x has Encoding & Decoding
+
+    Note: The type variable `x` says it can take on any value that has only
+    the abilities `Hash` and `Encoding`.
+
+    But, I see that it's also used as if it has the ability `Decoding`. Can
+    you use `x` without that ability? If not, consider adding it to the `has`
+    clause of `x`.
+    "###
+    );
+
+    test_report!(
+        list_pattern_not_terminated,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2, -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ────────── tmp/list_pattern_not_terminated/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2, -> ""
+                       ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_indent,
+        indoc!(
+            r#"
+            when [] is 
+                [1, 2,
+            3] -> ""
+            "#
+        ),
+    @r###"
+    ── UNFINISHED LIST PATTERN ──────────── tmp/list_pattern_weird_indent/Test.roc ─
+
+    I am partway through parsing a list pattern, but I got stuck here:
+
+    5│          [1, 2,
+    6│      3] -> ""
+            ^
+
+    I was expecting to see a closing square brace before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_pattern_weird_rest_pattern,
+        indoc!(
+            r#"
+            when [] is
+                [...] -> ""
+            "#
+        ),
+    @r###"
+    ── INCORRECT REST PATTERN ─────── tmp/list_pattern_weird_rest_pattern/Test.roc ─
+
+    It looks like you may trying to write a list rest pattern, but it's
+    not the form I expect:
+
+    5│          [...] -> ""
+                 ^
+
+    List rest patterns, which match zero or more elements in a list, are
+    denoted with .. - is that what you meant?
+    "###
+    );
+
+    test_report!(
+        unnecessary_extension_variable,
+        indoc!(
+            r#"
+            f : {} -> [A, B]*
+            f
+            "#
+        ),
+    @r###"
+    ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
+
+    I see you annotated a wildcard in a place where it's not needed:
+
+    4│      f : {} -> [A, B]*
+                            ^
+
+    Tag unions that are constants, or the return values of functions, are
+    always inferred to be open by default! You can remove this annotation
+    safely.
+    "###
+    );
+
+    test_report!(
+        multiple_list_patterns_start_and_end,
+        indoc!(
+            r#"
+            when [] is
+                [.., A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [.., A, ..] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is
+    5│>          [.., A, ..] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        multiple_list_patterns_in_a_row,
+        indoc!(
+            r#"
+            when [] is
+                [A, .., .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [A, .., .., B] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is
+    5│>          [A, .., .., B] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        mismatch_within_list_pattern,
+        indoc!(
+            r#"
+            when [] is
+                [A, 1u8] -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This list element doesn't match the types of other elements in the
+    pattern:
+
+    5│          [A, 1u8] -> ""
+                    ^^^
+
+    It matches integers:
+
+        U8
+
+    But the other elements in this list pattern match
+
+        [A]
+    "###
+    );
+
+    test_report!(
+        mismatch_list_pattern_vs_condition,
+        indoc!(
+            r#"
+            when [A, B] is
+                ["foo", "bar"] -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when [A, B] is
+    5│           ["foo", "bar"] -> ""
+
+    The `when` condition is a list of type:
+
+        List [A, B]
+
+    But the branch patterns have type:
+
+        List Str
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        list_match_non_exhaustive_only_empty,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+
+    Other possibilities include:
+
+        [_, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_spread_exhaustive,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_non_exhaustive_infinite,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A] -> ""
+    9│>          [A, A] -> ""
+
+    Other possibilities include:
+
+        [_, _, _, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_unary_head,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+            "#
+        )
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+                [B, ..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A, ..] -> ""
+
+    Other possibilities include:
+
+        [B, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, B, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, B, ..] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, A, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+                [.., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [.., A] -> ""
+
+    Other possibilities include:
+
+        [.., B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [.., B, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [.., B, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [.., _, B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [B] -> ""
+                [A, .., A] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [_] -> ""
+     9│>          [A, .., B] -> ""
+    10│>          [B, .., A] -> ""
+
+    Other possibilities include:
+
+        [_, .., _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, .., B] -> ""
+    8│>          [B, .., A] -> ""
+    9│>          [B, .., B] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [A, .., A]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_exhaustive_big_sizes_but_not_small_sizes,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [A, A, A, .., A, A, A] -> ""
+                [A, A, A, .., A, A] -> ""
+                [A, A, .., A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, A, A, .., A, A, A] -> ""
+    8│>          [A, A, A, .., A, A] -> ""
+    9│>          [A, A, .., A, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, _]
+        [_, _, _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_nested_list_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [..]] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_nested_list_not_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A, B])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [.., B]] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [[]] -> ""
+     9│>          [[A, ..]] -> ""
+    10│>          [[..], .., [.., B]] -> ""
+
+    Other possibilities include:
+
+        [[B, ..]]
+        [_, .., []]
+        [_, .., [.., A]]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_exact_size,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [_] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+     6│       when l is
+     7│           [] -> ""
+     8│           [_] -> ""
+     9│>          [_] -> ""
+    10│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_any_slice,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [..] -> ""
+                ^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_suffix_slice_with_sized_prefix,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [.., _] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [.., _] -> ""
+                ^^^^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_based_on_ctors,
+        indoc!(
+            r#"
+            l : List {}
+
+            when l is
+                [{}, .., _] -> ""
+                [_, .., {}] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    6│       when l is
+    7│           [{}, .., _] -> ""
+    8│>          [_, .., {}] -> ""
+    9│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_no_problem!(
+        list_match_with_guard,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [ A, .. ] if Bool.true -> ""
+                [ A, .. ] -> ""
+                _ -> ""
+            "#
+        )
     );
 }

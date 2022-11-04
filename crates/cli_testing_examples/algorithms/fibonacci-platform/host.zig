@@ -83,23 +83,18 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
 
-    // start time
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    var timer = std.time.Timer.start() catch unreachable;
 
     const result = roc__mainForHost_1_exposed(10);
 
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
+    const nanos = timer.read();
+    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
     stdout.print("{d}\n", .{result}) catch unreachable;
 
-    const delta = to_seconds(ts2) - to_seconds(ts1);
-
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }

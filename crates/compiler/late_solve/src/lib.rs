@@ -16,6 +16,7 @@ use roc_solve::solve::Pools;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
+use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
 use roc_unify::unify::{Env, Mode, Unified};
 
@@ -362,6 +363,7 @@ pub fn unify(
         left,
         right,
         Mode::EQ,
+        Polarity::Pos,
     );
 
     match unified {

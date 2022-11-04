@@ -19,7 +19,8 @@ use roc_types::{
     num::int_lit_width_to_variable,
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        RedundantMark, Subs, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable,
+        VariableSubsSlice,
     },
     types::RecordField,
 };
@@ -87,10 +88,10 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
     let rcd_sym = env.new_symbol("rcd");
 
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     let (body_var, body) = record_fields.iter_all().fold(
-        (hasher_var, Expr::Var(hasher_sym)),
+        (hasher_var, Expr::Var(hasher_sym, hasher_var)),
         |total_hasher, (field_name, field_var, _)| {
             let field_name = env.subs[field_name].clone();
             let field_var = env.subs[field_var];
@@ -99,7 +100,10 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
                 record_var,
                 field_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
-                loc_expr: Box::new(Loc::at_zero(Expr::Var(rcd_sym))),
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(
+                    rcd_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
                 field: field_name,
             };
 
@@ -162,7 +166,7 @@ fn hash_tag_union(
     let union_sym = env.new_symbol("union");
 
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     let (discr_width, discr_precision_var, hash_discr_member) = if union_tags.len() > u64::MAX as _
     {
@@ -215,7 +219,7 @@ fn hash_tag_union(
             let (discr_hasher_var, disc_hasher_expr) = call_hash_ability_member(
                 env,
                 hash_discr_member,
-                (hasher_var, Expr::Var(hasher_sym)),
+                (hasher_var, Expr::Var(hasher_sym, hasher_var)),
                 (
                     discr_num_var,
                     Expr::Int(
@@ -232,7 +236,11 @@ fn hash_tag_union(
             let (body_var, body_expr) = (payload_vars.into_iter()).zip(payload_syms).fold(
                 (discr_hasher_var, disc_hasher_expr),
                 |total_hasher, (payload_var, payload_sym)| {
-                    call_hash_hash(env, total_hasher, (payload_var, Expr::Var(payload_sym)))
+                    call_hash_hash(
+                        env,
+                        total_hasher,
+                        (payload_var, Expr::Var(payload_sym, payload_var)),
+                    )
                 },
             );
 
@@ -251,7 +259,7 @@ fn hash_tag_union(
     //   ...
     let when_var = whole_hasher_var;
     let when_expr = Expr::When {
-        loc_cond: Box::new(Loc::at_zero(Expr::Var(union_sym))),
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(union_sym, union_var))),
         cond_var: union_var,
         expr_var: when_var,
         region: Region::zero(),
@@ -313,7 +321,7 @@ fn hash_newtype_tag_union(
     // hash_union = \hasher, A x1 .. xn ->
     //   Hash.hash (... (Hash.hash discrHasher x1) ...) xn
     let hasher_sym = env.new_symbol("hasher");
-    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Symbol::HASH_HASHER));
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     // A
     let tag_name = tag_name;
@@ -338,9 +346,13 @@ fn hash_newtype_tag_union(
 
     // Fold up `Hash.hash (... (Hash.hash discrHasher x11) ...) x1n`
     let (body_var, body_expr) = (payload_vars.into_iter()).zip(payload_syms).fold(
-        (hasher_var, Expr::Var(hasher_sym)),
+        (hasher_var, Expr::Var(hasher_sym, hasher_var)),
         |total_hasher, (payload_var, payload_sym)| {
-            call_hash_hash(env, total_hasher, (payload_var, Expr::Var(payload_sym)))
+            call_hash_hash(
+                env,
+                total_hasher,
+                (payload_var, Expr::Var(payload_sym, payload_var)),
+            )
         },
     );
 

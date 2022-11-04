@@ -1,6 +1,5 @@
 use std::{
     io::{BufReader, BufWriter},
-    ops::Range,
     path::Path,
 };
 
@@ -55,7 +54,7 @@ struct PeMetadata {
     thunks_start_offset_in_section: usize,
 
     /// Virtual address of the .rdata section
-    rdata_virtual_address: u32,
+    dummy_dll_thunk_section_virtual_address: u32,
 
     /// The offset into the file of the .reloc section
     reloc_offset_in_file: usize,
@@ -108,18 +107,16 @@ impl PeMetadata {
             .unwrap();
 
         let dynamic_relocations = DynamicRelocationsPe::new(preprocessed_data);
-        let thunks_start_offset_in_file =
-            find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
 
-        let rdata_section = dynhost_obj
-            .sections()
-            .find(|s| s.name() == Ok(".rdata"))
-            .unwrap();
+        let dummy_dll_thunks = find_thunks_start_offset(preprocessed_data, &dynamic_relocations);
+        let thunks_start_offset_in_file = dummy_dll_thunks.offset_in_file as usize;
 
-        let thunks_start_offset_in_section =
-            thunks_start_offset_in_file - rdata_section.file_range().unwrap().0 as usize;
+        let dummy_dll_thunk_section_virtual_address =
+            dummy_dll_thunks.section.virtual_address.get(LE);
 
-        let rdata_virtual_address = rdata_section.address() as u32;
+        let thunks_start_offset_in_section = (dummy_dll_thunks.offset_in_file
+            - dummy_dll_thunks.section.pointer_to_raw_data.get(LE) as u64)
+            as usize;
 
         let (reloc_section_index, reloc_section) = dynhost_obj
             .sections()
@@ -175,7 +172,7 @@ impl PeMetadata {
             dynamic_relocations,
             thunks_start_offset_in_file,
             thunks_start_offset_in_section,
-            rdata_virtual_address,
+            dummy_dll_thunk_section_virtual_address,
             reloc_offset_in_file,
             reloc_section_index,
         }
@@ -186,12 +183,19 @@ pub(crate) fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
     preprocessed_filename: &Path,
+    dummy_dll_symbols: &[String],
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
     let data = open_mmap(host_exe_filename);
+
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
-    let mut preprocessed = Preprocessor::preprocess(preprocessed_filename, &data, &new_sections);
+    let mut preprocessed = Preprocessor::preprocess(
+        preprocessed_filename,
+        &data,
+        dummy_dll_symbols.len(),
+        &new_sections,
+    );
 
     // get the metadata from the preprocessed executable before the destructive operations below
     let md = PeMetadata::from_preprocessed_host(&preprocessed, &new_sections);
@@ -208,27 +212,47 @@ pub(crate) fn preprocess_windows(
         dir.size.set(LE, new);
     }
 
-    // clear out the import table entry. we do implicitly assume that our dummy .dll is the last
-    {
-        const W: usize = std::mem::size_of::<ImageImportDescriptor>();
-
-        let start = md.dynamic_relocations.imports_offset_in_file as usize
-            + W * md.dynamic_relocations.dummy_import_index as usize;
-
-        for b in preprocessed[start..][..W].iter_mut() {
-            *b = 0;
-        }
-    }
+    remove_dummy_dll_import_table_entry(&mut preprocessed, &md);
 
     md.write_to_file(metadata_filename);
 
     Ok(())
 }
 
+fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
+    const W: usize = std::mem::size_of::<ImageImportDescriptor>();
+
+    let dr = &md.dynamic_relocations;
+
+    // there is one zeroed-out descriptor at the back
+    let count = dr.import_directory_size as usize / W - 1;
+
+    let descriptors = load_structs_inplace_mut::<ImageImportDescriptor>(
+        executable,
+        dr.import_directory_offset_in_file as usize,
+        count,
+    );
+
+    // move the dummy to the final position
+    descriptors.swap(dr.dummy_import_index as usize, count - 1);
+
+    // make this the new zeroed-out descriptor
+    if let Some(d) = descriptors.last_mut() {
+        *d = ImageImportDescriptor {
+            original_first_thunk: Default::default(),
+            time_date_stamp: Default::default(),
+            forwarder_chain: Default::default(),
+            name: Default::default(),
+            first_thunk: Default::default(),
+        }
+    }
+}
+
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
     let app_obj_sections = AppSections::from_data(roc_app_bytes);
+
     let mut symbols = app_obj_sections.roc_symbols;
 
     let image_base: u64 = md.image_base;
@@ -238,7 +262,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let app_sections_size: usize = app_obj_sections
         .sections
         .iter()
-        .map(|s| next_multiple_of(s.file_range.end - s.file_range.start, file_alignment))
+        .map(|s| next_multiple_of(s.bytes.len(), file_alignment))
         .sum();
 
     let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
@@ -250,7 +274,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         ) as u64;
 
     let mut section_file_offset = md.dynhost_file_size;
-    let mut virtual_address = (app_code_section_va - image_base) as u32;
+    let mut section_virtual_address = (app_code_section_va - image_base) as u32;
 
     // find the location to write the section headers for our new sections
     let mut section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
@@ -276,13 +300,13 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
             .sections
             .iter()
             .filter(|s| s.kind == kind)
-            .map(|s| s.file_range.end - s.file_range.start)
+            .map(|s| s.bytes.len())
             .sum();
 
         // offset_in_section now becomes a proper virtual address
         for symbol in symbols.iter_mut() {
             if symbol.section_kind == kind {
-                symbol.offset_in_section += image_base as usize + virtual_address as usize;
+                symbol.offset_in_section += image_base as usize + section_virtual_address as usize;
             }
         }
 
@@ -301,7 +325,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     section_header_start,
                     section_file_offset,
                     virtual_size,
-                    virtual_address,
+                    section_virtual_address,
                     size_of_raw_data,
                 );
             }
@@ -315,7 +339,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     section_header_start,
                     section_file_offset,
                     virtual_size,
-                    virtual_address,
+                    section_virtual_address,
                     size_of_raw_data,
                 );
             }
@@ -324,10 +348,15 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
         let mut offset = section_file_offset;
         let it = app_obj_sections.sections.iter().filter(|s| s.kind == kind);
         for section in it {
-            let slice = &roc_app_bytes[section.file_range.start..section.file_range.end];
+            let slice = section.bytes;
             executable[offset..][..slice.len()].copy_from_slice(slice);
 
-            for (name, app_relocation) in section.relocations.iter() {
+            let it = section
+                .relocations
+                .iter()
+                .flat_map(|(name, rs)| rs.iter().map(move |r| (name, r)));
+
+            for (name, app_relocation) in it {
                 let AppRelocation {
                     offset_in_section,
                     relocation,
@@ -340,9 +369,10 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                             // we implicitly only do 32-bit relocations
                             debug_assert_eq!(relocation.size(), 32);
 
-                            let delta =
-                                destination - virtual_address as i64 - *offset_in_section as i64
-                                    + relocation.addend();
+                            let delta = destination
+                                - section_virtual_address as i64
+                                - *offset_in_section as i64
+                                + relocation.addend();
 
                             executable[offset + *offset_in_section as usize..][..4]
                                 .copy_from_slice(&(delta as i32).to_le_bytes());
@@ -353,12 +383,34 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // we implicitly only do 32-bit relocations
                     debug_assert_eq!(relocation.size(), 32);
 
-                    let delta = destination - virtual_address as i64 - *offset_in_section as i64
-                        + relocation.addend();
+                    let delta =
+                        destination - section_virtual_address as i64 - *offset_in_section as i64
+                            + relocation.addend();
+
+                    executable[offset + *offset_in_section as usize..][..4]
+                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                } else if name == "___chkstk_ms" {
+                    // this is a stack probe that is inserted when a function uses more than 2
+                    // pages of stack space. The source of this function is not linked in, so we
+                    // have to do it ourselves. We patch in the bytes as a separate section, and
+                    // here just need to jump to those bytes
+
+                    // This relies on the ___CHKSTK_MS section being the last text section in the list of sections
+                    let destination = length - ___CHKSTK_MS.len();
+
+                    let delta =
+                        destination as i64 - *offset_in_section as i64 + relocation.addend();
 
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
                 } else {
+                    if *address == 0 && !name.starts_with("roc") {
+                        eprintln!(
+                            "I don't know the address of the {} function! this may cause segfaults",
+                            name
+                        );
+                    }
+
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
@@ -380,7 +432,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
         section_header_start += std::mem::size_of::<ImageSectionHeader>();
         section_file_offset += size_of_raw_data as usize;
-        virtual_address += next_multiple_of(length, section_alignment) as u32;
+        section_virtual_address += next_multiple_of(length, section_alignment) as u32;
         file_bytes_added += next_multiple_of(length, section_alignment) as u32;
     }
 
@@ -420,7 +472,10 @@ struct DynamicRelocationsPe {
     section_offset_in_file: u32,
 
     /// Offset in the file of the imports directory
-    imports_offset_in_file: u32,
+    import_directory_offset_in_file: u32,
+
+    /// Size in the file of the imports directory
+    import_directory_size: u32,
 
     /// Offset in the file of the data directories
     data_directories_offset_in_file: u32,
@@ -525,8 +580,9 @@ impl DynamicRelocationsPe {
 
         let import_table = ImportTable::new(section_data, section_va, import_va);
 
-        let imports_offset_in_section = import_va.wrapping_sub(section_va);
-        let imports_offset_in_file = offset_in_file + imports_offset_in_section;
+        let (import_directory_offset_in_file, import_directory_size) = data_dir
+            .file_range(&sections)
+            .expect("import directory exists");
 
         let (descriptor, dummy_import_index) = Self::find_roc_dummy_dll(&import_table)?.unwrap();
 
@@ -535,10 +591,11 @@ impl DynamicRelocationsPe {
             address_and_offset: Default::default(),
             section_virtual_address: section_va,
             section_offset_in_file: offset_in_file,
-            imports_offset_in_file,
+            import_directory_offset_in_file,
             data_directories_offset_in_file,
             dummy_import_index,
             section_headers_offset_in_file,
+            import_directory_size,
         };
 
         this.append_roc_imports(&import_table, &descriptor)?;
@@ -555,7 +612,8 @@ impl DynamicRelocationsPe {
 /// update existing section headers to point to a different (shifted) location in the file
 struct Preprocessor {
     header_offset: u64,
-    additional_length: usize,
+    additional_header_space: usize,
+    additional_reloc_space: usize,
     extra_sections_start: usize,
     extra_sections_width: usize,
     section_count_offset: u64,
@@ -569,9 +627,17 @@ struct Preprocessor {
 impl Preprocessor {
     const SECTION_HEADER_WIDTH: usize = std::mem::size_of::<ImageSectionHeader>();
 
-    fn preprocess(output_path: &Path, data: &[u8], extra_sections: &[[u8; 8]]) -> MmapMut {
-        let this = Self::new(data, extra_sections);
-        let mut result = open_mmap_mut(output_path, data.len() + this.additional_length);
+    fn preprocess(
+        output_path: &Path,
+        data: &[u8],
+        dummy_dll_symbols: usize,
+        extra_sections: &[[u8; 8]],
+    ) -> MmapMut {
+        let this = Self::new(data, dummy_dll_symbols, extra_sections);
+        let mut result = open_mmap_mut(
+            output_path,
+            data.len() + this.additional_header_space + this.additional_reloc_space,
+        );
 
         this.copy(&mut result, data);
         this.fix(&mut result, extra_sections);
@@ -579,7 +645,7 @@ impl Preprocessor {
         result
     }
 
-    fn new(data: &[u8], extra_sections: &[[u8; 8]]) -> Self {
+    fn new(data: &[u8], dummy_dll_symbols: usize, extra_sections: &[[u8; 8]]) -> Self {
         use object::read::pe::ImageNtHeaders;
 
         let dos_header = pe::ImageDosHeader::parse(data).unwrap_or_else(|e| internal_error!("{e}"));
@@ -604,13 +670,16 @@ impl Preprocessor {
         let extra_alignments = div_ceil(extra_sections_width, file_alignment);
         let new_headers_size = old_headers_size + extra_alignments * file_alignment;
 
-        let additional_length = new_headers_size - old_headers_size;
+        let additional_header_space = new_headers_size - old_headers_size;
+        let additional_reloc_space =
+            Self::additional_reloc_space(data, dummy_dll_symbols, file_alignment);
 
         Self {
             extra_sections_start: section_table_offset as usize
                 + sections.len() as usize * Self::SECTION_HEADER_WIDTH,
             extra_sections_width,
-            additional_length,
+            additional_header_space,
+            additional_reloc_space,
             header_offset,
             // the section count is stored 6 bytes into the header
             section_count_offset: header_offset + 4 + 2,
@@ -619,6 +688,39 @@ impl Preprocessor {
             old_headers_size,
             new_headers_size,
             section_alignment,
+        }
+    }
+
+    fn additional_reloc_space(data: &[u8], extra_symbols: usize, file_alignment: usize) -> usize {
+        let file = object::read::pe::PeFile64::parse(data).unwrap();
+
+        let reloc_section = file
+            .section_table()
+            .iter()
+            .find(|h| h.name == *b".reloc\0\0")
+            .unwrap_or_else(|| internal_error!("host binary does not have a .reloc section"));
+
+        // we use the virtual size here because it is more granular; the `size_of_raw_data` is
+        // rounded up to the file alignment
+        let available_space =
+            reloc_section.size_of_raw_data.get(LE) - reloc_section.virtual_size.get(LE);
+
+        // worst case, each relocation needs its own header
+        let worst_case = std::mem::size_of::<ImageBaseRelocation>() + std::mem::size_of::<u16>();
+
+        if available_space < (extra_symbols * worst_case) as u32 {
+            // resize that section
+            let new_size = next_multiple_of(
+                reloc_section.virtual_size.get(LE) as usize + (extra_symbols * worst_case),
+                file_alignment,
+            );
+
+            let delta = new_size - reloc_section.size_of_raw_data.get(LE) as usize;
+            debug_assert_eq!(delta % file_alignment, 0);
+
+            delta
+        } else {
+            0
         }
     }
 
@@ -642,11 +744,17 @@ impl Preprocessor {
             .copy_from_slice(&data[extra_sections_start..][..rest_of_headers]);
 
         // copy all of the actual (post-header) data
-        result[self.new_headers_size..].copy_from_slice(&data[self.old_headers_size..]);
+        let source = &data[self.old_headers_size..];
+        result[self.new_headers_size..][..source.len()].copy_from_slice(source);
     }
 
     fn write_dummy_sections(&self, result: &mut MmapMut, extra_section_names: &[[u8; 8]]) {
         const W: usize = std::mem::size_of::<ImageSectionHeader>();
+
+        // only correct for the first section, but that is OK because it's overwritten later
+        // anyway. But, this value may be used to check whether a previous section overruns into
+        // the app sections.
+        let pointer_to_raw_data = result.len() - self.additional_header_space;
 
         let previous_section_header =
             load_struct_inplace::<ImageSectionHeader>(result, self.extra_sections_start - W);
@@ -673,7 +781,7 @@ impl Preprocessor {
                 // NOTE: this must be a valid virtual address, using 0 is invalid!
                 virtual_address: object::U32::new(LE, next_virtual_address as u32),
                 size_of_raw_data: Default::default(),
-                pointer_to_raw_data: Default::default(),
+                pointer_to_raw_data: object::U32::new(LE, pointer_to_raw_data as u32),
                 pointer_to_relocations: Default::default(),
                 pointer_to_linenumbers: Default::default(),
                 number_of_relocations: Default::default(),
@@ -733,27 +841,41 @@ impl Preprocessor {
         // now be updated to point to the correct place in the file
         let shift = self.new_headers_size - self.old_headers_size;
         let mut offset = self.section_table_offset as usize;
-        loop {
-            let header = load_struct_inplace_mut::<object::pe::ImageSectionHeader>(result, offset);
 
+        let headers = load_structs_inplace_mut::<object::pe::ImageSectionHeader>(
+            result,
+            offset,
+            self.new_section_count,
+        );
+
+        let mut it = headers.iter_mut().peekable();
+        while let Some(header) = it.next() {
             let old = header.pointer_to_raw_data.get(LE);
             header.pointer_to_raw_data.set(LE, old + shift as u32);
 
-            // stop when we hit the NULL section
-            if header.name == [0; 8] {
-                break;
+            if header.name == *b".reloc\0\0" {
+                // assumes `.reloc` is the final section
+                debug_assert_eq!(it.peek().map(|s| s.name).as_ref(), extra_sections.first());
+
+                let old = header.size_of_raw_data.get(LE);
+                let new = old + self.additional_reloc_space as u32;
+                header.size_of_raw_data.set(LE, new);
             }
 
             offset += std::mem::size_of::<object::pe::ImageSectionHeader>();
         }
     }
 }
+struct DummyDllThunks<'a> {
+    section: &'a object::pe::ImageSectionHeader,
+    offset_in_file: u64,
+}
 
 /// Find the place in the executable where the thunks for our dummy .dll are stored
-fn find_thunks_start_offset(
-    executable: &[u8],
+fn find_thunks_start_offset<'a>(
+    executable: &'a [u8],
     dynamic_relocations: &DynamicRelocationsPe,
-) -> usize {
+) -> DummyDllThunks<'a> {
     // The host executable contains indirect calls to functions that the host should provide
     //
     //     14000105d:	e8 8e 27 00 00       	call   0x1400037f0
@@ -782,7 +904,7 @@ fn find_thunks_start_offset(
     // - https://learn.microsoft.com/en-us/archive/msdn-magazine/2002/february/inside-windows-win32-portable-executable-file-format-in-detail
     const W: usize = std::mem::size_of::<ImageImportDescriptor>();
 
-    let dummy_import_desc_start = dynamic_relocations.imports_offset_in_file as usize
+    let dummy_import_desc_start = dynamic_relocations.import_directory_offset_in_file as usize
         + W * dynamic_relocations.dummy_import_index as usize;
 
     let dummy_import_desc =
@@ -808,19 +930,21 @@ fn find_thunks_start_offset(
     let sections = nt_headers.sections(executable, offset).unwrap();
 
     // find the section the virtual address is in
-    let (section_va, offset_in_file) = sections
+    let (section_virtual_address, section) = sections
         .iter()
         .find_map(|section| {
             section
                 .pe_data_containing(executable, dummy_thunks_address)
-                .map(|(_section_data, section_va)| {
-                    (section_va, section.pointer_to_raw_data.get(LE))
-                })
+                .map(|(_section_data, section_va)| (section_va, section))
         })
         .expect("Invalid thunk virtual address");
 
-    // and get the offset in the file of 0x1400037f0
-    (dummy_thunks_address - section_va + offset_in_file) as usize
+    DummyDllThunks {
+        section,
+        // and get the offset in the file of 0x1400037f0
+        offset_in_file: dummy_thunks_address as u64 - section_virtual_address as u64
+            + section.pointer_to_raw_data.get(LE) as u64,
+    }
 }
 
 /// Make the thunks point to our actual roc application functions
@@ -831,9 +955,10 @@ fn redirect_dummy_dll_functions(
     thunks_start_offset: usize,
 ) {
     // it could be that a symbol exposed by the app is not used by the host. We must skip unused symbols
-    let mut targets = function_definition_vas.iter();
+    // this is an O(n^2) loop, hopefully that does not become a problem. If it does we can sort
+    // both vectors to get linear complexity in the loop.
     'outer: for (i, host_name) in imports.iter().enumerate() {
-        for (roc_app_target_name, roc_app_target_va) in targets.by_ref() {
+        for (roc_app_target_name, roc_app_target_va) in function_definition_vas {
             if host_name == roc_app_target_name {
                 // addresses are 64-bit values
                 let address_bytes = &mut executable[thunks_start_offset + i * 8..][..8];
@@ -869,11 +994,10 @@ struct AppRelocation {
 }
 
 #[derive(Debug)]
-struct Section {
-    /// File range of the section (in the app object)
-    file_range: Range<usize>,
+struct Section<'a> {
+    bytes: &'a [u8],
     kind: SectionKind,
-    relocations: MutMap<String, AppRelocation>,
+    relocations: MutMap<String, Vec<AppRelocation>>,
     app_section_index: SectionIndex,
 }
 
@@ -885,8 +1009,8 @@ struct AppSymbol {
 }
 
 #[derive(Debug, Default)]
-struct AppSections {
-    sections: Vec<Section>,
+struct AppSections<'a> {
+    sections: Vec<Section<'a>>,
     roc_symbols: Vec<AppSymbol>,
     other_symbols: Vec<(SectionIndex, AppSymbol)>,
 }
@@ -918,7 +1042,7 @@ fn process_internal_relocations(
         let length: usize = sections
             .iter()
             .filter(|s| s.kind == kind)
-            .map(|s| s.file_range.end - s.file_range.start)
+            .map(|s| s.bytes.len())
             .sum();
 
         host_section_virtual_address += next_multiple_of(length, section_alignment) as u32;
@@ -927,8 +1051,8 @@ fn process_internal_relocations(
     result
 }
 
-impl AppSections {
-    fn from_data(data: &[u8]) -> Self {
+impl<'a> AppSections<'a> {
+    fn from_data(data: &'a [u8]) -> Self {
         use object::ObjectSection;
 
         let file = object::File::parse(data).unwrap();
@@ -949,7 +1073,7 @@ impl AppSections {
                 _ => continue,
             };
 
-            let mut relocations = MutMap::default();
+            let mut relocations: MutMap<String, Vec<AppRelocation>> = MutMap::default();
 
             for (offset_in_section, relocation) in section.relocations() {
                 match relocation.target() {
@@ -960,22 +1084,20 @@ impl AppSections {
 
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
                         let name = symbol.and_then(|s| s.name()).unwrap_or_default();
+                        let name = redirect_libc_functions(name).unwrap_or(name).to_string();
 
-                        relocations.insert(
-                            name.to_string(),
-                            AppRelocation {
-                                offset_in_section,
-                                address,
-                                relocation,
-                            },
-                        );
+                        relocations.entry(name).or_default().push(AppRelocation {
+                            offset_in_section,
+                            address,
+                            relocation,
+                        });
                     }
                     _ => todo!(),
                 }
             }
 
             let (start, length) = section.file_range().unwrap();
-            let file_range = start as usize..(start + length) as usize;
+            let file_range = &data[start as usize..][..length as usize];
 
             // sections are one-indexed...
             let index = SectionIndex(i + 1);
@@ -993,13 +1115,23 @@ impl AppSections {
 
             let section = Section {
                 app_section_index: index,
-                file_range,
+                bytes: file_range,
                 kind,
                 relocations,
             };
 
             sections.push(section);
         }
+
+        // add a fake section that contains code for a stack probe that some app functions need
+        let stack_check_section = Section {
+            bytes: &___CHKSTK_MS,
+            kind: SectionKind::Text,
+            relocations: Default::default(),
+            app_section_index: object::SectionIndex(0),
+        };
+
+        sections.push(stack_check_section);
 
         let mut roc_symbols = Vec::new();
         let mut other_symbols = Vec::new();
@@ -1126,117 +1258,66 @@ fn write_section_header(
     data[section_header_start..][..header_array.len()].copy_from_slice(&header_array);
 }
 
-fn write_image_base_relocation(
-    mmap: &mut [u8],
-    reloc_section_start: usize,
-    new_block_va: u32,
-    relocations: &[u16],
-) -> usize {
-    // first, collect the blocks of relocations (each relocation block covers a 4K page)
-    // we will be moving stuff around, and have to work from the back to the front. However, the
-    // relocations are encoded in such a way that we can only decode them from front to back.
-    let mut next_block_start = reloc_section_start as u32;
-    let mut blocks = vec![];
-
-    loop {
-        let header =
-            load_struct_inplace_mut::<ImageBaseRelocation>(mmap, next_block_start as usize);
-
-        if header.virtual_address.get(LE) == 0 {
-            break;
-        }
-
-        blocks.push((next_block_start, *header));
-
-        next_block_start += header.size_of_block.get(LE);
-    }
-
-    // this is 8 in practice
-    const HEADER_WIDTH: usize = std::mem::size_of::<ImageBaseRelocation>();
-
-    const ENTRY_WIDTH: usize = std::mem::size_of::<u16>();
-
-    // extra space that we'll use for the new relocations
-    let shift_amount = relocations.len() * ENTRY_WIDTH;
-
-    let mut found_block = false;
-
-    // now, starting from the back, shift sections that need to be shifted and add the
-    // new relocations to the right block
-    while let Some((block_start, header)) = blocks.pop() {
-        let header_va = header.virtual_address.get(LE);
-        let header_size = header.size_of_block.get(LE);
-
-        let block_start = block_start as usize;
-
-        match header_va.cmp(&new_block_va) {
-            std::cmp::Ordering::Greater => {
-                // shift this block
-                mmap.copy_within(
-                    block_start..block_start + header_size as usize,
-                    block_start + shift_amount,
-                );
-            }
-            std::cmp::Ordering::Equal => {
-                // extend this block
-                let header = load_struct_inplace_mut::<ImageBaseRelocation>(mmap, block_start);
-
-                let new_size = header.size_of_block.get(LE) + shift_amount as u32;
-                header.size_of_block.set(LE, new_size);
-
-                let number_of_entries = (new_size as usize - HEADER_WIDTH) / ENTRY_WIDTH;
-                let entries = load_structs_inplace_mut::<u16>(
-                    mmap,
-                    block_start + HEADER_WIDTH,
-                    number_of_entries,
-                );
-
-                entries[number_of_entries - relocations.len()..].copy_from_slice(relocations);
-
-                // sort by VA. Upper 4 bits store the relocation type
-                entries.sort_unstable_by_key(|x| x & 0b0000_1111_1111_1111);
-
-                found_block = true;
-            }
-            std::cmp::Ordering::Less => {
-                if found_block {
-                    break;
-                } else {
-                    // we don't currently implement adding a new block if the block does not
-                    // already exist. Adding that logic is not hard, but let's see if we can get
-                    // away with not having it.
-                    internal_error!("the .rdata section with our dummy .dll info is not covered by a relocation block");
-                }
-            }
-        }
-    }
-
-    shift_amount
-}
-
-/// the roc app functions are called from the host with an indirect call: the code will look
-/// in a table to find the actual address of the app function. This table must be relocated,
-/// because it contains absolute addresses to jump to.
 fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
-    let relocations: Vec<_> = (0..md.dynamic_relocations.name_by_virtual_address.len())
-        .map(|i| (md.thunks_start_offset_in_section + 2 * i) as u16)
-        .collect();
-
-    let added_reloc_bytes = write_image_base_relocation(
+    // in the data directories, update the length of the base relocations
+    let dir = load_struct_inplace_mut::<pe::ImageDataDirectory>(
         executable,
-        md.reloc_offset_in_file,
-        md.rdata_virtual_address - md.image_base as u32,
-        &relocations,
+        md.dynamic_relocations.data_directories_offset_in_file as usize
+            + object::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC
+                * std::mem::size_of::<pe::ImageDataDirectory>(),
     );
 
-    // the reloc section got bigger, and we need to update the header with the new size
-    let reloc_section_header_start = md.dynamic_relocations.section_headers_offset_in_file as usize
-        + md.reloc_section_index * std::mem::size_of::<ImageSectionHeader>();
-
-    let ptr = load_struct_inplace_mut::<ImageSectionHeader>(executable, reloc_section_header_start);
-    let new_virtual_size = ptr.virtual_size.get(LE) + added_reloc_bytes as u32;
-    ptr.virtual_size.set(LE, new_virtual_size);
+    // for unclear reasons, we must bump the image directory size here.
+    // we also need some zeroed-out memory at the end, so if the directory
+    // ends at a multiple of `file_alignment`, pick the next one.
+    let new_reloc_directory_size =
+        next_multiple_of(dir.size.get(LE) as usize + 4, md.file_alignment as usize);
+    dir.size.set(LE, new_reloc_directory_size as u32);
 }
+
+/// Redirect `memcpy` and similar libc functions to their roc equivalents
+pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
+    match name {
+        "memcpy" => Some("roc_memcpy"),
+        "memset" => Some("roc_memset"),
+        "memmove" => Some("roc_memmove"),
+        _ => None,
+    }
+}
+
+// 0000000000000000 <.text>:
+//    0:	51                   	push   rcx
+//    1:	50                   	push   rax
+//    2:	48 3d 00 10 00 00    	cmp    rax,0x1000
+//    8:	48 8d 4c 24 18       	lea    rcx,[rsp+0x18]
+//    d:	72 18                	jb     27 <.text+0x27>
+//    f:	48 81 e9 00 10 00 00 	sub    rcx,0x1000
+//   16:	48 85 09             	test   QWORD PTR [rcx],rcx
+//   19:	48 2d 00 10 00 00    	sub    rax,0x1000
+//   1f:	48 3d 00 10 00 00    	cmp    rax,0x1000
+//   25:	77 e8                	ja     f <.text+0xf>
+//   27:	48 29 c1             	sub    rcx,rax
+//   2a:	48 85 09             	test   QWORD PTR [rcx],rcx
+//   2d:	58                   	pop    rax
+//   2e:	59                   	pop    rcx
+//   2f:	c3                   	ret
+const ___CHKSTK_MS: [u8; 48] = [
+    0x51, //  push   rcx
+    0x50, //  push   rax
+    0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, //  cmp    rax,0x0x1000
+    0x48, 0x8d, 0x4c, 0x24, 0x18, //  lea    rcx,0x[rsp+0x18]
+    0x72, 0x18, //  jb     0x27
+    0x48, 0x81, 0xe9, 0x00, 0x10, 0x00, 0x00, //  sub    rcx,0x0x1000
+    0x48, 0x85, 0x09, //  test   QWORD PTR [rcx],0xrcx
+    0x48, 0x2d, 0x00, 0x10, 0x00, 0x00, //  sub    rax,0x0x1000
+    0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, //  cmp    rax,0x0x1000
+    0x77, 0xe8, //  ja     0xf
+    0x48, 0x29, 0xc1, //  sub    rcx,0xrax
+    0x48, 0x85, 0x09, //  test   QWORD PTR [rcx],rcx
+    0x58, //  pop    rax
+    0x59, //  pop    rcx
+    0xc3, // ret
+];
 
 #[cfg(test)]
 mod test {
@@ -1425,7 +1506,7 @@ mod test {
         remove_dummy_dll_import_table_test(
             &mut data,
             dynamic_relocations.data_directories_offset_in_file,
-            dynamic_relocations.imports_offset_in_file,
+            dynamic_relocations.import_directory_offset_in_file,
             dynamic_relocations.dummy_import_index,
         );
 
@@ -1490,7 +1571,7 @@ mod test {
 
         let sections_len_old = image_headers_old.file_header().number_of_sections.get(LE);
 
-        let mmap = Preprocessor::preprocess(output_file, input_data, new_sections);
+        let mmap = Preprocessor::preprocess(output_file, input_data, 0, new_sections);
 
         let image_headers_new =
             load_struct_inplace::<ImageNtHeaders64>(&mmap, dos_header.nt_headers_offset() as usize);
@@ -1536,7 +1617,7 @@ mod test {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-obj",
                 "app.zig",
                 "-target",
@@ -1561,20 +1642,20 @@ mod test {
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
         let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        let roc_app_sections = AppSections::from_data(&*roc_app);
+        let roc_app_sections = AppSections::from_data(&roc_app);
         let symbols = roc_app_sections.roc_symbols;
 
         // make the dummy dylib based on the app object
         let names: Vec<_> = symbols.iter().map(|s| s.name.clone()).collect();
         let dylib_bytes = crate::generate_dylib::synthetic_dll(&names);
-        std::fs::write(dir.join("libapp.obj"), dylib_bytes).unwrap();
+        std::fs::write(dir.join("libapp.dll"), dylib_bytes).unwrap();
 
-        // now we can compile the host (it uses libapp.obj, hence the order here)
+        // now we can compile the host (it uses libapp.dll, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
-                "libapp.obj",
+                "libapp.dll",
                 "host.zig",
                 "-lc",
                 "-target",
@@ -1600,6 +1681,7 @@ mod test {
             &dir.join("host.exe"),
             &dir.join("metadata"),
             &dir.join("preprocessedhost"),
+            &names,
             false,
             false,
         )
@@ -1607,7 +1689,7 @@ mod test {
 
         std::fs::copy(&dir.join("preprocessedhost"), &dir.join("app.exe")).unwrap();
 
-        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &*roc_app);
+        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }
 
     #[allow(dead_code)]
@@ -1649,7 +1731,7 @@ mod test {
 
         let output = std::process::Command::new("wine")
             .current_dir(dir)
-            .args(&["app.exe"])
+            .args(["app.exe"])
             .output()
             .unwrap();
 
@@ -1787,7 +1869,7 @@ mod test {
 
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
                 "host.zig",
                 "-lc",
@@ -1814,7 +1896,12 @@ mod test {
 
         let extra_sections = [*b"\0\0\0\0\0\0\0\0", *b"\0\0\0\0\0\0\0\0"];
 
-        Preprocessor::preprocess(&dir.join("app.exe"), host_bytes, extra_sections.as_slice());
+        Preprocessor::preprocess(
+            &dir.join("app.exe"),
+            host_bytes,
+            0,
+            extra_sections.as_slice(),
+        );
     }
 
     #[cfg(windows)]

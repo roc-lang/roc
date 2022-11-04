@@ -2105,12 +2105,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
-name = "memexec"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc62ccb14881da5d1862cda3a9648fb4a4897b2aff0b2557b89da44a5e550b7c"
-
-[[package]]
 name = "memmap2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3404,7 +3398,6 @@ dependencies = [
  "inkwell 0.1.0",
  "libc",
  "libloading",
- "memexec",
  "mimalloc",
  "once_cell",
  "parking_lot 0.12.1",
@@ -3603,6 +3596,7 @@ name = "roc_exhaustive"
 version = "0.0.1"
 dependencies = [
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
 ]
@@ -3757,7 +3751,6 @@ version = "0.0.1"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.20",
  "iced-x86",
  "indoc",
  "libc",
@@ -3767,7 +3760,9 @@ dependencies = [
  "roc_build",
  "roc_collections",
  "roc_error_macros",
+ "roc_load",
  "roc_mono",
+ "roc_reporting",
  "serde",
  "target-lexicon",
  "tempfile",
@@ -3962,6 +3957,7 @@ dependencies = [
  "pretty_assertions",
  "roc_build",
  "roc_builtins",
+ "roc_can",
  "roc_collections",
  "roc_gen_llvm",
  "roc_intern",
@@ -3999,6 +3995,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "roc_utils",
  "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -4866,6 +4863,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "roc_utils",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",
@@ -5268,6 +5266,9 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 [[package]]
 name = "wasi_libc_sys"
 version = "0.0.1"
+dependencies = [
+ "roc_utils",
+]
 
 [[package]]
 name = "wasm-bindgen"

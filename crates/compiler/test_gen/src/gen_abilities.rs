@@ -221,6 +221,33 @@ fn ability_used_as_type_still_compiles() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bounds_to_multiple_abilities() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Idempot has idempot : a -> a | a has Idempot
+            Consume has consume : a -> Str | a has Consume
+
+            Hello := Str has [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
+
+            idempotHello = \@Hello msg -> @Hello msg
+            consumeHello = \@Hello msg -> msg
+
+            lifecycle : a -> Str | a has Idempot & Consume
+            lifecycle = \x -> idempot x |> consume
+
+            main = lifecycle (@Hello "hello world")
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode() {
     assert_evals_to!(
         indoc!(
@@ -370,6 +397,30 @@ fn encode_use_stdlib_without_wrapping_custom() {
             "#
         ),
         RocStr::from("\"Hello, World!\n\""),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derive_to_encoder_for_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Json]
+                provides [main] to "./platform"
+
+            HelloWorld := { a: Str } has [Encoding]
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":"Hello, World!"}"#),
         RocStr
     )
 }
@@ -768,6 +819,32 @@ fn decode_use_stdlib() {
 }
 
 #[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_derive_decoder_for_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Json]
+                provides [main] to "./platform"
+
+            HelloWorld := { a: Str } has [Decoding]
+
+            main =
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok (@HelloWorld {a}) -> a
+                    _ -> "FAIL"
+            "#
+        ),
+        RocStr::from(r#"Hello, World!"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib_json_list() {
     assert_evals_to!(
@@ -1122,11 +1199,6 @@ mod hash {
             addU32: tAddU32,
             addU64: tAddU64,
             addU128: tAddU128,
-            addI8: tAddI8,
-            addI16: tAddI16,
-            addI32: tAddI32,
-            addI64: tAddI64,
-            addI128: tAddI128,
             complete: tComplete,
         }]
 
@@ -1165,11 +1237,6 @@ mod hash {
         tAddU32 = \@THasher total, n -> @THasher (do32 total n)
         tAddU64 = \@THasher total, n -> @THasher (do64 total n)
         tAddU128 = \@THasher total, n -> @THasher (do128 total n)
-        tAddI8 = \@THasher total, n -> @THasher (do8 total (Num.toU8 n))
-        tAddI16 = \@THasher total, n -> @THasher (do16 total (Num.toU16 n))
-        tAddI32 = \@THasher total, n -> @THasher (do32 total (Num.toU32 n))
-        tAddI64 = \@THasher total, n -> @THasher (do64 total (Num.toU64 n))
-        tAddI128 = \@THasher total, n -> @THasher (do128 total (Num.toU128 n))
         tComplete = \@THasher _ -> Num.maxU64
 
         tRead = \@THasher bytes -> bytes
@@ -1600,6 +1667,33 @@ mod hash {
                 RocList<u8>
             )
         }
+
+        #[test]
+        fn derived_hash_for_opaque_record() {
+            assert_evals_to!(
+                &format!(
+                    indoc!(
+                        r#"
+                        app "test" provides [main] to "./platform"
+
+                        {}
+
+                        Q := {{ a: U8, b: U8, c: U8 }} has [Hash]
+
+                        q = @Q {{ a: 15, b: 27, c: 31 }}
+
+                        main =
+                            @THasher []
+                            |> Hash.hash q
+                            |> tRead
+                        "#
+                    ),
+                    TEST_HASHER,
+                ),
+                RocList::from_slice(&[15, 27, 31]),
+                RocList<u8>
+            )
+        }
     }
 }
 
@@ -1648,6 +1742,23 @@ mod eq {
                 app "test" provides [main] to "./platform"
 
                 main = Bool.isEq 10u8 10u8
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    fn derive_structural_eq_for_opaque() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := U8 has [Eq]
+
+                main = (@Q 15) == (@Q 15)
                 "#
             ),
             true,

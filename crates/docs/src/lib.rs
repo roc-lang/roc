@@ -138,8 +138,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
 }
 
 fn sidebar_link_url(module: &ModuleDocumentation) -> String {
-    let url = format!("{}{}/", base_url(), module.name.as_str());
-    url
+    format!("{}{}", base_url(), module.name.as_str())
 }
 
 fn page_title(package: &Documentation, module: &ModuleDocumentation) -> String {
@@ -871,7 +870,7 @@ fn markdown_to_html(
                 // more memory as we iterate through these.
                 arena.reset();
 
-                match parse_ident(&arena, state) {
+                match parse_ident(&arena, state, 0) {
                     Ok((_, Ident::Access { module_name, parts }, _)) => {
                         let mut iter = parts.iter();
 

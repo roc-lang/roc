@@ -1,9 +1,9 @@
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
-use crate::annotation::canonicalize_annotation;
+use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
+use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -18,7 +18,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, AliasVar, Type};
+use roc_types::types::{AbilitySet, Alias, AliasKind, AliasVar, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -130,13 +130,13 @@ pub struct Module {
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
-    pub able: MutMap<Variable, (Lowercase, Symbol)>,
+    pub able: MutMap<Variable, (Lowercase, AbilitySet)>,
     pub wildcards: VecSet<Variable>,
 }
 
@@ -152,7 +152,7 @@ pub struct ModuleOutput {
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
-    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 fn validate_generate_with<'a>(
@@ -221,6 +221,7 @@ impl GeneratedInfo {
                         effect_symbol,
                         Region::zero(),
                         vec![Loc::at_zero(AliasVar::unbound("a".into(), a_var))],
+                        vec![],
                         actual,
                         AliasKind::Opaque,
                     );
@@ -282,6 +283,7 @@ pub fn canonicalize_module_defs<'a>(
             name,
             alias.region,
             alias.type_variables,
+            alias.infer_ext_in_output_variables,
             alias.typ,
             alias.kind,
         );
@@ -387,7 +389,7 @@ pub fn canonicalize_module_defs<'a>(
     for able in output.introduced_variables.able {
         rigid_variables
             .able
-            .insert(able.variable, (able.name, able.ability));
+            .insert(able.variable, (able.name, able.abilities));
     }
 
     for var in output.introduced_variables.wildcards {
@@ -422,7 +424,7 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     let (mut declarations, mut output) =
-        crate::def::sort_can_defs_new(&mut env, &mut scope, var_store, defs, new_output);
+        crate::def::sort_can_defs_new(&mut scope, var_store, defs, new_output);
 
     debug_assert!(
         output.pending_derives.is_empty(),
@@ -442,6 +444,7 @@ pub fn canonicalize_module_defs<'a>(
                 loc_ann.region,
                 var_store,
                 pending_abilities_in_scope,
+                AnnotationFor::Value,
             );
 
             ann.add_to(
@@ -895,6 +898,15 @@ fn fix_values_captured_in_closure_pattern(
                 }
             }
         }
+        List { patterns, .. } => {
+            for loc_pat in patterns.patterns.iter_mut() {
+                fix_values_captured_in_closure_pattern(
+                    &mut loc_pat.value,
+                    no_capture_symbols,
+                    closure_captures,
+                );
+            }
+        }
         Identifier(_)
         | NumLiteral(..)
         | IntLiteral(..)
@@ -1040,7 +1052,7 @@ fn fix_values_captured_in_closure_expr(
         | Float(..)
         | Str(_)
         | SingleQuote(..)
-        | Var(_)
+        | Var(..)
         | AbilityMember(..)
         | EmptyRecord
         | TypedHole { .. }

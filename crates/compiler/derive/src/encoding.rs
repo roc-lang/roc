@@ -134,7 +134,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     // toEncoder elem
     let to_encoder_call = Call(
         to_encoder_fn,
-        vec![(elem_var, Loc::at_zero(Var(elem_sym)))],
+        vec![(elem_var, Loc::at_zero(Var(elem_sym, elem_var)))],
         CalledVia::Space,
     );
 
@@ -217,7 +217,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     let encode_list_call = Call(
         encode_list_fn,
         vec![
-            (list_var, Loc::at_zero(Var(lst_sym))),
+            (list_var, Loc::at_zero(Var(lst_sym, list_var))),
             (to_elem_encoder_fn_var, Loc::at_zero(to_elem_encoder)),
         ],
         CalledVia::Space,
@@ -314,7 +314,10 @@ fn to_encoder_record(
                 record_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
                 field_var,
-                loc_expr: Box::new(Loc::at_zero(Var(rcd_sym))),
+                loc_expr: Box::new(Loc::at_zero(Var(
+                    rcd_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
                 field: field_name,
             };
 
@@ -572,7 +575,7 @@ fn to_encoder_tag_union(
                     // toEncoder rcd.a
                     let to_encoder_call = Call(
                         to_encoder_fn,
-                        vec![(sym_var, Loc::at_zero(Var(sym)))],
+                        vec![(sym_var, Loc::at_zero(Var(sym, sym_var)))],
                         CalledVia::Space,
                     );
 
@@ -662,7 +665,7 @@ fn to_encoder_tag_union(
     //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
     //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
     let when_branches = When {
-        loc_cond: Box::new(Loc::at_zero(Var(tag_sym))),
+        loc_cond: Box::new(Loc::at_zero(Var(tag_sym, tag_union_var))),
         cond_var: tag_union_var,
         expr_var: whole_tag_encoders_var,
         region: Region::zero(),
@@ -778,7 +781,7 @@ fn wrap_in_encode_custom(
     // Encode.appendWith : List U8, encoder_var, fmt -[appendWith]-> List U8 | fmt has EncoderFormatting
     let append_with_fn = Box::new((
         this_append_with_fn_var,
-        Loc::at_zero(Var(Symbol::ENCODE_APPEND_WITH)),
+        Loc::at_zero(Var(Symbol::ENCODE_APPEND_WITH, this_append_with_fn_var)),
         this_append_with_clos_var,
         Variable::LIST_U8,
     ));
@@ -788,11 +791,11 @@ fn wrap_in_encode_custom(
         append_with_fn,
         vec![
             // (bytes_var, bytes)
-            (bytes_var, Loc::at_zero(Var(bytes_sym))),
+            (bytes_var, Loc::at_zero(Var(bytes_sym, bytes_var))),
             // (encoder_var, encoder)
             (encoder_var, Loc::at_zero(encoder)),
             // (fmt, fmt_var)
-            (fmt_var, Loc::at_zero(Var(fmt_sym))),
+            (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
         ],
         CalledVia::Space,
     );
@@ -869,7 +872,7 @@ fn wrap_in_encode_custom(
     // Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt has EncoderFormatting
     let custom_fn = Box::new((
         this_custom_fn_var,
-        Loc::at_zero(Var(Symbol::ENCODE_CUSTOM)),
+        Loc::at_zero(Var(Symbol::ENCODE_CUSTOM, this_custom_fn_var)),
         this_custom_clos_var,    // -[clos]->
         this_custom_encoder_var, // t' ~ Encoder fmt
     ));

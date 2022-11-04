@@ -125,6 +125,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToNum; STR_TO_NUM; 1,
     StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
+    StrGraphemes; STR_GRAPHEMES; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
@@ -247,7 +248,7 @@ fn lowlevel_1(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
 
     let body = RunLowLevel {
         op,
-        args: vec![(arg1_var, Var(Symbol::ARG_1))],
+        args: vec![(arg1_var, Var(Symbol::ARG_1, arg1_var))],
         ret_var,
     };
 
@@ -268,8 +269,8 @@ fn lowlevel_2(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op,
         args: vec![
-            (arg1_var, Var(Symbol::ARG_1)),
-            (arg2_var, Var(Symbol::ARG_2)),
+            (arg1_var, Var(Symbol::ARG_1, arg1_var)),
+            (arg2_var, Var(Symbol::ARG_2, arg2_var)),
         ],
         ret_var,
     };
@@ -292,9 +293,9 @@ fn lowlevel_3(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op,
         args: vec![
-            (arg1_var, Var(Symbol::ARG_1)),
-            (arg2_var, Var(Symbol::ARG_2)),
-            (arg3_var, Var(Symbol::ARG_3)),
+            (arg1_var, Var(Symbol::ARG_1, arg1_var)),
+            (arg2_var, Var(Symbol::ARG_2, arg2_var)),
+            (arg3_var, Var(Symbol::ARG_3, arg3_var)),
         ],
         ret_var,
     };
@@ -322,10 +323,10 @@ fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op,
         args: vec![
-            (arg1_var, Var(Symbol::ARG_1)),
-            (arg2_var, Var(Symbol::ARG_2)),
-            (arg3_var, Var(Symbol::ARG_3)),
-            (arg4_var, Var(Symbol::ARG_4)),
+            (arg1_var, Var(Symbol::ARG_1, arg1_var)),
+            (arg2_var, Var(Symbol::ARG_2, arg2_var)),
+            (arg3_var, Var(Symbol::ARG_3, arg3_var)),
+            (arg4_var, Var(Symbol::ARG_4, arg4_var)),
         ],
         ret_var,
     };
@@ -355,11 +356,11 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op,
         args: vec![
-            (arg1_var, Var(Symbol::ARG_1)),
-            (arg2_var, Var(Symbol::ARG_2)),
-            (arg3_var, Var(Symbol::ARG_3)),
-            (arg4_var, Var(Symbol::ARG_4)),
-            (arg5_var, Var(Symbol::ARG_5)),
+            (arg1_var, Var(Symbol::ARG_1, arg1_var)),
+            (arg2_var, Var(Symbol::ARG_2, arg2_var)),
+            (arg3_var, Var(Symbol::ARG_3, arg3_var)),
+            (arg4_var, Var(Symbol::ARG_4, arg4_var)),
+            (arg5_var, Var(Symbol::ARG_5, arg5_var)),
         ],
         ret_var,
     };
@@ -486,7 +487,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
                     ext_var: var_store.fresh(),
                     field: "b".into(),
                     field_var: var_store.fresh(),
-                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2, var_store.fresh()))),
                 },
             ),
             // out of bounds!
@@ -509,7 +510,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
                             ext_var: var_store.fresh(),
                             field: "a".into(),
                             field_var: num_var_2,
-                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2, var_store.fresh()))),
                         },
                     ],
                     var_store,
@@ -523,7 +524,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
         loc_expr: no_region(RunLowLevel {
             op: lowlevel,
-            args: vec![(num_var_1, Var(Symbol::ARG_1))],
+            args: vec![(num_var_1, Var(Symbol::ARG_1, var_store.fresh()))],
             ret_var: record_var,
         }),
         expr_var: record_var,
@@ -549,7 +550,7 @@ fn to_num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = Expr::RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (num_var, Var(Symbol::ARG_1)),
+            (num_var, Var(Symbol::ARG_1, num_var)),
             (
                 num_var,
                 Num(

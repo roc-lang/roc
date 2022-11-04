@@ -677,6 +677,24 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
 
+        Problem::DuplicateHasAbility { ability, region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I already saw that this type variable is bound to the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability once before:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Abilities only need to bound to a type variable once in a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause!"),
+                ]),
+            ]);
+            title = "DUPLICATE BOUND ABILITY".to_string();
+            severity = Severity::Warning;
+        }
+
         Problem::AbilityMemberMissingHasClause {
             member,
             ability,
@@ -996,6 +1014,28 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERLOADED SPECIALIZATION".to_string();
             severity = Severity::Warning;
+        }
+        Problem::UnnecessaryOutputWildcard { region } => {
+            doc = alloc.stack([
+                alloc.reflow("I see you annotated a wildcard in a place where it's not needed:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Tag unions that are constants, or the return values of functions, are always inferred to be open by default! You can remove this annotation safely."),
+            ]);
+            title = "UNNECESSARY WILDCARD".to_string();
+            severity = Severity::Warning;
+        }
+        Problem::MultipleListRestPattern { region } => {
+            doc = alloc.stack([
+                alloc.reflow("This list pattern match has multiple rest patterns:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("I only support compiling list patterns with one "),
+                    alloc.parser_suggestion(".."),
+                    alloc.reflow(" pattern! Can you remove this additional one?"),
+                ]),
+            ]);
+            title = "MULTIPLE LIST REST PATTERNS".to_string();
+            severity = Severity::RuntimeError;
         }
     };
 
@@ -1494,6 +1534,7 @@ fn pretty_runtime_error<'b>(
                 QualifiedIdentifier => " qualified ",
                 EmptySingleQuote => " empty character literal ",
                 MultipleCharsInSingleQuote => " overfull literal ",
+                DuplicateListRestPattern => " second rest pattern ",
             };
 
             let tip = match problem {
@@ -1506,6 +1547,9 @@ fn pretty_runtime_error<'b>(
                 QualifiedIdentifier => alloc
                     .tip()
                     .append(alloc.reflow("In patterns, only tags can be qualified")),
+                DuplicateListRestPattern => alloc
+                    .tip()
+                    .append(alloc.reflow("List patterns can only have one rest pattern")),
             };
 
             doc = alloc.stack([
@@ -2035,11 +2079,7 @@ pub fn to_circular_def_doc<'b>(
                     alloc.reflow(" is defined directly in terms of itself:"),
                 ]),
                 alloc.region(lines.convert_region(Region::span_across(symbol_region, expr_region))),
-                alloc.concat([
-                    alloc.reflow("Since Roc evaluates values strict, running this program would create an infinite number of "),
-                    alloc.symbol_unqualified(*symbol),
-                    alloc.reflow(" values!"),
-                ]),
+                alloc.reflow("Roc evaluates values strictly, so running this program would enter an infinite loop!"),
                 alloc.hint("").append(alloc.concat([
                     alloc.reflow("Did you mean to define "),alloc.symbol_unqualified(*symbol),alloc.reflow(" as a function?"),
                 ])),

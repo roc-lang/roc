@@ -145,6 +145,7 @@ comptime {
     exportStrFn(str.strTrimRight, "trim_right");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
+    exportStrFn(str.strGraphemes, "graphemes");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

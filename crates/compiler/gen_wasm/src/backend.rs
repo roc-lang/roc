@@ -1237,7 +1237,7 @@ impl<'a> WasmBackend<'a> {
             }
 
             CallType::HigherOrder(higher_order_lowlevel) => {
-                call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
+                call_higher_order_lowlevel(self, ret_sym, ret_layout, higher_order_lowlevel)
             }
 
             CallType::Foreign {

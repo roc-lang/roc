@@ -6,6 +6,9 @@ zig-cache
 *.rs.bk
 *.o
 *.obj
+*.dll
+*.lib
+*.def
 *.tmp
 *.wasm
 *.exe

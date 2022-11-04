@@ -1562,11 +1562,11 @@ impl Query {
         }
         hasher.update((self.arg_slots_touched.len() as u64).to_le_bytes());
         for &arg_touched in &self.arg_slots_touched {
-            hasher.update(&[arg_touched as u8]);
+            hasher.update([arg_touched as u8]);
         }
         hasher.update((self.ret_slots_touched.len() as u64).to_le_bytes());
         for &ret_touched in &self.ret_slots_touched {
-            hasher.update(&[ret_touched as u8]);
+            hasher.update([ret_touched as u8]);
         }
         api::FuncSpec(hasher.finalize().into())
     }
@@ -1775,7 +1775,7 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions 
 fn hash_func_id_trivial(func_id: FuncId) -> api::FuncSpec {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(&func_id.0.to_le_bytes());
+    hasher.update(func_id.0.to_le_bytes());
     api::FuncSpec(hasher.finalize().into())
 }
 

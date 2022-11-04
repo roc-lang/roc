@@ -37,7 +37,7 @@ mod test_parse {
         };
         (module => $arena:expr, $input:expr) => {
             module_defs()
-                .parse($arena, State::new($input.as_bytes()))
+                .parse($arena, State::new($input.as_bytes()), 0)
                 .map(|tuple| tuple.1)
         };
     }
@@ -124,6 +124,8 @@ mod test_parse {
         fail/lambda_missing_indent.expr,
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        fail/when_missing_arrow.expr,
+        fail/pattern_binds_keyword.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -175,6 +177,7 @@ mod test_parse {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
@@ -284,6 +287,7 @@ mod test_parse {
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_function.expr,
+        pass/when_in_function_python_style_indent.expr,
         pass/when_in_parens_indented.expr,
         pass/when_in_parens.expr,
         pass/when_with_alternative_patterns.expr,
@@ -292,6 +296,7 @@ mod test_parse {
         pass/when_with_numbers.expr,
         pass/when_with_records.expr,
         pass/where_clause_function.expr,
+        pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has_across_newlines.expr,
         pass/where_clause_multiple_has.expr,
         pass/where_clause_non_function.expr,
@@ -799,7 +804,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()), 0)
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -825,7 +830,7 @@ mod test_parse {
 
         let state = State::new(src.as_bytes());
         let parser = module_defs();
-        let parsed = parser.parse(arena, state);
+        let parsed = parser.parse(arena, state, 0);
         match parsed {
             Ok((_, _, _state)) => {
                 // dbg!(_state);

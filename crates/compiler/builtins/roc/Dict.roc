@@ -26,15 +26,20 @@ interface Dict
         Hash.{ Hasher },
     ]
 
-## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.
+## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
+## associate keys with values.
 ##
 ## ### Inserting
 ##
-## The most basic way to use a dictionary is to start with an empty one and then:
-## 1. Call [Dict.insert] passing a key and a value, to associate that key with that value in the dictionary.
-## 2. Later, call [Dict.get] passing the same key as before, and it will return the value you stored.
+## The most basic way to use a dictionary is to start with an empty one and
+## then:
+## 1. Call [Dict.insert] passing a key and a value, to associate that key with
+## that value in the dictionary.
+## 2. Later, call [Dict.get] passing the same key as before, and it will return
+## the value you stored.
 ##
-## Here's an example of a dictionary which uses a city's name as the key, and its population as the associated value.
+## Here's an example of a dictionary which uses a city's name as the key, and
+## its population as the associated value.
 ##
 ##     populationByCity =
 ##         Dict.empty
@@ -46,11 +51,12 @@ interface Dict
 ##
 ## ### Accessing keys or values
 ##
-## We can use [Dict.keys] and [Dict.values] functions to get only the keys or only the values.
+## We can use [Dict.keys] and [Dict.values] functions to get only the keys or
+## only the values.
 ##
-## You may notice that these lists have the same order as the original insertion order. This will be true if
-## all you ever do is [insert] and [get] operations on the dictionary, but [remove] operations can change this order.
-## Let's see how that looks.
+## You may notice that these lists have the same order as the original insertion
+## order. This will be true if all you ever do is [Dict.insert] and [Dict.get] operations
+## on the dictionary, but [Dict.remove] operations can change this order.
 ##
 ## ### Removing
 ##
@@ -62,30 +68,44 @@ interface Dict
 ##         ==
 ##         ["London", "Amsterdam", "Shanghai", "Delhi"]
 ##
-## Notice that the order changed! Philadelphia has been not only removed from the list, but Amsterdam - the last
-## entry we inserted - has been moved into the spot where Philadelphia was previously. This is exactly what
-## [Dict.remove] does: it removes an element and moves the most recent insertion into the vacated spot.
+## Notice that the order has changed. Philadelphia was not only removed from the
+## list, but Amsterdam - the last entry we inserted - has been moved into the
+## spot where Philadelphia was previously. This is exactly what [Dict.remove]
+## does. It removes an element and moves the most recent insertion into the
+## vacated spot.
 ##
-## This move is done as a performance optimization, and it lets [remove] have
-## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
+## This move is done as a performance optimization, and it lets [Dict.remove]
+## have [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## ### Equality
 ##
-## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
-## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
-## `fn dict1 == fn dict2` also being `Bool.true`, even if `fn` relies on the dictionary's ordering.
-Dict k v := List [Pair k v] has [Eq { isEq: dictEq }]
+## Two dictionaries are equal when their contents and orderings match. This
+## means that when `dict1 == dict2`, the expression `fn dict1 == fn dict2` will
+## also evaluate to `Bool.true`. The function `fn` can count on the ordering of
+## values in the dictionary to also match.
+Dict k v := List [Pair k v] has [Eq]
 
-dictEq = \@Dict l1, @Dict l2 -> l1 == l2
-
-## An empty dictionary.
+## Return an empty dictionary.
 empty : Dict k v
 empty = @Dict []
 
+## Return a dictionary with space allocated for a number of entries. This
+## may provide a performance optimisation if you know how many entries will be
+## inserted.
 withCapacity : Nat -> Dict k v
 withCapacity = \n -> @Dict (List.withCapacity n)
 
-get : Dict k v, k -> Result v [KeyNotFound]* | k has Eq
+## Get the value for a given key. If there is a value for the specified key it
+## will return [Ok value], otherwise return [Err KeyNotFound].
+##
+##     dictionary =
+##         Dict.empty
+##         |> Dict.insert 1 "Apple"
+##         |> Dict.insert 2 "Orange"
+##
+##     expect Dict.get dictionary 1 == Ok "Apple"
+##     expect Dict.get dictionary 2000 == Err KeyNotFound
+get : Dict k v, k -> Result v [KeyNotFound] | k has Eq
 get = \@Dict list, needle ->
     when List.findFirst list (\Pair key _ -> key == needle) is
         Ok (Pair _ v) ->
@@ -94,10 +114,27 @@ get = \@Dict list, needle ->
         Err NotFound ->
             Err KeyNotFound
 
+## Iterate through the keys and values in the dictionary and call the provided
+## function with signature `state, k, v -> state` for each value, with an
+## initial `state` value provided for the first call.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert "Apples" 12
+##         |> Dict.insert "Orange" 24
+##         |> Dict.walk 0 (\count, _, qty -> count + qty)
+##         |> Bool.isEq 36
 walk : Dict k v, state, (state, k, v -> state) -> state
 walk = \@Dict list, initialState, transform ->
     List.walk list initialState (\state, Pair k v -> transform state k v)
 
+## Insert a value into the dictionary at a specified key.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert "Apples" 12
+##         |> Dict.get "Apples"
+##         |> Bool.isEq (Ok 12)
 insert : Dict k v, k, v -> Dict k v | k has Eq
 insert = \@Dict list, k, v ->
     when List.findFirstIndex list (\Pair key _ -> key == k) is
@@ -109,10 +146,27 @@ insert = \@Dict list, k, v ->
             |> List.set index (Pair k v)
             |> @Dict
 
+## Returns the number of values in the dictionary.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert "One" "A Song"
+##         |> Dict.insert "Two" "Candy Canes"
+##         |> Dict.insert "Three" "Boughs of Holly"
+##         |> Dict.len
+##         |> Bool.isEq 3
 len : Dict k v -> Nat
 len = \@Dict list ->
     List.len list
 
+## Remove a value from the dictionary for a specified key.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert "Some" "Value"
+##         |> Dict.remove "Some"
+##         |> Dict.len
+##         |> Bool.isEq 0
 remove : Dict k v, k -> Dict k v | k has Eq
 remove = \@Dict list, key ->
     when List.findFirstIndex list (\Pair k _ -> k == key) is
@@ -127,7 +181,20 @@ remove = \@Dict list, key ->
             |> List.dropLast
             |> @Dict
 
-## Insert or remove a value in a Dict based on its presence
+## Insert or remove a value for a specified key. This function enables a
+## performance optimisation for the use case of providing a default when a value
+## is missing. This is more efficient than doing both a `Dict.get` and then a
+## `Dict.insert` call, and supports being piped.
+##
+##     alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+##     alterValue = \possibleValue ->
+##         when possibleValue is
+##             Missing -> Present Bool.false
+##             Present value -> if value then Missing else Present Bool.true
+##
+##     expect Dict.update Dict.empty "a" alterValue == Dict.single "a" Bool.false
+##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
+##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
 update = \dict, key, alter ->
     possibleValue =
@@ -139,56 +206,139 @@ update = \dict, key, alter ->
         Present value -> insert dict key value
         Missing -> remove dict key
 
-## Internal for testing only
+# Internal for testing only
 alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
 alterValue = \possibleValue ->
     when possibleValue is
         Missing -> Present Bool.false
-        Present value if Bool.not value -> Present Bool.true
-        Present _ -> Missing
+        Present value -> if value then Missing else Present Bool.true
 
 expect update empty "a" alterValue == single "a" Bool.false
 expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true
 expect update (single "a" Bool.true) "a" alterValue == empty
 
+## Check if the dictionary has a value for a specified key.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert 1234 "5678"
+##         |> Dict.contains 1234
 contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
-    step = \_, Pair key _val ->
-        if key == needle then
-            Break {}
-        else
-            Continue {}
+    List.any list \Pair key _val -> key == needle
 
-    when List.iterate list {} step is
-        Continue _ -> Bool.false
-        Break _ -> Bool.true
+expect contains empty "a" == Bool.false
+expect contains (single "a" {}) "a" == Bool.true
+expect contains (single "b" {}) "a" == Bool.false
+expect
+    Dict.empty
+    |> Dict.insert 1234 "5678"
+    |> Dict.contains 1234
+    |> Bool.isEq Bool.true
 
+## Returns a dictionary containing the key and value provided as input.
+##
+##     expect
+##         Dict.single "A" "B"
+##         |> Bool.isEq (Dict.insert Dict.empty "A" "B")
 single : k, v -> Dict k v
 single = \key, value ->
     @Dict [Pair key value]
 
-## Returns a [List] of the dictionary's keys.
+## Returns the keys of a dictionary as a [List].
+##
+##     expect
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Dict.keys
+##         |> Bool.isEq [1,2,3,4]
 keys : Dict k v -> List k
 keys = \@Dict list ->
     List.map list (\Pair k _ -> k)
 
-## Returns a [List] of the Dict's values
+## Returns the values of a dictionary as a [List].
+##
+##     expect
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Dict.values
+##         |> Bool.isEq ["One","Two","Three","Four"]
 values : Dict k v -> List v
 values = \@Dict list ->
     List.map list (\Pair _ v -> v)
 
-# union : Dict k v, Dict k v -> Dict k v
+## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
+## of all the key-value pairs. This means that all the key-value pairs in
+## both dictionaries will be combined. Note that where there are pairs
+## with the same key, the value contained in the first input will be
+## retained, and the value in the second input will be removed.
+##
+##     first =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##
+##     second =
+##         Dict.single 1 "Not Me"
+##         |> Dict.insert 3 "Me Too"
+##         |> Dict.insert 4 "And Also Me"
+##
+##     expected =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##         |> Dict.insert 3 "Me Too"
+##         |> Dict.insert 4 "And Also Me"
+##
+##     expect
+##         Dict.insertAll first second == expected
 insertAll : Dict k v, Dict k v -> Dict k v | k has Eq
 insertAll = \xs, @Dict ys ->
     List.walk ys xs (\state, Pair k v -> Dict.insertIfVacant state k v)
 
-# intersection : Dict k v, Dict k v -> Dict k v
+## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
+## of all the key-value pairs. This means that we keep only those pairs
+## that are in both dictionaries. Note that where there are pairs with
+## the same key, the value contained in the first input will be retained,
+## and the value in the second input will be removed.
+##
+##     first =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##
+##     second =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##         |> Dict.insert 3 "But Not Me"
+##         |> Dict.insert 4 "Or Me"
+##
+##     expect Dict.keepShared first second == first
 keepShared : Dict k v, Dict k v -> Dict k v | k has Eq
 keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
     |> @Dict
 
-# difference : Dict k v, Dict k v -> Dict k v
+## Remove the key-value pairs in the first input that are also in the second
+## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
+## of the values. This means that we will be left with only those pairs that
+## are in the first dictionary and whose keys are not in the second.
+##
+##     first =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##         |> Dict.insert 3 "Remove Me"
+##
+##     second =
+##         Dict.single 3 "Remove Me"
+##         |> Dict.insert 4 "I do nothing..."
+##
+##     expected =
+##         Dict.single 1 "Keep Me"
+##         |> Dict.insert 2 "And Me"
+##
+##     expect Dict.removeAll first second == expected
 removeAll : Dict k v, Dict k v -> Dict k v | k has Eq
 removeAll = \xs, @Dict ys ->
     List.walk ys xs (\state, Pair k _ -> Dict.remove state k)
@@ -224,11 +374,6 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
              addU32,
              addU64,
              addU128,
-             addI8,
-             addI16,
-             addI32,
-             addI64,
-             addI128,
              complete,
          },
      ]
@@ -249,17 +394,6 @@ combineState = \@LowLevelHasher { originalSeed, state }, { a, b, seed, length } 
     @LowLevelHasher { originalSeed, state: wymix state hash }
 
 complete = \@LowLevelHasher { state } -> state
-
-addI8 = \hasher, i8 ->
-    addU8 hasher (Num.toU8 i8)
-addI16 = \hasher, i16 ->
-    addU16 hasher (Num.toU16 i16)
-addI32 = \hasher, i32 ->
-    addU32 hasher (Num.toU32 i32)
-addI64 = \hasher, i64 ->
-    addU64 hasher (Num.toU64 i64)
-addI128 = \hasher, i128 ->
-    addU128 hasher (Num.toU128 i128)
 
 # These implementations hash each value individually with the seed and then mix
 # the resulting hash with the state. There are other options that may be faster
