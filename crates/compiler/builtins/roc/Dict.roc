@@ -223,7 +223,6 @@ expect update (single "a" Bool.true) "a" alterValue == empty
 ##         Dict.empty
 ##         |> Dict.insert 1234 "5678"
 ##         |> Dict.contains 1234
-##         |> Bool.isEq Bool.true
 contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
     List.any list \Pair key _val -> key == needle
