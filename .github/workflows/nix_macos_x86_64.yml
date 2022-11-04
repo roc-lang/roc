@@ -27,5 +27,5 @@ jobs:
           name: enigmaticsunrise
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      - name: execute tests without --release
-        run: nix develop -c cargo test --locked  # no --release yet until #3166 is fixed
+      - name: execute cli_run tests only, the full tests take too long but are run nightly
+        run: nix develop -c cargo test --locked --release -p cli_run
