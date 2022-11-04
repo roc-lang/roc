@@ -323,7 +323,7 @@ mod cli_run {
         let mut custom_flags: Vec<&str> = Vec::new();
 
         match executable_filename {
-            "form" | "hello-gui" | "breakout" | "ruby" => {
+            "form" | "hello-gui" | "breakout" | "libhello" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.
