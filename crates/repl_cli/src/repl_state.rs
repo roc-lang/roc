@@ -129,9 +129,11 @@ impl ReplState {
 
     pub fn eval_and_format(&mut self, src: &str, dimensions: Option<(usize, usize)>) -> String {
         let arena = Bump::new();
+        let pending_past_def;
         let mut opt_var_name;
         let src = match parse_src(&arena, src) {
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
+                pending_past_def = None;
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
                 // become a SyntaxErr as soon as we evaluate it),
                 // proceed as normal and let the error reporting happen during eval.
@@ -170,11 +172,23 @@ impl ReplState {
                             },
                         ..
                     } => {
-                        self.add_past_def(ident.to_string(), src.to_string());
+                        pending_past_def = Some((ident.to_string(), src.to_string()));
                         opt_var_name = Some(ident.to_string());
 
-                        // Eval the body of the def by adding a lookup to it
-                        *ident
+                        // Recreate the body of the def and then evaluate it as a lookup.
+                        // We do this so that any errors will get reported as part of this expr;
+                        // if we just did a lookup on the past def, then errors wouldn't get
+                        // reported because we filter out errors whose regions are in past defs.
+                        let mut buf = bumpalo::collections::string::String::with_capacity_in(
+                            ident.len() + src.len() + 1,
+                            &arena,
+                        );
+
+                        buf.push_str(src);
+                        buf.push('\n');
+                        buf.push_str(ident);
+
+                        buf.into_bump_str()
                     }
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
@@ -226,33 +240,45 @@ impl ReplState {
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
         // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
         // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
-        let (output, problems) = match opt_var_name
-            .or_else(|| self.past_def_idents.get(src.trim()).cloned())
-        {
-            Some(existing_ident) => {
-                opt_var_name = Some(existing_ident);
+        let (output, problems) =
+            match opt_var_name.or_else(|| self.past_def_idents.get(src.trim()).cloned()) {
+                Some(existing_ident) => {
+                    opt_var_name = Some(existing_ident);
 
-                gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal)
-            }
-            None => {
-                let (output, problems) =
-                    gen_and_eval_llvm(&self.with_past_defs(src), Triple::host(), OptLevel::Normal);
-
-                // Don't persist defs that have compile errors
-                if problems.errors.is_empty() {
-                    let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
-                    let src = format!("{var_name} = {}", src.trim_end());
-
-                    opt_var_name = Some(var_name.clone());
-
-                    self.add_past_def(var_name, src);
-                } else {
-                    opt_var_name = None;
+                    gen_and_eval_llvm(
+                        self.past_defs.iter().map(|def| def.src.as_str()),
+                        src,
+                        Triple::host(),
+                        OptLevel::Normal,
+                    )
                 }
+                None => {
+                    let (output, problems) = gen_and_eval_llvm(
+                        self.past_defs.iter().map(|def| def.src.as_str()),
+                        src,
+                        Triple::host(),
+                        OptLevel::Normal,
+                    );
 
-                (output, problems)
-            }
-        };
+                    // Don't persist defs that have compile errors
+                    if problems.errors.is_empty() {
+                        let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
+                        let src = format!("{var_name} = {}", src.trim_end());
+
+                        opt_var_name = Some(var_name.clone());
+
+                        self.add_past_def(var_name, src);
+                    } else {
+                        opt_var_name = None;
+                    }
+
+                    (output, problems)
+                }
+            };
+
+        if let Some((ident, src)) = pending_past_def {
+            self.add_past_def(ident, src);
+        }
 
         format_output(output, problems, opt_var_name, dimensions)
     }
@@ -268,20 +294,6 @@ impl ReplState {
         existing_idents.insert(ident.clone());
 
         self.past_defs.push(PastDef { ident, src });
-    }
-
-    /// Wrap the given expresssion in the appropriate past defs
-    pub fn with_past_defs(&self, src: &str) -> String {
-        let mut buf = String::new();
-
-        for past_def in self.past_defs.iter() {
-            buf.push_str(past_def.src.as_str());
-            buf.push('\n');
-        }
-
-        buf.push_str(src);
-
-        buf
     }
 }
 
@@ -541,8 +553,7 @@ fn format_output(
 ) -> String {
     let mut buf = String::new();
 
-    // Only print errors; discard warnings.
-    for message in problems.errors.iter() {
+    for message in problems.errors.iter().chain(problems.warnings.iter()) {
         if !buf.is_empty() {
             buf.push_str("\n\n");
         }

@@ -42,17 +42,16 @@ impl Problems {
     }
 }
 
-pub fn compile_to_mono<'a>(
+pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     arena: &'a Bump,
-    src: &str,
+    defs: I,
+    expr: &str,
     target_info: TargetInfo,
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
     let filename = PathBuf::from("");
     let src_dir = PathBuf::from("fake/test/path");
-
-    let module_src = arena.alloc(promote_expr_to_module(src));
-
+    let (bytes_before_expr, module_src) = promote_expr_to_module(arena, defs, expr);
     let exposed_types = Default::default();
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -114,18 +113,24 @@ pub fn compile_to_mono<'a>(
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
         for problem in can_probs.into_iter() {
-            let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
+            // Filter out all warnings and errors whose regions end before this,
+            // because they must be part of the defs (excluding the most renently added def,
+            // if that's the one being evaluated) and therefore not things we should show.
+            // This filters out things like shadowing warnings and unused def warnings.
+            if problem.region().unwrap_or_default().end().offset as usize >= bytes_before_expr {
+                let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
+                let severity = report.severity;
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            match severity {
-                Severity::Warning => {
-                    warnings.push(buf);
-                }
-                Severity::RuntimeError => {
-                    errors.push(buf);
+                match severity {
+                    Severity::Warning => {
+                        warnings.push(buf);
+                    }
+                    Severity::RuntimeError => {
+                        errors.push(buf);
+                    }
                 }
             }
         }
@@ -152,16 +157,33 @@ pub fn compile_to_mono<'a>(
     (Some(loaded), problems)
 }
 
-fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n");
+fn promote_expr_to_module<'a, 'i, I: Iterator<Item = &'i str>>(
+    arena: &'a Bump,
+    defs: I,
+    expr: &str,
+) -> (usize, &'a str) {
+    const REPL_MODULE_HEADER: &str = "app \"app\" provides [replOutput] to \"./platform\"\n\n";
+    const REPL_MODULE_MAIN_DEF: &str = "replOutput =\n";
+    const INDENT: &str = "    ";
 
-    for line in src.lines() {
-        // indent the body!
-        buffer.push_str("    ");
+    let mut buffer = bumpalo::collections::string::String::from_str_in(REPL_MODULE_HEADER, arena);
+
+    for line in defs {
+        // don't indent the defs
+        buffer.push_str(line);
+        buffer.push_str("\n\n");
+    }
+
+    buffer.push_str(REPL_MODULE_MAIN_DEF);
+
+    let bytes_before_expr = buffer.len();
+
+    for line in expr.lines() {
+        // indent the expr!
+        buffer.push_str(INDENT);
         buffer.push_str(line);
         buffer.push('\n');
     }
 
-    buffer
+    (bytes_before_expr, buffer.into_bump_str())
 }

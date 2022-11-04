@@ -70,8 +70,8 @@ fn exhaustiveness_problem() {
 
             This when does not cover all the possibilities:
 
-            6│>      when t is
-            7│>          A -> 1
+            7│>      when t is
+            8│>          A -> 1
 
             Other possibilities include:
 
@@ -96,13 +96,9 @@ fn standalone_annotation() {
     let mut state = ReplState::new();
     let mut input = "x : Str".to_string();
 
-    assert_eq!(&state.with_past_defs("test"), "test");
-
     incomplete(&mut input);
     assert!(!is_incomplete(&input));
     assert_eq!(state.step(&input, None), Ok(String::new()));
-
-    assert_eq!(&state.with_past_defs("test"), "x : Str\n\ntest");
 }
 
 /// validate and step the given input, then check the Result vs the output
