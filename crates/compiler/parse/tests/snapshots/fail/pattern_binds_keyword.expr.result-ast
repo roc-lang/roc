@@ -1,1 +1,1 @@
-Expr(When(Condition(Start(@30), @29), @24), @0)
+Expr(When(Arrow(@24), @24), @0)
