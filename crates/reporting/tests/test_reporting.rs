@@ -4847,14 +4847,27 @@ mod test_reporting {
             "#
         ),
         @r###"
-    ── MISSING EXPRESSION ───────────────────── tmp/pattern_binds_keyword/Test.roc ─
+    ── MISSING ARROW ────────────────────────── tmp/pattern_binds_keyword/Test.roc ─
 
-    I am partway through parsing a `when` expression, but I got stuck here:
+    I am partway through parsing a `when` expression, but got stuck here:
 
     5│          Just when ->
-                           ^
+                     ^
 
-    I was expecting to see an expression like 42 or "hello".
+    I was expecting to see an arrow next.
+
+    Note: Sometimes I get confused by indentation, so try to make your `when`
+    look something like this:
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
     "###
     );
 

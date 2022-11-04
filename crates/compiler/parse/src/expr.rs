@@ -346,6 +346,7 @@ fn parse_expr_start<'a>(
         loc!(move |a, s, m| parse_expr_operator_chain(m, options, a, s)),
         fail_expr_start_e()
     ]
+    .trace("expr_start")
     .parse(arena, state, min_indent)
 }
 
@@ -2076,10 +2077,10 @@ mod when {
                     parser::keyword_e(keyword::IS, EWhen::Is)
                 )
             ),
-            move |arena, state, progress, (case_indent, loc_condition), min_indent| {
+            move |arena, state, _progress, (case_indent, loc_condition), min_indent| {
                 if case_indent < min_indent {
                     return Err((
-                        progress,
+                        MadeProgress,
                         // TODO maybe pass case_indent here?
                         EWhen::PatternAlignment(5, state.pos()),
                         state,
@@ -2089,15 +2090,18 @@ mod when {
                 // Everything in the branches must be indented at least as much as the case itself.
                 let min_indent = case_indent;
 
-                let (p1, branches, state) = branches(options).parse(arena, state, min_indent)?;
+                let (_p1, branches, state) = branches(options)
+                    .parse(arena, state, min_indent)
+                    .map_err(|(_p, e, s)| (MadeProgress, e, s))?;
 
                 Ok((
-                    progress.or(p1),
+                    MadeProgress,
                     Expr::When(arena.alloc(loc_condition), branches.into_bump_slice()),
                     state,
                 ))
             },
         )
+        .trace("when")
     }
 
     /// Parsing when with indentation.
