@@ -17,8 +17,7 @@ hosted Effect
         removeProperty,
         setListener,
         removeListener,
-        enableVdomAllocator,
-        disableVdomAllocator,
+        runInVdomArena,
     ]
     imports []
     generates Effect with [always, after]
@@ -65,13 +64,21 @@ setListener : NodeId, EventType, EventHandlerId -> Effect {}
 removeListener : NodeId, EventType -> Effect {}
 
 # Enable a special memory allocator for virtual DOM
-# This consists of two arenas, which alternate between "old" and "new".
+# This consists of two arenas, "even" and "odd", which alternately hold the "old" and "new" VDOM.
 # After we do a diff, the "old" virtual DOM can be dropped without checking refcounts.
 # Danger: Could cause memory unsafety bugs if used incorrectly! Do not expose!
 # Not suitable for values that have a different lifetime from the virtual DOM!
-enableVdomAllocator : Effect {}
+# TODO: actually implement this for real! LOL
+enableVdomAllocator : Bool -> Effect {}
 
 # Switch back from the virtual DOM allocator to the "normal"
 # allocator that is safe to use with long-lived values.
 # At the same time, drop the entire "old" virtual DOM arena.
 disableVdomAllocator : Effect {}
+
+runInVdomArena : Bool, ({} -> Effect a) -> Effect a
+runInVdomArena = \useOddArena, run ->
+    _ <- Effect.enableVdomAllocator useOddArena |> Effect.after
+    returnVal <- run {} |> Effect.after
+    _ <- Effect.disableVdomAllocator |> Effect.after
+    Effect.always returnVal

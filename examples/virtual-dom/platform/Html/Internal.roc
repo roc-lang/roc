@@ -32,6 +32,7 @@ PlatformState state initData : {
     state,
     views : Dict HtmlId (Html state),
     handlers : HandlerLookup state,
+    isOddArena : Bool,
 }
 
 # TODO: keep a list of free indices that we push and pop like a stack
@@ -277,7 +278,7 @@ JsEventResult state initData : {
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
 dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
 dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
-    { app, state, views, handlers } =
+    { app, state, views, handlers, isOddArena: wasOddArena } =
         Box.unbox boxedPlatformState
     eventData =
         Box.unbox boxedEventData
@@ -297,23 +298,23 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
 
     when action is
         Update newState ->
-            # Switch to an arena allocator. All values allocated in the arena will be freed after the next update.
-            _ <- Effect.enableVdomAllocator |> Effect.after
-            newViews = app.renderDynamic newState
-            emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
+            # Any values created in the arena will all be freed on the next update
+            isOddArena = !wasOddArena
 
-            newHandlers <- diffAndUpdateDom emptyHandlers views newViews |> Effect.after
-            newPlatformState = Box.box {
-                app,
-                state: newState,
-                views: newViews,
-                handlers: newHandlers,
-            }
-            jsEventResult = Box.box { platformState: newPlatformState, stopPropagation, preventDefault }
+            Effect.runInVdomArena isOddArena \_ ->
+                newViews = app.renderDynamic newState
+                emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
 
-            # Drop the arena for the previous update, and switch back to the normal allocator
-            _ <- Effect.disableVdomAllocator |> Effect.after
-            Effect.always jsEventResult
+                newHandlers <- diffAndUpdateDom emptyHandlers views newViews |> Effect.after
+                newBoxedPlatformState = Box.box {
+                    app,
+                    state: newState,
+                    views: newViews,
+                    handlers: newHandlers,
+                    isOddArena,
+                }
+
+                Effect.always (Box.box { platformState: newBoxedPlatformState, stopPropagation, preventDefault })
 
         # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
         _ ->
