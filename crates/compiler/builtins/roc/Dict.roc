@@ -226,8 +226,7 @@ expect update (single "a" Bool.true) "a" alterValue == empty
 ##         |> Bool.isEq Bool.true
 contains : Dict k v, k -> Bool | k has Eq
 contains = \@Dict list, needle ->
-    (Pair key _value) <- List.any list
-    key == needle
+    List.any list \Pair key _val -> key == needle
 
 expect contains empty "a" == Bool.false
 expect contains (single "a" {}) "a" == Bool.true
