@@ -1,9 +1,0 @@
-/*.txt
-/dist
-/notes.md
-
-# Binary data (pre-linked Wasm object file)
-/data
-
-# wasm-pack
-/pkg

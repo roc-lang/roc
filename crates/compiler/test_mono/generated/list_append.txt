@@ -1,0 +1,19 @@
+procedure List.4 (List.105, List.106):
+    let List.412 : U64 = 1i64;
+    let List.410 : List I64 = CallByName List.70 List.105 List.412;
+    let List.409 : List I64 = CallByName List.71 List.410 List.106;
+    ret List.409;
+
+procedure List.70 (#Attr.2, #Attr.3):
+    let List.413 : List I64 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.413;
+
+procedure List.71 (#Attr.2, #Attr.3):
+    let List.411 : List I64 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.411;
+
+procedure Test.0 ():
+    let Test.2 : List I64 = Array [1i64];
+    let Test.3 : I64 = 2i64;
+    let Test.1 : List I64 = CallByName List.4 Test.2 Test.3;
+    ret Test.1;

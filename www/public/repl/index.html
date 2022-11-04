@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>Roc REPL</title>
+    <link rel="stylesheet" href="/repl/repl.css" />
+  </head>
+
+  <body>
+    <div class="body-wrapper">
+      <section class="text">
+        <h1>The rockin' Roc REPL</h1>
+      </section>
+
+      <section class="history">
+        <div class="scroll-wrap">
+          <div id="history-text" class="scroll code">
+            <div id="loading-message">
+              Loading Roc compiler as a WebAssembly module... please wait!
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="source">
+        <textarea
+          rows="5"
+          autofocus
+          id="source-input"
+          class="code"
+          placeholder="You can enter Roc code here after the compiler is loaded!"
+          disabled
+        ></textarea>
+      </section>
+    </div>
+    <script type="module" src="/repl/repl.js"></script>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-25,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @4-25 When(
+                    @9-10 Var {
+                        module_name: "",
+                        ident: "n",
+                    },
+                    [
+                        WhenBranch {
+                            patterns: [
+                                @19-20 SpaceBefore(
+                                    NumLiteral(
+                                        "0",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            value: @24-25 Num(
+                                "0",
+                            ),
+                            guard: None,
+                        },
+                    ],
+                ),
+            ),
+        ],
+    },
+    @26-28 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

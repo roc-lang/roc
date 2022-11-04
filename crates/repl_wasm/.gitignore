@@ -1,0 +1,5 @@
+# wasm-pack
+/pkg
+
+# shell script output
+/build

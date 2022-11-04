@@ -1,6 +1,0 @@
-procedure Test.0 ():
-    let Test.11 : [<rnu><null>, C *self] = Z ;
-    let Test.10 : [<rnu><null>, C *self] = S Test.11;
-    let Test.9 : [<rnu><null>, C *self] = S Test.10;
-    let Test.3 : [<rnu><null>, C *self] = S Test.9;
-    ret Test.3;

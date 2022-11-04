@@ -1,6 +1,7 @@
 
 
 /// A polygon with 4 corners
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Quad {
     pub pos: [f32; 2],
@@ -11,6 +12,7 @@ pub struct Quad {
     pub border_width: f32,
 }
 
+// Safety: repr(C), and as defined will not having padding.
 unsafe impl bytemuck::Pod for Quad {}
 unsafe impl bytemuck::Zeroable for Quad {}
 

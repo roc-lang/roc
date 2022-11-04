@@ -1,0 +1,10 @@
+[package]
+name = "roc_intern"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+parking_lot = "0.12"

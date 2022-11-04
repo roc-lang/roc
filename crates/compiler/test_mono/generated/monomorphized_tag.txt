@@ -1,0 +1,8 @@
+procedure Test.2 (Test.4, Test.5):
+    let Test.7 : U8 = 18i64;
+    ret Test.7;
+
+procedure Test.0 ():
+    let Test.1 : Int1 = false;
+    let Test.6 : U8 = CallByName Test.2 Test.1 Test.1;
+    ret Test.6;

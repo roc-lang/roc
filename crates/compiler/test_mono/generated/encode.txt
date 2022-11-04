@@ -1,0 +1,32 @@
+procedure List.4 (List.105, List.106):
+    let List.412 : U64 = 1i64;
+    let List.410 : List U8 = CallByName List.70 List.105 List.412;
+    let List.409 : List U8 = CallByName List.71 List.410 List.106;
+    ret List.409;
+
+procedure List.70 (#Attr.2, #Attr.3):
+    let List.413 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.413;
+
+procedure List.71 (#Attr.2, #Attr.3):
+    let List.411 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.411;
+
+procedure Test.23 (Test.24, Test.35, Test.22):
+    let Test.37 : List U8 = CallByName List.4 Test.24 Test.22;
+    ret Test.37;
+
+procedure Test.8 (Test.22):
+    ret Test.22;
+
+procedure Test.9 (Test.27):
+    let Test.33 : U8 = CallByName Test.8 Test.27;
+    ret Test.33;
+
+procedure Test.0 ():
+    let Test.32 : U8 = 15i64;
+    let Test.28 : U8 = CallByName Test.9 Test.32;
+    let Test.30 : List U8 = Array [];
+    let Test.31 : {} = Struct {};
+    let Test.29 : List U8 = CallByName Test.23 Test.30 Test.31 Test.28;
+    ret Test.29;
