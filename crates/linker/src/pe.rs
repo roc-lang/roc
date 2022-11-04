@@ -1617,7 +1617,7 @@ mod test {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-obj",
                 "app.zig",
                 "-target",
@@ -1642,7 +1642,7 @@ mod test {
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
         let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        let roc_app_sections = AppSections::from_data(&*roc_app);
+        let roc_app_sections = AppSections::from_data(&roc_app);
         let symbols = roc_app_sections.roc_symbols;
 
         // make the dummy dylib based on the app object
@@ -1653,7 +1653,7 @@ mod test {
         // now we can compile the host (it uses libapp.dll, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
                 "libapp.dll",
                 "host.zig",
@@ -1689,7 +1689,7 @@ mod test {
 
         std::fs::copy(&dir.join("preprocessedhost"), &dir.join("app.exe")).unwrap();
 
-        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &*roc_app);
+        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }
 
     #[allow(dead_code)]
@@ -1731,7 +1731,7 @@ mod test {
 
         let output = std::process::Command::new("wine")
             .current_dir(dir)
-            .args(&["app.exe"])
+            .args(["app.exe"])
             .output()
             .unwrap();
 
@@ -1869,7 +1869,7 @@ mod test {
 
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
                 "host.zig",
                 "-lc",

@@ -128,7 +128,7 @@ fn function_s<'a, 'i>(
             remainder,
         } => {
             let id = *id;
-            let body: &Stmt = *body;
+            let body: &Stmt = body;
             let new_body = function_s(env, w, c, body);
 
             let new_join = if std::ptr::eq(body, new_body) || body == new_body {
@@ -179,7 +179,7 @@ fn function_s<'a, 'i>(
             arena.alloc(new_switch)
         }
         Refcounting(op, continuation) => {
-            let continuation: &Stmt = *continuation;
+            let continuation: &Stmt = continuation;
             let new_continuation = function_s(env, w, c, continuation);
 
             if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
@@ -198,7 +198,7 @@ fn function_s<'a, 'i>(
             layouts,
             remainder,
         } => {
-            let continuation: &Stmt = *remainder;
+            let continuation: &Stmt = remainder;
             let new_continuation = function_s(env, w, c, continuation);
 
             if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
@@ -223,7 +223,7 @@ fn function_s<'a, 'i>(
             layouts,
             remainder,
         } => {
-            let continuation: &Stmt = *remainder;
+            let continuation: &Stmt = remainder;
             let new_continuation = function_s(env, w, c, continuation);
 
             if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {

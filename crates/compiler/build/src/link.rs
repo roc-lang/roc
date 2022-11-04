@@ -124,7 +124,7 @@ pub fn build_zig_host_native(
             bitcode::get_builtins_host_obj_path()
         };
 
-        zig_cmd.args(&[
+        zig_cmd.args([
             "build-exe",
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
@@ -132,10 +132,10 @@ pub fn build_zig_host_native(
             &builtins_obj,
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(["build-obj", "-fPIC"]);
     }
 
-    zig_cmd.args(&[
+    zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
@@ -154,7 +154,7 @@ pub fn build_zig_host_native(
     // when we use zig 0.9. It looks like zig 0.10 is going to fix
     // this problem for us, so this is a temporary workaround
     if !target.contains("windows") {
-        zig_cmd.args(&[
+        zig_cmd.args([
             // include the zig runtime
             "-fcompiler-rt",
         ]);
@@ -162,13 +162,13 @@ pub fn build_zig_host_native(
 
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
-        zig_cmd.args(&["-mcpu", "x86_64"]);
+        zig_cmd.args(["-mcpu", "x86_64"]);
     }
 
     if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(&["-O", "ReleaseSafe"]);
+        zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(&["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -378,9 +378,9 @@ pub fn build_zig_host_wasm32(
         .args(args);
 
     if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(&["-O", "ReleaseSafe"]);
+        zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(&["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -400,11 +400,11 @@ pub fn build_c_host_native(
     let mut clang_cmd = clang();
     clang_cmd
         .env_clear()
-        .env("PATH", &env_path)
-        .env("CPATH", &env_cpath)
-        .env("HOME", &env_home)
+        .env("PATH", env_path)
+        .env("CPATH", env_cpath)
+        .env("HOME", env_home)
         .args(sources)
-        .args(&["-o", dest]);
+        .args(["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
         match target.operating_system {
             OperatingSystem::Windows => {
@@ -425,7 +425,7 @@ pub fn build_c_host_native(
                 );
             }
             _ => {
-                clang_cmd.args(&[
+                clang_cmd.args([
                     shared_lib_path.to_str().unwrap(),
                     // This line is commented out because
                     // @bhansconnect: With the addition of Str.graphemes, always
@@ -444,7 +444,7 @@ pub fn build_c_host_native(
             }
         }
     } else {
-        clang_cmd.args(&["-fPIC", "-c"]);
+        clang_cmd.args(["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
         clang_cmd.arg("-O3");
@@ -473,8 +473,8 @@ pub fn build_swift_host_native(
     let mut command = Command::new("arch");
     command
         .env_clear()
-        .env("PATH", &env_path)
-        .env("HOME", &env_home);
+        .env("PATH", env_path)
+        .env("HOME", env_home);
 
     match arch {
         Architecture::Aarch64(_) => command.arg("-arm64"),
@@ -487,10 +487,10 @@ pub fn build_swift_host_native(
         .args(sources)
         .arg("-emit-object")
         .arg("-parse-as-library")
-        .args(&["-o", dest]);
+        .args(["-o", dest]);
 
     if let Some(objc_header) = objc_header_path {
-        command.args(&["-import-objc-header", objc_header]);
+        command.args(["-import-objc-header", objc_header]);
     }
 
     if matches!(opt_level, OptLevel::Optimize) {
@@ -641,7 +641,7 @@ pub fn rebuild_host(
 
         let source_file = if shared_lib_path.is_some() {
             cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
-            cargo_cmd.args(&["--bin", "host"]);
+            cargo_cmd.args(["--bin", "host"]);
             "src/main.rs"
         } else {
             cargo_cmd.arg("--lib");
@@ -673,7 +673,7 @@ pub fn rebuild_host(
 
             let mut ld_cmd = Command::new("ld");
 
-            ld_cmd.env_clear().env("PATH", &env_path).args(&[
+            ld_cmd.env_clear().env("PATH", &env_path).args([
                 "-r",
                 "-L",
                 cargo_out_dir.to_str().unwrap(),
@@ -693,7 +693,7 @@ pub fn rebuild_host(
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
         let mut rustc_cmd = Command::new("rustc");
-        rustc_cmd.args(&[
+        rustc_cmd.args([
             rust_host_src.to_str().unwrap(),
             "-o",
             rust_host_dest.to_str().unwrap(),
@@ -739,7 +739,7 @@ pub fn rebuild_host(
 
             let mut ld_cmd = Command::new("ld");
 
-            ld_cmd.env_clear().env("PATH", &env_path).args(&[
+            ld_cmd.env_clear().env("PATH", &env_path).args([
                 "-r",
                 c_host_dest.to_str().unwrap(),
                 rust_host_dest.to_str().unwrap(),
@@ -856,9 +856,9 @@ fn link_linux(
     if let Architecture::X86_32(_) = target.architecture {
         return Ok((
             zig()
-                .args(&["build-exe"])
+                .args(["build-exe"])
                 .args(input_paths)
-                .args(&[
+                .args([
                     "-target",
                     "i386-linux-musl",
                     "-lc",
@@ -1011,7 +1011,7 @@ fn link_linux(
                 .filter(|&(ref k, _)| k.starts_with("NIX_"))
                 .collect::<HashMap<String, String>>(),
         )
-        .args(&[
+        .args([
             "--gc-sections",
             "--eh-frame-hdr",
             "-A",
@@ -1021,11 +1021,11 @@ fn link_linux(
             &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
-        .args(&["-dynamic-linker", ld_linux])
+        .args(["-dynamic-linker", ld_linux])
         .args(input_paths)
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
-        .args(&[
+        .args([
             // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
@@ -1076,7 +1076,7 @@ fn link_macos(
         // The `-l` flags should go after the `.o` arguments
         // Don't allow LD_ env vars to affect this
         .env_clear()
-        .args(&[
+        .args([
             // NOTE: we don't do --gc-sections on macOS because the default
             // macOS linker doesn't support it, but it's a performance
             // optimization, so if we ever switch to a different linker,
@@ -1108,7 +1108,7 @@ fn link_macos(
         ld_command.arg(roc_link_flag);
     }
 
-    ld_command.args(&[
+    ld_command.args([
         // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
@@ -1148,7 +1148,7 @@ fn link_macos(
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
             let codesign_child = Command::new("codesign")
-                .args(&["-s", "-", output_path.to_str().unwrap()])
+                .args(["-s", "-", output_path.to_str().unwrap()])
                 .spawn()?;
 
             Ok((codesign_child, output_path))
@@ -1187,7 +1187,7 @@ fn link_wasm32(
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
-        .args(&["build-exe"])
+        .args(["build-exe"])
         .args(input_paths)
         .args([
             // include wasi libc
@@ -1222,7 +1222,7 @@ fn link_windows(
     match link_type {
         LinkType::Dylib => {
             let child = zig()
-                .args(&["build-lib"])
+                .args(["build-lib"])
                 .args(input_paths)
                 .args([
                     "-lc",
@@ -1244,7 +1244,7 @@ fn link_windows(
         }
         LinkType::Executable => {
             let child = zig()
-                .args(&["build-exe"])
+                .args(["build-exe"])
                 .args(input_paths)
                 .args([
                     "-target",

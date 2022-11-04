@@ -1821,7 +1821,7 @@ pub(crate) fn sort_can_defs(
                 .strongly_connected_components_subset(group);
 
             debug_assert!(
-                !group.iter_ones().any(|index| matches!((&defs[index]).as_ref().unwrap().loc_pattern.value, Pattern::AbilityMemberSpecialization{..})),
+                !group.iter_ones().any(|index| matches!(defs[index].as_ref().unwrap().loc_pattern.value, Pattern::AbilityMemberSpecialization{..})),
                 "A specialization is involved in a recursive cycle - this should not be knowable until solving");
 
             let declaration = if direct_sccs.groups().count() == 1 {

@@ -352,7 +352,7 @@ pub fn expr_to_expr2<'a>(
 
             for (node_id, branch) in can_branches.iter_node_ids().zip(branches.iter()) {
                 let (can_when_branch, branch_references) =
-                    canonicalize_when_branch(env, scope, *branch, &mut output);
+                    canonicalize_when_branch(env, scope, branch, &mut output);
 
                 output.references.union_mut(branch_references);
 
