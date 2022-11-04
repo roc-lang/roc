@@ -225,8 +225,6 @@ VALUE call_roc(VALUE self, VALUE rb_arg)
 
 void Init_demo()
 {
-    printf("Ruby just required Roc. Let's get READY TO ROC.\n");
-
-    VALUE roc_stuff = rb_define_module("RocStuff");
-    rb_define_module_function(roc_stuff, "call_roc", &call_roc, 1);
+    VALUE roc_app = rb_define_module("RocApp");
+    rb_define_module_function(roc_app, "call_roc", &call_roc, 1);
 }
