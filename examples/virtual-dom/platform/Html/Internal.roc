@@ -19,7 +19,23 @@ interface Html.Internal
         appendRenderedStatic,
         nodeSize,
     ]
-    imports [Action.{ Action }, Encode, Json, Html.HostJavaScript.{ hostJavaScript }]
+    imports [
+        Action.{ Action },
+        Effect.{ Effect },
+        Encode,
+        Json,
+        Html.HostJavaScript.{ hostJavaScript },
+    ]
+
+PlatformState state initData : {
+    app : App state initData,
+    state,
+    views : Dict HtmlId (Html state),
+    handlers : HandlerLookup state,
+}
+
+# TODO: keep a list of free indices that we push and pop like a stack
+HandlerLookup state : List (Result (Handler state) [NoHandler])
 
 App state initData : {
     static : Html [],
@@ -250,44 +266,81 @@ keepStaticAttr = \attr ->
 # -------------------------------
 #   EVENT HANDLING
 # -------------------------------
-insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, lookup : List (Result (Handler state) [NoHandler]) }
-insertHandler = \lookup, newHandler ->
-    when List.findFirstIndex lookup Result.isErr is
+JsEventResult state initData : {
+    platformState : Box (PlatformState state initData),
+    stopPropagation : Bool,
+    preventDefault : Bool,
+}
+
+## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
+## We use Box to pass data structures on the Wasm heap. This is a lot easier than trying to access Wasm stack from JS.
+## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
+dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
+dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
+    { app, state, views, handlers } =
+        Box.unbox boxedPlatformState
+    eventData =
+        Box.unbox boxedEventData
+    maybeHandler =
+        List.get handlers handlerId
+        |> Result.withDefault (Err NoHandler)
+    { action, stopPropagation, preventDefault } =
+        when maybeHandler is
+            Err NoHandler ->
+                { action: Action.none, stopPropagation: Bool.false, preventDefault: Bool.false }
+
+            Ok (@Handler (Normal handler)) ->
+                { action: handler state eventData, stopPropagation: Bool.false, preventDefault: Bool.false }
+
+            Ok (@Handler (Custom handler)) ->
+                handler state eventData
+
+    when action is
+        Update newState ->
+            # Switch to an arena allocator. All values allocated in the arena will be freed after the next update.
+            _ <- Effect.enableVdomAllocator |> Effect.after
+            newViews = app.renderDynamic newState
+            emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
+
+            newHandlers <- diffAndUpdateDom emptyHandlers views newViews |> Effect.after
+            newPlatformState = Box.box {
+                app,
+                state: newState,
+                views: newViews,
+                handlers: newHandlers,
+            }
+            jsEventResult = Box.box { platformState: newPlatformState, stopPropagation, preventDefault }
+
+            # Drop the arena for the previous update, and switch back to the normal allocator
+            _ <- Effect.disableVdomAllocator |> Effect.after
+            Effect.always jsEventResult
+
+        # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
+        _ ->
+            Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
+
+diffAndUpdateDom : HandlerLookup state, Dict HtmlId (Html state), Dict HtmlId (Html state) -> Effect (HandlerLookup state)
+
+insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
+insertHandler = \handlers, newHandler ->
+    when List.findFirstIndex handlers Result.isErr is
         Ok index ->
             {
                 index,
-                lookup: List.set lookup index (Ok newHandler),
+                handlers: List.set handlers index (Ok newHandler),
             }
 
         Err NotFound ->
             {
-                index: List.len lookup,
-                lookup: List.append lookup (Ok newHandler),
+                index: List.len handlers,
+                handlers: List.append handlers (Ok newHandler),
             }
 
 replaceHandler : List (Result (Handler state) [NoHandler]), Nat, Handler state -> List (Result (Handler state) [NoHandler])
-replaceHandler = \lookup, index, newHandler ->
-    { list } = List.replace lookup index (Ok newHandler)
+replaceHandler = \handlers, index, newHandler ->
+    { list } = List.replace handlers index (Ok newHandler)
 
     list
-
-dispatchEvent : List (Result (Handler state) [NoHandler]), Nat, List (List U8), state -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }
-dispatchEvent = \lookup, handlerId, eventData, state ->
-    maybeHandler =
-        List.get lookup handlerId
-        |> Result.withDefault (Err NoHandler)
-
-    when maybeHandler is
-        Err NoHandler ->
-            { action: Action.none, stopPropagation: Bool.false, preventDefault: Bool.false }
-
-        Ok (@Handler (Normal handler)) ->
-            action = handler state eventData
-
-            { action, stopPropagation: Bool.false, preventDefault: Bool.false }
-
-        Ok (@Handler (Custom handler)) ->
-            handler state eventData
 
 # -------------------------------
 #   SERVER SIDE INIT
@@ -407,11 +460,10 @@ populateViewContainers = \walkState, oldTreeNode ->
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
-
 ClientInit state : {
     state,
-    dynamicViews: Dict HtmlId (Html state),
-    staticViews: Dict HtmlId (Html state),
+    dynamicViews : Dict HtmlId (Html state),
+    staticViews : Dict HtmlId (Html state),
 }
 
 initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [JsonError, ViewNotFound HtmlId, UnusedViews (List HtmlId)] | initData has Decoding
@@ -421,6 +473,7 @@ initClientApp = \json, viewIdList, app ->
     dynamicViews = app.renderDynamic state
     staticUnindexed = Dict.map dynamicViews translateStatic
     empty = Dict.withCapacity (Dict.len staticUnindexed)
+
     staticViews <- indexViews viewIdList staticUnindexed 0 0 empty |> Result.try
     Ok {
         state,
@@ -434,9 +487,11 @@ indexViews = \viewIdList, unindexedViews, viewIndex, nodeIndex, indexedViews ->
         Ok id ->
             view <- Dict.get unindexedViews id |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
             indexedState = indexNodes { list: List.withCapacity 1, index: nodeIndex } view
+
             indexedView <- List.first indexedState.list |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
             newIndexedViews = Dict.insert indexedViews id indexedView
             newUnindexedViews = Dict.remove unindexedViews id
+
             indexViews viewIdList newUnindexedViews (viewIndex + 1) indexedState.index newIndexedViews
 
         Err OutOfBounds ->
@@ -477,3 +532,7 @@ indexNodes = \{ list, index }, node ->
                 list: List.append list node,
                 index,
             }
+
+# -------------------------------
+#   VIRTUAL DOM DIFF
+# -------------------------------
