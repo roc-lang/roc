@@ -1,4 +1,4 @@
-platform "hello-world"
+platform "ruby-interop"
     requires {} { main : arg -> ret | arg has Decoding, ret has Encoding }
     exposes []
     packages {}
