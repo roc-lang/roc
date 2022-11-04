@@ -3,10 +3,10 @@ app "libhello"
     imports []
     provides [main] to pf
 
-main : List U8 -> List U8
-main = \json ->
-    if List.isEmpty json then
-        "I need some JSON here!" |> Str.toUtf8
+main : U64 -> Str
+main = \num ->
+    if num == 0 then
+        "I need a positive number here!"
     else
-        str = Str.fromUtf8 json |> Result.withDefault "Invalid UTF-8 in JSON from Ruby"
-        "\(str), OH YEAH!!! 🤘🤘" |> Str.toUtf8
+        str = Num.toStr num
+        "The number was \(str), OH YEAH!!! 🤘🤘"
