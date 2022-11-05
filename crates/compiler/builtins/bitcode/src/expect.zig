@@ -19,8 +19,35 @@ pub fn setSharedBuffer(ptr: [*]u8, length: usize) callconv(.C) usize {
     return 0;
 }
 
-pub fn expectFailedStart() callconv(.C) [*]u8 {
+pub fn expectFailedStartSharedBuffer() callconv(.C) [*]u8 {
     return SHARED_BUFFER.ptr;
+}
+
+pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
+    // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+    var name: [100]u8 = undefined;
+    _ = std.fmt.bufPrint(name[0..100], "/roc_expect_buffer_{}\x00", .{roc_getppid()}) catch unreachable;
+
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        const shared_fd = roc_shm_open(@ptrCast(*const i8, &name), O_RDWR | O_CREAT, 0o666);
+
+        const length = 4096;
+
+        const shared_ptr = roc_mmap(
+            null,
+            length,
+            PROT_WRITE,
+            MAP_SHARED,
+            shared_fd,
+            0,
+        );
+
+        const ptr = @ptrCast([*]u8, shared_ptr);
+
+        return ptr;
+    } else {
+        unreachable;
+    }
 }
 
 extern fn roc_send_signal(pid: c_int, sig: c_int) c_int;
@@ -30,7 +57,6 @@ extern fn roc_getppid() c_int;
 
 pub fn readSharedBufferEnv() callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        // const name = "/roc_expect_buffer";
 
         // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
         var name: [100]u8 = undefined;

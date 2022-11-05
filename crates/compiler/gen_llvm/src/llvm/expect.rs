@@ -14,7 +14,8 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
 use super::build::{
-    add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, Scope,
+    add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
+    Scope,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -93,16 +94,6 @@ fn write_state<'a, 'ctx, 'env>(
     env.builder.build_store(offset_ptr, offset);
 }
 
-pub(crate) fn read_env_shared_buffer(env: &Env) {
-    let func = env
-        .module
-        .get_function(bitcode::UTILS_EXPECT_READ_ENV_SHARED_BUFFER)
-        .unwrap();
-
-    env.builder
-        .build_call(func, &[], "call_expect_read_env_shared_buffer");
-}
-
 pub(crate) fn finalize(env: &Env) {
     let func = env
         .module
@@ -121,10 +112,13 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     region: Region,
     lookups: &[Symbol],
 ) {
-    let func = env
-        .module
-        .get_function(bitcode::UTILS_EXPECT_FAILED_START)
-        .unwrap();
+    let start_function = if let LlvmBackendMode::BinaryDev = env.mode {
+        bitcode::UTILS_EXPECT_FAILED_START_SHARED_FILE
+    } else {
+        bitcode::UTILS_EXPECT_FAILED_START_SHARED_BUFFER
+    };
+
+    let func = env.module.get_function(start_function).unwrap();
 
     let call_result = env
         .builder

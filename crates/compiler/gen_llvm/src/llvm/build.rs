@@ -2817,10 +2817,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
 
-                if let LlvmBackendMode::BinaryDev = env.mode {
-                    crate::llvm::expect::read_env_shared_buffer(env);
-                }
-
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
                         clone_to_shared_memory(
