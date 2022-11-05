@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
 #include <ruby.h>
@@ -19,10 +20,7 @@ void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
 
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-    char *msg = (char *)ptr;
-    fprintf(stderr,
-            "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
-    exit(0);
+    rb_raise(rb_eException, "%s", (char *)ptr);
 }
 
 void *roc_memcpy(void *dest, const void *src, size_t n)
@@ -32,42 +30,142 @@ void *roc_memcpy(void *dest, const void *src, size_t n)
 
 void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
-struct RocStr
+// Reference counting
+
+// If the refcount is set to this, that means the allocation is
+// stored in readonly memory in the binary, and we must not
+// attempt to increment or decrement it; if we do, we'll segfault!
+const ssize_t REFCOUNT_READONLY = 0;
+const ssize_t REFCOUNT_ONE = (ssize_t)PTRDIFF_MIN;
+const size_t MASK = (size_t)PTRDIFF_MIN;
+
+// Increment reference count, given a pointer to the first element in a collection.
+// We don't need to check for overflow because in order to overflow a usize worth of refcounts,
+// you'd need to somehow have more pointers in memory than the OS's virtual address space can hold.
+void incref(uint8_t* bytes, uint32_t alignment)
 {
-    char *bytes;
+    ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
+    ssize_t refcount = *refcount_ptr;
+
+    if (refcount != REFCOUNT_READONLY) {
+        *refcount_ptr = refcount + 1;
+    }
+}
+
+// Decrement reference count, given a pointer to the first element in a collection.
+// Then call roc_dealloc if nothing is referencing this collection anymore.
+void decref(uint8_t* bytes, uint32_t alignment)
+{
+    if (bytes == NULL) {
+        return;
+    }
+
+    size_t extra_bytes = (sizeof(size_t) >= (size_t)alignment) ? sizeof(size_t) : (size_t)alignment;
+    ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
+    ssize_t refcount = *refcount_ptr;
+
+    if (refcount != REFCOUNT_READONLY) {
+        *refcount_ptr = refcount - 1;
+
+        if (refcount == REFCOUNT_ONE) {
+            void *original_allocation = (void *)(refcount_ptr - (extra_bytes - sizeof(size_t)));
+
+            roc_dealloc(original_allocation, alignment);
+        }
+    }
+}
+
+// RocBytes (List U8)
+
+struct RocBytes
+{
+    uint8_t *bytes;
     size_t len;
     size_t capacity;
 };
 
-struct RocStr init_rocstr(char *bytes, size_t len)
+struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
 {
-    struct RocStr ret;
-
-    if (len < sizeof(struct RocStr))
+    if (len == 0)
     {
-        // This is a small string. TODO do small string things.
-        size_t refcount_size = sizeof(size_t);
-        char *new_content = (char *)roc_alloc(len + refcount_size, alignof(size_t)) - refcount_size;
+        struct RocBytes ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
 
-        roc_memcpy(new_content, bytes, len);
-
-        ret.bytes = new_content;
-        ret.len = len;
-        ret.capacity = len;
+        return ret;
     }
     else
     {
+        struct RocBytes ret;
         size_t refcount_size = sizeof(size_t);
-        char *new_content = (char *)roc_alloc(len + refcount_size, alignof(size_t)) - refcount_size;
+        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
 
-        roc_memcpy(new_content, bytes, len);
+        memcpy(new_content, bytes, len);
 
         ret.bytes = new_content;
         ret.len = len;
         ret.capacity = len;
-    }
 
-    return ret;
+        return ret;
+    }
+}
+
+// RocStr
+
+struct RocStr
+{
+    uint8_t *bytes;
+    size_t len;
+    size_t capacity;
+};
+
+struct RocStr init_rocstr(uint8_t *bytes, size_t len)
+{
+    if (len == 0)
+    {
+        struct RocStr ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
+
+        return ret;
+    }
+    else if (len < sizeof(struct RocStr))
+    {
+        // Start out with zeroed memory, so that
+        // if we end up comparing two small RocStr values
+        // for equality, we won't risk memory garbage resulting
+        // in two equal strings appearing unequal.
+        struct RocStr ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = MASK,
+        };
+
+        // Copy the bytes into the stack allocation
+        memcpy(&ret, bytes, len);
+
+        // Record the string's length in the last byte of the stack allocation
+        ((uint8_t *)&ret)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
+
+        return ret;
+    }
+    else
+    {
+        // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
+        struct RocBytes roc_bytes = init_rocbytes(bytes, len);
+
+        struct RocStr ret = {
+            .len = roc_bytes.len,
+            .bytes = roc_bytes.bytes,
+            .capacity = roc_bytes.capacity,
+        };
+
+        return ret;
+    }
 }
 
 bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
@@ -76,9 +174,9 @@ bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
 // account the small string optimization
 size_t roc_str_len(struct RocStr str)
 {
-    char *bytes = (char *)&str;
-    char last_byte = bytes[sizeof(str) - 1];
-    char last_byte_xored = last_byte ^ 0b10000000;
+    uint8_t *bytes = (uint8_t *)&str;
+    uint8_t last_byte = bytes[sizeof(str) - 1];
+    uint8_t last_byte_xored = last_byte ^ 0b10000000;
     size_t small_len = (size_t)(last_byte_xored);
     size_t big_len = str.len;
 
@@ -95,45 +193,38 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
+extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
-VALUE hello(VALUE self, VALUE rb_arg)
+// Receive a value from Ruby, JSON serialized it and pass it to Roc as a List U8
+// (at which point the Roc platform will decode it and crash if it's invalid,
+// which roc_panic will translate into a Ruby exception), then get some JSON back from Roc
+// - also as a List U8 - and have Ruby JSON.parse it into a plain Ruby value to return.
+VALUE call_roc(VALUE self, VALUE rb_arg)
 {
-    // Verify the argument is a Ruby string; raise a type error if not.
-    if (TYPE(rb_arg) != T_STRING)
-    {
-        rb_raise(rb_eTypeError, "`hello` only accepts strings.");
-    }
+    // This must be required before the to_json method will exist on String.
+    rb_require("json");
 
-    struct RocStr arg = init_rocstr(RSTRING_PTR(rb_arg), RSTRING_LEN(rb_arg));
-    struct RocStr ret;
+    // Turn the given Ruby value into a JSON string.
+    // TODO should we defensively encode it as UTF-8 first?
+    VALUE json_arg = rb_funcall(rb_arg, rb_intern("to_json"), 0);
 
+    struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(json_arg), RSTRING_LEN(json_arg));
+    struct RocBytes ret;
+
+    // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
-    // Determine str_len and the str_bytes pointer,
-    // taking into account the small string optimization.
-    size_t str_len = roc_str_len(ret);
-    VALUE ruby_str;
+    // Create a rb_utf8_str from the heap-allocated JSON bytes the Roc function returned.
+    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, ret.len);
 
-    if (is_small_str(ret))
-    {
-        ruby_str = rb_utf8_str_new((char *)&ret, str_len);
-    }
-    else
-    {
-        ruby_str = rb_utf8_str_new(ret.bytes, str_len);
+    // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
+    decref((void *)&ret, alignof(uint8_t *));
 
-        // TODO decrement refcount and then only dealloc if that was the last reference
-        roc_dealloc(ret.bytes - sizeof(size_t), alignof(char *));
-    }
-
-    return ruby_str;
+    return rb_funcall(rb_define_module("JSON"), rb_intern("parse"), 1, returned_json);
 }
 
 void Init_demo()
 {
-    printf("Ruby just required Roc. Let's get READY TO ROC.\n");
-
-    VALUE roc_stuff = rb_define_module("RocStuff");
-    rb_define_module_function(roc_stuff, "hello", &hello, 1);
+    VALUE roc_app = rb_define_module("RocApp");
+    rb_define_module_function(roc_app, "call_roc", &call_roc, 1);
 }
