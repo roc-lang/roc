@@ -705,6 +705,13 @@ pub struct MonomorphizedModule<'a> {
     pub expectations: VecMap<ModuleId, Expectations>,
 }
 
+/// Values used to render expect output
+pub struct ExpectMetadata<'a> {
+    pub interns: Interns,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
+    pub expectations: VecMap<ModuleId, Expectations>,
+}
+
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {

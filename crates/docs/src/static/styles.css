@@ -37,6 +37,10 @@ a {
   color: #972395;
 }
 
+table tr th, table tr td {
+  padding: 6px 13px;
+}
+
 .logo {
   padding: 2px 8px;
 }

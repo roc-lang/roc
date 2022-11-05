@@ -920,7 +920,7 @@ fn markdown_to_html(
         }
     };
 
-    let markdown_options = pulldown_cmark::Options::empty();
+    let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
     let mut expecting_code_block = false;
 
