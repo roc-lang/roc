@@ -14,10 +14,8 @@ pub fn space0_around_ee<'a, P, S, E>(
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -34,10 +32,8 @@ pub fn space0_around_e_no_after_indent_check<'a, P, S, E>(
     indent_before_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -55,10 +51,8 @@ pub fn space0_before_optional_after<'a, P, S, E>(
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -84,8 +78,7 @@ fn spaces_around_help<'a, S>(
     ),
 ) -> Loc<S>
 where
-    S: Spaceable<'a>,
-    S: 'a,
+    S: 'a + Spaceable<'a>,
 {
     let (spaces_before, (loc_val, spaces_after)) = tuples;
 
@@ -117,10 +110,8 @@ pub fn space0_before_e<'a, P, S, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -142,10 +133,8 @@ pub fn space0_after_e<'a, P, S, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
