@@ -19,8 +19,7 @@
 
 <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and optionally annotate your types.</p>
 
-<h2 id="installation">Installation</h2>
-
+<h2><a name="installation"><a href="#installation">Installation</a></a></h2>
 <p>Roc doesn't have a numbered release yet, but you can download a nightly release of the
     <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
     (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
@@ -28,26 +27,22 @@
     <a href="https://medium.com/codex/adding-executable-program-commands-to-the-path-variable-5e45f1bdf6ce">Mac or Linux</a>,
     and <a href="https://medium.com/@kevinmarkvi/how-to-add-executables-to-your-path-in-windows-5ffa4ce61a53">on Windows</a>).
 </p>
-
 <p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information. If you get stuck, there are plenty of people happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"><code>#beginners</code> stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
-
-<h2 id="strings-and-numbers">Strings and Numbers</h2>
-
+<h2><a name="strings-and-numbers"><a href="#strings-and-numbers">Strings and Numbers</a></a></h2>
 <p>Let's start by getting acquainted with Roc's <i>Read Eval Print Loop</i>, or REPL for
 short.</p>
-
 <p>Run this in a terminal:</p>
 <code class="snippet">roc repl</code>
 <p>If Roc is <a href="#installation">installed</a>, you should see this:</p>
 <samp>The rockin’ roc repl</samp>
 <p>So far, so good!</p>
-<h3 id="hello-world">Hello, World!</h3>
+<h3><a name="hello-world"><a href="#hello-world">Hello, World!</a></a></h3>
 <p>Try typing this at the REPL prompt and pressing Enter:</p>
 <code class="snippet">"Hello, World!"</code>
 <p>The REPL should cheerfully display the following:</p>
-<samp>"Hello, World!" <span class="ann">:</span> Str</span>            <span class="autovar"># val1</span></samp>
+<samp>"Hello, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val1</span></samp>
 <p>Congratulations! You&#39;ve just written your first Roc code!</p>
-<h3 id="arithmetic">String Interpolation</h3>
+<h3><a name="naming-things"><a href="#naming-things">Naming Things</a></a></h3>
 <p>When you entered the <em>expression</em> <code>&quot;Hello, World!&quot;</code>,
 the REPL printed it back out. It also printed <code><span class="ann">:</span> Str</code>, because
 <code>Str</code> is that expression's type. We'll talk about types later; for now, let's ignore
@@ -60,15 +55,22 @@ just there as a convenience.</p>
 <p>Still, while we're talking about them, let's try it out. Put this into the repl and press Enter:</p>
 <code class="snippet">val1</code>
 <p>You should see the same <code>"Hello, World!"</code> line as before.</p>
-<p>You can also create your own names for expressions. Try entering these lines:</p>
+<p>You can also assign specific names to expressions. Try entering these lines:</p>
 <code class="snippet">greeting = "Hi"</code>
 <code class="snippet">audience = "World"</code>
-<code class="snippet">"\(greeting), \(audience)!"</code>
-<p>After entering that last one, you should see this output:</p>
-<samp>"Hi, World!" <span class="ann">:</span> Str</span>            <span class="autovar"># val2</span></samp>
-<p>This</p>
-<h3 id="arithmetic">Arithmetic</h3>
-<p>Next let's try putting in a more complicated expression:</p>
+<p>From now until you exit the REPL, you can refer to either <code>greeting</code> or <code>audience</code> by those names!</p>
+<h3><a name="string-interpolation"><a href="#string-interpolation">String Interpolation</a></a></h3>
+<p>You can combine named strings together using <i>string interpolation</i>, like so:</p>
+<code class="snippet"><span class="str">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></code>
+<p>If you put this into the REPL, you should see this output:</p>
+<samp>"Hi there, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val2</span></samp>
+<p>Notice that the REPL printed <code class="autovar"># val2</code> here. This works just like
+<code class="autovar"># val1</code> did before, but it chose the name <code>val2</code> for this
+expression because <code>val1</code> was already taken in this REPL session. As we continue entering more
+expressions into the REPL, you'll see more and more of these generated names.</code>
+<p>By the way, there are many other ways to put strings together! Check out the documentation for the <a href="https://www.roc-lang.org/builtins/Str"><code>Str</code> module</a> for more.</code></p>
+<h3><a name="arithmetic"><a href="#arithmetic">Arithmetic</a></a></h3>
+<p>Let's try putting in a more complicated expression:</p>
 <samp>1 + 1
 
 2 <span class="ann">:</span> Num *</samp>

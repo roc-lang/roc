@@ -29,13 +29,29 @@ code.snippet, samp {
 
 .ann {
     /* type annotation - purple in the repl */
-    color: rebeccapurple;
+    color: orchid;
 }
 
 .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
     color: green;
 }
+
+.str {
+    /* automatic variable names in the repl, e.g. # val1 */
+    color: goldenrod;
+}
+
+.str-esc {
+    /* automatic variable names in the repl, e.g. # val1 */
+    color: cyan;
+}
+
+.str-interp {
+    /* automatic variable names in the repl, e.g. # val1 */
+    color: white;
+}
+
 
 /* Used on on the different-names page. */
 
