@@ -30,7 +30,7 @@ interface Html.Internal
 PlatformState state initData : {
     app : App state initData,
     state,
-    views : Dict HtmlId (Html state),
+    view : Html state,
     handlers : HandlerLookup state,
     isOddArena : Bool,
 }
@@ -39,13 +39,10 @@ PlatformState state initData : {
 HandlerLookup state : List (Result (Handler state) [NoHandler])
 
 App state initData : {
-    static : Html [],
-    initDynamic : initData -> state,
-    renderDynamic : state -> Dict HtmlId (Html state),
+    init : initData -> state,
+    render : state -> (Html state),
     wasmUrl : Str,
 }
-
-HtmlId : Str
 
 Html state : [
     None,
@@ -278,7 +275,7 @@ JsEventResult state initData : {
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
 dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
 dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
-    { app, state, views, handlers, isOddArena: wasOddArena } =
+    { app, state, view, handlers, isOddArena: wasOddArena } =
         Box.unbox boxedPlatformState
     eventData =
         Box.unbox boxedEventData
@@ -302,14 +299,14 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
             isOddArena = !wasOddArena
 
             Effect.runInVdomArena isOddArena \_ ->
-                newViews = app.renderDynamic newState
+                newView = app.render newState
                 emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
 
-                newHandlers <- diffAndUpdateDom emptyHandlers views newViews |> Effect.after
+                newHandlers <- diffAndUpdateDom emptyHandlers view newView |> Effect.after
                 newBoxedPlatformState = Box.box {
                     app,
                     state: newState,
-                    views: newViews,
+                    view: newView,
                     handlers: newHandlers,
                     isOddArena,
                 }
@@ -320,7 +317,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
         _ ->
             Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
 
-diffAndUpdateDom : HandlerLookup state, Dict HtmlId (Html state), Dict HtmlId (Html state) -> Effect (HandlerLookup state)
+diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect (HandlerLookup state)
 
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
 insertHandler = \handlers, newHandler ->
@@ -346,30 +343,16 @@ replaceHandler = \handlers, index, newHandler ->
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [MissingHtmlIds (List Str), InvalidDocument] | initData has Encoding
+initServerApp : initData, App state initData -> Result (Html []) [InvalidDocument] | initData has Encoding
 initServerApp = \initData, app ->
-    views =
-        initData
-        |> app.initDynamic
-        |> app.renderDynamic
-        |> Dict.map translateStatic
+    initData
+    |> app.init
+    |> app.render
+    |> translateStatic
+    |> insertRocScript initData app.wasmUrl
 
-    { views: remainingViews, siblings } =
-        populateViewContainers { views, siblings: [] } app.static
-
-    if Dict.len remainingViews != 0 then
-        Err (MissingHtmlIds (Dict.keys remainingViews))
-    else
-        when List.first siblings is
-            Err _ ->
-                # error is impossible, since we know the List has exactly one entry
-                Err (MissingHtmlIds [])
-
-            Ok document ->
-                insertRocScript document initData (Dict.keys views) app.wasmUrl
-
-insertRocScript : Html [], initData, List HtmlId, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
-insertRocScript = \document, initData, viewIds, wasmUrl ->
+insertRocScript : Html [], initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript = \document, initData, wasmUrl ->
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
@@ -379,8 +362,11 @@ insertRocScript = \document, initData, viewIds, wasmUrl ->
         |> Encode.toBytes Json.toUtf8
         |> Str.fromUtf8
         |> Result.withDefault ""
-    jsViewIds = viewIds |> Encode.toBytes Json.toUtf8 |> Str.fromUtf8 |> Result.withDefault ""
-    jsWasmUrl = wasmUrl |> Encode.toBytes Json.toUtf8 |> Str.fromUtf8 |> Result.withDefault ""
+    jsWasmUrl =
+        wasmUrl
+        |> Encode.toBytes Json.toUtf8
+        |> Str.fromUtf8
+        |> Result.withDefault ""
 
     script : Html []
     script = (element "script") [] [
@@ -389,9 +375,8 @@ insertRocScript = \document, initData, viewIds, wasmUrl ->
             (function(){
             \(hostJavaScript)
             const initData = \(jsInitData);
-            const viewIds = \(jsViewIds);
             const wasmUrl = \(jsWasmUrl);
-            window.roc = roc_init(initData, viewIds, wasmUrl);
+            window.roc = roc_init(initData, wasmUrl);
             })();
             """,
     ]
@@ -422,85 +407,40 @@ insertRocScript = \document, initData, viewIds, wasmUrl ->
 
         _ -> Err InvalidDocument
 
-populateViewContainers : { views : Dict HtmlId (Html []), siblings : List (Html []) }, Html [] -> { views : Dict HtmlId (Html []), siblings : List (Html []) }
-populateViewContainers = \walkState, oldTreeNode ->
-    when oldTreeNode is
-        Element name jsIndex size attrs children ->
-            { views, siblings } = walkState
-
-            maybeFound =
-                List.walkUntil attrs (Err KeyNotFound) \_, attr ->
-                    when attr is
-                        HtmlAttr "id" id ->
-                            Dict.get views id
-                            |> Result.map \view -> { view, id }
-                            |> Break
-
-                        _ -> Err KeyNotFound |> Continue
-
-            when maybeFound is
-                Ok { view, id } ->
-                    {
-                        views: Dict.remove views id,
-                        siblings: List.append siblings (Element name jsIndex size attrs [view]),
-                    }
-
-                Err KeyNotFound ->
-                    emptyNewChildren = List.withCapacity (List.len children)
-                    { views: newViews, siblings: newChildren } =
-                        List.walk children { views, siblings: emptyNewChildren } populateViewContainers
-
-                    {
-                        views: newViews,
-                        siblings: List.append siblings (Element name jsIndex size attrs newChildren),
-                    }
-
-        _ ->
-            walkState
-
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
 ClientInit state : {
     state,
-    dynamicViews : Dict HtmlId (Html state),
-    staticViews : Dict HtmlId (Html state),
+    staticView : Html state,
+    dynamicView : Html state,
 }
 
-initClientApp : List U8, List Str, App state initData -> Result (ClientInit state) [JsonError, ViewNotFound HtmlId, UnusedViews (List HtmlId)] | initData has Decoding
-initClientApp = \json, viewIdList, app ->
-    initData <- json |> Decode.fromBytes Json.fromUtf8 |> Result.mapErr (\_ -> JsonError) |> Result.try
-    state = app.initDynamic initData
-    dynamicViews = app.renderDynamic state
-    staticUnindexed = Dict.map dynamicViews translateStatic
-    empty = Dict.withCapacity (Dict.len staticUnindexed)
-
-    staticViews <- indexViews viewIdList staticUnindexed 0 0 empty |> Result.try
+initClientApp : List U8, App state initData -> Result (ClientInit state) [JsonError] | initData has Decoding
+initClientApp = \json, app ->
+    initData <-
+        json
+        |> Decode.fromBytes Json.fromUtf8
+        |> Result.mapErr (\_ -> JsonError)
+        |> Result.try
+    state = app.init initData
+    dynamicView = app.render state
+    staticUnindexed = translateStatic dynamicView
+    staticView =
+        indexNodes { list: [], index: 0 } staticUnindexed
+        |> .list
+        |> List.first
+        |> Result.withDefault (Text NoJsIndex "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
     Ok {
         state,
-        dynamicViews,
-        staticViews,
+        staticView,
+        dynamicView,
     }
 
-indexViews : List HtmlId, Dict HtmlId (Html state), Nat, Nat, Dict HtmlId (Html state) -> Result (Dict HtmlId (Html state)) [ViewNotFound HtmlId, UnusedViews (List HtmlId)]
-indexViews = \viewIdList, unindexedViews, viewIndex, nodeIndex, indexedViews ->
-    when List.get viewIdList viewIndex is
-        Ok id ->
-            view <- Dict.get unindexedViews id |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
-            indexedState = indexNodes { list: List.withCapacity 1, index: nodeIndex } view
-
-            indexedView <- List.first indexedState.list |> Result.mapErr (\_ -> ViewNotFound id) |> Result.try
-            newIndexedViews = Dict.insert indexedViews id indexedView
-            newUnindexedViews = Dict.remove unindexedViews id
-
-            indexViews viewIdList newUnindexedViews (viewIndex + 1) indexedState.index newIndexedViews
-
-        Err OutOfBounds ->
-            if Dict.len unindexedViews == 0 then
-                Ok indexedViews
-            else
-                Err (UnusedViews (Dict.keys unindexedViews))
-
+# Assign an index to each (virtual) DOM node.
+# In JavaScript, we maintain an array of references to real DOM nodes.
+# In Roc, each virtual DOM node in the "old" tree knows the index of its real DOM node in the JS array.
+# Here we traverse the tree in the same order as JavaScript does when it initialises the array.
 indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
 indexNodes = \{ list, index }, node ->
     when node is
