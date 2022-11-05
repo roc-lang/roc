@@ -570,6 +570,24 @@ We refer to whatever comes before a `->` in a `when` expression as a *pattern* -
 patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
 suggest making a `when` branch that begins with something like `Custom description ->`.
 
+### Pattern Matching on Lists
+You can also pattern match on lists, like so:
+
+    when myList is
+        [] -> # the list is empty
+        [Foo, ..] -> # it starts with a Foo tag
+        [Foo, Bar, ..] -> # it starts with a Foo tag followed by a Bar tag
+        [Foo, a, ..] -> # it starts with a Foo tag followed by something we name `a`
+        [Ok a, ..] -> # it starts with an Ok tag containing a payload named `a`
+        [.., Foo] -> # it ends with a Foo tag
+        [A, B, .., C, D] -> # it has certain elements at the beginning and and
+
+This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get)
+multiple times, since each call to `get` requires a separate conditional to handle the different
+`Result`s they return.
+
+> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
+
 ## Booleans
 
 In many programming languages, `true` and `false` are special language keywords that refer to
