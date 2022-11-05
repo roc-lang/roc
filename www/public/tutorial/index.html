@@ -1703,9 +1703,9 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 <p>© 2022</p>
 </footer>
 <script>
-    // When you click in a repl box, select its content to make it easier to copy/paste.
+    // When you double-click in a repl box, select its content (to make it easier to copy/paste).
     document.querySelectorAll(".repl-prompt").forEach((elem) => {
-        elem.addEventListener("click", (event) => {
+        elem.addEventListener("dblclick", (event) => {
             getSelection().selectAllChildren(event.target.closest(".repl-prompt"));
         });
     });
