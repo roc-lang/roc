@@ -215,6 +215,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                 // Flaky test errors that only occur sometimes on MacOS ci server.
                 if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
+                    || error_str.contains("LLVM failed to emit asm")
                 {
                     if flaky_fail_counter == 10 {
                         panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
