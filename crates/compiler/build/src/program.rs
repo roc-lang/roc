@@ -370,7 +370,7 @@ fn gen_from_mono_module_llvm<'a>(
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
-            .args(&["-instnamer", app_ll_file.to_str().unwrap()])
+            .args(["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
             Ok(_) => {}
@@ -392,7 +392,7 @@ fn gen_from_mono_module_llvm<'a>(
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
                 let ll_to_bc = Command::new("llvm-as")
-                    .args(&[
+                    .args([
                         app_ll_dbg_file.to_str().unwrap(),
                         "-o",
                         app_bc_file.to_str().unwrap(),

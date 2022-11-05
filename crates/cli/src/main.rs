@@ -178,14 +178,7 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_REPL, _)) => {
-            {
-                roc_repl_cli::main()?;
-
-                // Exit 0 if the repl exited normally
-                Ok(0)
-            }
-        }
+        Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_EDIT, matches)) => {
             match matches
                 .values_of_os(DIRECTORY_OR_FILES)

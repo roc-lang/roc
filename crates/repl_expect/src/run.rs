@@ -286,7 +286,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
 ) -> std::io::Result<bool> {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+    let mut signals = Signals::new([SIGCHLD, SIGUSR1]).unwrap();
 
     match unsafe { libc::fork() } {
         0 => unsafe {
@@ -472,8 +472,7 @@ fn render_expect_failure<'a>(
         start,
         frame.start_offset,
         &variables,
-    )
-    .unwrap();
+    );
 
     renderer.render_failure(
         writer,

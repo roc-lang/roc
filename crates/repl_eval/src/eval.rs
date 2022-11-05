@@ -13,7 +13,7 @@ use roc_mono::layout::{
     self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
     UnionVariant, WrappedVariant,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
@@ -27,11 +27,6 @@ struct Env<'a, 'env> {
     target_info: TargetInfo,
     interns: &'a Interns,
     layout_cache: LayoutCache<'a>,
-}
-
-#[derive(Debug)]
-pub enum ToAstProblem {
-    FunctionLayout,
 }
 
 /// JIT execute the given main function, and then wrap its results in an Expr
@@ -53,7 +48,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     interns: &'a Interns,
     layout_interner: LayoutInterner<'a>,
     target_info: TargetInfo,
-) -> Result<Expr<'a>, ToAstProblem> {
+) -> Expr<'a> {
     let mut env = Env {
         arena,
         subs,
@@ -68,10 +63,24 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
             result,
             captures_niche: _,
         } => {
-            // this is a thunk
+            // This is a thunk, which cannot be defined in userspace, so we know
+            // it's `main` and can be executed.
             jit_to_ast_help(&mut env, app, main_fn_name, &result, var)
         }
-        _ => Err(ToAstProblem::FunctionLayout),
+        ProcLayout { arguments, .. } => {
+            // This is a user-supplied function; create a fake Expr for it.
+            let mut arg_patterns =
+                bumpalo::collections::Vec::with_capacity_in(arguments.len(), arena);
+
+            // Put in an underscore for each of the args, just to get the arity right.
+            for _ in 0..arguments.len() {
+                arg_patterns.push(Loc::at_zero(Pattern::Underscore("_")));
+            }
+
+            let body_expr = Loc::at_zero(Expr::Record(Collection::empty()));
+
+            Expr::Closure(arg_patterns.into_bump_slice(), arena.alloc(body_expr))
+        }
     }
 }
 
@@ -331,7 +340,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     main_fn_name: &str,
     layout: &Layout<'a>,
     var: Variable,
-) -> Result<Expr<'a>, ToAstProblem> {
+) -> Expr<'a> {
     let (newtype_containers, alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
 
     macro_rules! num_helper {
@@ -342,33 +351,22 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let result = match layout {
-        Layout::Builtin(Builtin::Bool) => Ok(app.call_function(
-            main_fn_name,
-            |mem: &A::Memory, num: bool| {
-                bool_to_ast(
-                    env,
-                    mem,
-                    num,
-                    env.subs.get_content_without_compacting(raw_var),
-                )
-            },
-        )),
+    let expr = match layout {
+        Layout::Builtin(Builtin::Bool) => {
+            app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
+                bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
+            })
+        }
         Layout::Builtin(Builtin::Int(int_width)) => {
             use Content::*;
             use IntWidth::*;
 
-            let result = match (alias_content, int_width) {
+            match (alias_content, int_width) {
                 (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
-                    app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
-                        byte_to_ast(
-                            env,
-                            mem,
-                            num,
-                            env.subs.get_content_without_compacting(raw_var),
-                        )
+                    app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
+                        byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
                 }
                 // The rest are numbers... for now
@@ -381,22 +379,18 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 (_, I32) => num_helper!(i32),
                 (_, I64) => num_helper!(i64),
                 (_, I128) => num_helper!(i128),
-            };
-
-            Ok(result)
+            }
         }
         Layout::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 
-            let result = match float_width {
+            match float_width {
                 F32 => num_helper!(f32),
                 F64 => num_helper!(f64),
                 F128 => todo!("F128 not implemented"),
-            };
-
-            Ok(result)
+            }
         }
-        Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
+        Layout::Builtin(Builtin::Decimal) => num_helper!(RocDec),
         Layout::Builtin(Builtin::Str) => {
             let body = |mem: &A::Memory, addr| {
                 let string = mem.deref_str(addr);
@@ -404,24 +398,21 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 Expr::Str(StrLiteral::PlainLine(arena_str))
             };
 
-            Ok(app.call_function_returns_roc_str(env.target_info, main_fn_name, body))
+            app.call_function_returns_roc_str(env.target_info, main_fn_name, body)
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            //
-            Ok(app.call_function_returns_roc_list(
-                main_fn_name,
-                |mem: &A::Memory, (addr, len, _cap)| {
-                    list_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        len,
-                        elem_layout,
-                        env.subs.get_content_without_compacting(raw_var),
-                    )
-                },
-            ))
-        }
+        Layout::Builtin(Builtin::List(elem_layout)) => app.call_function_returns_roc_list(
+            main_fn_name,
+            |mem: &A::Memory, (addr, len, _cap)| {
+                list_to_ast(
+                    env,
+                    mem,
+                    addr,
+                    len,
+                    elem_layout,
+                    env.subs.get_content_without_compacting(raw_var),
+                )
+            },
+        ),
         Layout::Struct { field_layouts, .. } => {
             let fields = [Layout::u64(), *layout];
             let layout = Layout::struct_no_name_order(env.arena.alloc(fields));
@@ -433,38 +424,24 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 .get_content_without_compacting(raw_var)
             {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, mem, addr, *fields))
+                    struct_to_ast(env, mem, addr, *fields)
                 }
                 Content::Structure(FlatType::EmptyRecord) => {
-                    Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
+                    struct_to_ast(env, mem, addr, RecordFields::empty())
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
-                    Ok(single_tag_union_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        field_layouts,
-                        tag_name,
-                        payload_vars,
-                    ))
+                    single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
                 }
                 Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
                     let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
 
-                    Ok(single_tag_union_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        field_layouts,
-                        tag_name,
-                        &[],
-                    ))
+                    single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
                 }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    Ok(OPAQUE_FUNCTION)
+                    OPAQUE_FUNCTION
                 }
                 other => {
                     unreachable!(
@@ -482,7 +459,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
             let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
-            Ok(app.call_function_dynamic_size(
+
+            app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -495,14 +473,15 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            ))
+            )
         }
         Layout::Union(UnionLayout::Recursive(_))
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
-            Ok(app.call_function_dynamic_size(
+
+            app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -515,31 +494,29 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            ))
+            )
         }
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::LambdaSet(_) => OPAQUE_FUNCTION,
         Layout::Boxed(_) => {
             let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
-            Ok(app.call_function_dynamic_size(
-                main_fn_name,
-                size as usize,
-                |mem: &A::Memory, addr| {
-                    addr_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        layout,
-                        WhenRecursive::Unreachable,
-                        env.subs.get_root_key_without_compacting(raw_var),
-                    )
-                },
-            ))
+
+            app.call_function_dynamic_size(main_fn_name, size as usize, |mem: &A::Memory, addr| {
+                addr_to_ast(
+                    env,
+                    mem,
+                    addr,
+                    layout,
+                    WhenRecursive::Unreachable,
+                    env.subs.get_root_key_without_compacting(raw_var),
+                )
+            })
         }
     };
-    result.map(|e| apply_newtypes(env, newtype_containers.into_bump_slice(), e))
+
+    apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -582,7 +559,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             // num is always false at the moment.
             let num: bool = mem.deref_bool(addr);
 
-            bool_to_ast(env, mem, num, raw_content)
+            bool_to_ast(env, num, raw_content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -1141,12 +1118,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
-    mem: &M,
-    value: bool,
-    content: &Content,
-) -> Expr<'a> {
+fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1176,7 +1148,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: bool_to_ast(env, mem, value, content),
+                            value: bool_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1225,7 +1197,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            bool_to_ast(env, mem, value, content)
+            bool_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -1233,12 +1205,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
     }
 }
 
-fn byte_to_ast<'a, M: ReplAppMemory>(
-    env: &mut Env<'a, '_>,
-    mem: &M,
-    value: u8,
-    content: &Content,
-) -> Expr<'a> {
+fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1268,7 +1235,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: byte_to_ast(env, mem, value, content),
+                            value: byte_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1345,7 +1312,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            byte_to_ast(env, mem, value, content)
+            byte_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in byte_to_ast", other);

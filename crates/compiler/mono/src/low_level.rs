@@ -1,6 +1,6 @@
 use roc_module::symbol::Symbol;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HigherOrder {
     ListMap {
         xs: Symbol,

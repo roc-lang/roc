@@ -411,16 +411,16 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             match rc_operation {
                 Mode::Inc => {
                     let n = 1;
-                    increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
+                    increment_refcount_layout(env, layout_ids, n, value, layout);
                 }
                 Mode::IncN => {
                     let n = it.next().unwrap().into_int_value();
                     n.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-                    increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
+                    increment_n_refcount_layout(env, layout_ids, n, value, layout);
                 }
                 Mode::Dec => {
-                    decrement_refcount_layout(env, function_value, layout_ids, value, layout);
+                    decrement_refcount_layout(env, layout_ids, value, layout);
                 }
             }
 

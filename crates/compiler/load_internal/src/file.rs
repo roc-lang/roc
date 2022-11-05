@@ -3107,7 +3107,7 @@ fn load_platform_module<'a>(
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
-    let file = fs::read(&filename);
+    let file = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
     match file {
