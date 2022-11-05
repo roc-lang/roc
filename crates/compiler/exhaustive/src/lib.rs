@@ -1,5 +1,5 @@
-//! [Exhaustiveness](https://dev.to/babak/exhaustive-type-checking-with-typescript-4l3f) checking, based on "Warning for pattern matching" (Luc Maranget, 2007).
-//! http://moscova.inria.fr/~maranget/papers/warn/warn.pdf
+//! Exhaustiveness checking, based on [Warnings for pattern matching](http://moscova.inria.fr/~maranget/papers/warn/warn.pdf)
+//! (Luc Maranget, 2007).
 
 use roc_collections::all::{HumanIndex, MutMap};
 use roc_error_macros::internal_error;
