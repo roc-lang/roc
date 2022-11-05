@@ -6,8 +6,8 @@ use roc_collections::MutSet;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
-use roc_parse::parser::Either;
-use roc_parse::parser::{EClosure, EExpr};
+use roc_parse::parser::{EClosure, EExpr, EPattern};
+use roc_parse::parser::{EWhen, Either};
 use roc_parse::state::State;
 use roc_parse::{join_alias_to_body, join_ann_to_body};
 use roc_region::all::Loc;
@@ -321,6 +321,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _), _))
+                | Err((_, EExpr::When(EWhen::Pattern(EPattern::Start(_), _), _), _))
                 | Err((_, EExpr::Start(_), _))
                 | Err((_, EExpr::IndentStart(_), _)) => ParseOutcome::Incomplete,
                 Err((_, EExpr::DefMissingFinalExpr(_), _))
