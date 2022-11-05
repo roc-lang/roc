@@ -86,43 +86,49 @@ be grouped.</p>
 
 -1 <span class="ann">:</span> Num *</samp>
 </section>
-<section><h3><a name="functions"><a href="#functions">Functions</a></a></h3>
-<p>Let's try calling a function:</p>
-<pre><code class="lang-coffee"><span class="hljs-meta">&gt;&gt;</span> Str.concat <span class="hljs-string">"Hi "</span> <span class="hljs-string">"there!"</span>
-<span class="hljs-string">"Hi there!"</span> : Str
-</code></pre>
-<p>In this expression, we&#39;re calling the <code>Str.concat</code> function
-passing two arguments: the string <code>&quot;Hi &quot;</code> and the string <code>&quot;there!&quot;</code>. The
-<code>Str.concat</code> function <em>concatenates</em> two strings together (that is, it puts
+<section><h3><a name="calling-functions"><a href="#calling-functions">Calling Functions</a></a></h3>
+<p>Remember back in the <a href="string-interpolation">string interpolation</a> section when we mentioned
+other ways to combine strings? Here's one of them:</p>
+<samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
+
+"Hi there!" <span class="ann">:</span> Str
+</samp>
+<p>Here we're calling the <code>Str.concat</code> function
+passing two arguments: the string <code>"Hi "</code> and the string <code>"there!"</code>.
+This <i>concatenates</i> the two strings together (that is, it puts
 one after the other) and returns the resulting combined string of
-<code>&quot;Hi there!&quot;</code>.</p>
-<p>Note that in Roc, we don&#39;t need parentheses or commas to call functions.
-We don&#39;t write <code>Str.concat(&quot;Hi &quot;, &quot;there!&quot;)</code> but rather <code>Str.concat &quot;Hi &quot; &quot;there!&quot;</code>.</p>
-<p>Just like in the arithmetic example above, we can use parentheses to specify
+<code>"Hi there!"</code>.</p>
+<p>Note that in Roc, we don't need parentheses or commas to call functions.
+We don't write <code>Str.concat("Hi ", "there!")</code> but rather <code>Str.concat "Hi " "there!"</code>.</p>
+<p>That said, just like in the arithmetic example above, we can use parentheses to specify
 how nested function calls should work. For example, we could write this:</p>
-<pre><code class="lang-coffee">&gt;&gt; Str<span class="hljs-selector-class">.concat</span> <span class="hljs-string">"Birds: "</span> (Num<span class="hljs-selector-class">.toStr</span> <span class="hljs-number">42</span>)
-<span class="hljs-string">"Birds: 42"</span> : Str
-</code></pre>
+<samp><span class="repl-prompt">Str.concat "Birds: " (Num.toStr 42)</span>
+
+"Birds: 42" <span class="ann">:</span> Str
+</samp>
 <p>This calls <code>Num.toStr</code> on the number <code>42</code>, which converts it into the string
-<code>&quot;42&quot;</code>, and then passes that string as the second argument to <code>Str.concat</code>.
-The parentheses are important here to specify how the function calls nest!
+<code>"42"</code>, and then passes that string as the second argument to <code>Str.concat</code>.</p>
+<p>The parentheses are important here to specify how the function calls nest.
 Try removing them, and see what happens:</p>
-<pre><code class="lang-coffee">&gt;&gt; Str<span class="hljs-selector-class">.concat</span> <span class="hljs-string">"Birds: "</span> Num<span class="hljs-selector-class">.toStr</span> <span class="hljs-number">42</span>
-&lt;error&gt;
-</code></pre>
-<p>This error message says that we&#39;ve given <code>Str.concat</code> too many arguments.
-Indeed we have! We&#39;ve passed it three arguments: the string <code>&quot;Birds&quot;</code>, the
-function <code>Num.toStr</code>, and the number <code>42</code>. That&#39;s not what we wanted to do.
-Putting parentheses around the <code>Num.toStr 42</code> call clarifies that we want it
-to be evaluated as its own expression, rather than being two arguments to
-<code>Str.concat</code>.</p>
-<p>Both the <code>Str.concat</code> function and the <code>Num.toStr</code> function have a <code>.</code> in
+<samp><span class="repl-prompt">Str.concat "Birds: " Num.toStr 42</span>
+
+<span class="repl-err">&lt;error&gt;</span>
+</samp>
+<p>The error tells us that we've given <code>Str.concat</code> too many arguments.
+Indeed we have! We've passed it three arguments:
+<ol>
+    <li>The string <code>"Birds"</code></li>
+    <li>The function <code>Num.toStr</code></li>
+    <li>The number <code>42</code></li>
+</ol>
+<p>That's not what we intended to do. Putting parentheses around the <code>Num.toStr 42</code> call clarifies that we want it
+to be evaluated as its own expression, rather than being two arguments to <code>Str.concat</code>.</p>
+<p>Both the <code>Str.concat</code> function and the <code>Num.toStr</code> function have a dot in
 their names. In <code>Str.concat</code>, <code>Str</code> is the name of a <em>module</em>, and <code>concat</code>
-is the name of a function inside that module. Similarly, <code>Num</code> is a different
-module, and <code>toStr</code> is a function inside that module.</p>
-<p>We&#39;ll get into more depth about modules later, but for now you can think of
-a module as a named collection of functions. It&#39;ll be awhile before we want
-to use them for more than that anyway!</p>
+is the name of a function inside that module. Similarly, <code>Num</code> is a module, and <code>toStr</code> is a function inside that module.</p>
+<p>We'll get into more depth about modules later, but for now you can think of
+a module as a named collection of functions. Eventually we'll discuss how
+to use them for more than that!</p>
 </section>
 <section><h2 id="building-an-application">Building an Application</h2>
 <p>Let&#39;s move out of the REPL and create our first Roc application.</p>

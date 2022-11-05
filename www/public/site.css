@@ -33,6 +33,10 @@ code.snippet, samp {
     color: darkcyan;
 }
 
+.repl-err {
+    color: red;
+}
+
 .ann {
     /* type annotation - purple in the repl */
     color: orchid;
