@@ -27,6 +27,12 @@ code.snippet, samp {
     margin-bottom: 16px;
 }
 
+.repl-prompt:before {
+    /* Add this using CSS so it isn't selectable, which would be annoying when trying to copy/paste! */
+    content: "» ";
+    color: darkcyan;
+}
+
 .ann {
     /* type annotation - purple in the repl */
     color: orchid;
