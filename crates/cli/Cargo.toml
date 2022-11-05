@@ -60,6 +60,7 @@ roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
 roc_tracing = { path = "../tracing" }
+roc_intern = { path = "../compiler/intern" }
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }
 bumpalo = { version = "3.11.0", features = ["collections"] }
