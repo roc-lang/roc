@@ -596,6 +596,9 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
+        ast::Expr::Tuple(_fields) => {
+            todo!("canonicalize tuple");
+        }
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,

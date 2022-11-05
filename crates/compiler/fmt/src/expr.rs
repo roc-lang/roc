@@ -106,6 +106,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -322,6 +323,9 @@ impl<'a> Formattable for Expr<'a> {
             }
             Record(fields) => {
                 fmt_record(buf, None, *fields, indent);
+            }
+            Tuple(_fields) => {
+                todo!("format tuple");
             }
             RecordUpdate { update, fields } => {
                 fmt_record(buf, Some(*update), *fields, indent);

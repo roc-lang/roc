@@ -1007,6 +1007,26 @@ fn to_expr_in_parens_report<'a>(
             expr,
             pos,
         ),
+        EInParens::Empty(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I am partway through parsing a parenthesized expression or tuple:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting to see an expression next."),
+                    alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "EMPTY PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         EInParens::End(pos) | EInParens::IndentEnd(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
