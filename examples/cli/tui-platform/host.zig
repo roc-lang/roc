@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const str = @import("str");
-const builtin = @import("builtin");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
