@@ -69,7 +69,7 @@ impl std::fmt::Debug for VmBlock<'_> {
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
 pub enum Align {
     Bytes1 = 0,
     Bytes2 = 1,
@@ -111,7 +111,7 @@ impl From<u32> for Align {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum VmSymbolState {
     /// Value doesn't exist yet
     NotYetPushed,

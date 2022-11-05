@@ -30,7 +30,7 @@ static EMPTY_TAG_UNION: &str = "[]";
 /// List (List I64)
 ///
 /// Otherwise, parens are unnecessary.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Parens {
     InFn,
     InTypeParam,

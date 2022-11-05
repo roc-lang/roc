@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[doc(hidden)]
 pub use pretty_assertions::assert_eq as _pretty_assert_eq;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct DebugAsDisplay<T>(pub T);
 
 impl<T: std::fmt::Display> std::fmt::Debug for DebugAsDisplay<T> {
@@ -32,7 +32,7 @@ impl TmpDir {
         let path = std::path::Path::new(dir);
         // ensure_empty_dir will fail if the dir doesn't already exist
         std::fs::create_dir_all(path).unwrap();
-        remove_dir_all::ensure_empty_dir(&path).unwrap();
+        remove_dir_all::ensure_empty_dir(path).unwrap();
 
         let mut pathbuf = std::path::PathBuf::new();
         pathbuf.push(path);

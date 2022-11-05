@@ -90,7 +90,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
         let mut zig_cmd = zig();
 
         zig_cmd
-            .current_dir(&bitcode_path)
+            .current_dir(bitcode_path)
             .args(["build", zig_object, "-Drelease=true"]);
 
         run_command(zig_cmd, 0);
@@ -126,7 +126,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let mut zig_cmd = zig();
 
     zig_cmd
-        .current_dir(&bitcode_path)
+        .current_dir(bitcode_path)
         .args(["build", zig_object, "-Drelease=true"]);
 
     run_command(zig_cmd, 0);
@@ -168,7 +168,7 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
 // recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
 fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
     // Make sure the destination directory exists before we try to copy anything into it.
-    std::fs::create_dir_all(&target_dir).unwrap_or_else(|err| {
+    std::fs::create_dir_all(target_dir).unwrap_or_else(|err| {
         panic!(
             "Failed to create output library directory for zig bitcode {:?}: {:?}",
             target_dir, err

@@ -124,6 +124,8 @@ mod test_parse {
         fail/lambda_missing_indent.expr,
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        fail/when_missing_arrow.expr,
+        fail/pattern_binds_keyword.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,

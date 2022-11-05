@@ -159,7 +159,7 @@ trait Backend<'a> {
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
+                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, following)
                 };
 
                 for spec in new_specializations.into_iter() {
