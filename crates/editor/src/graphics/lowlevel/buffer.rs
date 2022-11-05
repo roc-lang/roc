@@ -42,7 +42,7 @@ impl QuadBufferBuilder {
         max_y: f32,
         color: [f32; 4],
     ) -> Self {
-        self.vertex_data.extend(&[
+        self.vertex_data.extend([
             Vertex {
                 position: (min_x, min_y).into(),
                 color,
@@ -60,7 +60,7 @@ impl QuadBufferBuilder {
                 color,
             },
         ]);
-        self.index_data.extend(&[
+        self.index_data.extend([
             self.current_quad * 4,
             self.current_quad * 4 + 1,
             self.current_quad * 4 + 2,

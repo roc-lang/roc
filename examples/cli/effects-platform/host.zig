@@ -198,6 +198,7 @@ fn roc_fx_getInt_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
+    // make sure to strip `\r` on windows
     const raw_line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
     const line = std.mem.trimRight(u8, raw_line, &std.ascii.spaces);
 

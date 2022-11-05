@@ -12,6 +12,7 @@ use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
+use roc_utils::zig;
 use target_lexicon::Triple;
 
 #[cfg(feature = "gen-llvm-wasm")]
@@ -340,11 +341,11 @@ fn annotate_with_debug_info<'ctx>(
     let app_bc_file = "/tmp/roc-debugir.bc";
 
     // write the ll code to a file, so we can modify it
-    module.print_to_file(&app_ll_file).unwrap();
+    module.print_to_file(app_ll_file).unwrap();
 
     // run the debugir https://github.com/vaivaswatha/debugir tool
     match Command::new("debugir")
-        .args(&["-instnamer", app_ll_file])
+        .args(["-instnamer", app_ll_file])
         .output()
     {
         Ok(_) => {}
@@ -360,11 +361,11 @@ fn annotate_with_debug_info<'ctx>(
     }
 
     Command::new("llvm-as")
-        .args(&[app_dbg_ll_file, "-o", app_bc_file])
+        .args([app_dbg_ll_file, "-o", app_bc_file])
         .output()
         .unwrap();
 
-    inkwell::module::Module::parse_bitcode_from_path(&app_bc_file, context).unwrap()
+    inkwell::module::Module::parse_bitcode_from_path(app_bc_file, context).unwrap()
 }
 
 #[allow(dead_code)]
@@ -456,11 +457,9 @@ fn llvm_module_to_wasm_file(
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
-    use std::process::Command;
-
-    let output = Command::new(&crate::helpers::zig_executable())
+    let output = zig()
         .current_dir(dir_path)
-        .args(&[
+        .args([
             "wasm-ld",
             concat!(env!("OUT_DIR"), "/wasm_test_platform.wasm"),
             test_a_path.to_str().unwrap(),

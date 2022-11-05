@@ -1,4 +1,5 @@
-set -eux
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
+set -euxo pipefail
 
 # Build the compiler for WebAssembly target
 # We *could* write a build.rs to do this but we'd have nested cargo processes with different targets.

@@ -20,7 +20,7 @@ jobs:
           clean: "true"
 
       - name: execute tests with --release
-        run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test --locked --release
+        run: nix develop -c cargo test --locked --release
 
       - name: test wasm32 cli_run
-        run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test --locked --release --features="wasm32-cli-run"
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"

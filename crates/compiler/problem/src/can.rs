@@ -7,19 +7,19 @@ use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
 use roc_types::types::AliasKind;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CycleEntry {
     pub symbol: Symbol,
     pub symbol_region: Region,
     pub expr_region: Region,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BadPattern {
     Unsupported(PatternType),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShadowKind {
     Variable,
     Alias(Symbol),
@@ -28,7 +28,7 @@ pub enum ShadowKind {
 }
 
 /// Problems that can occur in the course of canonicalization.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(Symbol, Region),
@@ -185,6 +185,9 @@ pub enum Problem {
     UnnecessaryOutputWildcard {
         region: Region,
     },
+    MultipleListRestPattern {
+        region: Region,
+    },
 }
 
 impl Problem {
@@ -313,6 +316,7 @@ impl Problem {
                 def_pattern: region,
                 ..
             }
+            | Problem::MultipleListRestPattern { region }
             | Problem::UnnecessaryOutputWildcard { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
@@ -330,13 +334,13 @@ impl Problem {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtensionTypeKind {
     Record,
     TagUnion,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrecedenceProblem {
     BothNonAssociative(Region, Loc<BinOp>, Loc<BinOp>),
 }
@@ -385,7 +389,7 @@ pub enum FloatErrorKind {
     IntSuffix,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     Shadowing {
         original_region: Region,
@@ -508,7 +512,7 @@ impl RuntimeError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MalformedPatternProblem {
     MalformedInt,
     MalformedFloat,
@@ -518,4 +522,5 @@ pub enum MalformedPatternProblem {
     BadIdent(roc_parse::ident::BadIdent),
     EmptySingleQuote,
     MultipleCharsInSingleQuote,
+    DuplicateListRestPattern,
 }

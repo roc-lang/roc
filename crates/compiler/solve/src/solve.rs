@@ -947,15 +947,16 @@ fn solve(
                 );
 
                 let expectation = &constraints.expectations[expectation_index.index()];
-                let expected = type_cell_to_var(
+                let expected = either_type_index_to_var(
+                    constraints,
                     subs,
                     rank,
+                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
-                    pools,
                     aliases,
-                    expectation.get_type_ref(),
+                    *expectation.get_type_ref(),
                 );
 
                 match unify(
@@ -1065,15 +1066,16 @@ fn solve(
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
 
-                        let expected = type_cell_to_var(
+                        let expected = either_type_index_to_var(
+                            constraints,
                             subs,
                             rank,
+                            pools,
                             problems,
                             abilities_store,
                             obligation_cache,
-                            pools,
                             aliases,
-                            expectation.get_type_ref(),
+                            *expectation.get_type_ref(),
                         );
 
                         match unify(
@@ -1178,15 +1180,16 @@ fn solve(
                 );
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
-                let expected = type_cell_to_var(
+                let expected = either_type_index_to_var(
+                    constraints,
                     subs,
                     rank,
+                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
-                    pools,
                     aliases,
-                    expectation.get_type_ref(),
+                    *expectation.get_type_ref(),
                 );
 
                 let mode = match constraint {
@@ -1487,15 +1490,16 @@ fn solve(
                 //  4. Condition and branch types aren't "almost equal", this is just a normal type
                 //     error.
 
-                let (real_var, real_region, expected_type, category_and_expected) = match eq {
+                let (real_var, real_region, branches_var, category_and_expected) = match eq {
                     Ok(eq) => {
                         let roc_can::constraint::Eq(real_var, expected, category, real_region) =
                             constraints.eq[eq.index()];
                         let expected = &constraints.expectations[expected.index()];
+
                         (
                             real_var,
                             real_region,
-                            expected.get_type_ref(),
+                            *expected.get_type_ref(),
                             Ok((category, expected)),
                         )
                     }
@@ -1507,10 +1511,11 @@ fn solve(
                             real_region,
                         ) = constraints.pattern_eq[peq.index()];
                         let expected = &constraints.pattern_expectations[expected.index()];
+
                         (
                             real_var,
                             real_region,
-                            expected.get_type_ref(),
+                            *expected.get_type_ref(),
                             Err((category, expected)),
                         )
                     }
@@ -1528,15 +1533,16 @@ fn solve(
                     real_var,
                 );
 
-                let branches_var = type_cell_to_var(
+                let branches_var = either_type_index_to_var(
+                    constraints,
                     subs,
                     rank,
+                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
-                    pools,
                     aliases,
-                    expected_type,
+                    branches_var,
                 );
 
                 let cond_source_is_likely_positive_value = category_and_expected.is_ok();
@@ -1736,24 +1742,28 @@ fn solve(
                         close_pattern_matched_tag_unions(subs, real_var);
                     }
 
-                    let ExhaustiveSummary {
+                    if let Ok(ExhaustiveSummary {
                         errors,
                         exhaustive,
                         redundancies,
-                    } = check(subs, real_var, sketched_rows, context);
+                    }) = check(subs, real_var, sketched_rows, context)
+                    {
+                        // Store information about whether the "when" is exhaustive, and
+                        // which (if any) of its branches are redundant. Codegen may use
+                        // this for branch-fixing and redundant elimination.
+                        if !exhaustive {
+                            exhaustive_mark.set_non_exhaustive(subs);
+                        }
+                        for redundant_mark in redundancies {
+                            redundant_mark.set_redundant(subs);
+                        }
 
-                    // Store information about whether the "when" is exhaustive, and
-                    // which (if any) of its branches are redundant. Codegen may use
-                    // this for branch-fixing and redundant elimination.
-                    if !exhaustive {
-                        exhaustive_mark.set_non_exhaustive(subs);
+                        // Store the errors.
+                        problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                    } else {
+                        // Otherwise there were type errors deeper in the pattern; we will have
+                        // already reported them.
                     }
-                    for redundant_mark in redundancies {
-                        redundant_mark.set_redundant(subs);
-                    }
-
-                    // Store the errors.
-                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                 }
 
                 state
@@ -1892,6 +1902,11 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
                 stack.extend(subs.get_subs_slice(fields.variables()));
             }
 
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Open up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
+            }
+
             _ => {
                 // Everything else is not a structural type that can be opened
                 // (i.e. cannot be matched in a pattern-match)
@@ -1952,8 +1967,13 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
             }
 
             Structure(Record(fields, _)) => {
-                // Open up all nested tag unions.
+                // Close up all nested tag unions.
                 stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Structure(Apply(Symbol::LIST_LIST, args)) => {
+                // Close up nested tag unions.
+                stack.extend(subs.get_subs_slice(args));
             }
 
             Alias(_, _, real_var, _) => {
@@ -2233,21 +2253,22 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
-        let types_slice = &constraints.types[def_types_slice.types.indices()];
+        let type_indices_slice = &constraints.type_slices[def_types_slice.types.indices()];
         let loc_symbols_slice = &constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
 
-        let mut local_def_vars = Self::with_length(types_slice.len());
+        let mut local_def_vars = Self::with_length(type_indices_slice.len());
 
-        for (&(symbol, region), typ_cell) in (loc_symbols_slice.iter()).zip(types_slice) {
-            let var = type_cell_to_var(
+        for (&(symbol, region), typ_index) in (loc_symbols_slice.iter()).zip(type_indices_slice) {
+            let var = either_type_index_to_var(
+                constraints,
                 subs,
                 rank,
+                pools,
                 problems,
                 abilities_store,
                 obligation_cache,
-                pools,
                 aliases,
-                typ_cell,
+                *typ_index,
             );
 
             local_def_vars.push((symbol, Loc { value: var, region }));

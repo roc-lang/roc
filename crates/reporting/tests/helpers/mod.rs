@@ -140,9 +140,12 @@ pub fn can_expr_with<'a>(
         }
     };
 
+    let mut constraints = Constraints::new();
+
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
-    let expected = Expected::NoExpectation(Type::Variable(var));
+    let var_index = constraints.push_type(Type::Variable(var));
+    let expected = Expected::NoExpectation(var_index);
     let mut module_ids = ModuleIds::default();
 
     // ensure the Test module is accessible in our tests
@@ -169,7 +172,6 @@ pub fn can_expr_with<'a>(
         &loc_expr.value,
     );
 
-    let mut constraints = Constraints::new();
     let constraint = constrain_expr(
         &mut constraints,
         &mut roc_constrain::expr::Env {

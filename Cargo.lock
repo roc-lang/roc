@@ -496,6 +496,7 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_reporting",
+ "roc_utils",
  "serde",
  "serde-xml-rs",
  "strip-ansi-escapes",
@@ -3573,6 +3574,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "roc_utils",
  "rodio",
  "serde",
  "snafu",
@@ -3594,6 +3596,7 @@ name = "roc_exhaustive"
 version = "0.0.1"
 dependencies = [
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
 ]
@@ -3993,6 +3996,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "roc_utils",
  "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -4860,6 +4864,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "roc_utils",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",
@@ -5262,6 +5267,9 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 [[package]]
 name = "wasi_libc_sys"
 version = "0.0.1"
+dependencies = [
+ "roc_utils",
+]
 
 [[package]]
 name = "wasm-bindgen"

@@ -404,6 +404,16 @@ mod test_reporting {
         }
     }
 
+    macro_rules! test_no_problem {
+        ($(#[$meta:meta])* $test_name: ident, $program:expr) => {
+            #[test]
+            $(#[$meta])*
+            fn $test_name() {
+                __new_report_problem_as(std::stringify!($test_name), $program, |golden| pretty_assertions::assert_eq!(golden, ""))
+            }
+        }
+    }
+
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
@@ -4837,14 +4847,27 @@ mod test_reporting {
             "#
         ),
         @r###"
-    ── MISSING EXPRESSION ───────────────────── tmp/pattern_binds_keyword/Test.roc ─
+    ── MISSING ARROW ────────────────────────── tmp/pattern_binds_keyword/Test.roc ─
 
-    I am partway through parsing a `when` expression, but I got stuck here:
+    I am partway through parsing a `when` expression, but got stuck here:
 
     5│          Just when ->
-                           ^
+                     ^
 
-    I was expecting to see an expression like 42 or "hello".
+    I was expecting to see an arrow next.
+
+    Note: Sometimes I get confused by indentation, so try to make your `when`
+    look something like this:
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
     "###
     );
 
@@ -11714,7 +11737,7 @@ All branches in an `if` must have the same type!
         list_pattern_weird_rest_pattern,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [...] -> ""
             "#
         ),
@@ -11752,5 +11775,639 @@ All branches in an `if` must have the same type!
     always inferred to be open by default! You can remove this annotation
     safely.
     "###
+    );
+
+    test_report!(
+        multiple_list_patterns_start_and_end,
+        indoc!(
+            r#"
+            when [] is
+                [.., A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [.., A, ..] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is
+    5│>          [.., A, ..] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        multiple_list_patterns_in_a_row,
+        indoc!(
+            r#"
+            when [] is
+                [A, .., .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+
+    This list pattern match has multiple rest patterns:
+
+    5│          [A, .., .., B] -> ""
+                        ^^
+
+    I only support compiling list patterns with one .. pattern! Can you
+    remove this additional one?
+
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when [] is
+    5│>          [A, .., .., B] -> ""
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        mismatch_within_list_pattern,
+        indoc!(
+            r#"
+            when [] is
+                [A, 1u8] -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This list element doesn't match the types of other elements in the
+    pattern:
+
+    5│          [A, 1u8] -> ""
+                    ^^^
+
+    It matches integers:
+
+        U8
+
+    But the other elements in this list pattern match
+
+        [A]
+    "###
+    );
+
+    test_report!(
+        mismatch_list_pattern_vs_condition,
+        indoc!(
+            r#"
+            when [A, B] is
+                ["foo", "bar"] -> ""
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when [A, B] is
+    5│           ["foo", "bar"] -> ""
+
+    The `when` condition is a list of type:
+
+        List [A, B]
+
+    But the branch patterns have type:
+
+        List Str
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        list_match_non_exhaustive_only_empty,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+
+    Other possibilities include:
+
+        [_, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_spread_exhaustive,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_non_exhaustive_infinite,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A] -> ""
+    9│>          [A, A] -> ""
+
+    Other possibilities include:
+
+        [_, _, _, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_unary_head,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+            "#
+        )
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+                [B, ..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [A, ..] -> ""
+
+    Other possibilities include:
+
+        [B, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, B, ..] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, B, ..] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, A, ..]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+                [.., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [.., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [] -> ""
+    8│>          [.., A] -> ""
+
+    Other possibilities include:
+
+        [.., B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [.., B, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [.., B, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [.., _, B]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_exhaustive_empty_and_rest_with_exhausted_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [A] -> ""
+                [B] -> ""
+                [A, .., A] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_exhaustive_empty_and_rest_with_nonexhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [_] -> ""
+     9│>          [A, .., B] -> ""
+    10│>          [B, .., A] -> ""
+
+    Other possibilities include:
+
+        [_, .., _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_no_small_sizes_and_non_exhaustive_head_and_tail,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, .., B] -> ""
+                [B, .., A] -> ""
+                [B, .., B] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, .., B] -> ""
+    8│>          [B, .., A] -> ""
+    9│>          [B, .., B] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [A, .., A]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_exhaustive_big_sizes_but_not_small_sizes,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [A, A, A, .., A, A, A] -> ""
+                [A, A, A, .., A, A] -> ""
+                [A, A, .., A, A] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when l is
+    7│>          [A, A, A, .., A, A, A] -> ""
+    8│>          [A, A, A, .., A, A] -> ""
+    9│>          [A, A, .., A, A] -> ""
+
+    Other possibilities include:
+
+        []
+        [_]
+        [_, _]
+        [_, _, _]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        list_match_nested_list_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [..]] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_nested_list_not_exhaustive,
+        indoc!(
+            r#"
+            l : List (List [A, B])
+
+            when l is
+                [] -> ""
+                [[]] -> ""
+                [[A, ..]] -> ""
+                [[..], .., [.., B]] -> ""
+            "#
+        ),
+    @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     6│>      when l is
+     7│>          [] -> ""
+     8│>          [[]] -> ""
+     9│>          [[A, ..]] -> ""
+    10│>          [[..], .., [.., B]] -> ""
+
+    Other possibilities include:
+
+        [[B, ..]]
+        [_, .., []]
+        [_, .., [.., A]]
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_exact_size,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_] -> ""
+                [_] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+     6│       when l is
+     7│           [] -> ""
+     8│           [_] -> ""
+     9│>          [_] -> ""
+    10│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_any_slice,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [..] -> ""
+                ^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_suffix_slice_with_sized_prefix,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [] -> ""
+                [_, ..] -> ""
+                [.., _] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd pattern is redundant:
+
+    6│      when l is
+    7│          [] -> ""
+    8│          [_, ..] -> ""
+    9│          [.., _] -> ""
+                ^^^^^^^
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        list_match_redundant_based_on_ctors,
+        indoc!(
+            r#"
+            l : List {}
+
+            when l is
+                [{}, .., _] -> ""
+                [_, .., {}] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    6│       when l is
+    7│           [{}, .., _] -> ""
+    8│>          [_, .., {}] -> ""
+    9│           [..] -> ""
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_no_problem!(
+        list_match_with_guard,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [ A, .. ] if Bool.true -> ""
+                [ A, .. ] -> ""
+                _ -> ""
+            "#
+        )
     );
 }

@@ -28,7 +28,7 @@ pub struct MemberVariables {
 
 /// The member and its signature is defined locally, in the module the store is created for.
 /// We need to instantiate and introduce this during solving.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMemberType(Variable);
 
 /// Member type information that needs to be resolved from imports.
@@ -56,7 +56,7 @@ impl ResolvePhase for Pending {
     type MemberType = PendingMemberType;
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved;
 impl ResolvePhase for Resolved {
     type MemberType = ResolvedMemberType;

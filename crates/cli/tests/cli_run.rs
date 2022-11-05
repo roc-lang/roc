@@ -85,6 +85,12 @@ mod cli_run {
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
         let err = format!("{}found in <ignored for test> ms.", before_first_digit);
 
+        // make paths consistent
+        let err = err.replace('\\', "/");
+
+        // consistency with typewriters, very important
+        let err = err.replace('\r', "");
+
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
@@ -1148,7 +1154,7 @@ fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     //        .unwrap();
 
     let store = Store::default();
-    let module = Module::from_file(&store, &wasm_path).unwrap();
+    let module = Module::from_file(&store, wasm_path).unwrap();
 
     let mut fake_stdin = wasmer_wasi::Pipe::new();
     let fake_stdout = wasmer_wasi::Pipe::new();

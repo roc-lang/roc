@@ -353,13 +353,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
     let expr = match layout {
         Layout::Builtin(Builtin::Bool) => {
-            app.call_function(main_fn_name, |mem: &A::Memory, num: bool| {
-                bool_to_ast(
-                    env,
-                    mem,
-                    num,
-                    env.subs.get_content_without_compacting(raw_var),
-                )
+            app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
+                bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
             })
         }
         Layout::Builtin(Builtin::Int(int_width)) => {
@@ -370,13 +365,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
-                    app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
-                        byte_to_ast(
-                            env,
-                            mem,
-                            num,
-                            env.subs.get_content_without_compacting(raw_var),
-                        )
+                    app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
+                        byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
                 }
                 // The rest are numbers... for now
@@ -569,7 +559,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             // num is always false at the moment.
             let num: bool = mem.deref_bool(addr);
 
-            bool_to_ast(env, mem, num, raw_content)
+            bool_to_ast(env, num, raw_content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -1128,12 +1118,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
-    mem: &M,
-    value: bool,
-    content: &Content,
-) -> Expr<'a> {
+fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1163,7 +1148,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: bool_to_ast(env, mem, value, content),
+                            value: bool_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1212,7 +1197,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            bool_to_ast(env, mem, value, content)
+            bool_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -1220,12 +1205,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
     }
 }
 
-fn byte_to_ast<'a, M: ReplAppMemory>(
-    env: &mut Env<'a, '_>,
-    mem: &M,
-    value: u8,
-    content: &Content,
-) -> Expr<'a> {
+fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1255,7 +1235,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: byte_to_ast(env, mem, value, content),
+                            value: byte_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1332,7 +1312,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            byte_to_ast(env, mem, value, content)
+            byte_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in byte_to_ast", other);
