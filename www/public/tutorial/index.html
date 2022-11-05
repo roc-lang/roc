@@ -128,25 +128,27 @@ their names. In <code>Str.concat</code>, <code>Str</code> is the name of a <em>m
 is the name of a function inside that module. Similarly, <code>Num</code> is a module, and <code>toStr</code> is a function inside that module.</p>
 <p>We'll get into more depth about modules later, but for now you can think of
 a module as a named collection of functions. Eventually we'll discuss how
-to use them for more than that!</p>
+to use them for more than that.</p>
 </section>
-<section><h2 id="building-an-application">Building an Application</h2>
-<p>Let&#39;s move out of the REPL and create our first Roc application.</p>
-<p>Create a new file called <code>Hello.roc</code> and put this inside it:</p>
-<pre><code class="lang-coffee"><span class="hljs-keyword">app</span> <span class="hljs-string">"hello"</span>
-    packages { pf: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.<span class="hljs-keyword">Program</span>]
-    provides [main] to pf
 
-main = Stdout.<span class="hljs-keyword">line</span> <span class="hljs-string">"I'm a Roc application!"</span> |&gt; <span class="hljs-keyword">Program</span>.quick
-</code></pre>
+<section><h2><a name="building-an-application"><a href="#building-an-application">Building an Application</a></a></h2>
+<p>Let's move out of the REPL and create our first Roc application!</p>
+<p>Create a new file named <code>hello.roc</code> and put this inside it:</p>
+<samp><span class="kw">app</span> <span class="str">"hello"</span>
+    <span class="kw">packages</span> { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">imports</span> [pf.Stdout, pf.Program]
+    <span class="kw">provides</span> [main] <span class="kw">to</span> pf
+
+main =
+    Stdout.line <span class="str">"I'm a Roc application!"</span>
+    |&gt; Program.quick
+</code></samp>
 <blockquote>
-<p><strong>NOTE:</strong> This assumes you&#39;ve put Hello.roc in the root directory of the Roc
-source code. If you&#39;d like to put it somewhere else, you&#39;ll need to replace
-<code>&quot;examples/cli/cli-platform/main.roc&quot;</code> with the path to the
-<code>examples/cli/cli-platform/main.roc</code> file in that source code. In the future,
-Roc will have the tutorial built in, and this aside will no longer be
-necessary!</p>
+<p><strong>NOTE:</strong> This assumes you've put <code>hello.roc</code> in the root directory of the Roc
+source code. If you'd like to put it somewhere else, you'll need to replace
+<code class="str">"examples/cli/cli-platform/main.roc"</code> with the path to the
+<code>examples/cli/cli-platform/main.roc</code> file in that source code. In a future release of Roc,
+having the Roc source code downloaded will no longer be necessary to access <code>cli-platform</code>!</p>
 </blockquote>
 <p>Try running this with:</p>
 <pre><code class="lang-sh"><span class="hljs-variable">$ </span>roc Hello.roc

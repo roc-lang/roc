@@ -47,6 +47,11 @@ code.snippet, samp {
     color: green;
 }
 
+.kw {
+    /* automatic variable names in the repl, e.g. # val1 */
+    color: purple;
+}
+
 .str {
     /* automatic variable names in the repl, e.g. # val1 */
     color: goldenrod;
