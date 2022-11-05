@@ -423,8 +423,7 @@ fn render_expect_failure<'a>(
         start,
         frame.start_offset,
         &variables,
-    )
-    .unwrap();
+    );
 
     renderer.render_failure(
         writer,

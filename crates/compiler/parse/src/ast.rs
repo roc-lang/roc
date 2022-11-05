@@ -615,6 +615,14 @@ impl<'a> CommentOrNewline<'a> {
             DocComment(comment_str) => format!("##{}", comment_str),
         }
     }
+
+    pub fn comment_str(&'a self) -> Option<&'a str> {
+        match self {
+            CommentOrNewline::LineComment(s) => Some(*s),
+            CommentOrNewline::DocComment(s) => Some(*s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

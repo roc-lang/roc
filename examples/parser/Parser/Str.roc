@@ -140,14 +140,14 @@ string : Str -> Parser RawStr Str
 string = \expectedString ->
     strToRaw expectedString
     |> stringRaw
-    |> map (\_val -> expectedString)
+    |> map \_val -> expectedString
 
 scalar : U32 -> Parser RawStr U32
 scalar = \expectedScalar ->
     expectedScalar
     |> strFromScalar
     |> string
-    |> map (\_ -> expectedScalar)
+    |> map \_ -> expectedScalar
 
 # Matches any codeunit
 anyCodeunit : Parser RawStr U8
@@ -181,7 +181,7 @@ digit =
         |> List.map \digitNum ->
             digitNum
             |> codeunit
-            |> map (\_ -> digitNum)
+            |> map \_ -> digitNum
 
     oneOf digitParsers
 
@@ -192,7 +192,7 @@ digits =
     |> map \digitsList ->
         digitsList
         |> List.map Num.intCast
-        |> List.walk 0 (\sum, digitVal -> 10 * sum + digitVal)
+        |> List.walk 0 \sum, digitVal -> 10 * sum + digitVal
 
 ## Try a bunch of different parsers.
 ##
