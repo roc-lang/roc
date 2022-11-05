@@ -2359,8 +2359,26 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
             unreachable!()
         }
         Declaration::Expects(expects) => {
-            // Expects should only be added to top-level decls, not to let-exprs!
-            unreachable!("{:?}", &expects)
+            let mut loc_ret = loc_ret;
+
+            let conditions = expects.conditions.into_iter().rev();
+            let condition_regions = expects.regions.into_iter().rev();
+            let expect_regions = expects.preceding_comment.into_iter().rev();
+
+            let it = expect_regions.zip(condition_regions).zip(conditions);
+
+            for ((expect_region, condition_region), condition) in it {
+                let region = Region::span_across(&expect_region, &loc_ret.region);
+                let expr = Expr::Expect {
+                    loc_condition: Box::new(Loc::at(condition_region, condition)),
+                    loc_continuation: Box::new(loc_ret),
+                    lookups_in_cond: vec![],
+                };
+
+                loc_ret = Loc::at(region, expr);
+            }
+
+            loc_ret
         }
         Declaration::ExpectsFx(expects) => {
             // Expects should only be added to top-level decls, not to let-exprs!
