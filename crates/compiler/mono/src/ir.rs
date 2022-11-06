@@ -10891,37 +10891,49 @@ fn generate_glue_procs_for_fields<'a>(
     home: ModuleId,
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
-    struct_layout: Layout<'a>,
+    unboxed_struct_layout: Layout<'a>,
     field_layouts: &'a [Layout<'a>],
     output: &mut Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
 ) {
     output.reserve(field_layouts.len());
 
+    let boxed_struct_layout = Layout::Boxed(arena.alloc(unboxed_struct_layout));
+
     for (index, field) in field_layouts.iter().enumerate() {
         let symbol = Symbol::new(home, ident_ids.gen_unique());
         let argument = Symbol::new(home, ident_ids.gen_unique());
+        let unboxed = Symbol::new(home, ident_ids.gen_unique());
         let result = Symbol::new(home, ident_ids.gen_unique());
 
         let proc_layout = ProcLayout {
-            arguments: arena.alloc([struct_layout]),
+            arguments: arena.alloc([boxed_struct_layout]),
             result: *field,
             captures_niche: CapturesNiche::no_niche(),
         };
 
-        let expr = Expr::StructAtIndex {
-            index: index as u64,
-            field_layouts,
-            structure: argument,
-        };
-
         let ret_stmt = arena.alloc(Stmt::Ret(result));
 
-        let body = Stmt::Let(result, expr, *field, ret_stmt);
+        let field_get_expr = Expr::StructAtIndex {
+            index: index as u64,
+            field_layouts,
+            structure: unboxed,
+        };
+
+        let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
+
+        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+
+        let unbox_stmt = Stmt::Let(
+            unboxed,
+            unbox_expr,
+            unboxed_struct_layout,
+            arena.alloc(field_get_stmt),
+        );
 
         let proc = Proc {
             name: LambdaName::no_niche(symbol),
-            args: arena.alloc([(struct_layout, argument)]),
-            body,
+            args: arena.alloc([(boxed_struct_layout, argument)]),
+            body: unbox_stmt,
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,

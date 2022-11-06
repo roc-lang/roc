@@ -4371,17 +4371,62 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    _glue_layouts: &GlueLayouts<'a>,
+    glue_layouts: &GlueLayouts<'a>,
     opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(
+    let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
         opt_entry_point,
         debug_output_file,
     );
+
+    let captures_niche = CapturesNiche::no_niche();
+
+    let mut getter_names = Vec::with_capacity_in(glue_layouts.getters.len(), env.arena);
+
+    for (symbol, top_level) in glue_layouts.getters.iter().copied() {
+        let it = top_level.arguments.iter().copied();
+        let bytes =
+            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
+        let func_name = FuncName(&bytes);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let mut it = func_solutions.specs();
+        let func_spec = it.next().unwrap();
+        debug_assert!(
+            it.next().is_none(),
+            "we expect only one specialization of this symbol"
+        );
+
+        // NOTE fake layout; it is only used for debug prints
+        let roc_main_fn = function_value_by_func_spec(
+            env,
+            *func_spec,
+            symbol,
+            &[],
+            captures_niche,
+            &Layout::UNIT,
+        );
+
+        let name = roc_main_fn.get_name().to_str().unwrap();
+
+        let getter_name = &format!("Getter{}", name);
+        let getter_name = env.arena.alloc_str(getter_name);
+        getter_names.push(&*getter_name);
+
+        // Add main to the module.
+        let _ = expose_function_to_host_help_c_abi(
+            env,
+            name,
+            roc_main_fn,
+            top_level.arguments,
+            top_level.result,
+            getter_name,
+        );
+    }
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
