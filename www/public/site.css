@@ -1,8 +1,8 @@
 :root {
     --text-color: #121212;
-    --header-link-color: #6666ff;
+    --header-link-color: #6060f7;
     --header-link-hover: #222;
-    --link-color: #17b9b0;
+    --link-color: #1abbb2;
     --repl-prompt: #0ff4f4;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
@@ -148,10 +148,6 @@ h1 {
     text-shadow: 2px 2px 2px #ddd;
 }
 
-h2, h3, h4, h5 {
-    text-shadow: 1px 1px 1px #010101
-}
-
 h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
 }
@@ -262,10 +258,6 @@ h3 {
         --snippet-bg: #1a1a1a;
         --snippet-border: #444;
         --code-color: #cdcdcd;
-    }
-
-    h1, h2, h3, h4, h5 {
-        text-shadow: none;
     }
 
     html {
