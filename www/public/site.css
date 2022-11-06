@@ -1,6 +1,6 @@
 :root {
     --text-color: #121212;
-    --header-link-color: #6060f7;
+    --header-link-color: #9675f0;
     --header-link-hover: #222;
     --link-color: #1abbb2;
     --repl-prompt: #0ff4f4;
@@ -249,7 +249,6 @@ h3 {
 @media (prefers-color-scheme: dark) {
     :root {
         --text-color: #cdcdcd;
-        --header-link-color: #6666ff;
         --header-link-hover: #ddd;
         --link-color: #1bc6bd;
         --repl-prompt: #0ff4f4;
