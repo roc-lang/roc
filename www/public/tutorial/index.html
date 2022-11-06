@@ -135,24 +135,16 @@ to use them for more than that.</p>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Create a new file named <code>hello.roc</code> and put this inside it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">packages</span> { pf: <span class="str">"https://roc-lang.org/tutorial/cli-platform/1.0.0"</span> }
     <span class="kw">imports</span> [pf.Stdout, pf.Program]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
-main =
+main <span class="kw">=</span>
     Stdout.line <span class="str">"I'm a Roc application!"</span>
-    |&gt; Program.quick
+    <span class="kw">|&gt;</span> Program.quick
 </code></samp>
-<blockquote>
-<p><strong>NOTE:</strong> This assumes you've put <code>hello.roc</code> in the root directory of the Roc
-source code. If you'd like to put it somewhere else, you'll need to replace
-<code class="str">"examples/cli/cli-platform/main.roc"</code> with the path to the
-<code>examples/cli/cli-platform/main.roc</code> file in that source code. In a future release of Roc,
-having the Roc source code downloaded will no longer be necessary to access <code>cli-platform</code>!</p>
-</blockquote>
 <p>Try running this with:</p>
-<pre><code class="lang-sh"><span class="hljs-variable">$ </span>roc Hello.roc
-</code></pre>
+<samp>roc Hello.roc</samp>
 <p>You should see this:</p>
 <pre><code class="lang-sh">I<span class="hljs-comment">'m a Roc application!</span>
 </code></pre>
