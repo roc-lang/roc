@@ -112,6 +112,44 @@ code.snippet, samp {
     color: var(--text-color);
 }
 
+#tutorial-start {
+    display: flex;
+    flex-direction: row-reverse;
+}
+
+#tutorial-intro {
+    flex: 1;
+}
+
+#tutorial-toc {
+    margin-top: 7em;
+    background: #f3f3f3;
+    border: 1px solid #ddd;
+    padding: 10px 24px;
+    margin-left: 20px;
+}
+
+#tutorial-toc code {
+    background: none;
+    color: inherit;
+    margin: 0;
+    padding: 0;
+}
+
+#tutorial-toc ol {
+    padding: 3px;
+    margin: 8px 0;
+    list-style: none;
+}
+
+#tutorial-toc h2 {
+    color: #686868;
+    font-family: inherit;
+    font-size: 2em;
+    text-shadow: none;
+    margin: 0;
+    padding: 20px 0;
+}
 
 /* Used on on the different-names page. */
 

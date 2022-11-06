@@ -13,20 +13,43 @@
 </head>
 
 <body>
-<h1>Tutorial</h1>
+<div id="tutorial-start">
+    <nav id="tutorial-toc">
+        <h2>Outline</h2>
+        <ol>
+            <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
+            <li><a href="#building-an-application">Building an Application</a></li>
+            <li><a href="#functions-and-if">Functions and <code>if</code></a></li>
+            <li><a href="#records">Records</a>
+            <li><a href="#tags">Tags</a>
+            <li><a href="#booleans">Booleans</a>
+            <li><a href="#lists">Lists</a>
+            <li><a href="#types">Types</a>
+            <li><a href="#tests-and-expectations">Tests and expectations</a>
+            <li><a href="#modules">Modules</a>
+            <li><a href="#tasks">Tasks</a>
+            <li><a href="#advanced concepts">Advanced Concepts</a>
+        </ol>
+    </nav>
+    <div id="tutorial-intro">
+        <section>
+            <h1>Tutorial</h1>
 
-<p>Welcome to Roc!</p>
+            <p>Welcome to Roc!</p>
 
-<p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and optionally annotate your types.</p>
-
-<section><h2><a name="installation"><a href="#installation">Installation</a></a></h2>
-<p>Roc doesn't have a numbered release yet, but you can download a nightly release of the
-    <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
-    (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
-    be sure to add <code>roc</code> to your <a href="https://www.java.com/en/download/help/path.html">PATH</a>.</p>
-</p>
-<p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information. If you get stuck, there are plenty of people who will be happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners">#beginners stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
-</section>
+            <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and optionally annotate your types.</p>
+        </section>
+        <section><h2><a name="installation"><a href="#installation">Installation</a></a></h2>
+            <p>Roc doesn't have a numbered release yet, but you can download a nightly release of the
+                <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
+                (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
+                be sure to add <code>roc</code> to your <a href="https://www.java.com/en/download/help/path.html">PATH</a>.</p>
+            </p>
+            <p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information.</p>
+            <p>If you get stuck, there are plenty of people who will be happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners">#beginners stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
+        </section>
+    </div>
+</div>
 <section><h2><a name="strings-and-numbers"><a href="#strings-and-numbers">Strings and Numbers</a></a></h2>
 <p>Let's start by getting acquainted with Roc's <a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop"><i>Read-Eval-Print-Loop</i></a>, or <b>REPL</b> for
 short. Run this in a terminal:</p>
@@ -141,6 +164,7 @@ main <span class="kw">=</span>
 <p>Try running this with:</p>
 <samp>roc Hello.roc</samp>
 <p>You should see this:</p>
+<!--
 <pre><code class="lang-sh">I<span class="hljs-comment">'m a Roc application!</span>
 </code></pre>
 <p>Congratulations - you&#39;ve now written your first Roc application! We&#39;ll go over what the parts of
@@ -1697,6 +1721,7 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 <p>Made by people who like to make nice things.</p>
 <p>© 2022</p>
 </footer>
+-->
 <script>
     // When you double-click in a repl box, select its content (to make it easier to copy/paste).
     document.querySelectorAll(".repl-prompt").forEach((elem) => {
