@@ -1,20 +1,26 @@
 :root {
-    --text-color: #cdcdcd;
+    --text-color: #121212;
     --header-link-color: #6666ff;
-    --link-color: #1bc6bd;
+    --header-link-hover: #222;
+    --link-color: #17b9b0;
     --repl-prompt: #0ff4f4;
+    --body-bg: #fff;
+    --code-bg: #e7e7e7;
+    --snippet-bg: #f6f6f6;
+    --snippet-border: #bbb;
+    --code-color: #303030;
 }
 
 html {
     font-family: 'Lato', sans-serif;
     line-height: 1.5rem;
-    background: #0e0e0f;
+    background: var(--body-bg);
     color: var(--text-color);
 }
 
 p {
     font-size: 1.2rem;
-    line-height: 1.76rem;
+    line-height: 1.85rem;
 }
 
 a {
@@ -43,25 +49,26 @@ aside {
 }
 
 code {
-  margin: 0 0.2rem;
-  white-space: nowrap;
-  background: #303030;
-  padding: 0 0.2rem;
+    margin: 0 0.2rem;
+    white-space: nowrap;
+    background: var(--code-bg);
+    padding: 0.05rem 0.3rem;
 }
 
 code, samp {
     font-family: 'Source Code Pro', monospace;
+    color: var(--code-color);
 }
 
 code.snippet, samp {
     display: block;
     white-space: pre;
     padding: 10px 16px;
-    background-color: #222;
+    background-color: var(--snippet-bg);
     margin-bottom: 16px;
     font-size: 1.2rem;
     line-height: 1.76rem;
-    border: 1px solid #444;
+    border: 1px solid var(--snippet-border);
 }
 
 .repl-prompt:before {
@@ -86,7 +93,7 @@ code.snippet, samp {
 
 .kw {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: purple;
+    color: #67a0fb;
 }
 
 .str {
@@ -133,10 +140,25 @@ th, td {
 
 h1, h2, h3, h4, h5 {
     font-family: 'Permanent Marker';
+    line-height: 1rem;
+    margin-top: 2.8rem;
+}
+
+h1 {
+    text-shadow: 2px 2px 2px #ddd;
+}
+
+h2, h3, h4, h5 {
+    text-shadow: 1px 1px 1px #010101
 }
 
 h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
+}
+
+h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
+    text-decoration: none;
+    color: var(--header-link-hover);
 }
 
 h1 {
@@ -226,4 +248,27 @@ h3 {
   font-weight: 400;
   src: url(https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMlrSlcZZJmOpw.woff) format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --text-color: #cdcdcd;
+        --header-link-color: #6666ff;
+        --header-link-hover: #ddd;
+        --link-color: #1bc6bd;
+        --repl-prompt: #0ff4f4;
+        --body-bg: #0e0e0f;
+        --code-bg: #303030;
+        --snippet-bg: #1a1a1a;
+        --snippet-border: #444;
+        --code-color: #cdcdcd;
+    }
+
+    h1, h2, h3, h4, h5 {
+        text-shadow: none;
+    }
+
+    html {
+        scrollbar-color: #444444 #2f2f2f;
+    }
 }

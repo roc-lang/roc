@@ -23,11 +23,9 @@
 <p>Roc doesn't have a numbered release yet, but you can download a nightly release of the
     <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
     (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
-    be sure to add <code>roc</code> to your <code>PATH</code> (here's how to do that on
-    <a href="https://medium.com/codex/adding-executable-program-commands-to-the-path-variable-5e45f1bdf6ce">Mac or Linux</a>,
-    and <a href="https://medium.com/@kevinmarkvi/how-to-add-executables-to-your-path-in-windows-5ffa4ce61a53">on Windows</a>).
+    be sure to add <code>roc</code> to your <a href="https://www.java.com/en/download/help/path.html">PATH</a>.</p>
 </p>
-<p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information. If you get stuck, there are plenty of people happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"><code>#beginners</code> stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
+<p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information. If you get stuck, there are plenty of people who will be happy to help if you open a topic in the <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners">#beginners stream</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
 </section>
 <section><h2><a name="strings-and-numbers"><a href="#strings-and-numbers">Strings and Numbers</a></a></h2>
 <p>Let's start by getting acquainted with Roc's <i>Read Eval Print Loop</i>, or REPL for
@@ -43,18 +41,16 @@ short.</p>
 <samp class="repl-prompt">Hello, World!"</samp>
 <p>The REPL should cheerfully display the following:</p>
 <samp>"Hello, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val1</span></samp>
-<p>Congratulations! You&#39;ve just written your first Roc code!</p>
+<p>Congratulations! You've just written your first Roc code.</p>
 <h3><a name="naming-things"><a href="#naming-things">Naming Things</a></a></h3>
-<p>When you entered the <em>expression</em> <code>&quot;Hello, World!&quot;</code>,
+<p>When you entered the <em>expression</em> <code>"Hello, World!"</code>,
 the REPL printed it back out. It also printed <code><span class="ann">:</span> Str</code>, because
 <code>Str</code> is that expression's type. We'll talk about types later; for now, let's ignore
 the <code><span class="ann">:</span></code> and whatever comes after it whenever we see them.</p>
 <p>The REPL also printed <code class="autovar"># val1</code> at the end of the line.
 That means from now on you can use the variable name <code>val1</code> to refer
-to the <code>"Hello, World!"</code> expression you just entered. This comes in handy
-when entering complicated expressions! Future sections of the tutorial will omit these labels, since they're
-just there as a convenience.</p>
-<p>Still, while we're talking about them, let's try it out. Put this into the repl and press Enter:</p>
+to the <code>"Hello, World!"</code> expression you just entered.</p>
+<p>Let's try that out. Put this into the repl and press Enter:</p>
 <samp class="repl-prompt">val1</samp>
 <p>You should see the same <code>"Hello, World!"</code> line as before.</p>
 <p>You can also assign specific names to expressions. Try entering these lines:</p>
@@ -69,8 +65,8 @@ just there as a convenience.</p>
 <samp>"Hi there, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val2</span></samp>
 <p>Notice that the REPL printed <code class="autovar"># val2</code> here. This works just like
 <code class="autovar"># val1</code> did before, but it chose the name <code>val2</code> for this
-expression because <code>val1</code> was already taken in this REPL session. As we continue entering more
-expressions into the REPL, you'll see more and more of these generated names.</code>
+expression because <code>val1</code> was already taken. As we continue entering more
+expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.</code>
 <p>By the way, there are many other ways to put strings together! Check out the documentation for the <a href="https://www.roc-lang.org/builtins/Str"><code>Str</code> module</a> for more.</code></p>
 </section>
 <section><h3><a name="arithmetic"><a href="#arithmetic">Arithmetic</a></a></h3>
@@ -87,7 +83,7 @@ be grouped.</p>
 -1 <span class="ann">:</span> Num *</samp>
 </section>
 <section><h3><a name="calling-functions"><a href="#calling-functions">Calling Functions</a></a></h3>
-<p>Remember back in the <a href="string-interpolation">string interpolation</a> section when we mentioned
+<p>Remember back in the <a href="#string-interpolation">string interpolation</a> section when we mentioned
 other ways to combine strings? Here's one of them:</p>
 <samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
 
@@ -133,7 +129,7 @@ to use them for more than that.</p>
 
 <section><h2><a name="building-an-application"><a href="#building-an-application">Building an Application</a></a></h2>
 <p>Let's move out of the REPL and create our first Roc application!</p>
-<p>Create a new file named <code>hello.roc</code> and put this inside it:</p>
+<p>Make a new file named <code>hello.roc</code> and put this inside it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
     <span class="kw">packages</span> { pf: <span class="str">"https://roc-lang.org/tutorial/cli-platform/1.0.0"</span> }
     <span class="kw">imports</span> [pf.Stdout, pf.Program]
