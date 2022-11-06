@@ -31,8 +31,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
-    UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
+    ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::{
     CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
@@ -703,7 +703,7 @@ pub struct MonomorphizedModule<'a> {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
-    pub glue_layouts: Vec<Layout<'a>>,
+    pub glue_layouts: GlueLayouts<'a>,
 }
 
 #[derive(Debug)]
@@ -3012,7 +3012,7 @@ fn finish_specialization<'a>(
         }
     };
 
-    let mut glue_layouts = Vec::new();
+    let mut glue_getters = Vec::new();
 
     if let EntryPoint::Executable { symbol, layout, .. } = &entry_point {
         let mut locked = ident_ids_by_module.lock();
@@ -3031,8 +3031,8 @@ fn finish_specialization<'a>(
                 *layout,
             );
 
+            glue_getters.extend(glue_procs.procs.iter().map(|t| t.0));
             procedures.extend(glue_procs.procs);
-            glue_layouts.extend(glue_procs.layouts);
         }
     }
 
@@ -3056,7 +3056,9 @@ fn finish_specialization<'a>(
         sources,
         timings: state.timings,
         toplevel_expects,
-        glue_layouts,
+        glue_layouts: GlueLayouts {
+            getters: glue_getters,
+        },
     })
 }
 

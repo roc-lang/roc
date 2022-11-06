@@ -10807,6 +10807,11 @@ pub fn layout_contains_function(arena: &Bump, layout: Layout) -> bool {
     false
 }
 
+#[derive(Debug, Default)]
+pub struct GlueLayouts<'a> {
+    pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
+}
+
 pub struct GlueProcs<'a> {
     pub procs: Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
     pub layouts: Vec<'a, Layout<'a>>,

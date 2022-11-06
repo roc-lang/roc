@@ -51,8 +51,8 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-    ModifyRc, OptLevel, ProcLayout,
+    BranchInfo, CallType, EntryPoint, GlueLayouts, HigherOrderLowLevel, JoinPointId,
+    ListLiteralElement, ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
@@ -4371,7 +4371,7 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    _glue_layouts: &[Layout<'a>],
+    _glue_layouts: &GlueLayouts<'a>,
     opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) {
