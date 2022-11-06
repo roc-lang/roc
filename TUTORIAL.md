@@ -574,13 +574,15 @@ suggest making a `when` branch that begins with something like `Custom descripti
 You can also pattern match on lists, like so:
 
     when myList is
-        [] -> # the list is empty
-        [Foo, ..] -> # it starts with a Foo tag
-        [Foo, Bar, ..] -> # it starts with a Foo tag followed by a Bar tag
-        [Foo, a, ..] -> # it starts with a Foo tag followed by something we name `a`
-        [Ok a, ..] -> # it starts with an Ok tag containing a payload named `a`
-        [.., Foo] -> # it ends with a Foo tag
-        [A, B, .., C, D] -> # it has certain elements at the beginning and and
+        [] -> 0 # the list is empty
+        [Foo, ..] -> 1 # it starts with a Foo tag
+        [_, ..] -> 2 # it contains at least one element, which we ignore
+        [Foo, Bar, ..] -> 3 # it starts with a Foo tag followed by a Bar tag
+        [Foo, Bar, Baz] -> 4 # it contains exactly three elements: Foo, Bar, and Baz
+        [Foo, a, ..] -> 5 # it starts with a Foo tag followed by something we name `a`
+        [Ok a, ..] -> 6 # it starts with an Ok tag containing a payload named `a`
+        [.., Foo] -> 7 # it ends with a Foo tag
+        [A, B, .., C, D] -> 8 # it has certain elements at the beginning and and
 
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get)
 multiple times, since each call to `get` requires a separate conditional to handle the different
