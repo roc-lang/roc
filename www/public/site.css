@@ -1,7 +1,6 @@
 :root {
     --text-color: #121212;
-    --h1-color: #6666ff;
-    --header-link-color: #3cd7c1;
+    --header-link-color: #6666ff;
     --header-link-hover: #222;
     --link-color: #17b9b0;
     --repl-prompt: #0ff4f4;
@@ -143,11 +142,18 @@ h1, h2, h3, h4, h5 {
     font-family: 'Permanent Marker';
     line-height: 1rem;
     margin-top: 2.8rem;
+}
+
+h1 {
+    text-shadow: 2px 2px 2px #ddd;
+}
+
+h2, h3, h4, h5 {
     text-shadow: 1px 1px 1px #010101
 }
 
 h1 a, h2 a, h3 a, h4 a, h5 a {
-    color: #3fcac2;
+    color: var(--header-link-color);
 }
 
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
@@ -156,19 +162,15 @@ h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
 }
 
 h1 {
-    font-size: 5rem;
-    color: var(--h1-color);
-    text-shadow: 2px 2px 2px #010101
+    font-size: 4rem;
 }
 
 h2 {
     font-size: 3rem;
-    text-shadow: 2px 2px 1px #010101;
 }
 
 h3 {
     font-size: 2rem;
-    text-shadow: 2px 1px 1px #010101;
 }
 
 @font-face {
