@@ -1,6 +1,29 @@
+:root {
+    --text-color: #cdcdcd;
+    --header-link-color: #6666ff;
+    --link-color: #1bc6bd;
+    --repl-prompt: #0ff4f4;
+}
+
 html {
-    font-family: sans-serif;
-    line-height: 145%;
+    font-family: 'Lato', sans-serif;
+    line-height: 1.5rem;
+    background: #0e0e0f;
+    color: var(--text-color);
+}
+
+p {
+    font-size: 1.2rem;
+    line-height: 1.76rem;
+}
+
+a {
+    text-decoration: none;
+    color: var(--link-color);
+}
+
+a:hover {
+    text-decoration: underline;
 }
 
 li {
@@ -15,36 +38,50 @@ li {
 }
 
 aside {
-    background-color: #eee;
+    background-color: #222;
     padding: 2px 20px;
+}
+
+code {
+  margin: 0 0.2rem;
+  white-space: nowrap;
+  background: #303030;
+  padding: 0 0.2rem;
+}
+
+code, samp {
+    font-family: 'Source Code Pro', monospace;
 }
 
 code.snippet, samp {
     display: block;
     white-space: pre;
     padding: 10px 16px;
-    background-color: #eee;
+    background-color: #222;
     margin-bottom: 16px;
+    font-size: 1.2rem;
+    line-height: 1.76rem;
+    border: 1px solid #444;
 }
 
 .repl-prompt:before {
     /* Add this using CSS so it isn't selectable, which would be annoying when trying to copy/paste! */
+    color: var(--repl-prompt);
     content: "» ";
-    color: darkcyan;
 }
 
 .repl-err {
-    color: red;
+    color: #ff5f5f;
 }
 
 .ann {
     /* type annotation - purple in the repl */
-    color: orchid;
+    color: #f384fd;
 }
 
 .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: green;
+    color: #3dbd0f;
 }
 
 .kw {
@@ -59,12 +96,12 @@ code.snippet, samp {
 
 .str-esc {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: cyan;
+    color: var(--repl-prompt);
 }
 
 .str-interp {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: white;
+    color: var(--text-color);
 }
 
 
@@ -92,4 +129,101 @@ th, td {
 #different-names-body ul {
     padding: 0;
     list-style-type: none;
+}
+
+h1, h2, h3, h4, h5 {
+    font-family: 'Permanent Marker';
+}
+
+h1 a, h2 a, h3 a, h4 a, h5 a {
+    color: var(--header-link-color);
+}
+
+h1 {
+    font-size: 4rem;
+}
+
+h2 {
+    font-size: 3rem;
+}
+
+h3 {
+    font-size: 2rem;
+}
+
+@font-face {
+  font-family: 'Permanent Marker';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/permanentmarker/v16/Fh4uPib9Iyv2ucM6pGQMWimMp004La2Cf5b6jlg.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
+@font-face {
+  font-family: 'Merriweather';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-ciZMdeX3rsHo.woff2) format('woff2');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* latin */
+@font-face {
+  font-family: 'Merriweather';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-fCZMdeX3rg.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
+@font-face {
+  font-family: 'Merriweather Sans';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4Vh-sBzRRXnKOrnx4.woff) format('woff');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Merriweather Sans';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4ViesBzRRXnKOr.woff) format('woff');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
+@font-face {
+  font-family: 'Lato';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjxAwXiWtFCfQ7A.woff2) format('woff2');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Lato';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjx4wXiWtFCc.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMdrSlcZZJmOpwVS.woff) format('woff');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMlrSlcZZJmOpw.woff) format('woff');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
