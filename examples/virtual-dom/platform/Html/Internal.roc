@@ -40,7 +40,7 @@ HandlerLookup state : List (Result (Handler state) [NoHandler])
 
 App state initData : {
     init : initData -> state,
-    render : state -> (Html state),
+    render : state -> Html state,
     wasmUrl : Str,
 }
 
@@ -299,14 +299,14 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
             isOddArena = !wasOddArena
 
             Effect.runInVdomArena isOddArena \_ ->
-                newView = app.render newState
+                newViewUnindexed = app.render newState
                 emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
 
-                newHandlers <- diffAndUpdateDom emptyHandlers view newView |> Effect.after
+                { newHandlers, node: newViewIndexed } <- diffAndUpdateDom emptyHandlers view newViewUnindexed |> Effect.after
                 newBoxedPlatformState = Box.box {
                     app,
                     state: newState,
-                    view: newView,
+                    view: newViewIndexed,
                     handlers: newHandlers,
                     isOddArena,
                 }
@@ -316,8 +316,6 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
         # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
         _ ->
             Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
-
-diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect (HandlerLookup state)
 
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
 insertHandler = \handlers, newHandler ->
@@ -431,6 +429,7 @@ initClientApp = \json, app ->
         |> .list
         |> List.first
         |> Result.withDefault (Text NoJsIndex "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
+
     Ok {
         state,
         staticView,
@@ -477,3 +476,51 @@ indexNodes = \{ list, index }, node ->
 # -------------------------------
 #   VIRTUAL DOM DIFF
 # -------------------------------
+diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+diffAndUpdateDom = \newHandlers, oldNode, newNode ->
+    todo = Effect.always { newHandlers, node: newNode }
+
+    when { oldNode, newNode } is
+        { oldNode: Text (JsIndex index) oldContent, newNode: Text NoJsIndex newContent } ->
+            retVal = { newHandlers, node: Text (JsIndex index) newContent }
+
+            if newContent == oldContent then
+                Effect.always retVal
+            else
+                Effect.updateTextNode index newContent
+                |> Effect.map \_ -> retVal
+
+        { oldNode: Text _ _, newNode: Text _ _ } ->
+            Effect.always { newHandlers, node: newNode }
+
+        { oldNode: Element oldName (JsIndex index) oldSize oldAttrs oldChildren, newNode: Element newName NoJsIndex newSize newAttrs newChildren } ->
+            if newName == oldName then
+                # iterate over the children and attrs
+                todo
+            else
+                todo
+
+        { oldNode: Element _ _ _ _ _, newNode: Element _ _ _ _ _ } ->
+            todo #  TODO: debug message for framework dev
+
+        { oldNode: Lazy oldCallback, newNode: Lazy newCallback } ->
+            todo
+
+        { oldNode: None, newNode: None } ->
+            todo
+
+        _ ->
+            # Just replace
+            todo
+
+# create a new subtree from the bottom up
+# swap it
+createSubTree : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+
+# Element name jsIndex size attrs children ->
+#     newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
+#     newChildren = List.map children \c -> translate c parentToChild childToParent
+#     Element name jsIndex size newAttrs newChildren
+# Lazy childCallback ->
+#     Lazy (translateLazy childCallback parentToChild childToParent)
+# None -> None

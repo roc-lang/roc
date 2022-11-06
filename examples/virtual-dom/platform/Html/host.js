@@ -48,6 +48,15 @@ const init = async (initData, dynamicRootIds, wasmUrl) => {
     },
 
     /**
+     * @param {number} nodeId
+     * @param {number} contentAddr
+     */
+    updateTextNode: (nodeId, contentAddr) => {
+      const node = nodes[nodeId];
+      node.textContent = decodeRocStr(contentAddr);
+    },
+
+    /**
      * @param {number} parentId
      * @param {number} childId
      */

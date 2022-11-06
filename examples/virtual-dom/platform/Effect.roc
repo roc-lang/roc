@@ -4,11 +4,11 @@ hosted Effect
         always,
         after,
         NodeId,
-        nodeId,
         EventHandlerId,
         eventHandlerId,
         createElement,
         createTextNode,
+        updateTextNode,
         appendChild,
         removeNode,
         setAttribute,
@@ -22,8 +22,8 @@ hosted Effect
     imports []
     generates Effect with [always, after]
 
-NodeId := Nat
-nodeId = \id -> @NodeId id
+# TODO: private type
+NodeId : Nat
 
 EventHandlerId := Nat
 eventHandlerId = \id -> @EventHandlerId id
@@ -38,6 +38,9 @@ createElement : TagName -> Effect NodeId
 
 ## createTextNode content
 createTextNode : Str -> Effect NodeId
+
+## updateTextNode content
+updateTextNode : NodeId, Str -> Effect {}
 
 ## appendChild parentId childId
 appendChild : NodeId, NodeId -> Effect {}
