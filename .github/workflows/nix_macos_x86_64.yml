@@ -28,4 +28,4 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
       - name: execute cli_run tests only, the full tests take too long but are run nightly
-        run: nix develop -c cargo test --locked --release -p cli_run
+        run: nix develop -c cargo test --locked --release -p roc_cli
