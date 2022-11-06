@@ -768,6 +768,16 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 }
 
 #[cfg(target_family = "unix")]
+fn os_str_as_utf8_bytes(os_str: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    os_str.as_bytes()
+}
+
+#[cfg(not(target_family = "unix"))]
+fn os_str_as_utf8_bytes(os_str: &OsStr) -> &[u8] {
+    os_str.to_str().unwrap().as_bytes()
+}
+
 fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &'a Bump,
     executable: &ExecutableFile,
@@ -777,10 +787,9 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     bumpalo::collections::Vec<'a, CString>,
 ) {
     use bumpalo::collections::CollectIn;
-    use std::os::unix::ffi::OsStrExt;
 
     let path = executable.as_path();
-    let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let path_cstring = CString::new(os_str_as_utf8_bytes(path.as_os_str())).unwrap();
 
     // argv is an array of pointers to strings passed to the new program
     // as its command-line arguments.  By convention, the first of these
@@ -789,7 +798,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
     let it = args
         .into_iter()
-        .map(|x| CString::new(x.as_ref().as_bytes()).unwrap());
+        .map(|x| CString::new(os_str_as_utf8_bytes(x.as_ref())).unwrap());
 
     let argv_cstrings: bumpalo::collections::Vec<CString> =
         std::iter::once(path_cstring).chain(it).collect_in(arena);
@@ -803,55 +812,9 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             buffer.clear();
 
             use std::io::Write;
-            buffer.write_all(k.as_bytes()).unwrap();
+            buffer.write_all(os_str_as_utf8_bytes(&k)).unwrap();
             buffer.write_all(b"=").unwrap();
-            buffer.write_all(v.as_bytes()).unwrap();
-
-            CString::new(buffer.as_slice()).unwrap()
-        })
-        .collect_in(arena);
-
-    (argv_cstrings, envp_cstrings)
-}
-
-#[cfg_attr(not(target_family = "windows"), allow(unused))]
-fn make_argv_envp_windows<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    arena: &'a Bump,
-    executable: &ExecutableFile,
-    args: I,
-) -> (
-    bumpalo::collections::Vec<'a, CString>,
-    bumpalo::collections::Vec<'a, CString>,
-) {
-    use bumpalo::collections::CollectIn;
-
-    let path = executable.as_path();
-    let path_cstring = CString::new(path.as_os_str().to_str().unwrap().as_bytes()).unwrap();
-
-    // argv is an array of pointers to strings passed to the new program
-    // as its command-line arguments.  By convention, the first of these
-    // strings (i.e., argv[0]) should contain the filename associated
-    // with the file being executed.  The argv array must be terminated
-    // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
-    let it = args
-        .into_iter()
-        .map(|x| CString::new(x.as_ref().to_str().unwrap().as_bytes()).unwrap());
-
-    let argv_cstrings: bumpalo::collections::Vec<CString> =
-        std::iter::once(path_cstring).chain(it).collect_in(arena);
-
-    // envp is an array of pointers to strings, conventionally of the
-    // form key=value, which are passed as the environment of the new
-    // program.  The envp array must be terminated by a NULL pointer.
-    let mut buffer = Vec::with_capacity(100);
-    let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-        .map(|(k, v)| {
-            buffer.clear();
-
-            use std::io::Write;
-            buffer.write_all(k.to_str().unwrap().as_bytes()).unwrap();
-            buffer.write_all(b"=").unwrap();
-            buffer.write_all(v.to_str().unwrap().as_bytes()).unwrap();
+            buffer.write_all(os_str_as_utf8_bytes(&v)).unwrap();
 
             CString::new(buffer.as_slice()).unwrap()
         })
@@ -1122,7 +1085,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         let executable = roc_run_executable_file_path(binary_bytes)?;
 
         // TODO forward the arguments
-        let (argv_cstrings, envp_cstrings) = make_argv_envp_windows(&arena, &executable, args);
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
