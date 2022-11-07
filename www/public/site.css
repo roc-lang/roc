@@ -1,7 +1,7 @@
 :root {
     --body-max-width: 900px;
     --text-color: #121212;
-    --top-bar-bg: #444;
+    --top-bar-bg: #222;
     --top-bar-fg: #eee;
     --top-bar-logo-hover: hsl(258, 73%, 70%);
     --header-link-color: #17b9b0;
