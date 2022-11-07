@@ -1,8 +1,8 @@
 :root {
     --body-max-width: 900px;
     --text-color: #121212;
-    --top-bar-border: #aaa;
-    --top-bar-fg: #444;
+    --top-bar-bg: #444;
+    --top-bar-fg: #eee;
     --top-bar-logo-hover: hsl(258, 73%, 70%);
     --header-link-color: #17b9b0;
     --header-link-hover: #222;
@@ -55,34 +55,59 @@ li {
 }
 
 #top-bar {
-    width: var(--body-max-width);
+    background-color: var(--top-bar-bg);
+    width: 100%;
+    height: 50px;
+}
+
+#top-bar nav {
+    min-width: var(--body-max-width);
+    max-width: 1024px;
     margin: 0 auto;
     display: flex;
     justify-content: space-between;
-    border-bottom: 1px solid var(--top-bar-border);
-    padding: 4px 0;
+}
+
+#top-bar .logo {
+    display: flex;
+    color: var(--top-bar-fg);
+}
+
+#top-bar .logo-caption {
+    font-size: 1.8rem;
+    padding: 10px;
+}
+
+#top-bar .logo svg {
+    padding: 2px;
+    height: 42px;
+    width: 42px;
+}
+
+#top-bar .logo svg, #top-bar .logo:visited svg {
+    fill: var(--top-bar-fg);
+}
+
+#top-bar .logo:hover {
+    color: var(--top-bar-logo-hover);
+    text-decoration: none;
+}
+
+#top-bar .logo:hover svg {
+    fill: var(--top-bar-logo-hover);
 }
 
 #top-bar-links {
     display: flex;
 }
 
-#top-bar a {
+#top-bar-links a {
     color: var(--top-bar-fg);
     font-size: 1.1rem;
     display: block;
-    padding: 16px;
-}
-
-#top-bar a:last-of-type {
-    padding-right: 0;
-    margin-right: 0;
-}
-
-#top-bar a.home-link {
-    font-size: 1.8rem;
-    padding: 12px 0;
-    margin: 0;
+    height: 100%;
+    padding: 12px 16px;
+    margin: 0 8px;
 }
 
 @media only screen and (min-device-width: 900px) {
@@ -349,8 +374,7 @@ h3 {
 @media (prefers-color-scheme: dark) {
     :root {
         --text-color: #cdcdcd;
-        --top-bar-fg: #ccc;
-        --top-bar-border: #888;
+        --top-bar-bg: hsl(257, 29%, 50%);
         --header-link-color: #6666ff;
         --header-link-hover: #ddd;
         --link-color: #1bc6bd;
