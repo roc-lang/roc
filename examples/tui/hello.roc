@@ -1,6 +1,6 @@
 app "breakout"
     packages { pf: "platform/main.roc" }
-    imports [pf.Game.{ Bounds, Elem, Event }]
+    imports [pf.Api.{ Bounds, Elem, Event }]
     provides [program] { Model } to pf
 
 Model : { text : Str }

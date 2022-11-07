@@ -1,4 +1,4 @@
-interface Game
+interface Api
     exposes [Bounds, Elem, Event]
     imports []
 
