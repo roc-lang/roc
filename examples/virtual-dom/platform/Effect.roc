@@ -1,8 +1,9 @@
 hosted Effect
     exposes [
         Effect,
-        always,
         after,
+        always,
+        map,
         NodeId,
         EventHandlerId,
         eventHandlerId,
@@ -20,7 +21,7 @@ hosted Effect
         runInVdomArena,
     ]
     imports []
-    generates Effect with [always, after]
+    generates Effect with [after, always, map]
 
 # TODO: private type
 NodeId : Nat
