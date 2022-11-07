@@ -2444,7 +2444,7 @@ impl RegisterVariable {
     }
 
     #[inline(always)]
-    fn with_stack<'a>(
+    fn with_stack(
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
@@ -3147,7 +3147,7 @@ fn type_to_variable<'a>(
 }
 
 #[inline(always)]
-fn roc_result_to_var<'a>(
+fn roc_result_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3329,7 +3329,7 @@ fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<Tag
 }
 
 #[inline(always)]
-fn register_tag_arguments<'a>(
+fn register_tag_arguments(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3355,7 +3355,7 @@ fn register_tag_arguments<'a>(
 }
 
 /// Assumes that the tags are sorted and there are no duplicates!
-fn insert_tags_fast_path<'a>(
+fn insert_tags_fast_path(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3427,7 +3427,7 @@ fn insert_tags_fast_path<'a>(
     }
 }
 
-fn insert_tags_slow_path<'a>(
+fn insert_tags_slow_path(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3458,7 +3458,7 @@ fn insert_tags_slow_path<'a>(
     UnionTags::insert_slices_into_subs(subs, tag_vars)
 }
 
-fn type_to_union_tags<'a>(
+fn type_to_union_tags(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -3514,7 +3514,7 @@ fn type_to_union_tags<'a>(
     }
 }
 
-fn create_union_lambda<'a>(
+fn create_union_lambda(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
