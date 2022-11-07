@@ -292,6 +292,7 @@ h2 {
 
 h3 {
     font-size: 2rem;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 @font-face {
