@@ -3426,6 +3426,7 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_tracing",
+ "roc_utils",
  "serial_test",
  "signal-hook",
  "target-lexicon",

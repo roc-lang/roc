@@ -1,6 +1,10 @@
 use snafu::OptionExt;
 use std::{
-    collections::HashMap, env::VarError, path::PathBuf, process::Command, slice::SliceIndex,
+    collections::HashMap,
+    env::{self, VarError},
+    path::PathBuf,
+    process::Command,
+    slice::SliceIndex,
 };
 use util_error::{IndexOfFailedSnafu, KeyNotFoundSnafu, OutOfBoundsSnafu, UtilResult};
 
@@ -121,6 +125,30 @@ pub fn get_lib_path() -> Option<PathBuf> {
     }
 
     None
+}
+
+// get the Path of the root of the repository
+pub fn root_dir() -> PathBuf {
+    let mut path = env::current_exe().ok().unwrap();
+
+    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
+    path.pop();
+
+    // If we're in deps/ get rid of deps/ in target/debug/deps/
+    if path.ends_with("deps") {
+        path.pop();
+    }
+
+    // Get rid of target/debug/ so we're back at the project root
+    path.pop();
+    path.pop();
+
+    // running cargo with --target will put us in the target dir
+    if path.ends_with("target") {
+        path.pop();
+    }
+
+    path
 }
 
 /// Gives a friendly error if cargo is not installed.

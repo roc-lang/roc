@@ -5,6 +5,7 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_utils::cargo;
+use roc_utils::root_dir;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -28,9 +29,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let roc_binary_path = build_roc_bin_cached();
+
+    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+}
+
+// If we don't already have a /target/release/roc, build it!
+pub fn build_roc_bin_cached() -> PathBuf {
     let roc_binary_path = path_to_roc_binary();
 
-    // If we don't have a /target/release/roc, rebuild it!
     if !roc_binary_path.exists() {
         // Remove the /target/release/roc part
         let root_project_dir = roc_binary_path
@@ -49,21 +56,25 @@ where
             vec!["build", "--release", "--bin", "roc"]
         };
 
-        let output = cargo()
-            .current_dir(root_project_dir)
-            .args(args)
-            .output()
-            .unwrap();
+        let mut cargo_cmd = cargo();
 
-        if !output.status.success() {
-            panic!("cargo build --release --bin roc failed. stdout was:\n\n{:?}\n\nstderr was:\n\n{:?}\n",
-                output.stdout,
-                output.stderr
+        cargo_cmd.current_dir(root_project_dir).args(&args);
+
+        let cargo_cmd_str = format!("{:?}", cargo_cmd);
+
+        let cargo_output = cargo_cmd.output().unwrap();
+
+        if !cargo_output.status.success() {
+            panic!(
+                "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
+                cargo_cmd_str,
+                String::from_utf8(cargo_output.stdout).unwrap(),
+                String::from_utf8(cargo_output.stderr).unwrap()
             );
         }
     }
 
-    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+    roc_binary_path
 }
 
 pub fn run_glue<I, S>(args: I) -> Out
@@ -356,30 +367,6 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
         .collect();
 
     Ok(answer)
-}
-
-#[allow(dead_code)]
-pub fn root_dir() -> PathBuf {
-    let mut path = env::current_exe().ok().unwrap();
-
-    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
-    path.pop();
-
-    // If we're in deps/ get rid of deps/ in target/debug/deps/
-    if path.ends_with("deps") {
-        path.pop();
-    }
-
-    // Get rid of target/debug/ so we're back at the project root
-    path.pop();
-    path.pop();
-
-    // running cargo with --target will put us in the target dir
-    if path.ends_with("target") {
-        path.pop();
-    }
-
-    path
 }
 
 // start the dir with crates/cli_testing_examples
