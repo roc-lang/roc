@@ -377,7 +377,7 @@ pub struct AliasShared {
 pub enum TypeTag {
     EmptyRecord,
     EmptyTagUnion,
-    /// The arugments are implicit
+    /// The arguments are implicit
     Function(
         /// lambda set
         Index<TypeTag>,
