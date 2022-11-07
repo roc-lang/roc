@@ -1,17 +1,21 @@
 :root {
     --text-color: #121212;
+    --top-bar-bg: hsl(258, 73%, 70%);
+    --top-bar-fg: #ffffff;
     --header-link-color: #17b9b0;
     --header-link-hover: #222;
-    --h1-color: #6666ff;
-    --link-color: #6666ff;
+    --link-color: hsl(258, 73%, 58%);
+    --h1-color: hsl(258, 73%, 70%);
     --repl-prompt: #0ff4f4;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
     --snippet-bg: #f6f6f6;
     --snippet-border: #bbb;
+    --code-color: #303030;
     --toc-background: #f3f3f3;
     --toc-border: #ddd;
-    --code-color: #303030;
+    --toc-search-bg: #fcfcfc;
+    --toc-search-border: #bbb;
 }
 
 html {
@@ -19,6 +23,11 @@ html {
     line-height: 1.5rem;
     background: var(--body-bg);
     color: var(--text-color);
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
 }
 
 section p:last-child {
@@ -43,10 +52,48 @@ li {
     margin-bottom: 0.5rem;
 }
 
+#top-bar {
+    background-color: var(--top-bar-bg);
+    display: flex;
+    justify-content: space-between;
+}
+
+#top-bar .logo {
+    display: block;
+    height: 48px;
+    width: 48px;
+}
+
+#top-bar .logo svg {
+    padding: 1px;
+    height: 42px;
+    width: 42px;
+}
+
+#top-bar .logo svg, #top-bar .logo:visited svg {
+    fill: var(--top-bar-fg);
+}
+
+#top-bar .logo:hover svg {
+    fill: black;
+}
+
+#top-bar-links {
+    display: flex;
+}
+
+#top-bar-links a {
+    color: var(--top-bar-fg);
+    display: block;
+    height: 100%;
+    padding: 11px 16px;
+    margin: 0 8px;
+}
+
 @media only screen and (min-device-width: 900px) {
-    body {
+    main {
         width: 900px;
-        margin: 24px auto;
+        margin: 36px auto;
     }
 }
 
