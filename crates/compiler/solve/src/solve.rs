@@ -32,10 +32,9 @@ use roc_types::subs::{
     OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
     UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, AliasShared, Category, OptAbleType,
-    OptAbleVar, Polarity, Reason, RecordField, TypeExtension, TypeTag, Types, Uls,
+    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
+    RecordField, Type, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -2695,7 +2694,6 @@ fn type_to_variable<'a>(
                     .zip(field_tys.into_iter())
                 {
                     let field_var = {
-                        use roc_types::types::RecordField::*;
                         let t = helper!(field_type);
                         types[field_kind].replace(t)
                     };
@@ -2829,7 +2827,7 @@ fn type_to_variable<'a>(
                     {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
-                        if let Some(abilities) = &types[opt_ability] {
+                        if types[opt_ability].is_some() {
                             let arg_region = types[arg_region];
                             bind_to_abilities.push((Loc::at(arg_region, copy_var), opt_ability));
                         }
@@ -2927,7 +2925,7 @@ fn type_to_variable<'a>(
                     {
                         let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
-                        if let Some(abilities) = &types[opt_abilities] {
+                        if types[opt_abilities].is_some() {
                             let region = types[region];
                             bind_to_abilities.push((Loc::at(region, copy_var), opt_abilities));
                         }
@@ -2971,10 +2969,10 @@ fn type_to_variable<'a>(
             } => {
                 let AliasShared {
                     symbol,
-                    type_argument_abilities,
+                    type_argument_abilities: _,
                     type_argument_regions: _,
                     lambda_set_variables,
-                    infer_ext_in_output_variables,
+                    infer_ext_in_output_variables: _, // TODO
                 } = types[shared];
 
                 let type_arguments = types.get_type_arguments(typ);
