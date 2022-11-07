@@ -467,11 +467,11 @@ pub fn constrain_pattern(
 
                         state.vars.push(*expr_var);
 
-                        let expr_expected = Expected::ForReason(
+                        let expr_expected = constraints.push_expected_type(Expected::ForReason(
                             Reason::RecordDefaultField(label.clone()),
                             pat_type_index,
                             loc_expr.region,
-                        );
+                        ));
 
                         let expr_con = constrain_expr(
                             constraints,
