@@ -1,5 +1,5 @@
 use crate::{
-    roc::{self, Bounds, 
+    glue::{self, Bounds, 
             // RocElem, RocElemTag, RocEvent
     },
 };
@@ -27,7 +27,7 @@ use crossterm::{
 
 pub fn run_event_loop(title: &str, window_bounds: Bounds) {
     
-    
+    use crate::roc;
     let (mut model, mut elems) = roc::init_and_render(window_bounds);
 
     

@@ -1,8 +1,11 @@
 platform "tui"
-    requires { Model } { program : _ }
-    exposes [Api]
+    requires { } { program : _ }
+    exposes [Model]
     packages {}
-    imports [Api.{ Bounds, Elem, Event }]
+    imports [
+        Api.{ Bounds, Elem, Event },
+        Model.{ Model },
+        ]
     provides [programForHost]
 
 # TODO allow changing the window title - maybe via a Task, since that shouldn't happen all the time
