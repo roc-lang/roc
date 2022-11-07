@@ -43,7 +43,7 @@ section p:last-child {
     margin-bottom: 0;
 }
 
-p {
+p, li {
     font-size: 1.2rem;
     line-height: 1.85rem;
 }
