@@ -46,12 +46,12 @@ App state initData : {
 
 Html state : [
     None,
-    Text JsIndex Str,
-    Element Str JsIndex Nat (List (Attribute state)) (List (Html state)),
+    Text MaybeJsIndex Str,
+    Element Str MaybeJsIndex Nat (List (Attribute state)) (List (Html state)),
     Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
 ]
 
-JsIndex : [
+MaybeJsIndex : [
     JsIndex Nat, # Index of the corresponding real DOM node in a JavaScript array
     NoJsIndex, # We don't have a JavaScript index for fresh nodes not yet diffed, or for static HTML
 ]
@@ -498,6 +498,8 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
                 # iterate over the children and attrs
                 todo
             else
+                # create a new subtree from the bottom up
+                # swap it
                 todo
 
         { oldNode: Element _ _ _ _ _, newNode: Element _ _ _ _ _ } ->
@@ -513,10 +515,99 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
             # Just replace
             todo
 
-# create a new subtree from the bottom up
-# swap it
 createSubTree : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+createSubTree = \newHandlers, node ->
+    when node is
+        Text _ content ->
+            Effect.createTextNode content
+            |> Effect.map \index -> 
+                    jsIndex : MaybeJsIndex
+                    jsIndex = JsIndex index
+                    { newHandlers, node: Text jsIndex content }
 
+        Element name _ size attrs children ->
+            nodeIndex <- Effect.createElement name |> Effect.after
+
+            # { style, newHandlers: updatedHandlers, effects } =
+            #     List.walk attrs { nodeIndex, style: "", newHandlers, effects: Effect.always {} } addAttribute
+
+            # _ <- effects |> Effect.after
+            # _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
+
+            jsIndex : MaybeJsIndex
+            jsIndex = JsIndex nodeIndex
+
+            #   for each child
+            #       recurse into it
+            #       then append it
+            Effect.always {
+                newHandlers, #: updatedHandlers,
+                node: Element name jsIndex size attrs children
+            }
+            
+
+        Lazy callback ->
+            createSubTree newHandlers (callback (Err NotCached)).node
+
+        None -> Effect.always { newHandlers, node: None }
+
+AddAttrWalk state : {
+    nodeIndex : Nat,
+    style : Str,
+    newHandlers: HandlerLookup state,
+    # updatedAttrs : List (Attribute state),
+    effects : Effect {},
+}
+
+addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
+addAttribute = \{ nodeIndex, style, newHandlers, effects }, attr ->
+    when attr is
+        EventListener name accessors (Ok handler) ->
+            # We need to modify the attr itself! walk state needs a list of them.
+            # Search for a free slot in newHandlers.
+            # swap the handler for a handlerIndex.
+            # insert an Effect.setListener
+            # handerIndex =
+            #     newHandlers
+            #     |> List.findFirstIndex (\h -> h == Err NoHandler)
+            # newAttr = attr
+
+
+
+            # { nodeIndex, style, newHandlers: List.append newHandlers handler, updatedAttrs: List.append updatedAttrs newAttr, effects }
+            { nodeIndex, style, newHandlers, effects }
+
+        EventListener name accessors (Err handlerIndex) ->
+            # This pattern should never be reached!
+            { nodeIndex, style, newHandlers, effects }
+
+        HtmlAttr k v ->
+            { nodeIndex, style, newHandlers, effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
+
+        DomProp k v ->
+            { nodeIndex, style, newHandlers, effects: Effect.after effects (\_ -> Effect.setProperty nodeIndex k v) }
+
+        Style k v ->
+            newStyle = "\(style) \(k):\(v);"
+
+            { nodeIndex, style: newStyle, newHandlers, effects }
+
+# a -> Effect [Step a, Done b]
+# Effect.loop : a, (a -> Effect [Step a, Done b]) -> Effect b
+# text
+#   create it
+# element
+#   create it
+#   for each attr
+#       insert it
+#   for each child
+#       recurse into it
+#       then append it
+# lazy
+#   expand it with the current state
+#   recurse
+# none
+#   no effects, just return it
 # Element name jsIndex size attrs children ->
 #     newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
 #     newChildren = List.map children \c -> translate c parentToChild childToParent
