@@ -477,6 +477,12 @@ pub struct Types {
     single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
 }
 
+impl Default for Types {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Types {
     pub fn new() -> Self {
         Self {
@@ -571,6 +577,7 @@ impl Types {
         self.tags_slices[index.index()] = type_slice;
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_old_type_slice(&mut self, old: &[Type]) -> Slice<TypeTag> {
         let slice = self.reserve_type_tags(old.len());
 
@@ -661,12 +668,14 @@ impl Types {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_old_type(&mut self, old: &Type) -> Index<TypeTag> {
         let index = self.reserve_type_tag();
         self.from_old_type_at(index, old);
         index
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
         match old {
             Type::EmptyRec => self.set_type_tag(index, TypeTag::EmptyRecord, Slice::default()),
