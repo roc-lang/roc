@@ -562,11 +562,37 @@ addAttribute : AddAttrWalk _, Attribute _ -> AddAttrWalk _
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
         EventListener name accessors (Ok handler) ->
+            # hangTheTypeChecker : Result (Handler _) [NoHandler]
+            # hangTheTypeChecker = Ok handler
+
+            # This badTypeCheckErrorNoAnnotation value is a:
+            #     [Err [NoHandler], Ok [Custom a, Normal *]a]
+            # But append needs its 2nd argument to be:
+            #     Result (Handler a) [NoHandler]
+            # badTypeCheckErrorNoAnnotation =
+            #     when handler is
+            #         Normal f -> Ok (Normal f)
+            #         Custom f -> Ok (Custom f)
+
+            badTypeCheckErrorAnnotated : Result (Handler _) [NoHandler]
+            badTypeCheckErrorAnnotated =
+                # This handler value is a:
+                #     Handler []
+                # But the branch patterns have type:
+                #     [Custom *, Normal *]
+                when handler is
+                    Normal f -> Ok (Normal f)
+                    Custom f -> Ok (Custom f)
+
             { updatedHandlers, handlerIndex } =
                 # TODO: speed this up using a free list
                 when List.findFirstIndex newHandlers Result.isErr is
                     Err NotFound ->
-                        { updatedHandlers: [], #List.append newHandlers (Ok handler),
+                        { 
+                        #   updatedHandlers: List.append newHandlers (Ok handler),
+                        #   updatedHandlers: List.append newHandlers hangTheTypeChecker,
+                        #   updatedHandlers: List.append newHandlers badTypeCheckErrorNoAnnotation,
+                          updatedHandlers: List.append newHandlers badTypeCheckErrorAnnotated,
                           handlerIndex: List.len newHandlers,
                         }
                     Ok freeIndex ->
