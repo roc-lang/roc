@@ -280,7 +280,7 @@ h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
 }
 
 h1 {
-    font-size: 5rem;
+    font-size: 6rem;
     color: var(--h1-color);
     text-shadow: 2px 2px 2px #010101;
 }
