@@ -441,7 +441,7 @@ pub fn constrain_expr(
         }
         Var(symbol, variable) => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
-            let expected_type = *constraints.expectations[expected.index()].get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
             let store_expected = constraints.store(expected_type, *variable, file!(), line!());
 
             let lookup_constr = constraints.lookup(*symbol, expected, region);
@@ -451,7 +451,7 @@ pub fn constrain_expr(
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
             // lookup the member in the environment.
-            let expected_type = *constraints.expectations[expected.index()].get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
             let store_expected =
                 constraints.store(expected_type, specialization_var, file!(), line!());
 
@@ -636,7 +636,7 @@ pub fn constrain_expr(
 
             branch_cons.push(cond_var_is_bool_con);
 
-            let expected = constraints.expectations[expected.index()].clone();
+            let expected = constraints[expected].clone();
             match expected {
                 FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
@@ -860,7 +860,7 @@ pub fn constrain_expr(
                     when_branch,
                     expected_pattern,
                     branch_expr_reason(
-                        &constraints.expectations[expected.index()],
+                        &constraints[expected],
                         HumanIndex::zero_based(index),
                         when_branch.value.region,
                     ),
@@ -1446,7 +1446,7 @@ pub fn constrain_expr(
             // Instead, trivially equate the expected type to itself. This will never yield
             // unification errors but it will catch errors in type translation, including ability
             // obligations.
-            let trivial_type = *constraints.expectations[expected.index()].get_type_ref();
+            let trivial_type = *constraints[expected].get_type_ref();
             constraints.equal_types(trivial_type, expected, Category::Unknown, region)
         }
     }

@@ -198,7 +198,7 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            let expected_type = *constraints.pattern_expectations[expected.index()].get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
             if could_be_a_tag_union(constraints, expected_type) {
                 state
                     .delayed_is_open_constraints
@@ -210,7 +210,7 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            let expected = &constraints.pattern_expectations[expected.index()];
+            let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
             if could_be_a_tag_union(constraints, type_index) {
@@ -232,7 +232,7 @@ pub fn constrain_pattern(
             ident: symbol,
             specializes: _,
         } => {
-            let expected = &constraints.pattern_expectations[expected.index()];
+            let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
             if could_be_a_tag_union(constraints, type_index) {
@@ -598,7 +598,7 @@ pub fn constrain_pattern(
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
-            let expected_type = *constraints.pattern_expectations[expected.index()].get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
 
             let whole_con = constraints.includes_tag(
                 expected_type,
