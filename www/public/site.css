@@ -68,33 +68,11 @@ li {
     justify-content: space-between;
 }
 
-#top-bar .logo {
+#top-bar .home-link {
     display: flex;
     color: var(--top-bar-fg);
-}
-
-#top-bar .logo-caption {
     font-size: 1.8rem;
     padding: 10px;
-}
-
-#top-bar .logo svg {
-    padding: 2px;
-    height: 42px;
-    width: 42px;
-}
-
-#top-bar .logo svg, #top-bar .logo:visited svg {
-    fill: var(--top-bar-fg);
-}
-
-#top-bar .logo:hover {
-    color: var(--top-bar-logo-hover);
-    text-decoration: none;
-}
-
-#top-bar .logo:hover svg {
-    fill: var(--top-bar-logo-hover);
 }
 
 #top-bar-links {
