@@ -128,11 +128,11 @@ code.snippet, samp {
 }
 
 #tutorial-toc {
-    margin-top: 20px;
+    margin-top: 18px;
     background: var(--toc-background);
     border: 1px solid var(--toc-border);
-    padding: 14px 24px;
-    margin-left: 20px;
+    padding: 12px 24px;
+    margin-left: 64px;
 }
 
 #tutorial-toc code {
@@ -165,10 +165,10 @@ code.snippet, samp {
     color: inherit;
     padding: 6px 8px;
     margin-top: 16px;
+    margin-bottom: 4px;
     box-sizing: border-box;
     width: 100%;
     font-size: inherit;
-    margin-bottom: 4px;
 }
 
 /* Used on on the different-names page. */
