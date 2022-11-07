@@ -32,6 +32,13 @@ html, body {
     padding: 0;
 }
 
+footer {
+    max-width: 1024px;
+    margin: 0 auto;
+    font-size: 14px;
+    padding: 16px;
+}
+
 section p:last-child {
     margin-bottom: 0;
 }
