@@ -520,20 +520,19 @@ createSubTree = \newHandlers, node ->
     when node is
         Text _ content ->
             Effect.createTextNode content
-            |> Effect.map \index -> 
-                    jsIndex : MaybeJsIndex
-                    jsIndex = JsIndex index
-                    { newHandlers, node: Text jsIndex content }
+            |> Effect.map \index ->
+                jsIndex : MaybeJsIndex
+                jsIndex = JsIndex index
+
+                { newHandlers, node: Text jsIndex content }
 
         Element name _ size attrs children ->
             nodeIndex <- Effect.createElement name |> Effect.after
+            { style, newHandlers: updatedHandlers, effects } =
+                List.walk attrs { nodeIndex, style: "", newHandlers, renderedAttrs: [], effects: Effect.always {} } addAttribute
 
-            # { style, newHandlers: updatedHandlers, effects } =
-            #     List.walk attrs { nodeIndex, style: "", newHandlers, effects: Effect.always {} } addAttribute
-
-            # _ <- effects |> Effect.after
-            # _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
-
+            _ <- effects |> Effect.after
+            _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
             jsIndex : MaybeJsIndex
             jsIndex = JsIndex nodeIndex
 
@@ -541,10 +540,9 @@ createSubTree = \newHandlers, node ->
             #       recurse into it
             #       then append it
             Effect.always {
-                newHandlers, #: updatedHandlers,
-                node: Element name jsIndex size attrs children
+                newHandlers: updatedHandlers,
+                node: Element name jsIndex size attrs children,
             }
-            
 
         Lazy callback ->
             createSubTree newHandlers (callback (Err NotCached)).node
@@ -554,43 +552,46 @@ createSubTree = \newHandlers, node ->
 AddAttrWalk state : {
     nodeIndex : Nat,
     style : Str,
-    newHandlers: HandlerLookup state,
-    # updatedAttrs : List (Attribute state),
+    newHandlers : HandlerLookup state,
+    renderedAttrs : List (Attribute state),
     effects : Effect {},
 }
 
-addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
-addAttribute = \{ nodeIndex, style, newHandlers, effects }, attr ->
+# addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
+addAttribute : AddAttrWalk _, Attribute _ -> AddAttrWalk _
+addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
         EventListener name accessors (Ok handler) ->
-            # We need to modify the attr itself! walk state needs a list of them.
-            # Search for a free slot in newHandlers.
-            # swap the handler for a handlerIndex.
-            # insert an Effect.setListener
-            # handerIndex =
-            #     newHandlers
-            #     |> List.findFirstIndex (\h -> h == Err NoHandler)
-            # newAttr = attr
+            { updatedHandlers, handlerIndex } =
+                # TODO: speed this up using a free list
+                when List.findFirstIndex newHandlers Result.isErr is
+                    Err NotFound ->
+                        { updatedHandlers: [], #List.append newHandlers (Ok handler),
+                          handlerIndex: List.len newHandlers,
+                        }
+                    Ok freeIndex ->
+                        { updatedHandlers: [], #List.set newHandlers freeIndex (Ok handler),
+                          handlerIndex: freeIndex,
+                        }
+            # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
+            renderedAttr = EventListener name accessors (Err handlerIndex)
 
-
-
-            # { nodeIndex, style, newHandlers: List.append newHandlers handler, updatedAttrs: List.append updatedAttrs newAttr, effects }
-            { nodeIndex, style, newHandlers, effects }
+            { nodeIndex, style, newHandlers: updatedHandlers, renderedAttrs: List.append renderedAttrs renderedAttr, effects }
 
         EventListener name accessors (Err handlerIndex) ->
             # This pattern should never be reached!
-            { nodeIndex, style, newHandlers, effects }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (EventListener name accessors (Err handlerIndex)), effects }
 
         HtmlAttr k v ->
-            { nodeIndex, style, newHandlers, effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (HtmlAttr k v), effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
 
         DomProp k v ->
-            { nodeIndex, style, newHandlers, effects: Effect.after effects (\_ -> Effect.setProperty nodeIndex k v) }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (DomProp k v), effects: Effect.after effects (\_ -> Effect.setProperty nodeIndex k v) }
 
         Style k v ->
             newStyle = "\(style) \(k):\(v);"
 
-            { nodeIndex, style: newStyle, newHandlers, effects }
+            { nodeIndex, style: newStyle, newHandlers, renderedAttrs: List.append renderedAttrs (Style k v), effects }
 
 # a -> Effect [Step a, Done b]
 # Effect.loop : a, (a -> Effect [Step a, Done b]) -> Effect b
