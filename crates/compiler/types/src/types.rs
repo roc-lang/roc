@@ -417,6 +417,7 @@ pub enum TypeTag {
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
+    /// The problem is at the index of the type tag
     Erroneous,
 
     // TypeExtension is implicit in the type slice
@@ -505,6 +506,11 @@ impl Types {
         self.single_tag_union_tag_names
             .get(typ)
             .expect("typ is not a single tag union")
+    }
+
+    #[track_caller]
+    pub fn get_problem(&self, typ: &Index<TypeTag>) -> &Problem {
+        self.problems.get(typ).expect("typ is not an error")
     }
 
     pub fn record_fields_slices(

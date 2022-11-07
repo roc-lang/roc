@@ -3040,7 +3040,6 @@ fn type_to_variable<'a>(
                     alias_variable,
                     AliasKind::Structural,
                 );
-                // let result = register(subs, rank, pools, content);
                 let result = register_with_known_var(subs, destination, rank, pools, content);
 
                 // We only want to unify the actual_var with the alias once
@@ -3054,7 +3053,11 @@ fn type_to_variable<'a>(
                 result
             }
             Erroneous => {
-                let content = Content::Error;
+                // TODO: remove `Erroneous`, `Error` can always be used, and type problems known at
+                // this point can be reported during canonicalization.
+                let problem_index =
+                    SubsIndex::push_new(&mut subs.problems, types.get_problem(&typ).clone());
+                let content = Content::Structure(FlatType::Erroneous(problem_index));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
