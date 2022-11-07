@@ -85,7 +85,7 @@ li {
     display: block;
     height: 100%;
     padding: 12px 16px;
-    margin: 0 8px;
+    margin: 0 2px;
 }
 
 @media only screen and (min-device-width: 900px) {
