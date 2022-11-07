@@ -361,20 +361,26 @@ impl std::ops::Neg for Polarity {
     }
 }
 
-#[allow(dead_code)]
 pub struct AliasShared {
-    symbol: Symbol,
-    type_argument_abilities: Slice<Option<AbilitySet>>,
-    type_argument_regions: Slice<Region>,
-    lambda_set_variables: Slice<TypeTag>,
-    infer_ext_in_output_variables: Slice<TypeTag>,
+    pub symbol: Symbol,
+    pub type_argument_abilities: Slice<Option<AbilitySet>>,
+    pub type_argument_regions: Slice<Region>,
+    pub lambda_set_variables: Slice<TypeTag>,
+    pub infer_ext_in_output_variables: Slice<TypeTag>,
 }
 
 #[derive(Debug, Clone)]
 pub enum TypeTag {
     EmptyRecord,
     EmptyTagUnion,
-    Function(Index<TypeTag>, Index<TypeTag>),
+    /// The arugments are implicit
+    Function(
+        /// lambda set
+        Index<TypeTag>,
+        /// return type
+        Index<TypeTag>,
+    ),
+    /// Closure arguments are implicit
     ClosureTag {
         name: Symbol,
         ambient_function: Variable,
@@ -420,6 +426,24 @@ pub enum TypeTag {
     Record(RecordFields),
 }
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct AsideTypeSlice(Slice<TypeTag>);
+
+impl AsideTypeSlice {
+    pub fn into_iter(&self) -> impl Iterator<Item = Index<TypeTag>> {
+        self.0.into_iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 pub struct Types {
     // main storage. Each type is represented by a tag, which is identified by its index.
     // `tags_slices` is a parallel array (so these two vectors always have the same size), that
@@ -427,6 +451,10 @@ pub struct Types {
     // the extension parameter of tag unions/records.
     tags: Vec<TypeTag>,
     tags_slices: Vec<Slice<TypeTag>>,
+
+    // used to store other slices of types that are not the "main" arguments of a type stored in
+    // `tags_slices`.
+    aside_types_slices: Vec<Slice<TypeTag>>,
 
     // region info where appropriate (retained for generating error messages)
     regions: Vec<Region>,
@@ -449,13 +477,14 @@ pub struct Types {
 }
 
 impl Types {
-    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
-
     pub fn new() -> Self {
         Self {
+            // tags.len() == tags_slices.len()
             tags: vec![TypeTag::EmptyRecord, TypeTag::EmptyTagUnion],
-            tags_slices: Default::default(),
+            tags_slices: vec![Default::default(), Default::default()],
+
+            aside_types_slices: Default::default(),
+
             regions: Default::default(),
             tag_names: Default::default(),
             field_types: Default::default(),
@@ -465,6 +494,49 @@ impl Types {
             problems: Default::default(),
             single_tag_union_tag_names: Default::default(),
         }
+    }
+
+    pub fn get_type_arguments(&self, tag: Index<TypeTag>) -> Slice<TypeTag> {
+        self.tags_slices[tag.index()]
+    }
+
+    #[track_caller]
+    pub fn get_tag_name(&self, typ: &Index<TypeTag>) -> &TagName {
+        self.single_tag_union_tag_names
+            .get(typ)
+            .expect("typ is not a single tag union")
+    }
+
+    pub fn record_fields_slices(
+        &self,
+        fields: RecordFields,
+    ) -> (Slice<Lowercase>, Slice<RecordField<()>>, Slice<TypeTag>) {
+        let RecordFields {
+            length,
+            field_names_start,
+            variables_start,
+            field_types_start,
+        } = fields;
+
+        let names = Slice::new(field_names_start, length);
+        let fields = Slice::new(field_types_start, length);
+        let tys = Slice::new(variables_start, length);
+
+        (names, fields, tys)
+    }
+
+    pub fn union_tag_slices(&self, union: UnionTags) -> (Slice<TagName>, Slice<AsideTypeSlice>) {
+        let UnionTags {
+            length,
+            labels_start,
+            values_start,
+            _marker,
+        } = union;
+
+        let tags = Slice::new(labels_start, length);
+        let payload_slices = Slice::new(values_start, length);
+
+        (tags, payload_slices)
     }
 
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
@@ -511,13 +583,14 @@ impl Types {
         let tag_names_slice =
             Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
 
+        // Store the payload slices in the aside buffer
         let type_slices = Slice::extend_new(
-            &mut self.tags_slices,
+            &mut self.aside_types_slices,
             std::iter::repeat(Slice::default()).take(tags.len()),
         );
 
         for (slice_index, (_, types)) in type_slices.indices().zip(tags) {
-            self.tags_slices[slice_index] = self.from_old_type_slice(types);
+            self.aside_types_slices[slice_index] = self.from_old_type_slice(types);
         }
 
         let union_tags = UnionTags {
@@ -567,10 +640,16 @@ impl Types {
             type_arguments.iter().map(|a| a.opt_abilities.clone()),
         );
 
+        // TODO: populate correctly
+        let type_argument_regions = Slice::extend_new(
+            &mut self.regions,
+            std::iter::repeat(Region::zero()).take(type_arguments.len()),
+        );
+
         AliasShared {
             symbol,
             type_argument_abilities,
-            type_argument_regions: Slice::default(),
+            type_argument_regions,
             lambda_set_variables: lambda_set_slice,
             infer_ext_in_output_variables: infer_ext_in_output_slice,
         }
@@ -705,10 +784,6 @@ impl Types {
                 lambda_set_variables,
                 infer_ext_in_output_types,
             }) => {
-                //    pub symbol: Symbol,
-                //    pub type_arguments: Vec<Loc<OptAbleType>>,
-                //    pub lambda_set_variables: Vec<LambdaSet>,
-
                 let type_argument_regions =
                     Slice::extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
 
@@ -793,7 +868,7 @@ impl Types {
 
                 let tag = match kind {
                     AliasKind::Structural => TypeTag::StructuralAlias { shared, actual },
-                    AliasKind::Opaque => TypeTag::StructuralAlias { shared, actual },
+                    AliasKind::Opaque => TypeTag::OpaqueAlias { shared, actual },
                 };
 
                 self.set_type_tag(index, tag, type_arguments_slice)
@@ -862,11 +937,65 @@ impl Polarity {
     }
 }
 
-impl std::ops::Index<Index<TypeTag>> for Types {
-    type Output = TypeTag;
+macro_rules! impl_types_index {
+    ($($field:ident, $ty:ty)*) => {$(
+        impl std::ops::Index<Index<$ty>> for Types {
+            type Output = $ty;
 
-    fn index(&self, index: Index<TypeTag>) -> &Self::Output {
-        &self.tags[index.index()]
+            fn index(&self, index: Index<$ty>) -> &Self::Output {
+                // Validate that the types line up, so you can't accidentally
+                // index into the wrong array.
+                let _: &Vec<$ty> = &self.$field;
+
+                &self.$field[index.index()]
+            }
+        }
+    )*}
+}
+
+macro_rules! impl_types_index_slice {
+    ($($field:ident, $ty:ty)*) => {$(
+        impl std::ops::Index<Slice<$ty>> for Types {
+            type Output = [$ty];
+
+            fn index(&self, slice: Slice<$ty>) -> &Self::Output {
+                // Validate that the types line up, so you can't accidentally
+                // index into the wrong array.
+                let _: &Vec<$ty> = &self.$field;
+
+                &self.$field[slice.indices()]
+            }
+        }
+    )*}
+}
+
+impl_types_index! {
+    tags, TypeTag
+    aliases, AliasShared
+    type_arg_abilities, Option<AbilitySet>
+    regions, Region
+    tag_names, TagName
+    field_types, RecordField<()>
+    field_names, Lowercase
+}
+
+impl_types_index_slice! {
+    tag_names, TagName
+}
+
+impl std::ops::Index<Index<AsideTypeSlice>> for Types {
+    type Output = Slice<TypeTag>;
+
+    fn index(&self, slice: Index<AsideTypeSlice>) -> &Self::Output {
+        &self.aside_types_slices[slice.index()]
+    }
+}
+
+impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
+    type Output = [Slice<TypeTag>];
+
+    fn index(&self, slice: Slice<AsideTypeSlice>) -> &Self::Output {
+        &self.aside_types_slices[slice.indices()]
     }
 }
 
