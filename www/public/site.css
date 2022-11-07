@@ -11,7 +11,7 @@
     --repl-prompt: #0ff4f4;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
-    --snippet-bg: #f6f6f6;
+    --snippet-bg: #fcfcfc;
     --snippet-border: #bbb;
     --code-color: #303030;
     --toc-background: #f3f3f3;
@@ -150,23 +150,28 @@ code.snippet, samp {
     color: #3dbd0f;
 }
 
-.kw {
-    /* automatic variable names in the repl, e.g. # val1 */
-    color: #67a0fb;
+.kw, .op {
+    /* language keywords, e.g. `if`, or operators, e.g. `+` */
+    color: #3474db;
+}
+
+.paren, .brace, .comma {
+    /* square braces, parens, commas */
+    color: #3474db;
 }
 
 .str {
-    /* automatic variable names in the repl, e.g. # val1 */
-    color: goldenrod;
+    /* string literals */
+    color: #158086;
 }
 
 .str-esc {
-    /* automatic variable names in the repl, e.g. # val1 */
-    color: var(--repl-prompt);
+    /* escapes inside string literals, e.g. \t */
+    color: #3474db;
 }
 
 .str-interp {
-    /* automatic variable names in the repl, e.g. # val1 */
+    /* interpolated variables inside string literals */
     color: var(--text-color);
 }
 
@@ -394,5 +399,20 @@ h4 {
 
     html {
         scrollbar-color: #444444 #2f2f2f;
+    }
+
+    .paren, .brace, .comma {
+        /* square braces, parens, commas */
+        color: #67a0fb;
+    }
+
+    .kw, .op {
+        /* language keywords, e.g. `if`, or operators, e.g. `+` */
+        color: #67a0fb;
+    }
+
+    .str {
+        /* string literals */
+        color: #26b2b9;
     }
 }

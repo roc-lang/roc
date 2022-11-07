@@ -28,25 +28,25 @@
 <main>
 <div id="tutorial-start">
     <nav id="tutorial-toc">
-        <input id="toc-search" type="text" placeholder="Search"/>
+        <input id="toc-search" type="text" placeholder="Search">
         <ol>
             <li><a href="#installation">Installation</a></li>
             <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
             <li><a href="#building-an-application">Building an Application</a></li>
             <li><a href="#functions-and-if">Functions and <code>if</code></a></li>
-            <li><a href="#records">Records</a>
-            <li><a href="#tags">Tags & Pattern Matching</a>
-            <li><a href="#booleans">Booleans</a>
-            <li><a href="#lists">Lists</a>
-            <li><a href="#types">Types</a>
-            <li><a href="#tests-and-expectations">Tests and Expectations</a>
-            <li><a href="#modules">Modules</a>
-            <li><a href="#modules">Platforms and Packages</a>
-            <li><a href="#tasks">Tasks</a>
-            <li><a href="#abilities">Abilities</a>
-            <li><a href="#next-steps">Next Steps</a>
-            <li><a href="#advanced concepts">Advanced Concepts</a>
-            <li><a href="#advanced concepts">Operator Desugaring Table</a>
+            <li><a href="#records">Records</a></li>
+            <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
+            <li><a href="#booleans">Booleans</a></li>
+            <li><a href="#lists">Lists</a></li>
+            <li><a href="#types">Types</a></li>
+            <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
+            <li><a href="#modules">Modules</a></li>
+            <li><a href="#modules">Platforms and Packages</a></li>
+            <li><a href="#tasks">Tasks</a></li>
+            <li><a href="#abilities">Abilities</a></li>
+            <li><a href="#next-steps">Next Steps</a></li>
+            <li><a href="#advanced concepts">Advanced Concepts</a></li>
+            <li><a href="#advanced concepts">Operator Desugaring Table</a></li>
         </ol>
     </nav>
     <div id="tutorial-intro">
@@ -57,18 +57,20 @@
 
             <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and optionally annotate your types.</p>
         </section>
-        <section><h2><a name="installation"><a href="#installation">Installation</a></a></h2>
+        <section><h2 id="installation"><a href="#installation">Installation</a></h2>
             <p>Roc doesn't have a numbered release or an installer yet, but you can download a nightly release of the
                 <code>roc</code> command-line executable from the <a href="https://github.com/roc-lang/roc/releases">Releases page</a>
                 (under "Assets"). After you <a href="https://kinsta.com/knowledgebase/unzip-tar-gz/">unzip it</a>,
                 be sure to add <code>roc</code> to your <a href="https://www.java.com/en/download/help/path.html">PATH</a>.</p>
-            </p>
-            <p>You'll know it worked when you can run <code>roc version</code> in your terminal and see it print out some version information.</p>
-            <p>If you get stuck, friendly people will be happy to help if you open a topic in <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners">#beginners</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a> and ask for assistance!</p>
+            <p>You'll know it worked when you can run <code>roc version</code> in your terminal
+                and see it print out some version information.</p>
+            <p>If you get stuck, friendly people will be happy to help if you open a topic in
+                <a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners">#beginners</a> on <a href="https://roc.zulipchat.com/">Roc Zulip Chat</a>
+                and ask for assistance!</p>
         </section>
     </div>
 </div>
-<section><h2><a name="strings-and-numbers"><a href="#strings-and-numbers">Strings and Numbers</a></a></h2>
+<section><h2 id="strings-and-numbers"><a href="#strings-and-numbers">Strings and Numbers</a></h2>
 <p>Let's start by getting acquainted with Roc's <a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop"><i>Read-Eval-Print-Loop</i></a>, or <b>REPL</b> for
 short. Run this in a terminal:</p>
 <code class="snippet">roc repl</code>
@@ -76,13 +78,13 @@ short. Run this in a terminal:</p>
 <samp>The rockin’ roc repl</samp>
 <p>So far, so good!</p>
 </section>
-<section><h3><a name="hello-world"><a href="#hello-world">Hello, World!</a></a></h3>
+<section><h3 id="hello-world"><a href="#hello-world">Hello, World!</a></h3>
 <p>Try typing this at the REPL prompt and pressing Enter:</p>
 <samp class="repl-prompt">Hello, World!"</samp>
 <p>The REPL should cheerfully display the following:</p>
-<samp>"Hello, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val1</span></samp>
+<samp>"Hello, World!" <span class="ann">:</span> Str                <span class="autovar"># val1</span></samp>
 <p>Congratulations! You've just written your first Roc code.</p>
-<h3><a name="naming-things"><a href="#naming-things">Naming Things</a></a></h3>
+<h3 id="naming-things"><a href="#naming-things">Naming Things</a></h3>
 <p>When you entered the <em>expression</em> <code>"Hello, World!"</code>,
 the REPL printed it back out. It also printed <code><span class="ann">:</span> Str</code>, because
 <code>Str</code> is that expression's type. We'll talk about types later; for now, let's ignore
@@ -98,22 +100,22 @@ to the <code>"Hello, World!"</code> expression you just entered.</p>
 <samp class="repl-prompt">audience = "World"</samp>
 <p>From now until you exit the REPL, you can refer to either <code>greeting</code> or <code>audience</code> by those names!</p>
 </section>
-<section><h3><a name="string-interpolation"><a href="#string-interpolation">String Interpolation</a></a></h3>
+<section><h3 id="string-interpolation"><a href="#string-interpolation">String Interpolation</a></h3>
 <p>You can combine named strings together using <i>string interpolation</i>, like so:</p>
 <samp class="repl-prompt"><span class="str">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp>
 <p>If you put this into the REPL, you should see this output:</p>
-<samp>"Hi there, World!" <span class="ann">:</span> Str</span>                <span class="autovar"># val2</span></samp>
+<samp>"Hi there, World!" <span class="ann">:</span> Str                <span class="autovar"># val2</span></samp>
 <p>Notice that the REPL printed <code class="autovar"># val2</code> here. This works just like
 <code class="autovar"># val1</code> did before, but it chose the name <code>val2</code> for this
 expression because <code>val1</code> was already taken. As we continue entering more
-expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.</code>
-<p>By the way, there are many other ways to put strings together! Check out the documentation for the <a href="https://www.roc-lang.org/builtins/Str"><code>Str</code> module</a> for more.</code></p>
+expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.</p>
+<p>By the way, there are many other ways to put strings together! Check out the documentation for the <a href="https://www.roc-lang.org/builtins/Str"><code>Str</code> module</a> for more.</p>
 </section>
-<section><h3><a name="arithmetic"><a href="#arithmetic">Arithmetic</a></a></h3>
+<section><h3 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h3>
 <p>Now let's try using an <i>operator</i>, specifically the <code>+</code> operator. Enter this:</p>
 <samp class="repl-prompt">1 + 1</samp>
 <p>You should see this output:</p>
-<samp>2 <span class="ann">:</span> Num *</span></samp>
+<samp>2 <span class="ann">:</span> Num *</samp>
 <p>According to the REPL, one plus one equals two. Sounds right!</p>
 <p>Roc will respect <a href="https://en.wikipedia.org/wiki/Order_of_operations">order of operations</a> when using multiple arithmetic operators
 like <code>+</code> and <code>-</code>, but you can use parentheses to specify exactly how they should
@@ -122,7 +124,7 @@ be grouped.</p>
 
 -1 <span class="ann">:</span> Num *</samp>
 </section>
-<section><h3><a name="calling-functions"><a href="#calling-functions">Calling Functions</a></a></h3>
+<section><h3 id="calling-functions"><a href="#calling-functions">Calling Functions</a></h3>
 <p>Remember back in the <a href="#string-interpolation">string interpolation</a> section when we mentioned
 other ways to combine strings? Here's one of them:</p>
 <samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
@@ -151,7 +153,7 @@ Try removing them, and see what happens:</p>
 <span class="repl-err">&lt;error&gt;</span>
 </samp>
 <p>The error tells us that we've given <code>Str.concat</code> too many arguments.
-Indeed we have! We've passed it three arguments:
+Indeed we have! We've passed it three arguments:</p>
 <ol>
     <li>The string <code>"Birds"</code></li>
     <li>The function <code>Num.toStr</code></li>
@@ -167,18 +169,18 @@ a module as a named collection of functions. Eventually we'll discuss how
 to use them for more than that.</p>
 </section>
 
-<section><h2><a name="building-an-application"><a href="#building-an-application">Building an Application</a></a></h2>
+<section><h2 id="building-an-application"><a href="#building-an-application">Building an Application</a></h2>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Make a new file named <code>hello.roc</code> and put this inside it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> { pf: <span class="str">roc-lang.org/basic-cli 1.0.0</span> }
-    <span class="kw">imports</span> [pf.Stdout, pf.Program]
-    <span class="kw">provides</span> [main] <span class="kw">to</span> pf
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">roc-lang.org/basic-cli 1.0.0</span> <span class="brace">}</span>
+    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout, pf.Program<span class="brace">]</span>
+    <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"I'm a Roc application!"</span>
     <span class="kw">|&gt;</span> Program.quick
-</code></samp>
+</samp>
 <p>Try running this with:</p>
 <samp>roc dev Hello.roc</samp>
 <p>You should see this printed to the terminal:</p>
@@ -186,15 +188,15 @@ main <span class="kw">=</span>
 <p>Congratulations - you've written your first Roc application! We'll go over what the parts of
 this file above <code>main</code> do later, but first let's play around a bit.
 Try replacing the <code>main</code> line with this:</p>
-<samp>birds = 3
+<samp>birds <span class="kw">=</span> 3
 
-iguanas = 2
+iguanas <span class="kw">=</span> 2
 
-total = Num.toStr (birds + iguanas)
+total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
 
-main =
-    Stdout.line "There are \(total) animals."
-    |&gt; Program.quick
+main <span class="kw">=</span>
+    Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
+    <span class="kw">|&gt;</span> Program.Quick
 </samp>
 <p>Now if you run <code>roc dev Hello.roc</code>, you should see this:</p>
 <samp>There are 5 animals.</samp>
@@ -218,13 +220,9 @@ a name to an expression, we can't reassign it! We'd get an error if we wrote thi
 
 <span class="hljs-attr">birds</span> = <span class="hljs-number">2</span>
 </code></pre>
-<p>Order of defs doesn't matter. We defined <code>birds</code> and <code>iguanas</code> before
-<code>total</code> (which uses both of them), but we defined <code>main</code> before <code>total</code> even though
-it uses <code>total</code>. If you like, you can change the order of these defs to anything
-you like, and everything will still work the same way!</p>
-<p>This works because Roc expressions don't have <em>side effects</em>. We'll talk more
-about side effects later.</p>
-</section><h2 id="functions-and-if-">Functions and <code>if</code></h2>
+</section>
+<!--
+<section><h2 id="functions-and-if-">Functions and <code>if</code></h2>
 <p>So far we've called functions like <code>Num.toStr</code>, <code>Str.concat</code>, and <code>Stdout.line</code>.
 Next let's try defining a function of our own.</p>
 <pre><code class="lang-coffee"><span class="hljs-attr">main</span> = Stdout.line <span class="hljs-string">"There are \(total) animals."</span> |&gt; Program.quick
@@ -1734,6 +1732,7 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 </tr>
 </tbody>
 </table>
+ -->
 </main>
 <footer>Made by people who like to make nice things. © 2022</footer>
 <script>
