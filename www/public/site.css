@@ -1,7 +1,7 @@
 :root {
     --body-max-width: 900px;
     --text-color: #121212;
-    --top-bar-bg: hsl(258, 59%, 61%);
+    --top-bar-bg: hsl(258, 40%, 57%);
     --top-bar-fg: #fff;
     --top-bar-logo-hover: #444;
     --header-link-color: #17b9b0;
@@ -374,8 +374,7 @@ h3 {
 @media (prefers-color-scheme: dark) {
     :root {
         --text-color: #cdcdcd;
-        --top-bar-bg: hsl(258, 73%, 70%);
-        --top-bar-fg: #ffffff;
+        --top-bar-bg: hsl(257, 29%, 50%);
         --header-link-color: #6666ff;
         --header-link-hover: #ddd;
         --link-color: #1bc6bd;
