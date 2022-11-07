@@ -440,15 +440,10 @@ pub fn constrain_expr(
         }
         Var(symbol, variable) => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
-            // TODO don't rewrap expectation
-            let expected = constraints.expectations[expected.index()].clone();
-            let expected_type = *expected.get_type_ref();
+            let expected_type = *constraints.expectations[expected.index()].get_type_ref();
             let store_expected = constraints.store(expected_type, *variable, file!(), line!());
 
-            let stored_index = constraints.push_type(Variable(*variable));
-            let stored_type = constraints.push_expected_type(expected.replace(stored_index));
-
-            let lookup_constr = constraints.lookup(*symbol, stored_type, region);
+            let lookup_constr = constraints.lookup(*symbol, expected, region);
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
