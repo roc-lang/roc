@@ -52,17 +52,22 @@ Html state : [
 ]
 
 MaybeJsIndex : [
-    JsIndex Nat, # Index of the corresponding real DOM node in a JavaScript array
-    NoJsIndex, # We don't have a JavaScript index for fresh nodes not yet diffed, or for static HTML
+    NotRendered, # There's no JavaScript index for virtual nodes not yet rendered to the DOM
+    Rendered Nat, # Index of the corresponding real DOM node in the JavaScript `nodes` array
 ]
 
 LazyCallback state : Result { state, node : Html state } [NotCached] -> { state, node : Html state }
 
 Attribute state : [
-    EventListener Str (List CyclicStructureAccessor) (Result (Handler state) Nat),
+    EventListener Str (List CyclicStructureAccessor) (MaybeRenderedHandler state),
     HtmlAttr Str Str,
     DomProp Str (List U8),
     Style Str Str,
+]
+
+MaybeRenderedHandler state : [
+    NotRendered (Handler state),
+    Rendered Nat,
 ]
 
 CyclicStructureAccessor : [
@@ -90,10 +95,10 @@ element = \tagName ->
         withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
         totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
 
-        Element tagName NoJsIndex totalSize attrs children
+        Element tagName NotRendered totalSize attrs children
 
 text : Str -> Html state
-text = \content -> Text NoJsIndex content
+text = \content -> Text NotRendered content
 
 # TODO: causes stack overflow in compiler
 # lazy : (Result { state, node : Html state } [NotCached] -> { state, node : Html state }) -> Html state
@@ -205,11 +210,11 @@ translateLazy = \childCallback, parentToChild, childToParent ->
 translateAttr : Attribute _, (_ -> _), (_ -> _) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
     when attr is
-        EventListener eventName accessors (Ok childHandler) ->
-            EventListener eventName accessors (Ok (translateHandler childHandler parentToChild childToParent))
+        EventListener eventName accessors (NotRendered childHandler) ->
+            EventListener eventName accessors (NotRendered (translateHandler childHandler parentToChild childToParent))
 
-        EventListener eventName accessors (Err handlerId) ->
-            EventListener eventName accessors (Err handlerId)
+        EventListener eventName accessors (Rendered handlerId) ->
+            EventListener eventName accessors (Rendered handlerId)
 
         HtmlAttr k v -> HtmlAttr k v
         DomProp k v -> DomProp k v
@@ -429,7 +434,7 @@ initClientApp = \json, app ->
         indexNodes { list: [], index: 0 } staticUnindexed
         |> .list
         |> List.first
-        |> Result.withDefault (Text NoJsIndex "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
+        |> Result.withDefault (Text NotRendered "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
 
     Ok {
         state,
@@ -447,8 +452,8 @@ indexNodes = \{ list, index }, node ->
         Text jsIndex content ->
             { nodeIndex, nextIndex } =
                 when jsIndex is
-                    JsIndex id -> { nodeIndex: JsIndex id, nextIndex: index }
-                    NoJsIndex -> { nodeIndex: JsIndex index, nextIndex: index + 1 }
+                    Rendered id -> { nodeIndex: Rendered id, nextIndex: index }
+                    NotRendered -> { nodeIndex: Rendered index, nextIndex: index + 1 }
 
             {
                 list: List.append list (Text nodeIndex content),
@@ -460,8 +465,8 @@ indexNodes = \{ list, index }, node ->
                 List.walk children { list, index } indexNodes
             { nodeIndex, nextIndex } =
                 when jsIndex is
-                    JsIndex id -> { nodeIndex: JsIndex id, nextIndex: afterChildren }
-                    NoJsIndex -> { nodeIndex: JsIndex afterChildren, nextIndex: afterChildren + 1 }
+                    Rendered id -> { nodeIndex: Rendered id, nextIndex: afterChildren }
+                    NotRendered -> { nodeIndex: Rendered afterChildren, nextIndex: afterChildren + 1 }
 
             {
                 list: List.append list (Element name nodeIndex size attrs newChildren),
@@ -482,8 +487,8 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
     todo = Effect.always { newHandlers, node: newNode }
 
     when { oldNode, newNode } is
-        { oldNode: Text (JsIndex index) oldContent, newNode: Text NoJsIndex newContent } ->
-            retVal = { newHandlers, node: Text (JsIndex index) newContent }
+        { oldNode: Text (Rendered index) oldContent, newNode: Text NotRendered newContent } ->
+            retVal = { newHandlers, node: Text (Rendered index) newContent }
 
             if newContent == oldContent then
                 Effect.always retVal
@@ -494,7 +499,7 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
         { oldNode: Text _ _, newNode: Text _ _ } ->
             Effect.always { newHandlers, node: newNode }
 
-        { oldNode: Element oldName (JsIndex index) oldSize oldAttrs oldChildren, newNode: Element newName NoJsIndex newSize newAttrs newChildren } ->
+        { oldNode: Element oldName (Rendered index) oldSize oldAttrs oldChildren, newNode: Element newName NotRendered newSize newAttrs newChildren } ->
             if newName == oldName then
                 # iterate over the children and attrs
                 todo
@@ -523,7 +528,7 @@ createSubTree = \newHandlers, node ->
             Effect.createTextNode content
             |> Effect.map \index ->
                 jsIndex : MaybeJsIndex
-                jsIndex = JsIndex index
+                jsIndex = Rendered index
 
                 { newHandlers, node: Text jsIndex content }
 
@@ -535,7 +540,7 @@ createSubTree = \newHandlers, node ->
             _ <- effects |> Effect.after
             _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
             jsIndex : MaybeJsIndex
-            jsIndex = JsIndex nodeIndex
+            jsIndex = Rendered nodeIndex
 
             #   for each child
             #       recurse into it
@@ -565,19 +570,19 @@ addAttribute :
     { nodeIndex : Nat, style : Str, newHandlers : HandlerLookup _, renderedAttrs : List (Attribute _), effects : Effect {} }
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
-        EventListener name accessors (Ok handler) ->
+        EventListener name accessors (NotRendered handler) ->
             { handlers: updatedHandlers, index: handlerIndex } =
                 # insertHandler newHandlers handler
                 { handlers: newHandlers, index: 0 } # TODO: type checker issues! For now, event listeners will not work. :-(
             # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
             renderedAttr =
-                EventListener name accessors (Err handlerIndex)
+                EventListener name accessors (Rendered handlerIndex)
 
             { nodeIndex, style, newHandlers: updatedHandlers, renderedAttrs: List.append renderedAttrs renderedAttr, effects }
 
-        EventListener name accessors (Err handlerIndex) ->
+        EventListener name accessors (Rendered handlerIndex) ->
             # This pattern should never be reached!
-            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (EventListener name accessors (Err handlerIndex)), effects }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (EventListener name accessors (Rendered handlerIndex)), effects }
 
         HtmlAttr k v ->
             { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (HtmlAttr k v), effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
