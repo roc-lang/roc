@@ -76,7 +76,8 @@ fn constrain_untyped_args(
 
         let pattern_type = Variable(*pattern_var);
         let pattern_type_index = constraints.push_type(Variable(*pattern_var));
-        let pattern_expected = PExpected::NoExpectation(pattern_type_index);
+        let pattern_expected =
+            constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_type_index));
 
         pattern_types.push(pattern_type);
 
@@ -2004,8 +2005,10 @@ fn constrain_when_branch_help(
     };
 
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
-        let pattern_expected =
-            pattern_expected(HumanIndex::zero_based(i), loc_pattern.pattern.region);
+        let pattern_expected = constraints.push_pat_expected_type(pattern_expected(
+            HumanIndex::zero_based(i),
+            loc_pattern.pattern.region,
+        ));
 
         let mut partial_state = PatternState::default();
         constrain_pattern(
@@ -2255,7 +2258,7 @@ pub(crate) fn constrain_def_pattern(
     loc_pattern: &Loc<Pattern>,
     expr_type: TypeOrVar,
 ) -> PatternState {
-    let pattern_expected = PExpected::NoExpectation(expr_type);
+    let pattern_expected = constraints.push_pat_expected_type(PExpected::NoExpectation(expr_type));
 
     let mut state = PatternState {
         headers: VecMap::default(),
@@ -2512,14 +2515,14 @@ fn constrain_typed_function_arguments(
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
-            let pattern_expected = PExpected::ForReason(
+            let pattern_expected = constraints.push_pat_expected_type(PExpected::ForReason(
                 PReason::TypedArg {
                     index: HumanIndex::zero_based(index),
                     opt_name: opt_label,
                 },
                 ann_index,
                 loc_pattern.region,
-            );
+            ));
 
             constrain_pattern(
                 constraints,
@@ -2559,7 +2562,8 @@ fn constrain_typed_function_arguments(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
+                let pattern_expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
                 constrain_pattern(
                     constraints,
                     env,
@@ -2639,14 +2643,14 @@ fn constrain_typed_function_arguments_simple(
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
-            let pattern_expected = PExpected::ForReason(
+            let pattern_expected = constraints.push_pat_expected_type(PExpected::ForReason(
                 PReason::TypedArg {
                     index: HumanIndex::zero_based(index),
                     opt_name: Some(symbol),
                 },
                 ann_index,
                 loc_pattern.region,
-            );
+            ));
 
             constrain_pattern(
                 constraints,
@@ -2686,7 +2690,8 @@ fn constrain_typed_function_arguments_simple(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
+                let pattern_expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
                 constrain_pattern(
                     constraints,
                     env,
