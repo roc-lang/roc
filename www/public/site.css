@@ -9,6 +9,8 @@
     --code-bg: #e7e7e7;
     --snippet-bg: #f6f6f6;
     --snippet-border: #bbb;
+    --toc-background: #f3f3f3;
+    --toc-border: #ddd;
     --code-color: #303030;
 }
 
@@ -17,6 +19,10 @@ html {
     line-height: 1.5rem;
     background: var(--body-bg);
     color: var(--text-color);
+}
+
+section p:last-child {
+    margin-bottom: 0;
 }
 
 p {
@@ -122,10 +128,10 @@ code.snippet, samp {
 }
 
 #tutorial-toc {
-    margin-top: 7em;
-    background: #f3f3f3;
-    border: 1px solid #ddd;
-    padding: 10px 24px;
+    margin-top: 20px;
+    background: var(--toc-background);
+    border: 1px solid var(--toc-border);
+    padding: 14px 24px;
     margin-left: 20px;
 }
 
@@ -140,6 +146,8 @@ code.snippet, samp {
     padding: 3px;
     margin: 8px 0;
     list-style: none;
+    padding-bottom: 0;
+    margin-bottom: 0;
 }
 
 #tutorial-toc h2 {
@@ -148,7 +156,19 @@ code.snippet, samp {
     font-size: 2em;
     text-shadow: none;
     margin: 0;
-    padding: 20px 0;
+    padding: 16px 0;
+}
+
+#toc-search {
+    background-color: var(--toc-search-bg);
+    border: 1px solid var(--toc-search-border);
+    color: inherit;
+    padding: 6px 8px;
+    margin-top: 16px;
+    box-sizing: border-box;
+    width: 100%;
+    font-size: inherit;
+    margin-bottom: 4px;
 }
 
 /* Used on on the different-names page. */
@@ -296,6 +316,10 @@ h3 {
         --snippet-bg: #1a1a1a;
         --snippet-border: #444;
         --code-color: #cdcdcd;
+        --toc-background: var(--snippet-bg);
+        --toc-border: var(--snippet-border);
+        --toc-search-bg: #333;
+        --toc-search-border: #555;
     }
 
     h1, h2, h3, h4, h5 {
