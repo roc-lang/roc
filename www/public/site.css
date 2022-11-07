@@ -267,7 +267,8 @@ th, td {
 h1, h2, h3, h4, h5 {
     font-family: 'Permanent Marker';
     line-height: 1rem;
-    margin-top: 2.8rem;
+    margin-top: 1.75rem;
+    margin-bottom: 0;
 }
 
 h1 a, h2 a, h3 a, h4 a, h5 a {
@@ -280,17 +281,27 @@ h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
 }
 
 h1 {
-    font-size: 6rem;
+    font-size: 7rem;
+    line-height: 7rem;
     color: var(--h1-color);
+    margin-top: 0;
+    margin-bottom: 1.75rem;
     text-shadow: 2px 2px 2px #010101;
 }
 
 h2 {
-    font-size: 3rem;
-    text-shadow: 2px 2px 1px #010101;
+    font-size: 4rem;
+    line-height: 4rem;
+    text-shadow: 2px 2px 2px #010101;
 }
 
 h3 {
+    font-size: 3rem;
+    line-height: 3rem;
+    text-shadow: 2px 2px 1px #010101;
+}
+
+h4 {
     font-size: 2rem;
     text-shadow: 1px 1px 1px #010101;
 }
