@@ -1,0 +1,21 @@
+[package]
+name = "host"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[lib]
+name = "host"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "host"
+path = "src/main.rs"
+
+[dependencies]
+roc_std = { path = "../../../crates/roc_std" }
+tui = "0.19"
+crossterm = "0.25"
+libc = "0.2"
