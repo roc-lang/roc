@@ -450,7 +450,6 @@ pub fn constrain_expr(
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
             // lookup the member in the environment.
-            // TODO don't rewrap expectation
             let expected_type = *constraints.expectations[expected.index()].get_type_ref();
             let store_expected =
                 constraints.store(expected_type, specialization_var, file!(), line!());
