@@ -319,6 +319,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
 
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
 insertHandler = \handlers, newHandler ->
+    # TODO: speed this up using a free list
     when List.findFirstIndex handlers Result.isErr is
         Ok index ->
             {
@@ -549,6 +550,14 @@ createSubTree = \newHandlers, node ->
 
         None -> Effect.always { newHandlers, node: None }
 
+# AddAttrWalk state : {
+#     nodeIndex : Nat,
+#     style : Str,
+#     newHandlers : HandlerLookup state,
+#     renderedAttrs : List (Attribute state),
+#     effects : Effect {},
+# }
+
 # addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
 addAttribute :
     { nodeIndex : Nat, style : Str, newHandlers : HandlerLookup _, renderedAttrs : List (Attribute _), effects : Effect {} },
@@ -557,20 +566,12 @@ addAttribute :
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
         EventListener name accessors (Ok handler) ->
-            { updatedHandlers, handlerIndex } =
-                # TODO: speed this up using a free list
-                when List.findFirstIndex newHandlers Result.isErr is
-                    Err NotFound ->
-                        {
-                          updatedHandlers: List.append newHandlers (Ok handler),
-                          handlerIndex: List.len newHandlers,
-                        }
-                    Ok freeIndex ->
-                        { updatedHandlers: [], #List.set newHandlers freeIndex (Ok handler),
-                          handlerIndex: freeIndex,
-                        }
+            { handlers: updatedHandlers, index: handlerIndex } =
+                # insertHandler newHandlers handler
+                { handlers: newHandlers, index: 0 } # TODO: type checker issues! For now, event listeners will not work. :-(
             # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
-            renderedAttr = EventListener name accessors (Err handlerIndex)
+            renderedAttr =
+                EventListener name accessors (Err handlerIndex)
 
             { nodeIndex, style, newHandlers: updatedHandlers, renderedAttrs: List.append renderedAttrs renderedAttr, effects }
 
