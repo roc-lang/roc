@@ -297,6 +297,10 @@ impl AbilitySet {
     pub fn into_sorted_iter(self) -> impl ExactSizeIterator<Item = Symbol> {
         self.0.into_iter()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl FromIterator<Symbol> for AbilitySet {
@@ -363,7 +367,7 @@ impl std::ops::Neg for Polarity {
 
 pub struct AliasShared {
     pub symbol: Symbol,
-    pub type_argument_abilities: Slice<Option<AbilitySet>>,
+    pub type_argument_abilities: Slice<AbilitySet>,
     pub type_argument_regions: Slice<Region>,
     pub lambda_set_variables: Slice<TypeTag>,
     pub infer_ext_in_output_variables: Slice<TypeTag>,
@@ -468,7 +472,7 @@ pub struct Types {
     field_names: Vec<Lowercase>,
 
     // aliases
-    type_arg_abilities: Vec<Option<AbilitySet>>, // TODO: structural sharing for `AbilitySet`s themselves
+    type_arg_abilities: Vec<AbilitySet>, // TODO: structural sharing for `AbilitySet`s themselves
     aliases: Vec<AliasShared>,
 
     // these tag types are relatively rare, and so we store them in a way that reduces space, at
@@ -650,7 +654,9 @@ impl Types {
 
         let type_argument_abilities = Slice::extend_new(
             &mut self.type_arg_abilities,
-            type_arguments.iter().map(|a| a.opt_abilities.clone()),
+            type_arguments
+                .iter()
+                .map(|a| a.opt_abilities.as_ref().cloned().unwrap_or_default()),
         );
 
         // TODO: populate correctly
@@ -836,7 +842,9 @@ impl Types {
 
                 let type_argument_abilities = Slice::extend_new(
                     &mut self.type_arg_abilities,
-                    type_arguments.iter().map(|a| a.value.opt_abilities.clone()),
+                    type_arguments
+                        .iter()
+                        .map(|a| a.value.opt_abilities.as_ref().cloned().unwrap_or_default()),
                 );
 
                 let alias_shared = AliasShared {
@@ -987,7 +995,7 @@ macro_rules! impl_types_index_slice {
 impl_types_index! {
     tags, TypeTag
     aliases, AliasShared
-    type_arg_abilities, Option<AbilitySet>
+    type_arg_abilities, AbilitySet
     regions, Region
     tag_names, TagName
     field_types, RecordField<()>

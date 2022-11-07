@@ -2819,7 +2819,7 @@ fn type_to_variable<'a>(
                     let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
                     let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
 
-                    for (((target_index, arg_type), arg_region), opt_ability) in
+                    for (((target_index, arg_type), arg_region), abilities) in
                         (new_variables.indices().skip(type_arguments_offset))
                             .zip(type_arguments.into_iter())
                             .zip(type_argument_regions.into_iter())
@@ -2827,9 +2827,9 @@ fn type_to_variable<'a>(
                     {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
-                        if types[opt_ability].is_some() {
+                        if !types[abilities].is_empty() {
                             let arg_region = types[arg_region];
-                            bind_to_abilities.push((Loc::at(arg_region, copy_var), opt_ability));
+                            bind_to_abilities.push((Loc::at(arg_region, copy_var), abilities));
                         }
                     }
 
@@ -2917,7 +2917,7 @@ fn type_to_variable<'a>(
 
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
-                    for (((target_index, typ), region), opt_abilities) in
+                    for (((target_index, typ), region), abilities) in
                         (new_variables.indices().skip(type_arguments_offset))
                             .zip(type_arguments.into_iter())
                             .zip(type_argument_regions.into_iter())
@@ -2925,9 +2925,9 @@ fn type_to_variable<'a>(
                     {
                         let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
-                        if types[opt_abilities].is_some() {
+                        if !types[abilities].is_empty() {
                             let region = types[region];
-                            bind_to_abilities.push((Loc::at(region, copy_var), opt_abilities));
+                            bind_to_abilities.push((Loc::at(region, copy_var), abilities));
                         }
                     }
 
@@ -3063,11 +3063,7 @@ fn type_to_variable<'a>(
     }
 
     for (Loc { value: var, region }, abilities) in bind_to_abilities {
-        // TODO: SoA represent as Some<Index<AbilitySet>>, not the other way
-        let abilities = types[abilities]
-            .as_ref()
-            .expect("should only have been added if it was Some");
-
+        let abilities = &types[abilities];
         match *subs.get_content_unchecked(var) {
             Content::RigidVar(a) => {
                 // TODO(multi-abilities): check run cache
