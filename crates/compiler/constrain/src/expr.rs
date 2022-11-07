@@ -1445,10 +1445,7 @@ pub fn constrain_expr(
             // Instead, trivially equate the expected type to itself. This will never yield
             // unification errors but it will catch errors in type translation, including ability
             // obligations.
-            // TODO: simpl
-            let expected = constraints.expectations[expected.index()].clone();
-            let trivial_type = *expected.get_type_ref();
-            let expected = constraints.push_expected_type(expected);
+            let trivial_type = *constraints.expectations[expected.index()].get_type_ref();
             constraints.equal_types(trivial_type, expected, Category::Unknown, region)
         }
     }
