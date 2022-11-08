@@ -33,7 +33,8 @@
             <li><a href="#installation">Installation</a></li>
             <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
             <li><a href="#building-an-application">Building an Application</a></li>
-            <li><a href="#functions-and-if-else">Functions and if/else</a></li>
+            <li><a href="#defining-functions">Defining Functions</a></li>
+            <li><a href="#if-then-else">if/then/else</a></li>
             <li><a href="#records">Records</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
@@ -220,10 +221,10 @@ a name to an expression, we can't reassign it! We'd get an error if we wrote the
 <samp>birds <span class="kw">=</span> 3
 birds <span class="kw">=</span> 2</samp>
 </section>
-<section><h2 id="functions-and-if-else"><a href="#functions-and-if-else">Functions and if/else</a></h2>
+<section><h2 id="defining-functions"><a href="#defining-functions">Defining Functions</a></h2>
 <p>So far we've called functions like <code>Num.toStr</code>, Str.concat</code>, and <code>Stdout.line</code>.
 Next let's try defining a function of our own.</p>
-<samp>birds <span class="kw">=</span> 3
+<samp><span class="dim">birds <span class="kw">=</span> 3
 
 iguanas <span class="kw">=</span> 2
 
@@ -231,70 +232,67 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick
+    <span class="kw">|&gt;</span> Program.quick</span>
 
 addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
     Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
 </samp>
 
-<p>This new <code>addAndStringify</code> function we've defined takes two numbers, adds them,
-calls <code>Num.toStr</code> on the result, and returns that. The <code>\num1, num2 -&gt;</code> syntax
-defines a function's arguments, and the expression after the <code>-&gt;</code> is the body
-of the function. The expression at the end of the body (<code>Num.toStr (num1 + num2)</code>
-in this case) is returned automatically.</p>
-<p>Let's modify the function to return an empty string if the numbers add to zero.</p>
-<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
-    <span class="hljs-built_in">sum</span> = num1 + num2
+<p>This new <code>addAndStringify</code> function we've defined accepts two numbers, adds them,
+calls <code>Num.toStr</code> on the result, and returns that.</p>
+<p>The <code><span class="kw">\</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span></code>
+syntax defines a function's arguments, and the expression
+after the <code class="kw">-&gt;</code> is the body of the function—<code>Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></code>
+in this case. When a function runs, its body expression gets evaluated and returned.</p>
+<section><h2 id="if-then-else"><a href="#if-then-else">if/then/else</a></h2>
+<p>Let's modify this function to return an empty string if the numbers add to zero.</p>
+<samp>addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
+    sum <span class="kw">=</span> num1 <span class="kw">+</span> num2
 
-    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
-        <span class="hljs-string">""</span>
-    <span class="hljs-keyword">else</span>
-        Num.toStr <span class="hljs-built_in">sum</span>
-</code></pre>
+    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
+        <span class="str">""</span>
+    <span class="kw">else</span>
+        Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
+</samp>
 <p>We did two things here:</p>
 <ul>
-<li>We introduced a local def named <code>sum</code>, and set it equal to <code>num1 + num2</code>. Because we defined <code>sum</code> inside <code>addAndStringify</code>, it will not be accessible outside that function.</li>
-<li>We added an <code>if</code> / <code>then</code> / <code>else</code> conditional to return either <code>""</code> or <code>Num.toStr sum</code> depending on whether <code>sum == 0</code>.</li>
+    <li>We introduced a <i>local def</i> named <code>sum</code>, and set it equal to <code>num1 <span class="op">+</span> num2</code>. Because we defined <code>sum</code> inside <code>addAndStringify</code>, it will not be accessible outside that function.</li>
+    <li>We added an <code>if</code> / <code>then</code> / <code>else</code> conditional to return either <code>""</code> or <code>Num.toStr sum</code> depending on whether <code>sum == 0</code>.</li>
 </ul>
-<p>Of note, we couldn't have done <code>total = num1 + num2</code> because that would be
-redefining <code>total</code> in the global scope, and defs can't be redefined. (However, we could use the name
-<code>sum</code> for a def in a different function, because then they'd be in completely
-different scopes and wouldn't affect each other.)</p>
-<p>Also note that every <code>if</code> must be accompanied by both <code>then</code> and also <code>else</code>.
-Having an <code>if</code> without an <code>else</code> is an error, because in Roc, everything is
-an expression - which means it must evaluate to a value. If there were ever an
+<p>Every <code>if</code> must be accompanied by both <code>then</code> and also <code>else</code>.
+Having an <code>if</code> without an <code>else</code> is an error, because <code>if</code> is an
+an expression, and all expressions must evaluate to a value. If there were ever an
 <code>if</code> without an <code>else</code>, that would be an expression that might not evaluate to
 a value!</p>
+<h3 id="else-if"><a href="#else-if">else if</a></h3>
 <p>We can combine <code>if</code> and <code>else</code> to get <code>else if</code>, like so:</p>
-<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
-    <span class="hljs-built_in">sum</span> = num1 + num2
+<samp><span class="dim">addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
+    sum <span class="kw">=</span> num1 <span class="kw">+</span> num2
 
-    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
-        <span class="hljs-string">""</span>
-    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> &lt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
-        <span class="hljs-string">"negative"</span>
-    <span class="hljs-keyword">else</span>
-        Num.toStr <span class="hljs-built_in">sum</span>
-</code></pre>
-<p>Note that <code>else if</code> is not a separate language keyword! It's just an <code>if</code>/<code>else</code> where
+    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
+        <span class="str">""</span></span>
+    <span class="kw">else if</span> sum <span class="op">&lt;</span> 0 <span class="kw">then</span>
+        <span class="str">"negative"</span>
+    <span class="dim"><span class="kw">else</span>
+        Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></span>
+</samp>
+<p>Note that <code class="kw">else if</code> is not a separate language keyword! It's just an <code>if</code>/<code>else</code> where
 the <code>else</code> branch contains another <code>if</code>/<code>else</code>. This is easier to see with different indentation:</p>
-<pre><code class="lang-coffee">addAndStringify = \num1, num2 -&gt;
-    <span class="hljs-built_in">sum</span> = num1 + num2
+<samp><span class="dim">addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
+    sum <span class="kw">=</span> num1 <span class="kw">+</span> num2
 
-    <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> == <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
-        <span class="hljs-string">""</span>
-    <span class="hljs-keyword">else</span>
-        <span class="hljs-keyword">if</span> <span class="hljs-built_in">sum</span> &lt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
-            <span class="hljs-string">"negative"</span>
-        <span class="hljs-keyword">else</span>
-            Num.toStr <span class="hljs-built_in">sum</span>
-</code></pre>
-<p>This code is equivalent to writing <code>else if sum &lt; 0 then</code> on one line, although the stylistic
-convention is to write <code>else if</code> on the same line.</p>
-<blockquote>
-<p><em>Note</em>: In Roc, <code>if</code> conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
-so the compiler will report an error for conditionals like <code>if 1 then</code> or <code>if "true" then</code>.)</p>
-</blockquote>
+    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
+        <span class="str">""</span></span>
+    <span class="kw">else
+        if</span> sum <span class="op">&lt;</span> 0 <span class="kw">then</span>
+            <span class="str">"negative"</span>
+        <span class="dim"><span class="kw">else</span>
+            Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></span>
+</samp>
+<p>This differently-indented version is equivalent to writing
+<code><span class="kw">else if</span> sum <span class="op">&lt;</span> 0 <span class="kw">then</span></code>
+on the same line, although the convention is to use the original version's style.
+</p>
 </section>
 <!--<section><h2 id="records">Records</h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make

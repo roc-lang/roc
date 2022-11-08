@@ -43,9 +43,13 @@ section p:last-child {
     margin-bottom: 0;
 }
 
-p, li {
+p, aside, li, footer {
     font-size: 1.2rem;
     line-height: 1.85rem;
+}
+
+aside {
+    margin-left: 4rem;
 }
 
 a {
@@ -100,11 +104,6 @@ li {
         width: var(--body-max-width);
         margin: 36px auto;
     }
-}
-
-aside {
-    background-color: #222;
-    padding: 2px 20px;
 }
 
 code {
@@ -263,6 +262,10 @@ h1, h2, h3, h4, h5 {
 
 h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
+}
+
+.dim {
+    opacity: 0.65;
 }
 
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
