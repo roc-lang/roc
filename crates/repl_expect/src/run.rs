@@ -63,10 +63,10 @@ impl<'a> ExpectMemory<'a> {
             if libc::fstat(shared_fd, &mut stat) == -1 {
                 internal_error!("failed to stat shared file, does it exist?");
             }
-            if stat.st_size < Self::SHM_SIZE as _ {
-                if libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1 {
-                    internal_error!("failed to truncate shared file, are the permissions wrong?");
-                }
+            if stat.st_size < Self::SHM_SIZE as _
+                && libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1
+            {
+                internal_error!("failed to truncate shared file, are the permissions wrong?");
             }
 
             let ptr = libc::mmap(
