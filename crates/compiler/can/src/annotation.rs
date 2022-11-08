@@ -391,7 +391,7 @@ pub(crate) fn make_apply_symbol(
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                Err(Type::Erroneous)
+                Err(Type::Error)
             }
         }
     } else {
@@ -404,7 +404,7 @@ pub(crate) fn make_apply_symbol(
 
                 // A failed import should have already been reported through
                 // roc_can::env::Env::qualified_lookup's checks
-                Err(Type::Erroneous)
+                Err(Type::Error)
             }
         }
     }
@@ -632,7 +632,7 @@ fn can_annotation_help(
                             type_got: args.len() as u8,
                             alias_kind: alias.kind,
                         });
-                        return Type::Erroneous;
+                        return Type::Error;
                     }
 
                     let mut type_var_to_arg = Vec::new();
@@ -722,7 +722,7 @@ fn can_annotation_help(
                         kind: ShadowKind::Variable,
                     });
 
-                    return Type::Erroneous;
+                    return Type::Error;
                 }
             };
 
@@ -989,7 +989,7 @@ fn can_annotation_help(
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
-            Type::Erroneous
+            Type::Error
         }
         Malformed(string) => {
             malformed(env, region, string);
@@ -1041,13 +1041,13 @@ fn canonicalize_has_clause(
                 && !scope.abilities_store.is_ability(symbol)
                 {
                     env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
-                    return Err(Type::Erroneous);
+                    return Err(Type::Error);
                 }
                 symbol
             }
             _ => {
                 env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
-                return Err(Type::Erroneous);
+                return Err(Type::Error);
             }
         };
 
@@ -1067,7 +1067,7 @@ fn canonicalize_has_clause(
             shadow: shadow.clone(),
             kind: ShadowKind::Variable,
         });
-        return Err(Type::Erroneous);
+        return Err(Type::Error);
     }
 
     let var = var_store.fresh();
@@ -1093,13 +1093,13 @@ fn can_extension_type<'a>(
         // Include erroneous types so that we don't overreport errors.
         matches!(
             typ,
-            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Erroneous
+            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Error
         )
     }
     fn valid_tag_ext_type(typ: &Type) -> bool {
         matches!(
             typ,
-            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Erroneous
+            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Error
         )
     }
 

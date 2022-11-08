@@ -1332,7 +1332,7 @@ pub enum Type {
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
-    Erroneous,
+    Error,
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
@@ -1428,7 +1428,7 @@ impl Clone for Type {
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
-            Self::Erroneous => Self::Erroneous,
+            Self::Error => Self::Error,
         }
     }
 }
@@ -1544,7 +1544,7 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Erroneous => write!(f, "Erroneous"),
+            Type::Error => write!(f, "Erroneous"),
             Type::DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
@@ -1904,7 +1904,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -2034,7 +2034,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -2137,7 +2137,7 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => Ok(()),
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
         }
     }
 
@@ -2199,7 +2199,7 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
         }
     }
 
@@ -2255,7 +2255,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Erroneous => false,
+            EmptyRec | EmptyTagUnion | Error => false,
         }
     }
 
@@ -2517,7 +2517,7 @@ impl Type {
                     } else {
                         if args.len() != alias.type_variables.len() {
                             // We will have already reported an error during canonicalization.
-                            *self = Type::Erroneous;
+                            *self = Type::Error;
                             return;
                         }
 
@@ -2629,7 +2629,7 @@ impl Type {
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -2765,7 +2765,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -2779,7 +2779,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.insert(*v);
@@ -2909,7 +2909,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -4118,7 +4118,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             }
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
-            Type::Erroneous => {}
+            Type::Error => {}
         }
     }
 }
