@@ -62,7 +62,6 @@ pub enum ErrorTypeContext {
 struct ErrorTypeState {
     taken: MutSet<Lowercase>,
     letters_used: u32,
-    problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
     recursive_tag_unions_seen: Vec<Variable>,
 }
@@ -2066,15 +2065,11 @@ impl Subs {
         let mut state = ErrorTypeState {
             taken,
             letters_used: 0,
-            problems: Vec::new(),
             context,
             recursive_tag_unions_seen: Vec::new(),
         };
 
-        (
-            var_to_err_type(self, &mut state, var, observed_pol),
-            state.problems,
-        )
+        (var_to_err_type(self, &mut state, var, observed_pol), vec![])
     }
 
     pub fn len(&self) -> usize {
