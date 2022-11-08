@@ -41,6 +41,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let (solved, _) = solve::run(
         ModuleId::ATTR,
+        Default::default(),
         constraints,
         problems,
         subs,

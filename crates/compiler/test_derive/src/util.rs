@@ -394,6 +394,7 @@ fn check_derived_typechecks_and_golden(
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
+        Default::default(),
         &constraints,
         constr,
         RigidVariables::default(),

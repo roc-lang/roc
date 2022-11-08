@@ -13,7 +13,7 @@ use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
     Variable,
 };
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -53,6 +53,7 @@ pub struct PendingDerivesTable(
 impl PendingDerivesTable {
     pub fn new(
         subs: &mut Subs,
+        types: &mut Types,
         aliases: &mut Aliases,
         pending_derives: PendingDerives,
         problems: &mut Vec<TypeError>,
@@ -81,6 +82,7 @@ impl PendingDerivesTable {
                     abilities_store,
                     obligation_cache,
                     &mut Pools::default(),
+                    types,
                     aliases,
                     &typ,
                 );

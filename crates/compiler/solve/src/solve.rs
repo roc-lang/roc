@@ -507,6 +507,7 @@ struct State {
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
     home: ModuleId,
+    types: Types,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
@@ -519,6 +520,7 @@ pub fn run(
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         home,
+        types,
         constraints,
         problems,
         &mut subs,
@@ -537,6 +539,7 @@ pub fn run(
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
     _home: ModuleId, // TODO: remove me?
+    mut types: Types,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -561,6 +564,7 @@ fn run_in_place(
 
     let pending_derives = PendingDerivesTable::new(
         subs,
+        &mut types,
         aliases,
         pending_derives,
         problems,
@@ -580,6 +584,7 @@ fn run_in_place(
 
     let state = solve(
         &arena,
+        types,
         constraints,
         state,
         rank,
@@ -636,6 +641,7 @@ enum Work<'a> {
 #[allow(clippy::too_many_arguments)]
 fn solve(
     arena: &Bump,
+    mut can_types: Types,
     constraints: &Constraints,
     mut state: State,
     rank: Rank,
@@ -694,6 +700,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -757,6 +764,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -876,6 +884,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -889,6 +898,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *expectation.get_type_ref(),
                 );
@@ -958,6 +968,7 @@ fn solve(
                     &mut vec![], // don't report any extra errors
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *source_index,
                 );
@@ -1001,6 +1012,7 @@ fn solve(
                             problems,
                             abilities_store,
                             obligation_cache,
+                            &mut can_types,
                             aliases,
                             *expectation.get_type_ref(),
                         );
@@ -1095,6 +1107,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1108,6 +1121,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *expectation.get_type_ref(),
                 );
@@ -1274,6 +1288,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1303,6 +1318,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1323,6 +1339,7 @@ fn solve(
                     abilities_store,
                     obligation_cache,
                     pools,
+                    &mut can_types,
                     aliases,
                     &tag_ty,
                 );
@@ -1435,6 +1452,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     real_var,
                 );
@@ -1447,6 +1465,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     branches_var,
                 );
@@ -2132,6 +2151,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         problems: &mut Vec<TypeError>,
         abilities_store: &mut AbilitiesStore,
         obligation_cache: &mut ObligationCache,
+        types: &mut Types,
         aliases: &mut Aliases,
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
@@ -2150,6 +2170,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
                 problems,
                 abilities_store,
                 obligation_cache,
+                types,
                 aliases,
                 *typ_index,
             );
@@ -2186,6 +2207,7 @@ fn either_type_index_to_var(
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
+    types: &mut Types,
     aliases: &mut Aliases,
     either_type_index: TypeOrVar,
 ) -> Variable {
@@ -2200,6 +2222,7 @@ fn either_type_index_to_var(
                 abilities_store,
                 obligation_cache,
                 pools,
+                types,
                 aliases,
                 typ_cell,
             )
@@ -2219,6 +2242,7 @@ fn type_cell_to_var(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     pools: &mut Pools,
+    types: &mut Types,
     aliases: &mut Aliases,
     typ_cell: &Cell<Type>,
 ) -> Variable {
@@ -2230,6 +2254,7 @@ fn type_cell_to_var(
         abilities_store,
         obligation_cache,
         pools,
+        types,
         aliases,
         &typ,
     );
@@ -2244,6 +2269,7 @@ pub(crate) fn type_to_var(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     pools: &mut Pools,
+    types: &mut Types,
     aliases: &mut Aliases,
     typ: &Type,
 ) -> Variable {
@@ -2251,7 +2277,6 @@ pub(crate) fn type_to_var(
         *var
     } else {
         let mut arena = take_scratchpad();
-        let mut types = Types::new();
         let typ = types.from_old_type(typ);
 
         let var = type_to_variable(
@@ -2263,7 +2288,7 @@ pub(crate) fn type_to_var(
             obligation_cache,
             &arena,
             aliases,
-            &mut types,
+            types,
             typ,
             false,
         );

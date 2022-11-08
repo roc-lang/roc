@@ -384,6 +384,7 @@ fn start_phase<'a>(
                     declarations,
                     dep_idents,
                     pending_derives,
+                    types,
                     ..
                 } = constrained;
 
@@ -393,6 +394,7 @@ fn start_phase<'a>(
                     module,
                     ident_ids,
                     module_timing,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -1096,6 +1098,7 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
@@ -4195,6 +4198,7 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
@@ -4216,6 +4220,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -4404,6 +4409,7 @@ pub fn add_imports(
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
+    types: Types,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4454,6 +4460,7 @@ fn run_solve_solve(
 
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
             module_id,
+            types,
             &constraints,
             actual_constraint,
             rigid_variables,
@@ -4512,6 +4519,7 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     exposed_for_module: ExposedForModule,
+    types: Types,
     constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4537,6 +4545,7 @@ fn run_solve<'a>(
             match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
                     exposed_for_module,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -4560,6 +4569,7 @@ fn run_solve<'a>(
         } else {
             run_solve_solve(
                 exposed_for_module,
+                types,
                 constraints,
                 constraint,
                 pending_derives,
@@ -5590,6 +5600,7 @@ fn run_task<'a>(
             module,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -5604,6 +5615,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
