@@ -323,7 +323,7 @@ fn from_pending_alias<'a>(
     let symbol = name.value;
 
     match to_annotation2(env, scope, &ann.value, ann.region) {
-        Annotation2::Erroneous(_) => todo!(),
+        Annotation2::Erroneous => todo!(),
         Annotation2::Annotation {
             named_rigids,
             unnamed_rigids,
@@ -419,7 +419,7 @@ fn canonicalize_pending_def<'a>(
             // but the rigids can show up in type error messages, so still register them
 
             match to_annotation2(env, scope, &loc_ann.value, loc_ann.region) {
-                Annotation2::Erroneous(_) => todo!(),
+                Annotation2::Erroneous => todo!(),
                 Annotation2::Annotation {
                     named_rigids,
                     unnamed_rigids,
@@ -468,7 +468,7 @@ fn canonicalize_pending_def<'a>(
 
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             match to_annotation2(env, scope, &loc_ann.value, loc_ann.region) {
-                Annotation2::Erroneous(_) => todo!(),
+                Annotation2::Erroneous => todo!(),
                 Annotation2::Annotation {
                     named_rigids,
                     unnamed_rigids,
