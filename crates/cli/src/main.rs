@@ -1,4 +1,4 @@
-//! the `roc` binary
+//! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{

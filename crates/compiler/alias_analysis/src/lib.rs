@@ -1,3 +1,5 @@
+//! Performs analysis and optimizations to remove unneeded [reference counts](https://en.wikipedia.org/wiki/Reference_counting)
+//! at runtime, and supports in-place mutation.
 use morphic_lib::TypeContext;
 use morphic_lib::{
     BlockExpr, BlockId, CalleeSpecVar, ConstDefBuilder, ConstName, EntryPointName, ExprContext,

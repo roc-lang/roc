@@ -1,3 +1,4 @@
+//! Provides testing utility functions for use throughout the Rust code base.
 use std::path::PathBuf;
 
 #[doc(hidden)]

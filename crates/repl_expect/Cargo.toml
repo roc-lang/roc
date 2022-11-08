@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Supports evaluating expect and printing contextual information when they fail."
 
 [dependencies]
 bumpalo = {version = "3.11.0", features = ["collections"]}

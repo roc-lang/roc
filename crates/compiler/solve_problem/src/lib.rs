@@ -1,3 +1,4 @@
+//! Provides types to describe problems that can occur during solving.
 use roc_can::expected::{Expected, PExpected};
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_problem::can::CycleEntry;

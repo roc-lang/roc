@@ -1,3 +1,5 @@
+//! Generates html documentation from Roc files. Used for
+//! [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;

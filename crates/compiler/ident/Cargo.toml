@@ -4,3 +4,4 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Implements data structures used for efficiently representing small strings, like identifiers."
