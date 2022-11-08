@@ -84,10 +84,6 @@ struct SubsHeader {
 
 impl SubsHeader {
     fn from_subs(subs: &Subs, exposed_vars_by_symbol: usize) -> Self {
-        // TODO what do we do with problems? they should
-        // be reported and then removed from Subs I think
-        debug_assert!(subs.problems.is_empty(), "{:?}", &subs.problems);
-
         Self {
             utable: subs.utable.len() as u64,
             variables: subs.variables.len() as u64,
@@ -252,7 +248,6 @@ impl Subs {
                     variable_slices: variable_slices.to_vec(),
                     unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
                     tag_name_cache: Default::default(),
-                    problems: Default::default(),
                     uls_of_var,
                 },
                 exposed_vars_by_symbol,
@@ -385,7 +380,6 @@ pub struct Subs {
     pub variable_slices: Vec<VariableSubsSlice>,
     pub unspecialized_lambda_sets: Vec<Uls>,
     pub tag_name_cache: TagNameCache,
-    pub problems: Vec<Problem>,
     pub uls_of_var: UlsOfVar,
 }
 
@@ -1723,7 +1717,6 @@ impl Subs {
             variable_slices: vec![VariableSubsSlice::default()],
             unspecialized_lambda_sets: Vec::new(),
             tag_name_cache: Default::default(),
-            problems: Vec::new(),
             uls_of_var: Default::default(),
         };
 
@@ -4118,7 +4111,6 @@ struct StorageSubsOffsets {
     record_fields: u32,
     variable_slices: u32,
     unspecialized_lambda_sets: u32,
-    problems: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -4202,7 +4194,6 @@ impl StorageSubs {
             record_fields: self.subs.record_fields.len() as u32,
             variable_slices: self.subs.variable_slices.len() as u32,
             unspecialized_lambda_sets: self.subs.unspecialized_lambda_sets.len() as u32,
-            problems: self.subs.problems.len() as u32,
         };
 
         let offsets = StorageSubsOffsets {
@@ -4214,7 +4205,6 @@ impl StorageSubs {
             record_fields: target.record_fields.len() as u32,
             variable_slices: target.variable_slices.len() as u32,
             unspecialized_lambda_sets: target.unspecialized_lambda_sets.len() as u32,
-            problems: target.problems.len() as u32,
         };
 
         // The first Variable::NUM_RESERVED_VARS are the same in every subs,
@@ -4263,7 +4253,6 @@ impl StorageSubs {
         target
             .unspecialized_lambda_sets
             .extend(self.subs.unspecialized_lambda_sets);
-        target.problems.extend(self.subs.problems);
 
         debug_assert_eq!(
             target.utable.len(),
@@ -4425,15 +4414,6 @@ impl StorageSubs {
         slice.start += offsets.unspecialized_lambda_sets;
 
         slice
-    }
-
-    fn offset_problem(
-        offsets: &StorageSubsOffsets,
-        mut problem_index: SubsIndex<Problem>,
-    ) -> SubsIndex<Problem> {
-        problem_index.index += offsets.problems;
-
-        problem_index
     }
 }
 
