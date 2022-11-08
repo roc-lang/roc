@@ -59,8 +59,13 @@ impl<'a> ExpectMemory<'a> {
                 internal_error!("failed to shm_open fd");
             }
 
-            // NOTE: we can only call `ftruncate` once on this file descriptor on mac
-            if libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1 {
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(shared_fd, &mut stat) == -1 {
+                internal_error!("failed to stat shared file, does it exist?");
+            }
+            if stat.st_size < Self::SHM_SIZE as _
+                && libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1
+            {
                 internal_error!("failed to truncate shared file, are the permissions wrong?");
             }
 
