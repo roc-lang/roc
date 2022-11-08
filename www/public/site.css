@@ -120,6 +120,7 @@ code, samp {
 
 code.snippet, samp {
     display: block;
+    overflow: auto;
     white-space: pre;
     padding: 10px 16px;
     background-color: var(--snippet-bg);
