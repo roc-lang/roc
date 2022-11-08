@@ -88,4 +88,23 @@ Spans : List Span # A string composed of clusters of graphemes, each with their 
 
 Elem : [
     Paragraph (List Spans) ParagraphConfig, # A widget to display some text
+    Layout (List Elem) LayoutConfig, # Use cassowary-rs solver to split area into smaller ones based on the preferred widths or heights and the direction.
 ]
+
+LayoutConfig : {
+    constraints : List Constraint,
+    vMargin : U16,
+    hMargin : U16,
+    direction : LayoutDirection,
+}
+
+LayoutDirection : [Horizontal,Vertical]
+
+Constraint : [
+    Percentage U16,
+    Ratio U32 U32,
+    Length U16,
+    Max U16,
+    Min U16,
+]
+

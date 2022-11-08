@@ -76,18 +76,7 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) {
     let events = Events::new(tick_rate);
     
     loop {
-
         let mut appReturn = false;
-
-        // let blockText = unsafe {(*model).text.as_str()};
-
-        // let mut frame = terminal.get_frame();
-
-        // frame.render_widget(
-            
-        // );
-        
-        // terminal.draw(|f| ui(f, &app))?;
         terminal.draw(|f| buildWidgets(f, &elems)).unwrap();
 
         // terminal.draw(|f| {
@@ -201,7 +190,7 @@ fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem
     
     // For now there is only one Elem type will change later
     // roc_std::RocList<roc_std::RocList<Span>>, ParagraphConfig
-    let (listSpans, config) = paragraph.as_Paragraph();
+    let (listSpans, config) = unsafe {paragraph.as_Paragraph()};
 
     // Build pargraph up from nested Span(s)
     let mut text = Vec::with_capacity(listSpans.len());
