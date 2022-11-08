@@ -1979,7 +1979,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((*ext, depth_any + 1, depth_lset));
                 }
-                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -3188,7 +3188,6 @@ fn layout_from_flat_type<'a>(
             layout_from_recursive_union(env, rec_var, &tags)
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
-        Erroneous(_) => cacheable(Err(LayoutProblem::Erroneous)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
     }
 }

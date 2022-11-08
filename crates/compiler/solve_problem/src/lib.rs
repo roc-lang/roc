@@ -12,7 +12,6 @@ pub enum TypeError {
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
     UnfulfilledAbility(Unfulfilled),
     BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),

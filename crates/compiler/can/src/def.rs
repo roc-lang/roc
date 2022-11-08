@@ -3109,8 +3109,7 @@ fn mark_cyclic_alias<'a>(
     others: Vec<Symbol>,
     report: bool,
 ) {
-    let problem = roc_types::types::Problem::CyclicAlias(symbol, region, others.clone());
-    *typ = Type::Erroneous(problem);
+    *typ = Type::Error;
 
     if report {
         let problem = Problem::CyclicAlias(symbol, region, others, alias_kind);

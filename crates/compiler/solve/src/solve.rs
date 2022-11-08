@@ -29,8 +29,8 @@ use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
-    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    OptVariable, Rank, RecordFields, Subs, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
@@ -945,13 +945,6 @@ fn solve(
 
                         state
                     }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        state
-                    }
                 }
             }
             Store(source_index, target, _filename, _linenr) => {
@@ -1069,13 +1062,6 @@ fn solve(
 
                                 state
                             }
-                            BadType(vars, problem) => {
-                                introduce(subs, rank, pools, &vars);
-
-                                problems.push(TypeError::BadType(problem));
-
-                                state
-                            }
                         }
                     }
                     None => {
@@ -1180,13 +1166,6 @@ fn solve(
                         );
 
                         problems.push(problem);
-
-                        state
-                    }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
 
                         state
                     }
@@ -1403,13 +1382,6 @@ fn solve(
 
                         state
                     }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        state
-                    }
                 }
             }
             &Exhaustive(eq, sketched_rows, context, exhaustive_mark) => {
@@ -1490,13 +1462,7 @@ fn solve(
                 let branches_content = subs.get_content_without_compacting(branches_var);
                 let already_have_error = matches!(
                     (real_content, branches_content),
-                    (
-                        Content::Error | Content::Structure(FlatType::Erroneous(_)),
-                        _
-                    ) | (
-                        _,
-                        Content::Error | Content::Structure(FlatType::Erroneous(_))
-                    )
+                    (Content::Error, _) | (_, Content::Error)
                 );
 
                 let snapshot = subs.snapshot();
@@ -1614,15 +1580,6 @@ fn solve(
                                 _ => internal_error!("Must be failure"),
                             }
                         }
-                    }
-                    BadType(vars, problem) => {
-                        subs.commit_snapshot(snapshot);
-
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        should_check_exhaustiveness = false;
                     }
                 }
 
@@ -2019,7 +1976,7 @@ fn check_ability_specialization(
                             // Commit so that the bad signature and its error persists in subs.
                             subs.commit_snapshot(snapshot);
 
-                            let (_typ, _problems) =
+                            let _typ =
                                 subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                             let problem = TypeError::WrongSpecialization {
@@ -2040,7 +1997,7 @@ fn check_ability_specialization(
                         // Commit so that `var` persists in subs.
                         subs.commit_snapshot(snapshot);
 
-                        let (typ, _problems) = subs.var_to_error_type(var, Polarity::OF_VALUE);
+                        let typ = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
                         let problem = TypeError::StructuralSpecialization {
                             region: symbol_loc_var.region,
@@ -2062,9 +2019,9 @@ fn check_ability_specialization(
                         // so we can have two separate error types.
                         subs.rollback_to(snapshot);
 
-                        let (expected_type, _problems) =
+                        let expected_type =
                             subs.var_to_error_type(root_signature_var, Polarity::OF_VALUE);
-                        let (actual_type, _problems) =
+                        let actual_type =
                             subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
@@ -2104,14 +2061,6 @@ fn check_ability_specialization(
                 );
 
                 problems.push(problem);
-
-                Err(())
-            }
-            BadType(vars, problem) => {
-                subs.commit_snapshot(snapshot);
-                introduce(subs, rank, pools, &vars);
-
-                problems.push(TypeError::BadType(problem));
 
                 Err(())
             }
@@ -2979,12 +2928,8 @@ fn type_to_variable<'a>(
 
                 result
             }
-            Erroneous => {
-                // TODO: remove `Erroneous`, `Error` can always be used, and type problems known at
-                // this point can be reported during canonicalization.
-                let problem_index =
-                    SubsIndex::push_new(&mut subs.problems, types.get_problem(&typ).clone());
-                let content = Content::Structure(FlatType::Erroneous(problem_index));
+            Error => {
+                let content = Content::Error;
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -3055,11 +3000,6 @@ fn type_to_variable<'a>(
                         );
 
                         problems.push(problem);
-                    }
-                    BadType(_vars, problem) => {
-                        // No introduction needed
-
-                        problems.push(TypeError::BadType(problem));
                     }
                 }
             }
@@ -3502,7 +3442,7 @@ fn circular_error(
     loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
-    let (error_type, _) = subs.var_to_error_type(var, Polarity::OF_VALUE);
+    let error_type = subs.var_to_error_type(var, Polarity::OF_VALUE);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);
@@ -3830,8 +3770,6 @@ fn adjust_rank_content(
 
                     rank
                 }
-
-                Erroneous(_) => group_rank,
             }
         }
 
@@ -4080,7 +4018,7 @@ fn deep_copy_var_help(
                         Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                    same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {

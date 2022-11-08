@@ -7,7 +7,7 @@ use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::types::{AliasKind, Problem, RecordField};
+use roc_types::types::{AliasKind, RecordField};
 use roc_types::{subs::Variable, types::ErrorType};
 
 use crate::lang::env::Env;
@@ -185,7 +185,7 @@ pub enum Annotation2 {
         symbols: MutSet<Symbol>,
         signature: Signature,
     },
-    Erroneous(roc_types::types::Problem),
+    Erroneous,
 }
 
 pub fn to_annotation2<'a>(
@@ -346,8 +346,8 @@ pub fn to_type2<'a>(
                     references.symbols.insert(symbol);
                     Type2::Alias(symbol, args, actual)
                 }
-                TypeApply::Erroneous(_problem) => {
-                    // Type2::Erroneous(problem)
+                TypeApply::Erroneous => {
+                    // Type2::Erroneous
                     todo!()
                 }
             }
@@ -721,7 +721,7 @@ fn can_tags<'a>(
 enum TypeApply {
     Apply(Symbol, PoolVec<Type2>),
     Alias(Symbol, PoolVec<TypeId>, TypeId),
-    Erroneous(roc_types::types::Problem),
+    Erroneous,
 }
 
 #[inline(always)]
@@ -744,7 +744,7 @@ fn to_type_apply<'a>(
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                return TypeApply::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                return TypeApply::Erroneous;
             }
         }
     } else {
@@ -755,7 +755,7 @@ fn to_type_apply<'a>(
                 // it was imported but it doesn't expose this ident.
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                return TypeApply::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
+                return TypeApply::Erroneous;
             }
         }
     };
@@ -775,14 +775,7 @@ fn to_type_apply<'a>(
             let mut substitutions: MutMap<Variable, TypeId> = MutMap::default();
 
             if alias.targs.len() != args.len() {
-                let error = TypeApply::Erroneous(Problem::BadTypeArguments {
-                    symbol,
-                    region,
-                    alias_needs: alias.targs.len() as u8,
-                    type_got: args.len() as u8,
-                    alias_kind: AliasKind::Structural,
-                });
-                return error;
+                return TypeApply::Erroneous;
             }
 
             let arguments = PoolVec::with_capacity(type_arguments.len() as u32, env.pool);

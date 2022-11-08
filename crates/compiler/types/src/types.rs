@@ -8,7 +8,7 @@ use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
@@ -422,7 +422,7 @@ pub enum TypeTag {
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
     /// The problem is at the index of the type tag
-    Erroneous,
+    Error,
 
     // TypeExtension is implicit in the type slice
     // it is length zero for closed, length 1 for open
@@ -477,7 +477,6 @@ pub struct Types {
 
     // these tag types are relatively rare, and so we store them in a way that reduces space, at
     // the cost of slightly higher lookup time
-    problems: VecMap<Index<TypeTag>, Problem>,
     single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
 }
 
@@ -502,7 +501,6 @@ impl Types {
             field_names: Default::default(),
             type_arg_abilities: Default::default(),
             aliases: Default::default(),
-            problems: Default::default(),
             single_tag_union_tag_names: Default::default(),
         }
     }
@@ -516,11 +514,6 @@ impl Types {
         self.single_tag_union_tag_names
             .get(typ)
             .expect("typ is not a single tag union")
-    }
-
-    #[track_caller]
-    pub fn get_problem(&self, typ: &Index<TypeTag>) -> &Problem {
-        self.problems.get(typ).expect("typ is not an error")
     }
 
     pub fn record_fields_slices(
@@ -938,10 +931,7 @@ impl Types {
             Type::RangedNumber(range) => {
                 self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
             }
-            Type::Erroneous(problem) => {
-                self.problems.insert(index, problem.clone());
-                self.set_type_tag(index, TypeTag::Erroneous, Slice::default())
-            }
+            Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
         }
     }
 
@@ -1198,11 +1188,7 @@ impl Types {
                     (Record(new_record_fields), new_ext_slice)
                 }
                 RangedNumber(range) => (RangedNumber(range), Default::default()),
-                Erroneous => {
-                    self.problems
-                        .insert(dest_index, self.get_problem(&typ).clone());
-                    (Erroneous, Default::default())
-                }
+                Error => (Error, Default::default()),
             };
 
             self.set_type_tag(dest_index, tag, args);
@@ -1332,7 +1318,7 @@ pub enum Type {
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
-    Erroneous(Problem),
+    Error,
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
@@ -1428,7 +1414,7 @@ impl Clone for Type {
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
-            Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+            Self::Error => Self::Error,
         }
     }
 }
@@ -1544,13 +1530,7 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Erroneous(problem) => {
-                write!(f, "Erroneous(")?;
-
-                problem.fmt(f)?;
-
-                write!(f, ")")
-            }
+            Type::Error => write!(f, "Erroneous"),
             Type::DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
@@ -1910,7 +1890,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -2040,7 +2020,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -2143,7 +2123,7 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
         }
     }
 
@@ -2205,7 +2185,7 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
         }
     }
 
@@ -2261,7 +2241,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Erroneous(_) => false,
+            EmptyRec | EmptyTagUnion | Error => false,
         }
     }
 
@@ -2522,13 +2502,8 @@ impl Type {
                         *self = alias;
                     } else {
                         if args.len() != alias.type_variables.len() {
-                            *self = Type::Erroneous(Problem::BadTypeArguments {
-                                symbol: *symbol,
-                                region,
-                                type_got: args.len() as u8,
-                                alias_needs: alias.type_variables.len() as u8,
-                                alias_kind: AliasKind::Structural,
-                            });
+                            // We will have already reported an error during canonicalization.
+                            *self = Type::Error;
                             return;
                         }
 
@@ -2640,7 +2615,7 @@ impl Type {
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -2770,16 +2745,13 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 output.push(*symbol);
                 stack.extend(args.iter().map(|t| &t.value));
             }
-            Erroneous(Problem::CyclicAlias(alias, _, _)) => {
-                output.push(*alias);
-            }
             RangedNumber(_) => {}
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, _sym, _),
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -2793,7 +2765,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.insert(*v);
@@ -2923,7 +2895,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -3313,25 +3285,6 @@ impl Alias {
                 .chain(self.type_variables.iter().map(|tv| &tv.region)),
         )
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
-pub enum Problem {
-    CanonicalizationProblem,
-    CircularType(Symbol, Box<ErrorType>, Region),
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(Ident),
-    Shadowed(Region, Loc<Ident>),
-    BadTypeArguments {
-        symbol: Symbol,
-        region: Region,
-        type_got: u8,
-        alias_needs: u8,
-        alias_kind: AliasKind,
-    },
-    InvalidModule,
-    SolvedTypeError,
-    HasClauseIsNotAbility(Region),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -4151,7 +4104,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             }
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
-            Type::Erroneous(_) => {}
+            Type::Error => {}
         }
     }
 }

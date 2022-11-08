@@ -82,7 +82,6 @@ pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
-    BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
 }
 
@@ -260,13 +259,6 @@ fn solve<'a>(
 
                     state
                 }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
-
-                    state
-                }
             }
         }
         //        Store(source, target, _filename, _linenr) => {
@@ -366,13 +358,6 @@ fn solve<'a>(
 
                             state
                         }
-                        BadType(vars, problem) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            problems.push(TypeError::BadType(problem));
-
-                            state
-                        }
                     }
                 }
                 None => {
@@ -445,13 +430,6 @@ fn solve<'a>(
                     );
 
                     problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
 
                     state
                 }
@@ -766,13 +744,6 @@ fn solve<'a>(
                     );
 
                     problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
 
                     state
                 }
@@ -1215,7 +1186,7 @@ fn circular_error(
     loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
-    let (error_type, _) = subs.var_to_error_type(var, Polarity::Pos);
+    let error_type = subs.var_to_error_type(var, Polarity::Pos);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);
@@ -1455,8 +1426,6 @@ fn adjust_rank_content(
 
                     rank
                 }
-
-                Erroneous(_) => group_rank,
             }
         }
 
@@ -1595,7 +1564,7 @@ fn instantiate_rigids_help(
                     }
                 }
 
-                EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRecord | EmptyTagUnion => {}
 
                 Record(fields, ext_var) => {
                     for index in fields.iter_variables() {
@@ -1775,7 +1744,7 @@ fn deep_copy_var_help(
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {

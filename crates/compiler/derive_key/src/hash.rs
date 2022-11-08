@@ -103,7 +103,6 @@ impl FlatHash {
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
-                FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {
