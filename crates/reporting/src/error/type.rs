@@ -75,60 +75,6 @@ pub fn type_problem<'b>(
 
             report(title, doc, filename)
         }
-        BadType(type_problem) => {
-            use roc_types::types::Problem::*;
-            match type_problem {
-                BadTypeArguments {
-                    symbol,
-                    region,
-                    type_got,
-                    alias_needs,
-                    alias_kind,
-                } => {
-                    let needed_arguments = if alias_needs == 1 {
-                        alloc.reflow("1 type argument")
-                    } else {
-                        alloc
-                            .text(alias_needs.to_string())
-                            .append(alloc.reflow(" type arguments"))
-                    };
-
-                    let found_arguments = alloc.text(type_got.to_string());
-
-                    let doc = alloc.stack([
-                        alloc.concat([
-                            alloc.reflow("The "),
-                            alloc.symbol_unqualified(symbol),
-                            alloc.reflow(" "),
-                            alloc.reflow(alias_kind.as_str()),
-                            alloc.reflow(" expects "),
-                            needed_arguments,
-                            alloc.reflow(", but it got "),
-                            found_arguments,
-                            alloc.reflow(" instead:"),
-                        ]),
-                        alloc.region(lines.convert_region(region)),
-                        alloc.reflow("Are there missing parentheses?"),
-                    ]);
-
-                    let title = if type_got > alias_needs {
-                        "TOO MANY TYPE ARGUMENTS".to_string()
-                    } else {
-                        "TOO FEW TYPE ARGUMENTS".to_string()
-                    };
-
-                    report(title, doc, filename)
-                }
-                Shadowed(original_region, shadow) => {
-                    let doc = report_shadowing(alloc, lines, original_region, shadow);
-                    let title = DUPLICATE_NAME.to_string();
-
-                    report(title, doc, filename)
-                }
-
-                other => panic!("unhandled bad type: {:?}", other),
-            }
-        }
         UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
 
