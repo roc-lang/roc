@@ -2819,6 +2819,7 @@ fn correct_mutual_recursive_type_alias<'a>(
             alias_type.instantiate_aliases(
                 alias_region,
                 &can_instantiate_symbol,
+                &mut |problem| env.problems.push(Problem::BadType(problem)),
                 var_store,
                 &mut new_lambda_sets,
                 &mut new_infer_ext_vars,
@@ -3109,8 +3110,7 @@ fn mark_cyclic_alias<'a>(
     others: Vec<Symbol>,
     report: bool,
 ) {
-    let problem = roc_types::types::Problem::CyclicAlias(symbol, region, others.clone());
-    *typ = Type::Erroneous(problem);
+    *typ = Type::Erroneous;
 
     if report {
         let problem = Problem::CyclicAlias(symbol, region, others, alias_kind);

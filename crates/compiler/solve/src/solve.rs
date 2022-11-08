@@ -2980,11 +2980,7 @@ fn type_to_variable<'a>(
                 result
             }
             Erroneous => {
-                // TODO: remove `Erroneous`, `Error` can always be used, and type problems known at
-                // this point can be reported during canonicalization.
-                let problem_index =
-                    SubsIndex::push_new(&mut subs.problems, types.get_problem(&typ).clone());
-                let content = Content::Structure(FlatType::Erroneous(problem_index));
+                let content = Content::Error;
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }

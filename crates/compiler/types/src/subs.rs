@@ -21,7 +21,7 @@ roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(UnionTags, 12);
 roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
 
-roc_error_macros::assert_sizeof_aarch64!(Problem, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Problem, 5 * 8);
 roc_error_macros::assert_sizeof_wasm!(Problem, 32);
 roc_error_macros::assert_sizeof_default!(Problem, 6 * 8);
 
@@ -4040,12 +4040,7 @@ fn flat_type_to_err_type(
             }
         }
 
-        Erroneous(problem_index) => {
-            let problem = subs.problems[problem_index.index as usize].clone();
-            state.problems.push(problem);
-
-            ErrorType::Error
-        }
+        Erroneous(_) => ErrorType::Error,
     }
 }
 

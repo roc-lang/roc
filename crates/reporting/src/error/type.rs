@@ -126,12 +126,6 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
-                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/roc-lang/roc/pull/1711
-
-                // We'll also report these as a canonicalization problem, no need to re-report them.
-                CyclicAlias(..) => None,
-                UnrecognizedIdent(..) => None,
-
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }

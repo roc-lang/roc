@@ -188,6 +188,7 @@ pub enum Problem {
     MultipleListRestPattern {
         region: Region,
     },
+    BadType(roc_types::types::Problem),
 }
 
 impl Problem {
@@ -330,6 +331,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
             | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
             | Problem::ExposedButNotDefined(_) => None,
+            Problem::BadType(..) => None,
         }
     }
 }

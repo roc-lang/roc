@@ -744,7 +744,7 @@ fn to_type_apply<'a>(
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                return TypeApply::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                return TypeApply::Erroneous(Problem::CanonicalizationProblem);
             }
         }
     } else {
@@ -755,7 +755,7 @@ fn to_type_apply<'a>(
                 // it was imported but it doesn't expose this ident.
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                return TypeApply::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
+                return TypeApply::Erroneous(Problem::CanonicalizationProblem);
             }
         }
     };

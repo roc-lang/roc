@@ -391,8 +391,7 @@ pub(crate) fn make_apply_symbol(
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                let ident: Ident = (*ident).into();
-                Err(Type::Erroneous(Problem::UnrecognizedIdent(ident)))
+                Err(Type::Erroneous)
             }
         }
     } else {
@@ -405,7 +404,7 @@ pub(crate) fn make_apply_symbol(
 
                 // A failed import should have already been reported through
                 // roc_can::env::Env::qualified_lookup's checks
-                Err(Type::Erroneous(Problem::SolvedTypeError))
+                Err(Type::Erroneous)
             }
         }
     }
@@ -626,14 +625,16 @@ fn can_annotation_help(
                     // use a known alias
 
                     if alias.type_variables.len() != args.len() {
-                        let error = Type::Erroneous(Problem::BadTypeArguments {
-                            symbol,
-                            region,
-                            alias_needs: alias.type_variables.len() as u8,
-                            type_got: args.len() as u8,
-                            alias_kind: alias.kind,
-                        });
-                        return error;
+                        env.problem(roc_problem::can::Problem::BadType(
+                            Problem::BadTypeArguments {
+                                symbol,
+                                region,
+                                alias_needs: alias.type_variables.len() as u8,
+                                type_got: args.len() as u8,
+                                alias_kind: alias.kind,
+                            },
+                        ));
+                        return Type::Erroneous;
                     }
 
                     let mut type_var_to_arg = Vec::new();
@@ -717,15 +718,13 @@ fn can_annotation_help(
                 Ok(symbol) => symbol,
 
                 Err((shadowed_symbol, shadow, _new_symbol)) => {
-                    let problem = Problem::Shadowed(shadowed_symbol.region, shadow.clone());
-
                     env.problem(roc_problem::can::Problem::Shadowing {
                         original_region: shadowed_symbol.region,
                         shadow,
                         kind: ShadowKind::Variable,
                     });
 
-                    return Type::Erroneous(problem);
+                    return Type::Erroneous;
                 }
             };
 
@@ -992,7 +991,7 @@ fn can_annotation_help(
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
-            Type::Erroneous(Problem::CanonicalizationProblem)
+            Type::Erroneous
         }
         Malformed(string) => {
             malformed(env, region, string);
@@ -1044,13 +1043,13 @@ fn canonicalize_has_clause(
                 && !scope.abilities_store.is_ability(symbol)
                 {
                     env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
-                    return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+                    return Err(Type::Erroneous);
                 }
                 symbol
             }
             _ => {
                 env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
-                return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+                return Err(Type::Erroneous);
             }
         };
 
@@ -1070,10 +1069,7 @@ fn canonicalize_has_clause(
             shadow: shadow.clone(),
             kind: ShadowKind::Variable,
         });
-        return Err(Type::Erroneous(Problem::Shadowed(
-            shadowing.first_seen(),
-            shadow,
-        )));
+        return Err(Type::Erroneous);
     }
 
     let var = var_store.fresh();
@@ -1099,13 +1095,13 @@ fn can_extension_type<'a>(
         // Include erroneous types so that we don't overreport errors.
         matches!(
             typ,
-            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Erroneous(..)
+            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Erroneous
         )
     }
     fn valid_tag_ext_type(typ: &Type) -> bool {
         matches!(
             typ,
-            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Erroneous(..)
+            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Erroneous
         )
     }
 

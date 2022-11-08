@@ -173,6 +173,7 @@ impl RecordField<Type> {
         &mut self,
         region: Region,
         aliases: &'a F,
+        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_sets: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -182,6 +183,7 @@ impl RecordField<Type> {
         self.as_inner_mut().instantiate_aliases(
             region,
             aliases,
+            push_problem,
             var_store,
             new_lambda_sets,
             new_infer_ext_vars,
@@ -228,6 +230,7 @@ impl LambdaSet {
         &mut self,
         region: Region,
         aliases: &'a F,
+        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_sets: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -237,6 +240,7 @@ impl LambdaSet {
         self.0.instantiate_aliases(
             region,
             aliases,
+            push_problem,
             var_store,
             new_lambda_sets,
             new_infer_ext_vars,
@@ -1332,7 +1336,7 @@ pub enum Type {
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
-    Erroneous(Problem),
+    Erroneous,
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
@@ -1428,7 +1432,7 @@ impl Clone for Type {
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
-            Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+            Self::Erroneous => Self::Erroneous,
         }
     }
 }
@@ -1544,13 +1548,7 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Erroneous(problem) => {
-                write!(f, "Erroneous(")?;
-
-                problem.fmt(f)?;
-
-                write!(f, ")")
-            }
+            Type::Erroneous => write!(f, "Erroneous"),
             Type::DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
@@ -1910,7 +1908,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Erroneous => {}
             }
         }
     }
@@ -2040,7 +2038,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Erroneous => {}
             }
         }
     }
@@ -2143,7 +2141,7 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => Ok(()),
         }
     }
 
@@ -2205,7 +2203,7 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => false,
         }
     }
 
@@ -2261,7 +2259,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Erroneous(_) => false,
+            EmptyRec | EmptyTagUnion | Erroneous => false,
         }
     }
 
@@ -2295,6 +2293,7 @@ impl Type {
         &mut self,
         region: Region,
         aliases: &'a F,
+        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -2309,6 +2308,7 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2317,6 +2317,7 @@ impl Type {
                 closure.instantiate_aliases(
                     region,
                     aliases,
+                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2324,6 +2325,7 @@ impl Type {
                 ret.instantiate_aliases(
                     region,
                     aliases,
+                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2334,6 +2336,7 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2346,6 +2349,7 @@ impl Type {
                         x.instantiate_aliases(
                             region,
                             aliases,
+                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
@@ -2357,6 +2361,7 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2368,6 +2373,7 @@ impl Type {
                     x.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2378,6 +2384,7 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2400,6 +2407,7 @@ impl Type {
                     t.value.typ.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2416,6 +2424,7 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2426,6 +2435,7 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2435,6 +2445,7 @@ impl Type {
                 actual_type.instantiate_aliases(
                     region,
                     aliases,
+                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2450,6 +2461,7 @@ impl Type {
                     arg.typ.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2460,6 +2472,7 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
+                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2469,6 +2482,7 @@ impl Type {
                 actual_type.instantiate_aliases(
                     region,
                     aliases,
+                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2522,13 +2536,14 @@ impl Type {
                         *self = alias;
                     } else {
                         if args.len() != alias.type_variables.len() {
-                            *self = Type::Erroneous(Problem::BadTypeArguments {
+                            push_problem(Problem::BadTypeArguments {
                                 symbol: *symbol,
                                 region,
                                 type_got: args.len() as u8,
                                 alias_needs: alias.type_variables.len() as u8,
                                 alias_kind: AliasKind::Structural,
                             });
+                            *self = Type::Erroneous;
                             return;
                         }
 
@@ -2555,6 +2570,7 @@ impl Type {
                             filler.value.instantiate_aliases(
                                 region,
                                 aliases,
+                                push_problem,
                                 var_store,
                                 new_lambda_set_variables,
                                 new_infer_ext_vars,
@@ -2591,6 +2607,7 @@ impl Type {
                         actual.instantiate_aliases(
                             region,
                             aliases,
+                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
@@ -2631,6 +2648,7 @@ impl Type {
                         x.value.instantiate_aliases(
                             region,
                             aliases,
+                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
@@ -2640,7 +2658,7 @@ impl Type {
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => {}
         }
     }
 
@@ -2770,16 +2788,13 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 output.push(*symbol);
                 stack.extend(args.iter().map(|t| &t.value));
             }
-            Erroneous(Problem::CyclicAlias(alias, _, _)) => {
-                output.push(*alias);
-            }
             RangedNumber(_) => {}
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, _sym, _),
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous | Variable(_) => {}
         }
     }
 
@@ -2793,7 +2808,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Erroneous => (),
 
         Variable(v) => {
             accum.insert(*v);
@@ -2923,7 +2938,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Erroneous => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -3319,8 +3334,6 @@ impl Alias {
 pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, Box<ErrorType>, Region),
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(Ident),
     Shadowed(Region, Loc<Ident>),
     BadTypeArguments {
         symbol: Symbol,
@@ -3330,7 +3343,6 @@ pub enum Problem {
         alias_kind: AliasKind,
     },
     InvalidModule,
-    SolvedTypeError,
     HasClauseIsNotAbility(Region),
 }
 
@@ -4151,7 +4163,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             }
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
-            Type::Erroneous(_) => {}
+            Type::Erroneous => {}
         }
     }
 }
