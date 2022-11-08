@@ -16,6 +16,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
+use roc_collections::soa::{Index, Slice};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -31,10 +32,9 @@ use roc_types::subs::{
     OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
     UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, OptAbleType, OptAbleVar,
-    Polarity, Reason, RecordField, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
+    RecordField, Type, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -300,6 +300,7 @@ impl Aliases {
         abilities_store: &AbilitiesStore,
         obligation_cache: &mut ObligationCache,
         arena: &bumpalo::Bump,
+        types: &mut Types,
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> (Variable, AliasKind) {
@@ -416,6 +417,7 @@ impl Aliases {
         if !can_reuse_old_definition {
             let mut typ = typ.clone();
             typ.substitute_variables(&substitutions);
+            let typ = types.from_old_type(&typ);
             let alias_variable = type_to_variable(
                 subs,
                 rank,
@@ -425,7 +427,8 @@ impl Aliases {
                 obligation_cache,
                 arena,
                 self,
-                &typ,
+                types,
+                typ,
                 false,
             );
             (alias_variable, kind)
@@ -441,6 +444,7 @@ impl Aliases {
             // assumption: an alias does not (transitively) syntactically contain itself
             // (if it did it would have to be a recursive tag union, which we should have fixed up
             // during canonicalization)
+            let t_index = types.from_old_type(&t);
             let alias_variable = type_to_variable(
                 subs,
                 rank,
@@ -450,7 +454,8 @@ impl Aliases {
                 obligation_cache,
                 arena,
                 self,
-                &t,
+                types,
+                t_index,
                 false,
             );
 
@@ -2368,6 +2373,8 @@ pub(crate) fn type_to_var(
         *var
     } else {
         let mut arena = take_scratchpad();
+        let mut types = Types::new();
+        let typ = types.from_old_type(typ);
 
         let var = type_to_variable(
             subs,
@@ -2378,6 +2385,7 @@ pub(crate) fn type_to_var(
             obligation_cache,
             &arena,
             aliases,
+            &mut types,
             typ,
             false,
         );
@@ -2403,30 +2411,21 @@ impl RegisterVariable {
         rank: Rank,
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
-        typ: &Type,
+        types: &mut Types,
+        typ: Index<TypeTag>,
     ) -> Self {
         use RegisterVariable::*;
 
-        match typ {
-            Type::Variable(var) => Direct(*var),
-            EmptyRec => Direct(Variable::EMPTY_RECORD),
-            EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
-            Type::DelayedAlias(AliasCommon { symbol, .. }) => {
-                if let Some(reserved) = Variable::get_reserved(*symbol) {
-                    if rank.is_none() {
-                        // reserved variables are stored with rank NONE
-                        return Direct(reserved);
-                    } else {
-                        // for any other rank, we need to copy; it takes care of adjusting the rank
-                        let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
-                        return Direct(copied);
-                    }
-                }
-
-                Deferred
-            }
-            Type::Alias { symbol, .. } => {
-                if let Some(reserved) = Variable::get_reserved(*symbol) {
+        match types[typ] {
+            TypeTag::Variable(var) => Direct(var),
+            TypeTag::EmptyRecord => Direct(Variable::EMPTY_RECORD),
+            TypeTag::EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
+            TypeTag::DelayedAlias { shared }
+            | TypeTag::StructuralAlias { shared, .. }
+            | TypeTag::OpaqueAlias { shared, .. }
+            | TypeTag::HostExposedAlias { shared, .. } => {
+                let AliasShared { symbol, .. } = types[shared];
+                if let Some(reserved) = Variable::get_reserved(symbol) {
                     if rank.is_none() {
                         // reserved variables are stored with rank NONE
                         return Direct(reserved);
@@ -2444,15 +2443,16 @@ impl RegisterVariable {
     }
 
     #[inline(always)]
-    fn with_stack<'a>(
+    fn with_stack(
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
-        typ: &'a Type,
-        stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+        types: &mut Types,
+        typ: Index<TypeTag>,
+        stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
     ) -> Variable {
-        match Self::from_type(subs, rank, pools, arena, typ) {
+        match Self::from_type(subs, rank, pools, arena, types, typ) {
             Self::Direct(var) => var,
             Self::Deferred => {
                 let var = subs.fresh_unnamed_flex_var();
@@ -2518,9 +2518,9 @@ impl AmbientFunctionPolicy {
 }
 
 #[derive(Debug)]
-enum TypeToVar<'a> {
+enum TypeToVar {
     Defer {
-        typ: &'a Type,
+        typ: Index<TypeTag>,
         destination: Variable,
         ambient_function: AmbientFunctionPolicy,
     },
@@ -2536,7 +2536,8 @@ fn type_to_variable<'a>(
     obligation_cache: &mut ObligationCache,
     arena: &'a bumpalo::Bump,
     aliases: &mut Aliases,
-    typ: &Type,
+    types: &mut Types,
+    typ: Index<TypeTag>,
     // Helpers for instantiating ambient functions of lambda set variables from type aliases.
     is_alias_lambda_set_arg: bool,
 ) -> Variable {
@@ -2547,7 +2548,7 @@ fn type_to_variable<'a>(
 
     macro_rules! helper {
         ($typ:expr, $ambient_function_policy:expr) => {{
-            match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
+            match RegisterVariable::from_type(subs, rank, pools, arena, types, $typ) {
                 RegisterVariable::Direct(var) => {
                     // If the variable is just a type variable but we know we're in a lambda set
                     // context, try to link to the ambient function.
@@ -2579,23 +2580,31 @@ fn type_to_variable<'a>(
         ambient_function,
     }) = stack.pop()
     {
-        match typ {
-            Variable(_) | EmptyRec | EmptyTagUnion => {
+        use TypeTag::*;
+        match types[typ] {
+            Variable(_) | EmptyRecord | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
             }
             RangedNumber(range) => {
-                let content = Content::RangedNumber(*range);
+                let content = Content::RangedNumber(range);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            Apply(symbol, arguments, _) => {
+            Apply {
+                symbol,
+                type_argument_regions: _,
+                region: _,
+            } => {
+                let arguments = types.get_type_arguments(typ);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                    let var = helper!(&var_index.value);
+                for (target_index, var_index) in
+                    (new_arguments.indices()).zip(arguments.into_iter())
+                {
+                    let var = helper!(var_index);
                     subs.variables[target_index] = var;
                 }
 
-                let flat_type = FlatType::Apply(*symbol, new_arguments);
+                let flat_type = FlatType::Apply(symbol, new_arguments);
                 let content = Content::Structure(flat_type);
 
                 register_with_known_var(subs, destination, rank, pools, content)
@@ -2603,11 +2612,12 @@ fn type_to_variable<'a>(
 
             ClosureTag {
                 name,
-                captures,
                 ambient_function,
             } => {
-                let union_lambdas =
-                    create_union_lambda(subs, rank, pools, arena, *name, captures, &mut stack);
+                let captures = types.get_type_arguments(typ);
+                let union_lambdas = create_union_lambda(
+                    subs, rank, pools, arena, types, name, captures, &mut stack,
+                );
 
                 let content = Content::LambdaSet(subs::LambdaSet {
                     solved: union_lambdas,
@@ -2615,7 +2625,7 @@ fn type_to_variable<'a>(
                     // is to begin with.
                     recursion_var: OptVariable::NONE,
                     unspecialized: SubsSlice::default(),
-                    ambient_function: *ambient_function,
+                    ambient_function,
                 });
 
                 register_with_known_var(subs, destination, rank, pools, content)
@@ -2623,7 +2633,7 @@ fn type_to_variable<'a>(
             UnspecializedLambdaSet { unspecialized } => {
                 let unspecialized_slice = SubsSlice::extend_new(
                     &mut subs.unspecialized_lambda_sets,
-                    std::iter::once(*unspecialized),
+                    std::iter::once(unspecialized),
                 );
 
                 // `ClosureTag` ambient functions are resolved during constraint generation.
@@ -2635,7 +2645,7 @@ fn type_to_variable<'a>(
                     AmbientFunctionPolicy::NoFunction => {
                         debug_assert!(is_alias_lambda_set_arg);
                         // To be filled in during delayed type alias instantiation
-                        Variable::NULL
+                        roc_types::subs::Variable::NULL
                     }
                     AmbientFunctionPolicy::Function(var) => var,
                 };
@@ -2650,9 +2660,12 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             // This case is important for the rank of boolean variables
-            Function(arguments, closure_type, ret_type) => {
+            Function(closure_type, ret_type) => {
+                let arguments = types.get_type_arguments(typ);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                for (target_index, var_index) in
+                    (new_arguments.indices()).zip(arguments.into_iter())
+                {
                     let var = helper!(var_index);
                     subs.variables[target_index] = var;
                 }
@@ -2665,31 +2678,33 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            Record(fields, ext) => {
+            Record(fields) => {
+                let ext_slice = types.get_type_arguments(typ);
+
                 // An empty fields is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyRecord in canonicalization
-                debug_assert!(!fields.is_empty() || !ext.is_closed());
+                debug_assert!(!fields.is_empty() || !ext_slice.is_empty());
 
                 let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
 
-                for (field, field_type) in fields {
+                let (fields_names, field_kinds, field_tys) = types.record_fields_slices(fields);
+
+                for ((field, field_kind), field_type) in (fields_names.into_iter())
+                    .zip(field_kinds.into_iter())
+                    .zip(field_tys.into_iter())
+                {
                     let field_var = {
-                        use roc_types::types::RecordField::*;
-                        match &field_type {
-                            Optional(t) => Optional(helper!(t)),
-                            Required(t) => Required(helper!(t)),
-                            Demanded(t) => Demanded(helper!(t)),
-                            RigidRequired(t) => RigidRequired(helper!(t)),
-                            RigidOptional(t) => RigidOptional(helper!(t)),
-                        }
+                        let t = helper!(field_type);
+                        types[field_kind].replace(t)
                     };
 
-                    field_vars.push((field.clone(), field_var));
+                    field_vars.push((types[field].clone(), field_var));
                 }
 
-                let temp_ext_var = match ext {
-                    TypeExtension::Open(ext) => helper!(ext),
-                    TypeExtension::Closed => Variable::EMPTY_RECORD,
+                debug_assert!(ext_slice.len() <= 1);
+                let temp_ext_var = match ext_slice.into_iter().next() {
+                    None => roc_types::subs::Variable::EMPTY_RECORD,
+                    Some(ext) => helper!(ext),
                 };
 
                 let (it, new_ext_var) =
@@ -2710,21 +2725,28 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            TagUnion(tags, ext) => {
+            TagUnion(tags) => {
+                let ext_slice = types.get_type_arguments(typ);
+
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-                debug_assert!(!tags.is_empty() || !ext.is_closed());
+                debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
-                let (union_tags, ext) =
-                    type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
+                let (union_tags, ext) = type_to_union_tags(
+                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                );
                 let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            FunctionOrTagUnion(tag_name, symbol, ext) => {
-                let temp_ext_var = match ext {
-                    TypeExtension::Open(ext) => helper!(ext),
-                    TypeExtension::Closed => Variable::EMPTY_TAG_UNION,
+            FunctionOrTagUnion(symbol) => {
+                let ext_slice = types.get_type_arguments(typ);
+                let tag_name = types.get_tag_name(&typ).clone();
+
+                debug_assert!(ext_slice.len() <= 1);
+                let temp_ext_var = match ext_slice.into_iter().next() {
+                    Some(ext) => helper!(ext),
+                    None => roc_types::subs::Variable::EMPTY_TAG_UNION,
                 };
 
                 let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
@@ -2738,30 +2760,33 @@ fn type_to_variable<'a>(
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }
 
-                let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name.clone()]);
-                let symbols = SubsSlice::extend_new(&mut subs.symbol_names, [*symbol]);
+                let tag_names = SubsSlice::extend_new(&mut subs.tag_names, [tag_name]);
+                let symbols = SubsSlice::extend_new(&mut subs.symbol_names, [symbol]);
 
                 let content =
                     Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            RecursiveTagUnion(rec_var, tags, ext) => {
+            RecursiveTagUnion(rec_var, tags) => {
+                let ext_slice = types.get_type_arguments(typ);
+
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-                debug_assert!(!tags.is_empty() || !ext.is_closed());
+                debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
-                let (union_tags, ext) =
-                    type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
+                let (union_tags, ext) = type_to_union_tags(
+                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                );
                 let content =
-                    Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
+                    Content::Structure(FlatType::RecursiveTagUnion(rec_var, union_tags, ext));
 
                 let tag_union_var = destination;
                 register_with_known_var(subs, tag_union_var, rank, pools, content);
 
                 register_with_known_var(
                     subs,
-                    *rec_var,
+                    rec_var,
                     rank,
                     pools,
                     Content::RecursionVar {
@@ -2773,34 +2798,43 @@ fn type_to_variable<'a>(
                 tag_union_var
             }
 
-            Type::DelayedAlias(AliasCommon {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-                infer_ext_in_output_types,
-            }) => {
+            DelayedAlias { shared } => {
+                let AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables,
+                    infer_ext_in_output_variables,
+                } = types[shared];
+
+                let type_arguments = types.get_type_arguments(typ);
+
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
                         + lambda_set_variables.len()
-                        + infer_ext_in_output_types.len();
+                        + infer_ext_in_output_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
                     let type_arguments_offset = 0;
                     let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
                     let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
 
-                    for (target_index, arg_type) in
-                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
+                    for (((target_index, arg_type), arg_region), abilities) in
+                        (new_variables.indices().skip(type_arguments_offset))
+                            .zip(type_arguments.into_iter())
+                            .zip(type_argument_regions.into_iter())
+                            .zip(type_argument_abilities.into_iter())
                     {
-                        let copy_var = helper!(&arg_type.value.typ);
+                        let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
-                        if let Some(abilities) = arg_type.value.opt_abilities.as_ref() {
-                            bind_to_abilities.push((Loc::at(arg_type.region, copy_var), abilities));
+                        if !types[abilities].is_empty() {
+                            let arg_region = types[arg_region];
+                            bind_to_abilities.push((Loc::at(arg_region, copy_var), abilities));
                         }
                     }
 
                     let it = (new_variables.indices().skip(lambda_set_vars_offset))
-                        .zip(lambda_set_variables);
+                        .zip(lambda_set_variables.into_iter());
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
                         // instantiation of the real var, there will be nothing to link against.
@@ -2813,14 +2847,15 @@ fn type_to_variable<'a>(
                             obligation_cache,
                             arena,
                             aliases,
-                            &ls.0,
+                            types,
+                            ls,
                             true,
                         );
                         subs.variables[target_index] = copy_var;
                     }
 
                     let it = (new_variables.indices().skip(infer_ext_vars_offset))
-                        .zip(infer_ext_in_output_types);
+                        .zip(infer_ext_in_output_variables.into_iter());
                     for (target_index, ext_typ) in it {
                         let copy_var = helper!(ext_typ);
                         subs.variables[target_index] = copy_var;
@@ -2842,29 +2877,39 @@ fn type_to_variable<'a>(
                     abilities_store,
                     obligation_cache,
                     arena,
-                    *symbol,
+                    types,
+                    symbol,
                     alias_variables,
                 );
 
-                let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
+                let content = Content::Alias(symbol, alias_variables, alias_variable, kind);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            Type::Alias {
-                symbol,
-                type_arguments,
-                actual,
-                lambda_set_variables,
-                infer_ext_in_output_types,
-                kind,
-            } => {
-                debug_assert!(Variable::get_reserved(*symbol).is_none());
+            StructuralAlias { shared, actual } | OpaqueAlias { shared, actual } => {
+                let kind = match types[typ] {
+                    StructuralAlias { .. } => AliasKind::Structural,
+                    OpaqueAlias { .. } => AliasKind::Opaque,
+                    _ => internal_error!(),
+                };
+
+                let AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables,
+                    infer_ext_in_output_variables,
+                } = types[shared];
+
+                debug_assert!(roc_types::subs::Variable::get_reserved(symbol).is_none());
+
+                let type_arguments = types.get_type_arguments(typ);
 
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
                         + lambda_set_variables.len()
-                        + infer_ext_in_output_types.len();
+                        + infer_ext_in_output_variables.len();
 
                     let type_arguments_offset = 0;
                     let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
@@ -2872,28 +2917,29 @@ fn type_to_variable<'a>(
 
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, all_vars_length);
 
-                    for (target_index, OptAbleType { typ, opt_abilities }) in
-                        (new_variables.indices().skip(type_arguments_offset)).zip(type_arguments)
+                    for (((target_index, typ), region), abilities) in
+                        (new_variables.indices().skip(type_arguments_offset))
+                            .zip(type_arguments.into_iter())
+                            .zip(type_argument_regions.into_iter())
+                            .zip(type_argument_abilities.into_iter())
                     {
                         let copy_var = helper!(typ);
                         subs.variables[target_index] = copy_var;
-                        if let Some(abilities) = opt_abilities.as_ref() {
-                            bind_to_abilities.push((
-                                Loc::at(roc_region::all::Region::zero(), copy_var),
-                                abilities,
-                            ));
+                        if !types[abilities].is_empty() {
+                            let region = types[region];
+                            bind_to_abilities.push((Loc::at(region, copy_var), abilities));
                         }
                     }
 
                     let it = (new_variables.indices().skip(lambda_set_vars_offset))
-                        .zip(lambda_set_variables);
+                        .zip(lambda_set_variables.into_iter());
                     for (target_index, ls) in it {
-                        let copy_var = helper!(&ls.0);
+                        let copy_var = helper!(ls);
                         subs.variables[target_index] = copy_var;
                     }
 
                     let it = (new_variables.indices().skip(infer_ext_vars_offset))
-                        .zip(infer_ext_in_output_types);
+                        .zip(infer_ext_in_output_variables.into_iter());
                     for (target_index, ext_typ) in it {
                         let copy_var = helper!(ext_typ);
                         subs.variables[target_index] = copy_var;
@@ -2907,33 +2953,42 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
-                    roc_result_to_var(subs, rank, pools, arena, actual, &mut stack)
+                let alias_variable = if let Symbol::RESULT_RESULT = symbol {
+                    roc_result_to_var(subs, rank, pools, arena, types, actual, &mut stack)
                 } else {
                     helper!(actual)
                 };
-                let content = Content::Alias(*symbol, alias_variables, alias_variable, *kind);
+                let content = Content::Alias(symbol, alias_variables, alias_variable, kind);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             HostExposedAlias {
-                name: symbol,
-                type_arguments,
-                actual: alias_type,
-                actual_var,
-                lambda_set_variables,
-                ..
+                shared,
+                actual_type: alias_type,
+                actual_variable: actual_var,
             } => {
+                let AliasShared {
+                    symbol,
+                    type_argument_abilities: _,
+                    type_argument_regions: _,
+                    lambda_set_variables,
+                    infer_ext_in_output_variables: _, // TODO
+                } = types[shared];
+
+                let type_arguments = types.get_type_arguments(typ);
+
                 let alias_variables = {
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
+                    for (target_index, arg_type) in
+                        (new_variables.indices()).zip(type_arguments.into_iter())
+                    {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
                     let it = (new_variables.indices().skip(type_arguments.len()))
-                        .zip(lambda_set_variables);
+                        .zip(lambda_set_variables.into_iter());
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
                         // instantiation of the real var, there will be nothing to link against.
@@ -2946,7 +3001,8 @@ fn type_to_variable<'a>(
                             obligation_cache,
                             arena,
                             aliases,
-                            &ls.0,
+                            types,
+                            ls,
                             true,
                         );
                         subs.variables[target_index] = copy_var;
@@ -2970,32 +3026,35 @@ fn type_to_variable<'a>(
                     obligation_cache,
                     arena,
                     aliases,
+                    types,
                     alias_type,
                     false,
                 );
                 // TODO(opaques): I think host-exposed aliases should always be structural
                 // (when does it make sense to give a host an opaque type?)
                 let content = Content::Alias(
-                    *symbol,
+                    symbol,
                     alias_variables,
                     alias_variable,
                     AliasKind::Structural,
                 );
-                // let result = register(subs, rank, pools, content);
                 let result = register_with_known_var(subs, destination, rank, pools, content);
 
                 // We only want to unify the actual_var with the alias once
                 // if it's already redirected (and therefore, redundant)
                 // don't do it again
-                if !subs.redundant(*actual_var) {
+                if !subs.redundant(actual_var) {
                     let descriptor = subs.get(result);
-                    subs.union(result, *actual_var, descriptor);
+                    subs.union(result, actual_var, descriptor);
                 }
 
                 result
             }
-            Erroneous(problem) => {
-                let problem_index = SubsIndex::push_new(&mut subs.problems, problem.clone());
+            Erroneous => {
+                // TODO: remove `Erroneous`, `Error` can always be used, and type problems known at
+                // this point can be reported during canonicalization.
+                let problem_index =
+                    SubsIndex::push_new(&mut subs.problems, types.get_problem(&typ).clone());
                 let content = Content::Structure(FlatType::Erroneous(problem_index));
 
                 register_with_known_var(subs, destination, rank, pools, content)
@@ -3004,6 +3063,7 @@ fn type_to_variable<'a>(
     }
 
     for (Loc { value: var, region }, abilities) in bind_to_abilities {
+        let abilities = &types[abilities];
         match *subs.get_content_unchecked(var) {
             Content::RigidVar(a) => {
                 // TODO(multi-abilities): check run cache
@@ -3081,28 +3141,42 @@ fn type_to_variable<'a>(
 }
 
 #[inline(always)]
-fn roc_result_to_var<'a>(
+fn roc_result_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    result_type: &'a Type,
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    types: &mut Types,
+    result_type: Index<TypeTag>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> Variable {
-    match result_type {
-        Type::TagUnion(tags, ext) => {
-            debug_assert!(ext.is_closed());
+    match types[result_type] {
+        TypeTag::TagUnion(tags) => {
+            let ext_slice = types.get_type_arguments(result_type);
+
+            debug_assert!(ext_slice.is_empty());
             debug_assert!(tags.len() == 2);
 
-            if let [(err, err_args), (ok, ok_args)] = &tags[..] {
+            let (tags_slice, payload_slices_slice) = types.union_tag_slices(tags);
+
+            if let ([err, ok], [err_args, ok_args]) =
+                (&types[tags_slice], &types[payload_slices_slice])
+            {
                 debug_assert_eq!(err, &subs.tag_names[0]);
                 debug_assert_eq!(ok, &subs.tag_names[1]);
 
-                if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
-                    let err_var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, err_type, stack);
-                    let ok_var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, ok_type, stack);
+                debug_assert_eq!(err_args.len(), 1);
+                debug_assert_eq!(ok_args.len(), 1);
+
+                if let (Some(err_type), Some(ok_type)) =
+                    (err_args.into_iter().next(), ok_args.into_iter().next())
+                {
+                    let err_var = RegisterVariable::with_stack(
+                        subs, rank, pools, arena, types, err_type, stack,
+                    );
+                    let ok_var = RegisterVariable::with_stack(
+                        subs, rank, pools, arena, types, ok_type, stack,
+                    );
 
                     let start = subs.variables.len() as u32;
                     let err_slice = SubsSlice::new(start, 1);
@@ -3148,13 +3222,13 @@ where
     }
 }
 
-fn sorted_no_duplicates<T>(slice: &[(TagName, T)]) -> bool {
-    match slice.split_first() {
+fn sorted_no_duplicate_tags(tag_slices: &[TagName]) -> bool {
+    match tag_slices.split_first() {
         None => true,
-        Some(((first, _), rest)) => {
+        Some((first, rest)) => {
             let mut current = first;
 
-            for (next, _) in rest {
+            for next in rest {
                 if current >= next {
                     return false;
                 } else {
@@ -3190,10 +3264,10 @@ fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)
 /// Find whether the current run of tag names is in the subs.tag_names array already. If so,
 /// we take a SubsSlice to the existing tag names, so we don't have to add/clone those tag names
 /// and keep subs memory consumption low
-fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsSlice<TagName>> {
+fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<TagName>> {
     use std::cmp::Ordering;
 
-    let tag_name = &slice.get(0)?.0;
+    let tag_name = slice.get(0)?;
 
     let mut result = None;
 
@@ -3215,7 +3289,7 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
                     // we might have a prefix
                     let tag_names = &subs.tag_names[subs_slice.start as usize..];
 
-                    for (from_subs, (from_slice, _)) in tag_names.iter().zip(slice.iter()) {
+                    for (from_subs, from_slice) in tag_names.iter().zip(slice.iter()) {
                         if from_subs != from_slice {
                             return None;
                         }
@@ -3226,7 +3300,7 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
                 Ordering::Equal => {
                     let tag_names = &subs.tag_names[subs_slice.indices()];
 
-                    for (from_subs, (from_slice, _)) in tag_names.iter().zip(slice.iter()) {
+                    for (from_subs, from_slice) in tag_names.iter().zip(slice.iter()) {
                         if from_subs != from_slice {
                             return None;
                         }
@@ -3249,22 +3323,24 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
 }
 
 #[inline(always)]
-fn register_tag_arguments<'a>(
+fn register_tag_arguments(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
-    arguments: &'a [Type],
+    types: &mut Types,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
+    arguments: Slice<TypeTag>,
 ) -> VariableSubsSlice {
     if arguments.is_empty() {
         VariableSubsSlice::default()
     } else {
         let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-        let it = new_variables.indices().zip(arguments);
+        let it = new_variables.indices().zip(arguments.into_iter());
 
         for (target_index, argument) in it {
-            let var = RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
+            let var =
+                RegisterVariable::with_stack(subs, rank, pools, arena, types, argument, stack);
             subs.variables[target_index] = var;
         }
 
@@ -3273,17 +3349,25 @@ fn register_tag_arguments<'a>(
 }
 
 /// Assumes that the tags are sorted and there are no duplicates!
-fn insert_tags_fast_path<'a>(
+fn insert_tags_fast_path(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    types: &mut Types,
+    union_tags: UnionTags,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionTags {
-    if let [(TagName(tag_name), arguments)] = tags {
+    let (tags, payload_slices) = types.union_tag_slices(union_tags);
+
+    debug_assert_eq!(tags.len(), payload_slices.len());
+
+    if let [arguments_slice] = &types[payload_slices] {
+        let arguments_slice = *arguments_slice;
+
         let variable_slice =
-            register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
+            register_tag_arguments(subs, rank, pools, arena, types, stack, arguments_slice);
+
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
@@ -3293,7 +3377,7 @@ fn insert_tags_fast_path<'a>(
             };
         }
 
-        match tag_name.as_str() {
+        match types[tags][0].0.as_str() {
             "Ok" => subs_tag_name!(Subs::TAG_NAME_OK.as_slice()),
             "Err" => subs_tag_name!(Subs::TAG_NAME_ERR.as_slice()),
             "InvalidNumStr" => subs_tag_name!(Subs::TAG_NAME_INVALID_NUM_STR.as_slice()),
@@ -3304,13 +3388,14 @@ fn insert_tags_fast_path<'a>(
     }
 
     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-    match find_tag_name_run(tags, subs) {
+    match find_tag_name_run(&types[tags], subs) {
         Some(new_tag_names) => {
-            let it = (new_variable_slices.indices()).zip(tags);
+            let it = (new_variable_slices.indices()).zip(payload_slices.into_iter());
 
-            for (variable_slice_index, (_, arguments)) in it {
+            for (variable_slice_index, arguments_index) in it {
+                let arguments = types[arguments_index];
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
+                    register_tag_arguments(subs, rank, pools, arena, types, stack, arguments);
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -3320,13 +3405,15 @@ fn insert_tags_fast_path<'a>(
 
             let it = (new_variable_slices.indices())
                 .zip(new_tag_names.indices())
-                .zip(tags);
+                .zip(tags.into_iter())
+                .zip(payload_slices.into_iter());
 
-            for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
+            for (((variable_slice_index, tag_name_index), tag_name), arguments_index) in it {
+                let arguments = types[arguments_index];
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
+                    register_tag_arguments(subs, rank, pools, arena, types, stack, arguments);
 
-                subs.tag_names[tag_name_index] = tag_name.clone();
+                subs.tag_names[tag_name_index] = types[tag_name].clone();
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -3334,25 +3421,30 @@ fn insert_tags_fast_path<'a>(
     }
 }
 
-fn insert_tags_slow_path<'a>(
+fn insert_tags_slow_path(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    types: &mut Types,
+    union_tags: UnionTags,
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionTags {
-    for (tag, tag_argument_types) in tags {
-        let tag_argument_types: &[Type] = tag_argument_types.as_slice();
+    let (tags, payload_slices) = types.union_tag_slices(union_tags);
+
+    for (tag_index, tag_argument_types_index) in (tags.into_iter()).zip(payload_slices.into_iter())
+    {
+        let tag_argument_types = &types[tag_argument_types_index];
+
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
-        for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
-            let var = RegisterVariable::with_stack(subs, rank, pools, arena, arg, stack);
+        for (i, arg) in (new_slice.indices()).zip(tag_argument_types.into_iter()) {
+            let var = RegisterVariable::with_stack(subs, rank, pools, arena, types, arg, stack);
             subs.variables[i] = var;
         }
 
-        tag_vars.push((tag.clone(), new_slice));
+        tag_vars.push((types[tag_index].clone(), new_slice));
     }
 
     sort_and_deduplicate(&mut tag_vars);
@@ -3360,36 +3452,42 @@ fn insert_tags_slow_path<'a>(
     UnionTags::insert_slices_into_subs(subs, tag_vars)
 }
 
-fn type_to_union_tags<'a>(
+fn type_to_union_tags(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
-    ext: &'a TypeExtension,
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    types: &mut Types,
+    union_tags: UnionTags,
+    opt_ext_slice: Slice<TypeTag>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
 
-    let sorted = tags.len() == 1 || sorted_no_duplicates(tags);
+    let (tags, _) = types.union_tag_slices(union_tags);
 
-    match ext {
-        TypeExtension::Closed => {
+    let sorted = tags.len() == 1 || sorted_no_duplicate_tags(&types[tags]);
+
+    debug_assert!(opt_ext_slice.len() <= 1);
+
+    match opt_ext_slice.into_iter().next() {
+        None => {
             let ext = Variable::EMPTY_TAG_UNION;
 
             let union_tags = if sorted {
-                insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
+                insert_tags_fast_path(subs, rank, pools, arena, types, union_tags, stack)
             } else {
                 let tag_vars = Vec::with_capacity_in(tags.len(), arena);
-                insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
+                insert_tags_slow_path(subs, rank, pools, arena, types, union_tags, tag_vars, stack)
             };
 
             (union_tags, ext)
         }
-        TypeExtension::Open(ext) => {
+        Some(ext) => {
             let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-            let temp_ext_var = RegisterVariable::with_stack(subs, rank, pools, arena, ext, stack);
+            let temp_ext_var =
+                RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
             let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                 subs,
                 UnionTags::default(),
@@ -3400,9 +3498,9 @@ fn type_to_union_tags<'a>(
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 
             let union_tags = if tag_vars.is_empty() && sorted {
-                insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
+                insert_tags_fast_path(subs, rank, pools, arena, types, union_tags, stack)
             } else {
-                insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
+                insert_tags_slow_path(subs, rank, pools, arena, types, union_tags, tag_vars, stack)
             };
 
             (union_tags, ext)
@@ -3410,16 +3508,18 @@ fn type_to_union_tags<'a>(
     }
 }
 
-fn create_union_lambda<'a>(
+fn create_union_lambda(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
+    types: &mut Types,
     closure: Symbol,
-    capture_types: &'a [Type],
-    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    capture_types: Slice<TypeTag>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionLambdas {
-    let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, capture_types);
+    let variable_slice =
+        register_tag_arguments(subs, rank, pools, arena, types, stack, capture_types);
     let new_variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
     let lambda_name_slice = SubsSlice::extend_new(&mut subs.symbol_names, [closure]);

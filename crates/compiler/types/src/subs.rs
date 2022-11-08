@@ -2657,10 +2657,10 @@ impl Label for Symbol {
 
 #[derive(Clone, Debug)]
 pub struct UnionLabels<L> {
-    length: u16,
-    labels_start: u32,
-    variables_start: u32,
-    _marker: std::marker::PhantomData<L>,
+    pub(crate) length: u16,
+    pub(crate) labels_start: u32,
+    pub(crate) values_start: u32,
+    pub(crate) _marker: std::marker::PhantomData<L>,
 }
 
 impl<L> Default for UnionLabels<L> {
@@ -2668,7 +2668,7 @@ impl<L> Default for UnionLabels<L> {
         Self {
             length: Default::default(),
             labels_start: Default::default(),
-            variables_start: Default::default(),
+            values_start: Default::default(),
             _marker: Default::default(),
         }
     }
@@ -2685,7 +2685,7 @@ where
             return false;
         }
 
-        let slice = subs.variable_slices[self.variables_start as usize];
+        let slice = subs.variable_slices[self.values_start as usize];
         slice.length == 1
     }
 
@@ -2708,7 +2708,7 @@ where
         Self {
             length: labels.len() as u16,
             labels_start: labels.start,
-            variables_start: variables.start,
+            values_start: variables.start,
             _marker: Default::default(),
         }
     }
@@ -2718,7 +2718,7 @@ where
     }
 
     pub fn variables(&self) -> SubsSlice<VariableSubsSlice> {
-        SubsSlice::new(self.variables_start, self.length)
+        SubsSlice::new(self.values_start, self.length)
     }
 
     pub fn len(&self) -> usize {
@@ -2764,7 +2764,7 @@ where
         Self {
             length: 1,
             labels_start: idx.index,
-            variables_start: 0,
+            values_start: 0,
             _marker: Default::default(),
         }
     }
@@ -2792,7 +2792,7 @@ where
         Self {
             length,
             labels_start,
-            variables_start,
+            values_start: variables_start,
             _marker: Default::default(),
         }
     }
@@ -3531,7 +3531,7 @@ fn explicit_substitute_union<L: Label>(
 
     let mut union_tags = tags;
     debug_assert_eq!(length, union_tags.len());
-    union_tags.variables_start = start;
+    union_tags.values_start = start;
     union_tags
 }
 
@@ -4382,7 +4382,7 @@ impl StorageSubs {
 
     fn offset_tag_union(offsets: &StorageSubsOffsets, mut union_tags: UnionTags) -> UnionTags {
         union_tags.labels_start += offsets.tag_names;
-        union_tags.variables_start += offsets.variable_slices;
+        union_tags.values_start += offsets.variable_slices;
 
         union_tags
     }
@@ -4392,7 +4392,7 @@ impl StorageSubs {
         mut union_lambdas: UnionLambdas,
     ) -> UnionLambdas {
         union_lambdas.labels_start += offsets.symbol_names;
-        union_lambdas.variables_start += offsets.variable_slices;
+        union_lambdas.values_start += offsets.variable_slices;
 
         union_lambdas
     }
