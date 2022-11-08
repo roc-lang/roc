@@ -58,7 +58,10 @@ fn constrain_symbols_from_requires(
                 };
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
-                let type_index = constraints.push_type(types, types.from_old_type(&loc_type.value));
+                let type_index = {
+                    let typ = types.from_old_type(&loc_type.value);
+                    constraints.push_type(types, typ)
+                };
                 let def_pattern_state =
                     constrain_def_pattern(types, constraints, &mut env, &pattern, type_index);
 
@@ -79,7 +82,10 @@ fn constrain_symbols_from_requires(
                 // provided by the app is in fact what the package module requires.
                 let arity = loc_type.value.arity();
                 let typ = loc_type.value;
-                let type_index = constraints.push_type(types, types.from_old_type(&typ));
+                let type_index = {
+                    let typ = types.from_old_type(&typ);
+                    constraints.push_type(types, typ)
+                };
                 let expected = constraints.push_expected_type(Expected::FromAnnotation(
                     loc_symbol.map(|&s| Pattern::Identifier(s)),
                     arity,
@@ -118,8 +124,10 @@ pub fn frontload_ability_constraints(
             };
             let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
-            let signature_index =
-                constraints.push_type(types, types.from_old_type(&signature.clone()));
+            let signature_index = {
+                let typ = types.from_old_type(&signature.clone());
+                constraints.push_type(types, typ)
+            };
 
             let mut def_pattern_state =
                 constrain_def_pattern(types, constraints, &mut env, &pattern, signature_index);

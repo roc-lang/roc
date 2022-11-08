@@ -2263,7 +2263,7 @@ fn type_cell_to_var(
     pools: &mut Pools,
     types: &mut Types,
     aliases: &mut Aliases,
-    typ_cell: &Cell<Type>,
+    typ_cell: &Cell<Index<TypeTag>>,
 ) -> Variable {
     let typ = typ_cell.replace(Type::EmptyTagUnion);
     let var = type_to_var(

@@ -164,7 +164,10 @@ fn constrain_untyped_closure(
 
     let pattern_state_constraints = constraints.and_constraint(pattern_state.constraints);
 
-    let function_type = constraints.push_type(&types, types.from_old_type(&function_type));
+    let function_type = {
+        let typ = types.from_old_type(&function_type);
+        constraints.push_type(&types, typ)
+    };
 
     let cons = [
         constraints.let_constraint(
@@ -227,10 +230,11 @@ pub fn constrain_expr(
                     rec_constraints.push(field_con);
                 }
 
-                let record_type = constraints.push_type(
-                    &types,
-                    types.from_old_type(&Type::Record(field_types, TypeExtension::Closed)),
-                );
+                let record_type = {
+                    let typ =
+                        types.from_old_type(&Type::Record(field_types, TypeExtension::Closed));
+                    constraints.push_type(&types, typ)
+                };
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
@@ -271,15 +275,17 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = constraints.push_type(
-                &types,
-                types.from_old_type(&Type::Record(
+            let fields_type = {
+                let typ = types.from_old_type(&Type::Record(
                     fields,
                     TypeExtension::from_type(Type::Variable(*ext_var)),
-                )),
-            );
-            let record_type =
-                constraints.push_type(&types, types.from_old_type(&Type::Variable(*record_var)));
+                ));
+                constraints.push_type(&types, typ)
+            };
+            let record_type = {
+                let typ = types.from_old_type(&Type::Variable(*record_var));
+                constraints.push_type(&types, typ)
+            };
 
             // NOTE from elm compiler: fields_type is separate so that Error propagates better
             let fields_type_expected = constraints.push_expected_type(NoExpectation(fields_type));
@@ -337,8 +343,10 @@ pub fn constrain_expr(
             loc_elems,
         } => {
             if loc_elems.is_empty() {
-                let elem_type_index =
-                    constraints.push_type(types, types.from_old_type(&empty_list_type(*elem_var)));
+                let elem_type_index = {
+                    let typ = types.from_old_type(&empty_list_type(*elem_var));
+                    constraints.push_type(types, typ)
+                };
                 let eq = constraints.equal_types(elem_type_index, expected, Category::List, region);
                 constraints.exists(vec![*elem_var], eq)
             } else {
@@ -366,8 +374,10 @@ pub fn constrain_expr(
                     list_constraints.push(constraint);
                 }
 
-                let elem_type_index =
-                    constraints.push_type(&types, types.from_old_type(&list_type(list_elem_type)));
+                let elem_type_index = {
+                    let typ = types.from_old_type(&list_type(list_elem_type));
+                    constraints.push_type(&types, typ)
+                };
                 list_constraints.push(constraints.equal_types(
                     elem_type_index,
                     expected,
@@ -448,14 +458,13 @@ pub fn constrain_expr(
                 arg_cons.push(arg_con);
             }
 
-            let expected_fn_index = constraints.push_type(
-                types,
-                types.function(
-                    types.from_old_type_slice(arg_types.iter()),
-                    types.from_old_type(&closure_type),
-                    types.from_old_type(&ret_type),
-                ),
-            );
+            let expected_fn_index = {
+                let arguments = types.from_old_type_slice(arg_types.iter());
+                let lambda_set = types.from_old_type(&closure_type);
+                let ret = types.from_old_type(&ret_type);
+                let typ = types.function(arguments, lambda_set, ret);
+                constraints.push_type(types, typ)
+            };
             let expected_fn_type =
                 constraints.push_expected_type(ForReason(fn_reason, expected_fn_index, region));
 
@@ -1023,13 +1032,13 @@ pub fn constrain_expr(
             let label = field.clone();
             rec_field_types.insert(label, RecordField::Demanded(field_type));
 
-            let record_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Record(
+            let record_type = {
+                let typ = types.from_old_type(&Type::Record(
                     rec_field_types,
                     TypeExtension::from_type(ext_type),
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
             let record_expected = constraints.push_expected_type(NoExpectation(record_type));
 
             let category = Category::Access(field.clone());
@@ -1071,7 +1080,10 @@ pub fn constrain_expr(
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
             let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
-            let record_type_index = constraints.push_type(types, types.from_old_type(&record_type));
+            let record_type_index = {
+                let typ = types.from_old_type(&record_type);
+                constraints.push_type(types, typ)
+            };
 
             let category = Category::Accessor(field.clone());
 
@@ -1080,27 +1092,27 @@ pub fn constrain_expr(
                 constraints.equal_types_var(*record_var, record_expected, category.clone(), region);
 
             let expected_lambda_set = {
-                let lambda_set_ty = constraints.push_type(
-                    types,
-                    types.from_old_type(&Type::ClosureTag {
+                let lambda_set_ty = {
+                    let typ = types.from_old_type(&Type::ClosureTag {
                         name: *closure_name,
                         captures: vec![],
                         ambient_function: *function_var,
-                    }),
-                );
+                    });
+                    constraints.push_type(types, typ)
+                };
                 constraints.push_expected_type(NoExpectation(lambda_set_ty))
             };
 
             let closure_type = Type::Variable(*closure_var);
 
-            let function_type_index = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Function(
+            let function_type_index = {
+                let typ = types.from_old_type(&Type::Function(
                     vec![record_type],
                     Box::new(closure_type),
                     Box::new(field_type),
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
 
             let cons = [
                 constraints.equal_types_var(
@@ -1197,13 +1209,13 @@ pub fn constrain_expr(
                 payload_types.push(Type::Variable(*var));
             }
 
-            let tag_union_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::TagUnion(
+            let tag_union_type = {
+                let typ = types.from_old_type(&Type::TagUnion(
                     vec![(name.clone(), payload_types)],
                     TypeExtension::from_type(Type::Variable(*ext_var)),
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
 
             let union_con = constraints.equal_types_with_storage(
                 tag_union_type,
@@ -1228,14 +1240,14 @@ pub fn constrain_expr(
             name,
             closure_name,
         } => {
-            let function_or_tag_union = constraints.push_type(
-                types,
-                types.from_old_type(&Type::FunctionOrTagUnion(
+            let function_or_tag_union = {
+                let typ = types.from_old_type(&Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
                     TypeExtension::from_type(Type::Variable(*ext_var)),
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
             let union_con = constraints.equal_types_with_storage(
                 function_or_tag_union,
                 expected,
@@ -1261,9 +1273,8 @@ pub fn constrain_expr(
             let arg_type = Type::Variable(*arg_var);
             let arg_type_index = constraints.push_variable(*arg_var);
 
-            let opaque_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Alias {
+            let opaque_type = {
+                let typ = types.from_old_type(&Type::Alias {
                     symbol: *name,
                     type_arguments: type_arguments
                         .iter()
@@ -1276,8 +1287,9 @@ pub fn constrain_expr(
                     infer_ext_in_output_types: vec![],
                     actual: Box::new(arg_type),
                     kind: AliasKind::Opaque,
-                }),
-            );
+                });
+                constraints.push_type(types, typ)
+            };
 
             // Constrain the argument
             let expected_arg =
@@ -1305,8 +1317,10 @@ pub fn constrain_expr(
             // variables of the opaque type
             // TODO: better expectation here
             let link_type_variables_con = {
-                let specialized_type_index =
-                    constraints.push_type(types, types.from_old_type(&**specialized_def_type));
+                let specialized_type_index = {
+                    let typ = types.from_old_type(&**specialized_def_type);
+                    constraints.push_type(types, typ)
+                };
                 let expected_index =
                     constraints.push_expected_type(Expected::NoExpectation(specialized_type_index));
                 constraints.equal_types(
@@ -1339,9 +1353,8 @@ pub fn constrain_expr(
         }) => {
             let argument_type = Type::Variable(*argument_var);
 
-            let opaque_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Alias {
+            let opaque_type = {
+                let typ = types.from_old_type(&Type::Alias {
                     symbol: *opaque_name,
                     type_arguments: type_arguments
                         .iter()
@@ -1354,8 +1367,9 @@ pub fn constrain_expr(
                     infer_ext_in_output_types: vec![],
                     actual: Box::new(argument_type.clone()),
                     kind: AliasKind::Opaque,
-                }),
-            );
+                });
+                constraints.push_type(types, typ)
+            };
 
             let expected_opaque_type = constraints.push_expected_type(NoExpectation(opaque_type));
 
@@ -1369,10 +1383,14 @@ pub fn constrain_expr(
 
             // Tie the type of the value wrapped by the opaque to the opaque's type variables.
             let link_type_variables_con = {
-                let arg_type_index =
-                    constraints.push_type(types, types.from_old_type(&argument_type));
-                let specialized_type_index =
-                    constraints.push_type(types, types.from_old_type(&(*specialized_def_type)));
+                let arg_type_index = {
+                    let typ = types.from_old_type(&argument_type);
+                    constraints.push_type(types, typ)
+                };
+                let specialized_type_index = {
+                    let typ = types.from_old_type(&(*specialized_def_type));
+                    constraints.push_type(types, typ)
+                };
                 let expected_specialized =
                     constraints.push_expected_type(Expected::NoExpectation(specialized_type_index));
                 constraints.equal_types(
@@ -1384,14 +1402,14 @@ pub fn constrain_expr(
             };
 
             let lambda_set = {
-                let lambda_set_index = constraints.push_type(
-                    types,
-                    types.from_old_type(&Type::ClosureTag {
+                let lambda_set_index = {
+                    let typ = types.from_old_type(&Type::ClosureTag {
                         name: *function_name,
                         captures: vec![],
                         ambient_function: *function_var,
-                    }),
-                );
+                    });
+                    constraints.push_type(types, typ)
+                };
                 constraints.push_expected_type(NoExpectation(lambda_set_index))
             };
 
@@ -1400,14 +1418,14 @@ pub fn constrain_expr(
             let opaque_type = Type::Variable(*opaque_var);
 
             let expected_function_type = {
-                let fn_type = constraints.push_type(
-                    types,
-                    types.from_old_type(&Type::Function(
+                let fn_type = {
+                    let typ = types.from_old_type(&Type::Function(
                         vec![argument_type],
                         Box::new(closure_type),
                         Box::new(opaque_type),
-                    )),
-                );
+                    ));
+                    constraints.push_type(types, typ)
+                };
                 constraints.push_expected_type(NoExpectation(fn_type))
             };
 
@@ -1699,11 +1717,11 @@ fn constrain_function_def(
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
 
-            let ret_type_index = constraints.push_type(
-                types,
+            let ret_type_index = {
                 // TODO(types-soa) get rid of clone
-                types.clone_with_variable_substitutions(ret_type, &Default::default()),
-            );
+                let typ = types.clone_with_variable_substitutions(ret_type, &Default::default());
+                constraints.push_type(types, typ)
+            };
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -1790,14 +1808,14 @@ fn constrain_function_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let signature_closure_type = {
-                let signature_closure_type_index = constraints.push_type(
-                    types,
+                let signature_closure_type_index = {
                     // TODO(types-soa) get rid of clone
-                    types.clone_with_variable_substitutions(
+                    let typ = types.clone_with_variable_substitutions(
                         signature_closure_type,
                         &Default::default(),
-                    ),
-                );
+                    );
+                    constraints.push_type(types, typ)
+                };
                 constraints.push_expected_type(Expected::FromAnnotation(
                     loc_pattern,
                     arity,
@@ -2472,11 +2490,11 @@ fn constrain_typed_def(
         rigids: ftv,
     };
 
-    let signature_index = constraints.push_type(
-        types,
+    let signature_index = {
         // TODO(types-soa) get rid of clone
-        types.clone_with_variable_substitutions(signature.clone(), &Default::default()),
-    );
+        let typ = types.clone_with_variable_substitutions(signature.clone(), &Default::default());
+        constraints.push_type(types, typ)
+    };
 
     let annotation_expected = constraints.push_expected_type(FromAnnotation(
         def.loc_pattern.clone(),
@@ -2530,11 +2548,11 @@ fn constrain_typed_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let ret_type_index = constraints.push_type(
-                types,
+            let ret_type_index = {
                 // TODO(types-soa) get rid of clone
-                types.clone_with_variable_substitutions(ret_type, &Default::default()),
-            );
+                let typ = types.clone_with_variable_substitutions(ret_type, &Default::default());
+                constraints.push_type(types, typ)
+            };
 
             vars.push(ret_var);
             vars.push(closure_var);
@@ -2584,14 +2602,14 @@ fn constrain_typed_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let signature_closure_type = {
-                let signature_closure_type_index = constraints.push_type(
-                    types,
+                let signature_closure_type_index = {
                     // TODO(types-soa) get rid of clone
-                    types.clone_with_variable_substitutions(
+                    let typ = types.clone_with_variable_substitutions(
                         signature_closure_type,
                         &Default::default(),
-                    ),
-                );
+                    );
+                    constraints.push_type(types, typ)
+                };
                 constraints.push_expected_type(Expected::FromAnnotation(
                     def.loc_pattern.clone(),
                     arity,
@@ -2685,11 +2703,11 @@ fn constrain_typed_function_arguments(
     let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
-        let ann_index = constraints.push_type(
-            types,
+        let ann_index = {
             // TODO(types-soa) remove clone
-            types.clone_with_variable_substitutions(ann.clone(), &Default::default()),
-        );
+            let typ = types.clone_with_variable_substitutions(ann.clone(), &Default::default());
+            constraints.push_type(types, typ)
+        };
 
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
@@ -3087,14 +3105,14 @@ fn constrain_closure_size(
 
     let finalizer = {
         // pick a more efficient representation if we don't actually capture anything
-        let closure_type = constraints.push_type(
-            types,
-            types.from_old_type(&Type::ClosureTag {
+        let closure_type = {
+            let typ = types.from_old_type(&Type::ClosureTag {
                 name,
                 captures: captured_types,
                 ambient_function,
-            }),
-        );
+            });
+            constraints.push_type(types, typ)
+        };
         let clos_type = constraints.push_expected_type(NoExpectation(closure_type));
         constraints.equal_types_var(closure_var, clos_type, Category::ClosureSize, region)
     };
@@ -3163,7 +3181,10 @@ fn instantiate_rigids(
     // Skipping all of this cloning here would be neat!
     let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
     if let Pattern::Identifier(symbol) = loc_pattern.value {
-        let annotation_index = constraints.push_type(types, types.from_old_type(&annotation));
+        let annotation_index = {
+            let typ = types.from_old_type(&annotation);
+            constraints.push_type(types, typ)
+        };
         headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
     } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
         types,
@@ -3369,10 +3390,11 @@ fn constraint_recursive_function(
                     // This doesn't yet work; needs investigation as to why.
                     // My guess is that when types SoA lands, this might just resolve itself, since
                     // types will be composed from variables to begin with.
-                    value: constraints.push_type(
-                        types,
-                        types.clone_with_variable_substitutions(signature, &Default::default()),
-                    ),
+                    value: {
+                        let typ =
+                            types.clone_with_variable_substitutions(signature, &Default::default());
+                        constraints.push_type(types, typ)
+                    },
                 },
             );
 
@@ -3388,7 +3410,7 @@ fn constraint_recursive_function(
             );
 
             let pattern_types = types
-                .from_old_type_slice(function_def.arguments.iter().map(|a| &Type::Variable(a.0)));
+                .from_old_type_slice(function_def.arguments.iter().map(|a| Type::Variable(a.0)));
 
             let closure_constraint = constrain_closure_size(
                 types,
@@ -3401,16 +3423,14 @@ fn constraint_recursive_function(
                 &mut vars,
             );
 
-            let fn_type = constraints.push_type(
-                types,
-                types.function(
-                    pattern_types,
-                    // TODO(types-soa) optimize for Variable
-                    types.from_old_type(&Type::Variable(closure_var)),
-                    // TODO(types-soa) remove clone
-                    types.clone_with_variable_substitutions(ret_type, &Default::default()),
-                ),
-            );
+            let fn_type = {
+                // TODO(types-soa) optimize for Variable
+                let lambda_set = types.from_old_type(&Type::Variable(closure_var));
+                // TODO(types-soa) remove clone
+                let ret = types.clone_with_variable_substitutions(ret_type, &Default::default());
+                let typ = types.function(pattern_types, lambda_set, ret);
+                constraints.push_type(types, typ)
+            };
 
             let expr_con = {
                 let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
@@ -3545,14 +3565,14 @@ pub fn rec_defs_help_simple(
 
                         hybrid_and_flex_info.vars.extend(new_infer_variables);
 
-                        let signature_index = constraints.push_type(
-                            types,
+                        let signature_index = {
                             // TODO(types-soa) remove clone
-                            types.clone_with_variable_substitutions(
+                            let typ = types.clone_with_variable_substitutions(
                                 signature.clone(),
                                 &Default::default(),
-                            ),
-                        );
+                            );
+                            constraints.push_type(types, typ)
+                        };
 
                         let annotation_expected = FromAnnotation(
                             loc_pattern.clone(),
@@ -3771,11 +3791,14 @@ fn rec_defs_help(
 
                 hybrid_and_flex_info.vars.extend(new_infer_variables);
 
-                let signature_index = constraints.push_type(
-                    types,
-                    // TODO(types-soa) remove clone
-                    types.clone_with_variable_substitutions(signature.clone(), &Default::default()),
-                );
+                let signature_index = {
+                    let typ = types
+                        .clone_with_variable_substitutions(signature.clone(), &Default::default());
+                    constraints.push_type(
+                        types, // TODO(types-soa) remove clone
+                        typ,
+                    )
+                };
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
@@ -3823,11 +3846,14 @@ fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let ret_type_index = constraints.push_type(
-                            types,
-                            // TODO(types-soa) remove clone
-                            types.clone_with_variable_substitutions(ret_type, &Default::default()),
-                        );
+                        let ret_type_index = {
+                            let typ = types
+                                .clone_with_variable_substitutions(ret_type, &Default::default());
+                            constraints.push_type(
+                                types, // TODO(types-soa) remove clone
+                                typ,
+                            )
+                        };
 
                         vars.push(ret_var);
                         vars.push(closure_var);
@@ -3843,7 +3869,7 @@ fn rec_defs_help(
                             arg_types,
                         );
                         let pattern_types = types
-                            .from_old_type_slice(arguments.iter().map(|a| &Type::Variable(a.0)));
+                            .from_old_type_slice(arguments.iter().map(|a| Type::Variable(a.0)));
 
                         let closure_constraint = constrain_closure_size(
                             types,
@@ -3856,18 +3882,14 @@ fn rec_defs_help(
                             &mut vars,
                         );
 
-                        let fn_type_index = constraints.push_type(
-                            types,
-                            types.function(
-                                pattern_types,
-                                types.from_old_type(&Type::Variable(closure_var)),
-                                // TODO(types-soa) remove clone
-                                types.clone_with_variable_substitutions(
-                                    ret_type,
-                                    &Default::default(),
-                                ),
-                            ),
-                        );
+                        let fn_type_index = {
+                            let lambda_set = types.from_old_type(&Type::Variable(closure_var));
+                            // TODO(types-soa) remove clone
+                            let ret = types
+                                .clone_with_variable_substitutions(ret_type, &Default::default());
+                            let typ = types.function(pattern_types, lambda_set, ret);
+                            constraints.push_type(types, typ)
+                        };
                         let body_type =
                             constraints.push_expected_type(NoExpectation(ret_type_index));
                         let expr_con = constrain_expr(

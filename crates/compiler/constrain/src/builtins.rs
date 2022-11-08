@@ -56,9 +56,10 @@ pub fn add_numeric_bound_constr(
         }
         NumericBound::Range(range) => {
             let precision_type = constraints.push_variable(precision_var);
-            let expected = Expected::NoExpectation(
-                constraints.push_type(types, types.from_old_type(&RangedNumber(range))),
-            );
+            let expected = {
+                let typ = types.from_old_type(&RangedNumber(range));
+                Expected::NoExpectation(constraints.push_type(types, typ))
+            };
             let expected_index = constraints.push_expected_type(expected);
             let constr = constraints.equal_types(precision_type, expected_index, category, region);
 
@@ -94,11 +95,14 @@ pub fn int_literal(
         Category::Num,
     );
 
-    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
-    let int_precision_type = constraints.push_type(
-        types,
-        types.from_old_type(&num_int(Type::Variable(precision_var))),
-    );
+    let num_type_index = {
+        let typ = types.from_old_type(&num_type);
+        constraints.push_type(types, typ)
+    };
+    let int_precision_type = {
+        let typ = types.from_old_type(&num_int(Type::Variable(precision_var)));
+        constraints.push_type(types, typ)
+    };
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, int_precision_type, region));
@@ -137,11 +141,14 @@ pub fn single_quote_literal(
         Category::Character,
     );
 
-    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
-    let int_precision_type = constraints.push_type(
-        types,
-        types.from_old_type(&num_int(Type::Variable(precision_var))),
-    );
+    let num_type_index = {
+        let typ = types.from_old_type(&num_type);
+        constraints.push_type(types, typ)
+    };
+    let int_precision_type = {
+        let typ = types.from_old_type(&num_int(Type::Variable(precision_var)));
+        constraints.push_type(types, typ)
+    };
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, int_precision_type, region));
@@ -184,11 +191,14 @@ pub fn float_literal(
         Category::Frac,
     );
 
-    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
-    let float_precision_type = constraints.push_type(
-        types,
-        types.from_old_type(&num_float(Type::Variable(precision_var))),
-    );
+    let num_type_index = {
+        let typ = types.from_old_type(&num_type);
+        constraints.push_type(types, typ)
+    };
+    let float_precision_type = {
+        let typ = types.from_old_type(&num_float(Type::Variable(precision_var)));
+        constraints.push_type(types, typ)
+    };
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, float_precision_type, region));
@@ -223,7 +233,10 @@ pub fn num_literal(
         Category::Num,
     );
 
-    let type_index = constraints.push_type(types, types.from_old_type(&num_type));
+    let type_index = {
+        let typ = types.from_old_type(&num_type);
+        constraints.push_type(types, typ)
+    };
     constrs.extend([constraints.equal_types(type_index, expected, Category::Num, region)]);
 
     let and_constraint = constraints.and_constraint(constrs);

@@ -4308,7 +4308,7 @@ pub fn add_imports(
                     };
 
                     let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
-                    let copied_import_index = constraints.push_type(Type::Variable(copied_import.variable));
+                    let copied_import_index = constraints.push_variable(copied_import.variable);
 
                     def_types.push((
                         $symbol,
@@ -4343,7 +4343,7 @@ pub fn add_imports(
     if my_module == ModuleId::NUM {
         // Num needs List.len, but List imports Num.
         let list_len_type_var = synth_list_len_type(subs);
-        let list_len_type_index = constraints.push_type(Type::Variable(list_len_type_var));
+        let list_len_type_index = constraints.push_variable(list_len_type_var);
         def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
         import_variables.push(list_len_type_var);
     }
@@ -4757,6 +4757,7 @@ fn canonicalize_and_constrain<'a>(
         roc_can::constraint::Constraint::True
     } else {
         constrain_module(
+            &mut types,
             &mut constraints,
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,

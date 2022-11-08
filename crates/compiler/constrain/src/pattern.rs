@@ -65,7 +65,7 @@ fn headers_from_annotation_help(
             ident: symbol,
             specializes: _,
         } => {
-            let annotation_index = constraints.push_type(types, types.from_old_type(&annotation.value));
+            let annotation_index = { let typ = types.from_old_type(&annotation.value); constraints.push_type(types, typ) };
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
@@ -93,7 +93,7 @@ fn headers_from_annotation_help(
                     // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
                     // the type of `x` within the binding itself is the same.
                     if let Some(field_type) = fields.get(&destruct.label) {
-                        let field_type_index = constraints.push_type(types, types.from_old_type(&field_type.as_inner().clone()));
+                        let field_type_index = { let typ = types.from_old_type(&field_type.as_inner().clone()); constraints.push_type(types, typ) };
                         headers.insert(
                             destruct.symbol,
                             Loc::at(annotation.region, field_type_index),
@@ -165,7 +165,7 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                let annotation_index = constraints.push_type(types, types.from_old_type( &annotation.value ));
+                let annotation_index = { let typ = types.from_old_type( &annotation.value ); constraints.push_type(types, typ) };
                 let typ = Loc::at(annotation.region, annotation_index);
                 headers.insert(*opaque, typ);
 
@@ -266,7 +266,10 @@ pub fn constrain_pattern(
                 region,
                 Category::Num,
             );
-            let num_type = constraints.push_type(types, types.from_old_type(&num_type));
+            let num_type = {
+                let typ = types.from_old_type(&num_type);
+                constraints.push_type(types, typ)
+            };
 
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
@@ -289,13 +292,16 @@ pub fn constrain_pattern(
                 region,
                 Category::Int,
             );
-            let num_type = constraints.push_type(types, types.from_old_type(&num_type));
+            let num_type = {
+                let typ = types.from_old_type(&num_type);
+                constraints.push_type(types, typ)
+            };
 
             // Link the free num var with the int var and our expectation.
-            let int_type = constraints.push_type(
-                types,
-                types.from_old_type(&builtins::num_int(Type::Variable(precision_var))),
-            );
+            let int_type = {
+                let typ = types.from_old_type(&builtins::num_int(Type::Variable(precision_var)));
+                constraints.push_type(types, typ)
+            };
 
             state.constraints.push({
                 let expected_index =
@@ -325,13 +331,16 @@ pub fn constrain_pattern(
                 region,
                 Category::Frac,
             );
-            let num_type_index = constraints.push_type(types, types.from_old_type(&num_type)); // NOTE: check me if something breaks!
+            let num_type_index = {
+                let typ = types.from_old_type(&num_type);
+                constraints.push_type(types, typ)
+            }; // NOTE: check me if something breaks!
 
             // Link the free num var with the float var and our expectation.
-            let float_type = constraints.push_type(
-                types,
-                types.from_old_type(&builtins::num_float(Type::Variable(precision_var))),
-            );
+            let float_type = {
+                let typ = types.from_old_type(&builtins::num_float(Type::Variable(precision_var)));
+                constraints.push_type(types, typ)
+            };
 
             state.constraints.push({
                 let expected_index =
@@ -350,7 +359,10 @@ pub fn constrain_pattern(
 
         StrLiteral(_) => {
             // TODO(types-soa) use Types::STR
-            let str_type = constraints.push_type(types, types.from_old_type(&builtins::str_type()));
+            let str_type = {
+                let typ = types.from_old_type(&builtins::str_type());
+                constraints.push_type(types, typ)
+            };
             state.constraints.push(constraints.equal_pattern_types(
                 str_type,
                 expected,
@@ -373,13 +385,16 @@ pub fn constrain_pattern(
                 Category::Int,
             );
 
-            let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
+            let num_type_index = {
+                let typ = types.from_old_type(&num_type);
+                constraints.push_type(types, typ)
+            };
 
             // Link the free num var with the int var and our expectation.
-            let int_type = constraints.push_type(
-                types,
-                types.from_old_type(&builtins::num_int(Type::Variable(precision_var))),
-            );
+            let int_type = {
+                let typ = types.from_old_type(&builtins::num_int(Type::Variable(precision_var)));
+                constraints.push_type(types, typ)
+            };
 
             state.constraints.push({
                 let expected_index =
@@ -426,7 +441,7 @@ pub fn constrain_pattern(
                 let pat_type = Type::Variable(*var);
                 let pat_type_index =
                     // TODO(types-soa) use variable here instead
-                    constraints.push_type(types, types.from_old_type(&pat_type.clone()));
+                    { let typ = types.from_old_type(&pat_type.clone()); constraints.push_type(types, typ) };
                 let expected =
                     constraints.push_pat_expected_type(PExpected::NoExpectation(pat_type_index));
 
@@ -513,13 +528,13 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Record(
+            let record_type = {
+                let typ = types.from_old_type(&Type::Record(
                     field_types,
                     TypeExtension::from_type(ext_type),
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
 
             let whole_var_index = constraints.push_variable(*whole_var);
             let expected_record =
@@ -572,14 +587,14 @@ pub fn constrain_pattern(
             }
 
             let list_var_index = constraints.push_variable(*list_var);
-            let solved_list = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Apply(
+            let solved_list = {
+                let typ = types.from_old_type(&Type::Apply(
                     Symbol::LIST_LIST,
                     vec![Loc::at(region, Type::Variable(*elem_var))],
                     region,
-                )),
-            );
+                ));
+                constraints.push_type(types, typ)
+            };
             let store_solved_list = constraints.store(solved_list, *list_var, file!(), line!());
 
             let expected_constraint = constraints.pattern_presence(
@@ -661,9 +676,8 @@ pub fn constrain_pattern(
             let arg_pattern_type = Type::Variable(*arg_pattern_var);
             let arg_pattern_type_index = constraints.push_variable(*arg_pattern_var);
 
-            let opaque_type = constraints.push_type(
-                types,
-                types.from_old_type(&Type::Alias {
+            let opaque_type = {
+                let typ = types.from_old_type(&Type::Alias {
                     symbol: *opaque,
                     type_arguments: type_arguments
                         .iter()
@@ -676,8 +690,9 @@ pub fn constrain_pattern(
                     infer_ext_in_output_types: vec![],
                     actual: Box::new(arg_pattern_type.clone()),
                     kind: AliasKind::Opaque,
-                }),
-            );
+                });
+                constraints.push_type(types, typ)
+            };
 
             // First, add a constraint for the argument "who"
             let arg_pattern_expected = constraints
@@ -716,13 +731,15 @@ pub fn constrain_pattern(
             // This must **always** be a presence constraint, that is enforcing
             // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
-            let arg_pattern_type = constraints.push_type(
-                types,
+            let arg_pattern_type = {
                 // TODO(types-soa) this is just a variable
-                types.from_old_type(&arg_pattern_type),
-            );
-            let specialized_type_index =
-                constraints.push_type(types, types.from_old_type(&(**specialized_def_type)));
+                let typ = types.from_old_type(&arg_pattern_type);
+                constraints.push_type(types, typ)
+            };
+            let specialized_type_index = {
+                let typ = types.from_old_type(&(**specialized_def_type));
+                constraints.push_type(types, typ)
+            };
             let specialized_type_expected = constraints
                 .push_pat_expected_type(PExpected::NoExpectation(specialized_type_index));
 

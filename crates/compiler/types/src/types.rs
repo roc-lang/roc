@@ -375,7 +375,7 @@ pub struct AliasShared {
 }
 
 /// The tag (head constructor) of a canonical type stored in [Types].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TypeTag {
     EmptyRecord,
     EmptyTagUnion,
@@ -613,14 +613,17 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_old_type_slice<'a>(
+    pub fn from_old_type_slice<'a, B>(
         &mut self,
-        old: impl ExactSizeIterator<Item = &'a Type>,
-    ) -> Slice<TypeTag> {
+        old: impl ExactSizeIterator<Item = B>,
+    ) -> Slice<TypeTag>
+    where
+        B: std::borrow::Borrow<Type>,
+    {
         let slice = self.reserve_type_tags(old.len());
 
         for (index, argument) in slice.into_iter().zip(old) {
-            self.from_old_type_at(index, argument);
+            self.from_old_type_at(index, argument.borrow());
         }
 
         slice
