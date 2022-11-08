@@ -61,17 +61,6 @@ mod cli_run {
         PlainText(&'a str),
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct CliTest<'a> {
-        filename: &'a str,
-        executable_filename: &'a str,
-        stdin: &'a [&'a str],
-        arguments: &'a [Arg<'a>],
-        env: &'a [(&'a str, &'a str)],
-        expected_ending: &'a str,
-        use_valgrind: bool,
-    }
-
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(
             [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),

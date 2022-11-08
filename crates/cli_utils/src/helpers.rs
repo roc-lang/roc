@@ -31,7 +31,7 @@ where
 {
     let roc_binary_path = build_roc_bin_cached();
 
-    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+    run_roc_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
 }
 
 // If we don't already have a /target/release/roc, build it!
@@ -82,7 +82,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_roc_binary(), args, &[])
+    run_roc_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
@@ -129,16 +129,16 @@ pub fn strip_colors(str: &str) -> String {
         .replace(ANSI_STYLE_CODES.color_reset, "")
 }
 
-pub fn run_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
+pub fn run_roc_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin_and_env(path, args, stdin_vals, &[])
+    run_roc_with_stdin_and_env(path, args, stdin_vals, &[])
 }
 
-pub fn run_with_stdin_and_env<I, S>(
-    path: &Path,
+pub fn run_roc_with_stdin_and_env<I, S>(
+    roc_path: &Path,
     args: I,
     stdin_vals: &[&str],
     extra_env: &[(&str, &str)],
@@ -147,46 +147,49 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut cmd = Command::new(path);
+    let mut roc_cmd = Command::new(roc_path);
 
     for arg in args {
-        cmd.arg(arg);
+        roc_cmd.arg(arg);
     }
 
     for (k, v) in extra_env {
-        cmd.env(k, v);
+        roc_cmd.env(k, v);
     }
 
-    let mut child = cmd
+    let roc_cmd_str = format!("{:?}", roc_cmd);
+
+    let mut roc_cmd_child = roc_cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
-            panic!(
-                "failed to execute compiled binary {} in CLI test: {err}",
-                path.to_string_lossy()
-            )
+            panic!("Failed to execute command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
         });
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
         for stdin_str in stdin_vals.iter() {
             stdin
                 .write_all(stdin_str.as_bytes())
-                .expect("Failed to write to stdin");
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to write to stdin for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",
+                    )
+                });
         }
     }
 
-    let output = child
-        .wait_with_output()
-        .expect("failed to get output for compiled binary in CLI test");
+    let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
+        panic!("Failed to get output for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
+    });
 
     Out {
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-        status: output.status,
+        stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
+        stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
+        status: roc_cmd_output.status,
     }
 }
 
