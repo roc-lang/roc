@@ -422,7 +422,7 @@ pub enum TypeTag {
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
     /// The problem is at the index of the type tag
-    Erroneous,
+    Error,
 
     // TypeExtension is implicit in the type slice
     // it is length zero for closed, length 1 for open
@@ -477,7 +477,6 @@ pub struct Types {
 
     // these tag types are relatively rare, and so we store them in a way that reduces space, at
     // the cost of slightly higher lookup time
-    problems: VecMap<Index<TypeTag>, Problem>,
     single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
 }
 
@@ -502,7 +501,6 @@ impl Types {
             field_names: Default::default(),
             type_arg_abilities: Default::default(),
             aliases: Default::default(),
-            problems: Default::default(),
             single_tag_union_tag_names: Default::default(),
         }
     }
@@ -516,11 +514,6 @@ impl Types {
         self.single_tag_union_tag_names
             .get(typ)
             .expect("typ is not a single tag union")
-    }
-
-    #[track_caller]
-    pub fn get_problem(&self, typ: &Index<TypeTag>) -> &Problem {
-        self.problems.get(typ).expect("typ is not an error")
     }
 
     pub fn record_fields_slices(
@@ -938,10 +931,7 @@ impl Types {
             Type::RangedNumber(range) => {
                 self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
             }
-            Type::Erroneous(problem) => {
-                self.problems.insert(index, problem.clone());
-                self.set_type_tag(index, TypeTag::Erroneous, Slice::default())
-            }
+            Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
         }
     }
 
@@ -1198,11 +1188,7 @@ impl Types {
                     (Record(new_record_fields), new_ext_slice)
                 }
                 RangedNumber(range) => (RangedNumber(range), Default::default()),
-                Erroneous => {
-                    self.problems
-                        .insert(dest_index, self.get_problem(&typ).clone());
-                    (Erroneous, Default::default())
-                }
+                Error => (Error, Default::default()),
             };
 
             self.set_type_tag(dest_index, tag, args);
