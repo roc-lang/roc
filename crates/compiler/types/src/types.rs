@@ -2516,6 +2516,7 @@ impl Type {
                         *self = alias;
                     } else {
                         if args.len() != alias.type_variables.len() {
+                            // We will have already reported an error during canonicalization.
                             *self = Type::Erroneous;
                             return;
                         }
