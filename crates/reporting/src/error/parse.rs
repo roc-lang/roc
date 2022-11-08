@@ -1384,7 +1384,7 @@ fn to_when_report<'a>(
         EWhen::IfToken(_pos) => unreachable!("the if-token is optional"),
         EWhen::When(_pos) => unreachable!("another branch would be taken"),
 
-        EWhen::Is(pos) | EWhen::IndentIs(pos) => to_unfinished_when_report(
+        EWhen::Is(pos) => to_unfinished_when_report(
             alloc,
             lines,
             filename,
