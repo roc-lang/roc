@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, Polarity, Problem, RecordField,
-    RecordFieldsError, TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorType, Polarity, RecordField, RecordFieldsError,
+    TypeExt, Uls,
 };
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
@@ -20,10 +20,6 @@ roc_error_macros::assert_sizeof_all!(Descriptor, 5 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(UnionTags, 12);
 roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
-
-roc_error_macros::assert_sizeof_aarch64!(Problem, 5 * 8);
-roc_error_macros::assert_sizeof_wasm!(Problem, 32);
-roc_error_macros::assert_sizeof_default!(Problem, 6 * 8);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);

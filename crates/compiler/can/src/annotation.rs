@@ -10,7 +10,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
     name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType,
-    OptAbleVar, Problem, RecordField, Type, TypeExtension,
+    OptAbleVar, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]

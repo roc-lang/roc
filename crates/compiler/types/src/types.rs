@@ -3301,22 +3301,6 @@ impl Alias {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
-pub enum Problem {
-    CanonicalizationProblem,
-    CircularType(Symbol, Box<ErrorType>, Region),
-    Shadowed(Region, Loc<Ident>),
-    BadTypeArguments {
-        symbol: Symbol,
-        region: Region,
-        type_got: u8,
-        alias_needs: u8,
-        alias_kind: AliasKind,
-    },
-    InvalidModule,
-    HasClauseIsNotAbility(Region),
-}
-
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Mismatch {
     TypeMismatch,
