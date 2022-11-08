@@ -1064,7 +1064,7 @@ fn canonicalize_has_clause(
         let shadow = Loc::at(region, var_name_ident);
         env.problem(roc_problem::can::Problem::Shadowing {
             original_region: shadowing.first_seen(),
-            shadow: shadow.clone(),
+            shadow,
             kind: ShadowKind::Variable,
         });
         return Err(Type::Error);

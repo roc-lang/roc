@@ -10,7 +10,6 @@ use crate::types::{
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use std::fmt::Write;
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";

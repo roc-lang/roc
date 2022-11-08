@@ -8,7 +8,7 @@ use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};

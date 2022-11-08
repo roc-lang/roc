@@ -6,9 +6,9 @@ use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
-use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
+use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{LineInfo, Loc, Region};
+use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
     Unfulfilled,
@@ -22,7 +22,6 @@ use roc_types::types::{
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
-const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 const OPAQUE_NUM_SYMBOLS: &[Symbol] = &[
@@ -393,26 +392,6 @@ fn underivable_hint<'b>(
             }
         },
     }
-}
-
-fn report_shadowing<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    original_region: Region,
-    shadow: Loc<Ident>,
-) -> RocDocBuilder<'b> {
-    let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
-
-    alloc.stack([
-        alloc
-            .text("The ")
-            .append(alloc.ident(shadow.value))
-            .append(alloc.reflow(" name is first defined here:")),
-        alloc.region(lines.convert_region(original_region)),
-        alloc.reflow("But then it's defined a second time here:"),
-        alloc.region(lines.convert_region(shadow.region)),
-        alloc.reflow(line),
-    ])
 }
 
 pub fn cyclic_alias<'b>(

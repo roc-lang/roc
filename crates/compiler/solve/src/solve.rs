@@ -29,8 +29,8 @@ use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
-    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    OptVariable, Rank, RecordFields, Subs, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
@@ -2928,7 +2928,7 @@ fn type_to_variable<'a>(
 
                 result
             }
-            Erroneous => {
+            Error => {
                 let content = Content::Error;
 
                 register_with_known_var(subs, destination, rank, pools, content)
