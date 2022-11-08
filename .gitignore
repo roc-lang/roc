@@ -39,7 +39,7 @@ editor/benches/resources/50000_lines.roc
 editor/benches/resources/500_lines.roc
 
 # file editor creates when no arg is passed
-new-roc-project
+roc-projects
 
 # rust cache (sccache folder)
 sccache_dir

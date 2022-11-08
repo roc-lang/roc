@@ -1,3 +1,4 @@
+//! Provides the WASM backend to generate Roc binaries.
 mod backend;
 mod layout;
 mod low_level;

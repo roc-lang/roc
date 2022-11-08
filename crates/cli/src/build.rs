@@ -1,15 +1,13 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
-    program::{self, Problems},
+    program::{self, CodeGenOptions, Problems},
 };
 use roc_builtins::bitcode;
-use roc_collections::VecMap;
 use roc_load::{
-    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
+    EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
 };
-use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -30,12 +28,11 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     .unwrap()
 }
 
-pub struct BuiltFile {
+pub struct BuiltFile<'a> {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
-    pub expectations: VecMap<ModuleId, Expectations>,
-    pub interns: Interns,
+    pub expect_metadata: ExpectMetadata<'a>,
 }
 
 pub enum BuildOrdering {
@@ -60,8 +57,7 @@ pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     app_module_path: PathBuf,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
@@ -69,7 +65,7 @@ pub fn build_file<'a>(
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
     order: BuildOrdering,
-) -> Result<BuiltFile, BuildFileError<'a>> {
+) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
 
@@ -121,7 +117,7 @@ pub fn build_file<'a>(
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
-                if matches!(opt_level, OptLevel::Development) {
+                if matches!(code_gen_options.opt_level, OptLevel::Development) {
                     ("wasm", "wasm", Some("wasm"))
                 } else {
                     ("zig", "bc", Some("wasm"))
@@ -180,7 +176,7 @@ pub fn build_file<'a>(
     };
 
     let rebuild_thread = spawn_rebuild_thread(
-        opt_level,
+        code_gen_options.opt_level,
         linking_strategy,
         prebuilt,
         host_input_path.clone(),
@@ -241,10 +237,7 @@ pub fn build_file<'a>(
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
     let problems = program::report_problems_monomorphized(&mut loaded);
-    let expectations = std::mem::take(&mut loaded.expectations);
     let loaded = loaded;
-
-    let interns = loaded.interns.clone();
 
     enum HostRebuildTiming {
         BeforeApp(u128),
@@ -266,13 +259,12 @@ pub fn build_file<'a>(
         HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
     };
 
-    let (roc_app_bytes, code_gen_timing) = program::gen_from_mono_module(
+    let (roc_app_bytes, code_gen_timing, expect_metadata) = program::gen_from_mono_module(
         arena,
         loaded,
         &app_module_path,
         target,
-        opt_level,
-        emit_debug_info,
+        code_gen_options,
         &preprocessed_host_path,
         wasm_dev_stack_bytes,
     );
@@ -351,7 +343,7 @@ pub fn build_file<'a>(
 
             let str_host_obj_path = bitcode::get_builtins_host_obj_path();
 
-            if matches!(opt_level, OptLevel::Development) {
+            if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
                 inputs.push(&str_host_obj_path);
             }
 
@@ -388,8 +380,7 @@ pub fn build_file<'a>(
         binary_path,
         problems,
         total_time,
-        interns,
-        expectations,
+        expect_metadata,
     })
 }
 

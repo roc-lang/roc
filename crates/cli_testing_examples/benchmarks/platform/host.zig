@@ -1,6 +1,6 @@
 const std = @import("std");
-const str = @import("str");
 const builtin = @import("builtin");
+const str = @import("str");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -85,9 +85,39 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
+
+fn roc_getppid() callconv(.C) c_int {
+    return getppid();
+}
+
+fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
+    return kill(pid, sig);
+}
+fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return shm_open(name, oflag, mode);
+}
+fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
+comptime {
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+        @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+    }
+}
+
 const Unit = extern struct {};
 
-pub export fn main() callconv(.C) u8 {
+pub fn main() !u8 {
+    const stderr = std.io.getStdErr().writer();
+
     // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
     const size = std.math.max(@intCast(usize, roc__mainForHost_size()), 8);
     const raw_output = roc_alloc(@intCast(usize, size), @alignOf(u64)).?;
@@ -108,7 +138,6 @@ pub export fn main() callconv(.C) u8 {
     const nanos = timer.read();
     const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
-    const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;

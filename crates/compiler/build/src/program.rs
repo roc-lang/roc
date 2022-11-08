@@ -3,7 +3,7 @@ use roc_error_macros::internal_error;
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_load::{EntryPoint, LoadedModule, MonomorphizedModule};
+use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -174,47 +174,60 @@ impl Deref for CodeObject {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CodeGenBackend {
+    Assembly,
+    Llvm,
+    Wasm,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodeGenOptions {
+    pub backend: CodeGenBackend,
+    pub opt_level: OptLevel,
+    pub emit_debug_info: bool,
+}
+
+type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
+
 #[allow(clippy::too_many_arguments)]
-pub fn gen_from_mono_module(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+pub fn gen_from_mono_module<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> (CodeObject, CodeGenTiming) {
-    match opt_level {
-        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            roc_file_path,
-            target,
-            opt_level,
-            emit_debug_info,
-        ),
-        OptLevel::Development => gen_from_mono_module_dev(
+) -> GenFromMono<'a> {
+    match code_gen_options.backend {
+        CodeGenBackend::Assembly => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
+        CodeGenBackend::Llvm => {
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
+        CodeGenBackend::Wasm => {
+            // emit wasm via the llvm backend
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
     }
 }
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
-fn gen_from_mono_module_llvm(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_llvm<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
-) -> (CodeObject, CodeGenTiming) {
+    code_gen_options: CodeGenOptions,
+) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::context::Context;
@@ -263,6 +276,12 @@ fn gen_from_mono_module_llvm(
         }
     }
 
+    let CodeGenOptions {
+        backend: _,
+        opt_level,
+        emit_debug_info,
+    } = code_gen_options;
+
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -278,7 +297,11 @@ fn gen_from_mono_module_llvm(
         interns: loaded.interns,
         module,
         target_info,
-        mode: LlvmBackendMode::Binary,
+        mode: match opt_level {
+            OptLevel::Development => LlvmBackendMode::BinaryDev,
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        },
+
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
@@ -430,17 +453,22 @@ fn gen_from_mono_module_llvm(
     (
         CodeObject::MemoryBuffer(memory_buffer),
         CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns: env.interns,
+            layout_interner: loaded.layout_interner,
+            expectations: loaded.expectations,
+        },
     )
 }
 
 #[cfg(feature = "target-wasm32")]
-fn gen_from_mono_module_dev(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_dev<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> (CodeObject, CodeGenTiming) {
+) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
@@ -458,13 +486,13 @@ fn gen_from_mono_module_dev(
 }
 
 #[cfg(not(feature = "target-wasm32"))]
-pub fn gen_from_mono_module_dev(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+pub fn gen_from_mono_module_dev<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
     _host_input_path: &Path,
     _wasm_dev_stack_bytes: Option<u32>,
-) -> (CodeObject, CodeGenTiming) {
+) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
@@ -476,12 +504,12 @@ pub fn gen_from_mono_module_dev(
 }
 
 #[cfg(feature = "target-wasm32")]
-fn gen_from_mono_module_dev_wasm32(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_dev_wasm32<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> (CodeObject, CodeGenTiming) {
+) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
     let MonomorphizedModule {
         module_id,
@@ -530,14 +558,19 @@ fn gen_from_mono_module_dev_wasm32(
     (
         CodeObject::Vector(final_binary_bytes),
         CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns,
+            layout_interner,
+            expectations: loaded.expectations,
+        },
     )
 }
 
-fn gen_from_mono_module_dev_assembly(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_dev_assembly<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
-) -> (CodeObject, CodeGenTiming) {
+) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
 
     let lazy_literals = true;
@@ -569,5 +602,13 @@ fn gen_from_mono_module_dev_assembly(
         .write()
         .expect("failed to build output object");
 
-    (CodeObject::Vector(module_out), CodeGenTiming { code_gen })
+    (
+        CodeObject::Vector(module_out),
+        CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns,
+            layout_interner,
+            expectations: loaded.expectations,
+        },
+    )
 }

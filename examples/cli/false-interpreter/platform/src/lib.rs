@@ -2,7 +2,7 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
 use libc;
 use roc_std::{RocList, RocStr};
 use std::env;
@@ -72,6 +72,41 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
     libc::memset(dst, c, n)
 }
 
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
+    libc::getppid()
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_mmap(
+    addr: *mut libc::c_void,
+    len: libc::size_t,
+    prot: libc::c_int,
+    flags: libc::c_int,
+    fd: libc::c_int,
+    offset: libc::off_t,
+) -> *mut libc::c_void {
+    libc::mmap(addr, len, prot, flags, fd, offset)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_shm_open(
+    name: *const libc::c_char,
+    oflag: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    libc::shm_open(name, oflag, mode as libc::c_uint)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> libc::c_int {
+    libc::kill(pid, sig)
+}
+
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let arg = env::args()
@@ -122,9 +157,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_getLine() -> RocStr {
-    use std::io::{self, BufRead};
-
-    let stdin = io::stdin();
+    let stdin = std::io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
     RocStr::from(line1.as_str())
@@ -132,11 +165,10 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_getChar() -> u8 {
-    use std::io::{self, BufRead};
     let mut buffer = [0];
 
-    if let Err(ioerr) = io::stdin().lock().read_exact(&mut buffer[..]) {
-        if ioerr.kind() == io::ErrorKind::UnexpectedEof {
+    if let Err(ioerr) = std::io::stdin().lock().read_exact(&mut buffer[..]) {
+        if ioerr.kind() == std::io::ErrorKind::UnexpectedEof {
             u8::MAX
         } else {
             panic!("Got an unexpected error while reading char from stdin");

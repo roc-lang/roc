@@ -16,8 +16,8 @@ For convenience and consistency, there is only one way to format roc.
 "#;
 
 pub const HELLO_WORLD: &str = r#"
-app "test-app"
-    packages { pf: "platform/main.roc" }
+app "untitled-app"
+    packages { pf: "rust-platform/main.roc" }
     imports []
     provides [main] to pf
 
@@ -29,7 +29,7 @@ pub fn nr_hello_world_lines() -> usize {
     HELLO_WORLD.matches('\n').count() - 1
 }
 
-pub const PLATFORM_DIR_NAME: &str = "platform";
+pub const PLATFORM_DIR_NAME: &str = "rust-platform";
 pub const PLATFORM_FILE_NAME: &str = "main.roc";
 
 pub const PLATFORM_STR: &str = r#"

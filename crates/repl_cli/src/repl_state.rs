@@ -6,6 +6,7 @@ use roc_collections::MutSet;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
+use roc_parse::parser::Parser;
 use roc_parse::parser::{EClosure, EExpr, EPattern};
 use roc_parse::parser::{EWhen, Either};
 use roc_parse::state::State;
@@ -317,7 +318,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
         _ => {
             let src_bytes = line.as_bytes();
 
-            match roc_parse::expr::parse_loc_expr(arena, State::new(src_bytes), 0) {
+            match roc_parse::expr::loc_expr().parse(arena, State::new(src_bytes), 0) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _), _))
