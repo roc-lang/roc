@@ -19,17 +19,22 @@ noStyle = {
     modifiers : [],
 }
 
+
+style1 = {bg: Blue, fg:Magenta, modifiers : [BOLD, ITALIC]}
+style2 = {bg: Black, fg:LightRed, modifiers : [SLOWBLINK, UNDERLINED]}
+style3 = {bg: Cyan, fg:LightMagenta, modifiers : []}
+style4 = {bg: None, fg:Yellow, modifiers : []}
+
 render : Model -> List Elem
 render = \model -> [
-    # Text { text: model.text }
-    Paragraph ([[{text : "Ahoy there", style: noStyle},{text : model.text, style: noStyle}]]) {
-        title : "Hello World",
-        titleStyle : noStyle,
-        titleAlignment : Left,
-        borders : [ALL],
-        borderStyle : noStyle,
+    Paragraph ([[{text : "Ahoy there ", style: style1},{text : model.text, style: style2}]]) {
+        title : "My Roc Box",
+        titleStyle : style1,
+        titleAlignment : Center,
+        borders : [TOP,LEFT],
+        borderStyle : style3,
         borderType : Double,
-        style : noStyle,
+        style : style4,
     },
     ]
 

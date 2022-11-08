@@ -1,8 +1,12 @@
 use crate::{
     glue::{
         Bounds, 
-            // RocElem, RocElemTag, RocEvent
+        Elem,
     },
+};
+use roc_std::{
+    RocList,
+    // RocStr,
 };
 use std::{
     io, 
@@ -11,11 +15,12 @@ use std::{
     sync::mpsc::{RecvError,Receiver,Sender}
 };
 use tui::{
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     widgets::{
-        // Widget, 
+        Widget, 
         Block, 
         Borders, 
+        BorderType,
         List,
         Paragraph,
         ListItem,
@@ -30,8 +35,9 @@ use tui::{
         Span,
         Spans,
     },
-    layout::{Layout, Constraint, Direction, Alignment},
-    Terminal
+    layout::{Layout, Constraint, Direction, Alignment, Rect},
+    Terminal,
+    Frame,
 };
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, KeyEvent
@@ -45,6 +51,8 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) {
     
     use crate::roc;
     let (mut model, mut elems) = roc::init_and_render(window_bounds);
+
+    // dbg!(&elems);
 
     // macro_rules! update_and_rerender {
     //     ($event:expr) => {
@@ -71,56 +79,53 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) {
 
         let mut appReturn = false;
 
-        let blockText = unsafe {(*model).text.as_str()};
+        // let blockText = unsafe {(*model).text.as_str()};
 
-        terminal.draw(|f| {
-            let size = f.size();
+        // let mut frame = terminal.get_frame();
 
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Percentage(10),
-                        Constraint::Percentage(80),
-                        Constraint::Percentage(10)
-                    ].as_ref()
-                )
-                .split(size);
+        // frame.render_widget(
             
-            let text = vec![
-                    Spans::from(vec![
-                        Span::raw("First"),
-                        Span::styled("line",Style::default().add_modifier(Modifier::ITALIC)),
-                        Span::raw("asaf"),
-                    ]),
-                    Spans::from(Span::styled("Second line", Style::default().fg(Color::Red))),
-                ];
-            let paragrph = Paragraph::new(text)
-                    .block(Block::default().title("Paragraph").borders(Borders::ALL))
-                    .style(Style::default().fg(Color::White).bg(Color::Gray))
-                    .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: true });
+        // );
+        
+        // terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| buildWidgets(f, &elems)).unwrap();
 
-            let block = Block::default()
-                .title(blockText)
-                .style(Style::default().fg(Color::LightBlue))
-                .borders(Borders::ALL)
-                ;
+        // terminal.draw(|f| {
+        //     let size = f.size();
+
+        //     // let chunks = Layout::default()
+        //     //     .direction(Direction::Horizontal)
+        //     //     .margin(1)
+        //     //     .constraints(
+        //     //         [
+        //     //             Constraint::Percentage(10),
+        //     //             Constraint::Percentage(80),
+        //     //             Constraint::Percentage(10)
+        //     //         ].as_ref()
+        //     //     )
+        //     //     .split(size);
+
+        //     // f.render_widget(block, chunks[0]);
+        //     // f.render_widget(list, chunks[2]);
+        //     // f.render_widget(paragrph, chunks[1]);
+            
+            
+            
+        //     // let block = buildWidgets(&elems);
                 
-            let items = [ListItem::new("Item 1"), ListItem::new("Item 2"), ListItem::new("Item 3")];
-            let list = List::new(items)
-                .block(Block::default().title("List").borders(Borders::ALL))
-                .style(Style::default().fg(Color::Magenta))
-                .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-                .highlight_symbol(">>");
+        //     // let items = [ListItem::new("Item 1"), ListItem::new("Item 2"), ListItem::new("Item 3")];
+        //     // let list = List::new(items)
+        //     //     .block(Block::default().title("List").borders(Borders::ALL))
+        //     //     .style(Style::default().fg(Color::Magenta))
+        //     //     .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
+        //     //     .highlight_symbol(">>");
             
-            f.render_widget(block, chunks[0]);
-            f.render_widget(list, chunks[2]);
-            f.render_widget(paragrph, chunks[1]);
+            
 
 
-        }).unwrap();
+        // }).unwrap();
+
+
 
         let result = match events.next().unwrap() {
             InputEvent::Input(key) => {
@@ -181,5 +186,130 @@ impl Events {
     /// This function block the current thread.
     pub fn next(&self) -> Result<InputEvent, RecvError> {
         self.rx.recv()
+    }
+}
+
+fn buildWidgets<B: Backend>(f: &mut Frame<B>, elems : &RocList<Elem>){
+    let size = f.size();
+
+    for elem in elems {
+        renderParagraph(f, size, elem);
+    }
+}
+
+
+// Block::default()
+//     .title("My Block!!")
+//     .style(Style::default().fg(Color::LightBlue))
+//     .borders(Borders::ALL)
+
+// pub struct ParagraphConfig {
+//     pub borderStyle: Styles,
+//     pub borders: roc_std::RocList<BorderModifier>,
+//     pub style: Styles,
+//     pub title: roc_std::RocStr,
+//     pub titleStyle: Styles,
+//     pub borderType: BorderType,
+//     pub titleAlignment: Alignment,
+// }
+fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem){
+    
+    // For now there is only one Elem type will change later
+    // roc_std::RocList<roc_std::RocList<Span>>, ParagraphConfig
+    let (listSpans, config) = paragraph.as_Paragraph();
+
+    let mut text = Vec::with_capacity(listSpans.len());
+
+    for aSpans in listSpans {
+
+        let mut spansElements = Vec::with_capacity(aSpans.len());
+
+        for span in aSpans {
+            let s = Span::styled(span.text.as_str(),getStyle(&span.style));
+            spansElements.push(s);  
+        }
+
+        text.push(Spans::from(spansElements)); 
+    }
+
+    let title = config.title.as_str();
+    let borderType = getBorderType(config.borderType);
+
+    let p = Paragraph::new(text)
+    .block(Block::default().title(title).borders(Borders::ALL).border_type(borderType))
+    .style(getStyle(&config.style))
+    .alignment(getAlignment(config.titleAlignment))
+    .wrap(Wrap { trim: true });
+    f.render_widget(p,area);
+
+    
+}
+
+fn getStyle(rocStyle : &crate::glue::Styles) -> Style {
+    let mut style = Style::default();
+
+    if rocStyle.bg.discriminant() != crate::glue::DiscriminantColor::None {
+        style = style.bg(getColor(rocStyle.bg));
+    }
+
+    if rocStyle.fg.discriminant() != crate::glue::DiscriminantColor::None {
+        style = style.fg(getColor(rocStyle.fg));
+    }
+
+    let mut modifiers = Modifier::empty();
+    for modifier in &rocStyle.modifiers {
+        match modifier {
+            crate::glue::TextModifier::BOLD => {modifiers.insert(Modifier::BOLD);},
+            crate::glue::TextModifier::CROSSEDOUT => {modifiers.insert(Modifier::CROSSED_OUT);},
+            crate::glue::TextModifier::DIM => {modifiers.insert(Modifier::DIM);},
+            crate::glue::TextModifier::HIDDEN => {modifiers.insert(Modifier::HIDDEN);},
+            crate::glue::TextModifier::ITALIC => {modifiers.insert(Modifier::ITALIC);},
+            crate::glue::TextModifier::RAPIDBLINK => {modifiers.insert(Modifier::RAPID_BLINK);},
+            crate::glue::TextModifier::REVERSED => {modifiers.insert(Modifier::REVERSED);},
+            crate::glue::TextModifier::SLOWBLINK => {modifiers.insert(Modifier::SLOW_BLINK);},
+            crate::glue::TextModifier::UNDERLINED => {modifiers.insert(Modifier::UNDERLINED);},
+        }
+    }
+    style = style.add_modifier(modifiers);
+
+    style
+}
+
+fn getColor(color : crate::glue::Color) -> Color {
+    match color.discriminant() {
+        crate::glue::DiscriminantColor::None => Color::Reset,
+        crate::glue::DiscriminantColor::Black => Color::Black,
+        crate::glue::DiscriminantColor::Red => Color::Red,
+        crate::glue::DiscriminantColor::Green => Color::Green,
+        crate::glue::DiscriminantColor::Yellow => Color::Yellow,
+        crate::glue::DiscriminantColor::Blue => Color::Blue,
+        crate::glue::DiscriminantColor::Magenta => Color::Magenta,
+        crate::glue::DiscriminantColor::Cyan => Color::Cyan,
+        crate::glue::DiscriminantColor::Gray => Color::Gray,
+        crate::glue::DiscriminantColor::DarkGray => Color::DarkGray,
+        crate::glue::DiscriminantColor::LightRed => Color::LightRed,
+        crate::glue::DiscriminantColor::LightGreen => Color::LightGreen,
+        crate::glue::DiscriminantColor::LightYellow => Color::LightYellow,
+        crate::glue::DiscriminantColor::LightBlue => Color::LightBlue,
+        crate::glue::DiscriminantColor::LightMagenta => Color::LightMagenta,
+        crate::glue::DiscriminantColor::LightCyan => Color::LightCyan,
+        crate::glue::DiscriminantColor::White => Color::White,
+    }
+}
+
+fn getAlignment(rocAlignment : crate::glue::Alignment) -> Alignment {
+    match rocAlignment {
+        crate::glue::Alignment::Left => Alignment::Left,
+        crate::glue::Alignment::Center => Alignment::Center,
+        crate::glue::Alignment::Right => Alignment::Right,
+    }
+}
+
+fn getBorderType(rocBorderType : crate::glue::BorderType) -> BorderType {
+    match rocBorderType {
+        crate::glue::BorderType::Plain => BorderType::Plain,
+        crate::glue::BorderType::Rounded => BorderType::Rounded,
+        crate::glue::BorderType::Double => BorderType::Double,
+        crate::glue::BorderType::Thick => BorderType::Thick,
     }
 }
