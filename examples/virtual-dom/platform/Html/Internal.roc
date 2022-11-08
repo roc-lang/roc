@@ -44,6 +44,8 @@ App state initData : {
     wasmUrl : Str,
 }
 
+# TODO: maybe we should have two separate types for rendered and unrendered views?
+# App code would only ever deal with the unrendered type. Diff is between old rendered and new unrendered
 Html state : [
     None,
     Text MaybeJsIndex Str,
@@ -66,8 +68,8 @@ Attribute state : [
 ]
 
 MaybeRenderedHandler state : [
-    NotRendered (Handler state),
-    Rendered Nat,
+    NotRendered (Handler state), # Virtual DOM node, not yet rendered. Contains the lambda from app code.
+    Rendered Nat, # Index into a Roc List of lamdas. JS knows this index, and the List is refreshed with new lambdas on every render.
 ]
 
 CyclicStructureAccessor : [
@@ -481,6 +483,7 @@ indexNodes = \{ list, index }, node ->
 
 # -------------------------------
 #   VIRTUAL DOM DIFF
+#   Doesn't work yet!! (Nov 2022)
 # -------------------------------
 diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
 diffAndUpdateDom = \newHandlers, oldNode, newNode ->
@@ -521,53 +524,61 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
             # Just replace
             todo
 
-createSubTree : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
-createSubTree = \newHandlers, node ->
+# TODO: This function is not called because it doesn't work yet!
+# It recurses over a recursive data type with a type variable, accumulating effects along the way.
+# The type checker is not quite ready to deal with that yet, so some code is commented out.
+#
+# createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) },
+#     Html state
+#     -> Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) }
+createSubTree :Effect { newHandlers : HandlerLookup _, renderedNodes : List (Html _) },
+    Html _
+    -> Effect { newHandlers : HandlerLookup _, renderedNodes : List (Html _) }
+createSubTree = \previousEffects, node ->
+    { newHandlers, renderedNodes } <- previousEffects |> Effect.after
     when node is
+        Element name _ size attrs children ->
+            nodeIndex <- Effect.createElement name |> Effect.after
+            { style, newHandlers: newHandlersAttrs, renderedAttrs, effects: attrEffects } =
+                List.walk attrs { nodeIndex, style: "", newHandlers, renderedAttrs: [], effects: Effect.always {} } addAttribute
+
+            _ <- attrEffects |> Effect.after
+            _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
+            jsIndex : MaybeJsIndex
+            jsIndex = Rendered nodeIndex
+
+            # TODO: this walk does not compile. Type checker is not ready for this yet!
+            # { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } <-
+            #     List.walk children { newHandlers: newHandlersAttrs, renderedNodes: [] } createSubTree |> Effect.after
+            { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } = { newHandlers: newHandlersAttrs, renderedNodes: [] } # TODO: remove
+            Effect.always {
+                newHandlers: newHandlersKids,
+                renderedNodes: List.append renderedNodes (Element name jsIndex size renderedAttrs renderedNodesKids),
+            }
+
+        Lazy callback ->
+            createSubTree
+                (Effect.always { newHandlers, renderedNodes })
+                (callback (Err NotCached)).node
+
         Text _ content ->
             Effect.createTextNode content
             |> Effect.map \index ->
                 jsIndex : MaybeJsIndex
                 jsIndex = Rendered index
 
-                { newHandlers, node: Text jsIndex content }
+                { newHandlers, renderedNodes: List.append renderedNodes (Text jsIndex content) }
 
-        Element name _ size attrs children ->
-            nodeIndex <- Effect.createElement name |> Effect.after
-            { style, newHandlers: updatedHandlers, effects } =
-                List.walk attrs { nodeIndex, style: "", newHandlers, renderedAttrs: [], effects: Effect.always {} } addAttribute
+        None -> Effect.always { newHandlers, renderedNodes: List.append renderedNodes None }
 
-            _ <- effects |> Effect.after
-            _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
-            jsIndex : MaybeJsIndex
-            jsIndex = Rendered nodeIndex
-
-            #   for each child
-            #       recurse into it
-            #       then append it
-            Effect.always {
-                newHandlers: updatedHandlers,
-                node: Element name jsIndex size attrs children,
-            }
-
-        Lazy callback ->
-            createSubTree newHandlers (callback (Err NotCached)).node
-
-        None -> Effect.always { newHandlers, node: None }
-
-# AddAttrWalk state : {
-#     nodeIndex : Nat,
-#     style : Str,
-#     newHandlers : HandlerLookup state,
-#     renderedAttrs : List (Attribute state),
-#     effects : Effect {},
-# }
-
-# addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
-addAttribute :
-    { nodeIndex : Nat, style : Str, newHandlers : HandlerLookup _, renderedAttrs : List (Attribute _), effects : Effect {} },
-    Attribute _ ->
-    { nodeIndex : Nat, style : Str, newHandlers : HandlerLookup _, renderedAttrs : List (Attribute _), effects : Effect {} }
+AddAttrWalk state : {
+    nodeIndex : Nat,
+    style : Str,
+    newHandlers : HandlerLookup state,
+    renderedAttrs : List (Attribute state),
+    effects : Effect {},
+}
+addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
         EventListener name accessors (NotRendered handler) ->
@@ -595,26 +606,3 @@ addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr 
 
             { nodeIndex, style: newStyle, newHandlers, renderedAttrs: List.append renderedAttrs (Style k v), effects }
 
-# a -> Effect [Step a, Done b]
-# Effect.loop : a, (a -> Effect [Step a, Done b]) -> Effect b
-# text
-#   create it
-# element
-#   create it
-#   for each attr
-#       insert it
-#   for each child
-#       recurse into it
-#       then append it
-# lazy
-#   expand it with the current state
-#   recurse
-# none
-#   no effects, just return it
-# Element name jsIndex size attrs children ->
-#     newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
-#     newChildren = List.map children \c -> translate c parentToChild childToParent
-#     Element name jsIndex size newAttrs newChildren
-# Lazy childCallback ->
-#     Lazy (translateLazy childCallback parentToChild childToParent)
-# None -> None
