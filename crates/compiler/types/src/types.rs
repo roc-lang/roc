@@ -944,6 +944,272 @@ impl Types {
             }
         }
     }
+
+    /// Creates a deep clone of a type with substituted variables.
+    pub fn clone_with_variable_substitutions(
+        &mut self,
+        typ: Index<TypeTag>,
+        subs: &MutMap<Variable, Variable>,
+    ) -> Index<TypeTag> {
+        let cloned = self.reserve_type_tag();
+
+        let mut stack = vec![(cloned, typ)];
+
+        macro_rules! defer {
+            ($type_index:expr) => {{
+                let cloned_index = self.reserve_type_tag();
+                stack.push((cloned_index, $type_index));
+                cloned_index
+            }};
+        }
+
+        macro_rules! defer_slice {
+            ($type_slice:expr) => {{
+                let cloned_indices = self.reserve_type_tags($type_slice.len());
+                debug_assert_eq!(cloned_indices.len(), $type_slice.len());
+                stack.extend(cloned_indices.into_iter().zip($type_slice.into_iter()));
+                cloned_indices
+            }};
+        }
+
+        macro_rules! subst {
+            ($var:expr) => {{
+                subs.get(&$var).copied().unwrap_or($var)
+            }};
+        }
+
+        macro_rules! do_shared {
+            ($shared:expr) => {{
+                let AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables,
+                    infer_ext_in_output_variables,
+                } = self[$shared];
+
+                let new_lambda_set_variables = defer_slice!(lambda_set_variables);
+                let new_infer_ext_in_output_variables = defer_slice!(infer_ext_in_output_variables);
+
+                let new_shared = AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables: new_lambda_set_variables,
+                    infer_ext_in_output_variables: new_infer_ext_in_output_variables,
+                };
+                Index::push_new(&mut self.aliases, new_shared)
+            }};
+        }
+
+        macro_rules! do_union_tags {
+            ($union_tags:expr) => {{
+                let (tags, payload_slices) = self.union_tag_slices($union_tags);
+
+                let new_payload_slices = Slice::extend_new(
+                    &mut self.aside_types_slices,
+                    std::iter::repeat(Slice::default()).take(payload_slices.len()),
+                );
+                for (new_payload_slice_index, payload_slice_index) in
+                    (new_payload_slices.indices()).zip(payload_slices.into_iter())
+                {
+                    let payload_slice = self[payload_slice_index];
+                    let new_payload_slice = defer_slice!(payload_slice);
+                    self.aside_types_slices[new_payload_slice_index] = new_payload_slice;
+                }
+
+                UnionTags {
+                    length: tags.len() as _,
+                    labels_start: tags.start() as _,
+                    values_start: new_payload_slices.start() as _,
+                    _marker: Default::default(),
+                }
+            }};
+        }
+
+        while let Some((dest_index, typ)) = stack.pop() {
+            use TypeTag::*;
+
+            let (tag, args) = match self[typ] {
+                Variable(v) => (Variable(subst!(v)), Default::default()),
+                EmptyRecord => (EmptyRecord, Default::default()),
+                EmptyTagUnion => (EmptyTagUnion, Default::default()),
+                Function(clos, ret) => {
+                    let args = self.get_type_arguments(typ);
+
+                    let new_args = defer_slice!(args);
+                    let new_clos = defer!(clos);
+                    let new_ret = defer!(ret);
+
+                    (Function(new_clos, new_ret), new_args)
+                }
+                ClosureTag {
+                    name,
+                    ambient_function,
+                } => {
+                    let captures = self.get_type_arguments(typ);
+
+                    let new_captures = defer_slice!(captures);
+                    let new_ambient_function = subst!(ambient_function);
+
+                    (
+                        ClosureTag {
+                            name,
+                            ambient_function: new_ambient_function,
+                        },
+                        new_captures,
+                    )
+                }
+                FunctionOrTagUnion(symbol) => {
+                    let ext = self.get_type_arguments(typ);
+
+                    let new_ext = defer_slice!(ext);
+                    self.single_tag_union_tag_names
+                        .insert(dest_index, self.get_tag_name(&typ).clone());
+
+                    (FunctionOrTagUnion(symbol), new_ext)
+                }
+                UnspecializedLambdaSet {
+                    unspecialized: Uls(var, sym, region),
+                } => {
+                    let new_var = subst!(var);
+
+                    (
+                        UnspecializedLambdaSet {
+                            unspecialized: Uls(new_var, sym, region),
+                        },
+                        Default::default(),
+                    )
+                }
+                DelayedAlias { shared } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+
+                    (DelayedAlias { shared: new_shared }, new_type_arguments)
+                }
+                StructuralAlias { shared, actual } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual = defer!(actual);
+
+                    (
+                        StructuralAlias {
+                            shared: new_shared,
+                            actual: new_actual,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                OpaqueAlias { shared, actual } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual = defer!(actual);
+
+                    (
+                        OpaqueAlias {
+                            shared: new_shared,
+                            actual: new_actual,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                HostExposedAlias {
+                    shared,
+                    actual_type,
+                    actual_variable,
+                } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual_type = defer!(actual_type);
+                    let new_actual_variable = subst!(actual_variable);
+
+                    (
+                        HostExposedAlias {
+                            shared: new_shared,
+                            actual_type: new_actual_type,
+                            actual_variable: new_actual_variable,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                Apply {
+                    symbol,
+                    type_argument_regions,
+                    region,
+                } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+
+                    (
+                        Apply {
+                            symbol,
+                            type_argument_regions,
+                            region,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                TagUnion(union_tags) => {
+                    let ext_slice = self.get_type_arguments(typ);
+
+                    let new_ext_slice = defer_slice!(ext_slice);
+                    let new_union_tags = do_union_tags!(union_tags);
+
+                    (TagUnion(new_union_tags), new_ext_slice)
+                }
+                RecursiveTagUnion(rec_var, union_tags) => {
+                    let ext_slice = self.get_type_arguments(typ);
+
+                    let new_rec_var = subst!(rec_var);
+                    let new_ext_slice = defer_slice!(ext_slice);
+                    let new_union_tags = do_union_tags!(union_tags);
+
+                    (
+                        RecursiveTagUnion(new_rec_var, new_union_tags),
+                        new_ext_slice,
+                    )
+                }
+                Record(fields) => {
+                    let ext_slice = self.get_type_arguments(typ);
+                    let (names, fields, tys) = self.record_fields_slices(fields);
+
+                    debug_assert_eq!(names.len(), fields.len());
+                    debug_assert_eq!(names.len(), tys.len());
+
+                    let new_tys = defer_slice!(tys);
+                    let new_ext_slice = defer_slice!(ext_slice);
+
+                    let new_record_fields = RecordFields {
+                        length: names.len() as _,
+                        field_names_start: names.start() as _,
+                        variables_start: new_tys.start() as _,
+                        field_types_start: fields.start() as _,
+                    };
+
+                    (Record(new_record_fields), new_ext_slice)
+                }
+                RangedNumber(range) => (RangedNumber(range), Default::default()),
+                Erroneous => {
+                    self.problems
+                        .insert(dest_index, self.get_problem(&typ).clone());
+                    (Erroneous, Default::default())
+                }
+            };
+
+            self.set_type_tag(dest_index, tag, args);
+        }
+
+        cloned
+    }
 }
 
 impl Polarity {
