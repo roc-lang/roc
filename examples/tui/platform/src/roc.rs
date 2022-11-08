@@ -1,13 +1,16 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{self, ManuallyDrop};
-use roc_std::{RocList, RocStr};
+// use core::mem::{self, ManuallyDrop};
+use roc_std::{
+    RocList,
+    // RocStr,
+};
 use std::ffi::CStr;
-use std::fmt::Debug;
+// use std::fmt::Debug;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
-use std::time::Duration;
+// use std::time::Duration;
 use crate::glue::{
     Model,
     Event,

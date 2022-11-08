@@ -4,6 +4,7 @@ platform "tui"
     packages {}
     imports [
         Api.{ Bounds, Elem, Event },
+        Elem.{ Elem },
         Model.{ Model },
         ]
     provides [programForHost]

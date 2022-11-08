@@ -1,15 +1,10 @@
 interface Api
-    exposes [
-        Elem, 
+    exposes [ 
         KeyCode, 
         Event,
         Bounds, 
     ]
     imports []
-
-Elem : [
-    Text { text : Str },
-]
 
 Bounds : { height : F32, width : F32 }
 
