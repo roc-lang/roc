@@ -6,7 +6,9 @@ use crate::builtins::{
 };
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
-use roc_can::constraint::{Constraint, Constraints, OpportunisticResolve, TypeOrVar};
+use roc_can::constraint::{
+    Constraint, Constraints, ExpectedTypeIndex, OpportunisticResolve, TypeOrVar,
+};
 use roc_can::def::Def;
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
@@ -74,7 +76,8 @@ fn constrain_untyped_args(
 
         let pattern_type = Variable(*pattern_var);
         let pattern_type_index = constraints.push_type(Variable(*pattern_var));
-        let pattern_expected = PExpected::NoExpectation(pattern_type_index);
+        let pattern_expected =
+            constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_type_index));
 
         pattern_types.push(pattern_type);
 
@@ -101,7 +104,7 @@ fn constrain_untyped_closure(
     constraints: &mut Constraints,
     env: &mut Env,
     region: Region,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
 
     fn_var: Variable,
     closure_var: Variable,
@@ -121,7 +124,7 @@ fn constrain_untyped_closure(
     vars.push(closure_var);
     vars.push(fn_var);
 
-    let body_type = NoExpectation(return_type_index);
+    let body_type = constraints.push_expected_type(NoExpectation(return_type_index));
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -150,7 +153,6 @@ fn constrain_untyped_closure(
     let pattern_state_constraints = constraints.and_constraint(pattern_state.constraints);
 
     let function_type = constraints.push_type(function_type);
-    let expected = constraints.push_expected_type(expected);
 
     let cons = [
         constraints.let_constraint(
@@ -178,7 +180,7 @@ pub fn constrain_expr(
     env: &mut Env,
     region: Region,
     expr: &Expr,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
 ) -> Constraint {
     match expr {
         &Int(var, precision, _, _, bound) => {
@@ -214,7 +216,6 @@ pub fn constrain_expr(
 
                 let record_type =
                     constraints.push_type(Type::Record(field_types, TypeExtension::Closed));
-                let expected = constraints.push_expected_type(expected);
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
@@ -268,7 +269,7 @@ pub fn constrain_expr(
                 Category::Record,
                 region,
             );
-            let expected_record = constraints.push_expected_type(expected);
+            let expected_record = expected;
             let record_con =
                 constraints.equal_types_var(*record_var, expected_record, Category::Record, region);
 
@@ -299,7 +300,7 @@ pub fn constrain_expr(
         }
         Str(_) => {
             let str_index = constraints.push_type(str_type());
-            let expected_index = constraints.push_expected_type(expected);
+            let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
@@ -316,13 +317,7 @@ pub fn constrain_expr(
         } => {
             if loc_elems.is_empty() {
                 let elem_type_index = constraints.push_type(empty_list_type(*elem_var));
-                let expected_index = constraints.push_expected_type(expected);
-                let eq = constraints.equal_types(
-                    elem_type_index,
-                    expected_index,
-                    Category::List,
-                    region,
-                );
+                let eq = constraints.equal_types(elem_type_index, expected, Category::List, region);
                 constraints.exists(vec![*elem_var], eq)
             } else {
                 let list_elem_type = Type::Variable(*elem_var);
@@ -330,13 +325,13 @@ pub fn constrain_expr(
                 let mut list_constraints = Vec::with_capacity(1 + loc_elems.len());
 
                 for (index, loc_elem) in loc_elems.iter().enumerate() {
-                    let elem_expected = ForReason(
+                    let elem_expected = constraints.push_expected_type(ForReason(
                         Reason::ElemInList {
                             index: HumanIndex::zero_based(index),
                         },
                         list_elem_type_index,
                         loc_elem.region,
-                    );
+                    ));
                     let constraint = constrain_expr(
                         constraints,
                         env,
@@ -349,10 +344,9 @@ pub fn constrain_expr(
                 }
 
                 let elem_type_index = constraints.push_type(list_type(list_elem_type));
-                let expected_index = constraints.push_expected_type(expected);
                 list_constraints.push(constraints.equal_types(
                     elem_type_index,
-                    expected_index,
+                    expected,
                     Category::List,
                     region,
                 ));
@@ -373,7 +367,7 @@ pub fn constrain_expr(
 
             let fn_type_index = constraints.push_type(Variable(*fn_var));
             let fn_region = loc_fn.region;
-            let fn_expected = NoExpectation(fn_type_index);
+            let fn_expected = constraints.push_expected_type(NoExpectation(fn_type_index));
 
             let fn_reason = Reason::FnCall {
                 name: opt_symbol,
@@ -408,7 +402,8 @@ pub fn constrain_expr(
                     name: opt_symbol,
                     arg_index: HumanIndex::zero_based(index),
                 };
-                let expected_arg = ForReason(reason, arg_type_index, region);
+                let expected_arg =
+                    constraints.push_expected_type(ForReason(reason, arg_type_index, region));
                 let arg_con = constrain_expr(
                     constraints,
                     env,
@@ -430,7 +425,7 @@ pub fn constrain_expr(
             let expected_fn_type =
                 constraints.push_expected_type(ForReason(fn_reason, expected_fn_index, region));
 
-            let expected_final_type = constraints.push_expected_type(expected);
+            let expected_final_type = expected;
 
             let category = Category::CallResult(opt_symbol, *called_via);
 
@@ -446,20 +441,17 @@ pub fn constrain_expr(
         }
         Var(symbol, variable) => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
-            let expected_type = *expected.get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
             let store_expected = constraints.store(expected_type, *variable, file!(), line!());
 
-            let stored_index = constraints.push_type(Variable(*variable));
-            let stored_type = constraints.push_expected_type(expected.replace(stored_index));
-
-            let lookup_constr = constraints.lookup(*symbol, stored_type, region);
+            let lookup_constr = constraints.lookup(*symbol, expected, region);
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
             // lookup the member in the environment.
-            let expected_type = *expected.get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
             let store_expected =
                 constraints.store(expected_type, specialization_var, file!(), line!());
 
@@ -513,7 +505,11 @@ pub fn constrain_expr(
         } => {
             let expected_bool = {
                 let bool_type = constraints.push_type(Type::Variable(Variable::BOOL));
-                Expected::ForReason(Reason::ExpectCondition, bool_type, loc_condition.region)
+                constraints.push_expected_type(Expected::ForReason(
+                    Reason::ExpectCondition,
+                    bool_type,
+                    loc_condition.region,
+                ))
             };
 
             let cond_con = constrain_expr(
@@ -564,7 +560,11 @@ pub fn constrain_expr(
         } => {
             let expected_bool = {
                 let bool_type = constraints.push_type(Type::Variable(Variable::BOOL));
-                Expected::ForReason(Reason::ExpectCondition, bool_type, loc_condition.region)
+                constraints.push_expected_type(Expected::ForReason(
+                    Reason::ExpectCondition,
+                    bool_type,
+                    loc_condition.region,
+                ))
             };
 
             let cond_con = constrain_expr(
@@ -616,16 +616,17 @@ pub fn constrain_expr(
         } => {
             let expect_bool = |constraints: &mut Constraints, region| {
                 let bool_type = constraints.push_type(Type::Variable(Variable::BOOL));
-                Expected::ForReason(Reason::IfCondition, bool_type, region)
+                constraints.push_expected_type(Expected::ForReason(
+                    Reason::IfCondition,
+                    bool_type,
+                    region,
+                ))
             };
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 3);
 
             // TODO why does this cond var exist? is it for error messages?
             let first_cond_region = branches[0].0.region;
-            let expected_bool = {
-                let expected = expect_bool(constraints, first_cond_region);
-                constraints.push_expected_type(expected)
-            };
+            let expected_bool = expect_bool(constraints, first_cond_region);
             let cond_var_is_bool_con = constraints.equal_types_var(
                 *cond_var,
                 expected_bool,
@@ -635,6 +636,7 @@ pub fn constrain_expr(
 
             branch_cons.push(cond_var_is_bool_con);
 
+            let expected = constraints[expected].clone();
             match expected {
                 FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
@@ -648,42 +650,45 @@ pub fn constrain_expr(
                             expected_bool,
                         );
 
+                        let expected_then = constraints.push_expected_type(FromAnnotation(
+                            name.clone(),
+                            arity,
+                            AnnotationSource::TypedIfBranch {
+                                index: HumanIndex::zero_based(index),
+                                num_branches,
+                                region: ann_source.region(),
+                            },
+                            tipe,
+                        ));
+
                         let then_con = constrain_expr(
                             constraints,
                             env,
                             loc_body.region,
                             &loc_body.value,
-                            FromAnnotation(
-                                name.clone(),
-                                arity,
-                                AnnotationSource::TypedIfBranch {
-                                    index: HumanIndex::zero_based(index),
-                                    num_branches,
-                                    region: ann_source.region(),
-                                },
-                                tipe,
-                            ),
+                            expected_then,
                         );
 
                         branch_cons.push(cond_con);
                         branch_cons.push(then_con);
                     }
 
+                    let expected_else = constraints.push_expected_type(FromAnnotation(
+                        name,
+                        arity,
+                        AnnotationSource::TypedIfBranch {
+                            index: HumanIndex::zero_based(branches.len()),
+                            num_branches,
+                            region: ann_source.region(),
+                        },
+                        tipe,
+                    ));
                     let else_con = constrain_expr(
                         constraints,
                         env,
                         final_else.region,
                         &final_else.value,
-                        FromAnnotation(
-                            name,
-                            arity,
-                            AnnotationSource::TypedIfBranch {
-                                index: HumanIndex::zero_based(branches.len()),
-                                num_branches,
-                                region: ann_source.region(),
-                            },
-                            tipe,
-                        ),
+                        expected_else,
                     );
 
                     let expected_result_type = constraints.push_expected_type(NoExpectation(tipe));
@@ -713,37 +718,39 @@ pub fn constrain_expr(
                             expected_bool,
                         );
 
+                        let expected_then = constraints.push_expected_type(ForReason(
+                            Reason::IfBranch {
+                                index: HumanIndex::zero_based(index),
+                                total_branches: branches.len(),
+                            },
+                            branch_var_index,
+                            loc_body.region,
+                        ));
                         let then_con = constrain_expr(
                             constraints,
                             env,
                             loc_body.region,
                             &loc_body.value,
-                            ForReason(
-                                Reason::IfBranch {
-                                    index: HumanIndex::zero_based(index),
-                                    total_branches: branches.len(),
-                                },
-                                branch_var_index,
-                                loc_body.region,
-                            ),
+                            expected_then,
                         );
 
                         branch_cons.push(cond_con);
                         branch_cons.push(then_con);
                     }
+                    let expected_else = constraints.push_expected_type(ForReason(
+                        Reason::IfBranch {
+                            index: HumanIndex::zero_based(branches.len()),
+                            total_branches: branches.len() + 1,
+                        },
+                        branch_var_index,
+                        final_else.region,
+                    ));
                     let else_con = constrain_expr(
                         constraints,
                         env,
                         final_else.region,
                         &final_else.value,
-                        ForReason(
-                            Reason::IfBranch {
-                                index: HumanIndex::zero_based(branches.len()),
-                                total_branches: branches.len() + 1,
-                            },
-                            branch_var_index,
-                            final_else.region,
-                        ),
+                        expected_else,
                     );
 
                     let expected = constraints.push_expected_type(expected);
@@ -853,7 +860,7 @@ pub fn constrain_expr(
                     when_branch,
                     expected_pattern,
                     branch_expr_reason(
-                        &expected,
+                        &constraints[expected],
                         HumanIndex::zero_based(index),
                         when_branch.value.region,
                     ),
@@ -901,12 +908,14 @@ pub fn constrain_expr(
             // First, solve the condition type.
             let real_cond_var = *real_cond_var;
             let real_cond_type = constraints.push_type(Type::Variable(real_cond_var));
+            let expected_real_cond =
+                constraints.push_expected_type(Expected::NoExpectation(real_cond_type));
             let cond_constraint = constrain_expr(
                 constraints,
                 env,
                 loc_cond.region,
                 &loc_cond.value,
-                Expected::NoExpectation(real_cond_type),
+                expected_real_cond,
             );
             pattern_cons.push(cond_constraint);
 
@@ -938,8 +947,6 @@ pub fn constrain_expr(
                 pattern_constraints,
                 body_constraints,
             );
-
-            let expected = constraints.push_expected_type(expected);
 
             let result_con =
                 constraints.equal_types_var(body_var, expected, Category::When, region);
@@ -980,14 +987,9 @@ pub fn constrain_expr(
             let record_con =
                 constraints.equal_types_var(*record_var, record_expected, category.clone(), region);
 
-            let constraint = constrain_expr(
-                constraints,
-                env,
-                region,
-                &loc_expr.value,
-                NoExpectation(record_type),
-            );
-            let expected = constraints.push_expected_type(expected);
+            let expected_record = constraints.push_expected_type(NoExpectation(record_type));
+            let constraint =
+                constrain_expr(constraints, env, region, &loc_expr.value, expected_record);
 
             let eq = constraints.equal_types_var(field_var, expected, category, region);
             constraints.exists_many(
@@ -1045,15 +1047,7 @@ pub fn constrain_expr(
                     category.clone(),
                     region,
                 ),
-                {
-                    let expected_index = constraints.push_expected_type(expected);
-                    constraints.equal_types(
-                        function_type_index,
-                        expected_index,
-                        category.clone(),
-                        region,
-                    )
-                },
+                constraints.equal_types(function_type_index, expected, category.clone(), region),
                 {
                     let store_fn_var_index = constraints.push_type(Variable(*function_var));
                     let store_fn_var_expected =
@@ -1074,13 +1068,8 @@ pub fn constrain_expr(
             )
         }
         LetRec(defs, loc_ret, cycle_mark) => {
-            let body_con = constrain_expr(
-                constraints,
-                env,
-                loc_ret.region,
-                &loc_ret.value,
-                expected.clone(),
-            );
+            let body_con =
+                constrain_expr(constraints, env, loc_ret.region, &loc_ret.value, expected);
 
             constrain_recursive_defs(constraints, env, defs, body_con, *cycle_mark)
         }
@@ -1096,13 +1085,8 @@ pub fn constrain_expr(
                 loc_ret = new_loc_ret;
             }
 
-            let mut body_con = constrain_expr(
-                constraints,
-                env,
-                loc_ret.region,
-                &loc_ret.value,
-                expected.clone(),
-            );
+            let mut body_con =
+                constrain_expr(constraints, env, loc_ret.region, &loc_ret.value, expected);
 
             while let Some(def) = stack.pop() {
                 body_con = constrain_def(constraints, env, def, body_con)
@@ -1124,12 +1108,13 @@ pub fn constrain_expr(
 
             for (var, loc_expr) in arguments {
                 let var_index = constraints.push_type(Variable(*var));
+                let expected_arg = constraints.push_expected_type(NoExpectation(var_index));
                 let arg_con = constrain_expr(
                     constraints,
                     env,
                     loc_expr.region,
                     &loc_expr.value,
-                    Expected::NoExpectation(var_index),
+                    expected_arg,
                 );
 
                 arg_cons.push(arg_con);
@@ -1141,7 +1126,6 @@ pub fn constrain_expr(
                 vec![(name.clone(), types)],
                 TypeExtension::from_type(Type::Variable(*ext_var)),
             ));
-            let expected = constraints.push_expected_type(expected);
 
             let union_con = constraints.equal_types_with_storage(
                 tag_union_type,
@@ -1171,7 +1155,6 @@ pub fn constrain_expr(
                 *closure_name,
                 TypeExtension::from_type(Type::Variable(*ext_var)),
             ));
-            let expected = constraints.push_expected_type(expected);
             let union_con = constraints.equal_types_with_storage(
                 function_or_tag_union,
                 expected,
@@ -1213,17 +1196,18 @@ pub fn constrain_expr(
             });
 
             // Constrain the argument
+            let expected_arg =
+                constraints.push_expected_type(Expected::NoExpectation(arg_type_index));
             let arg_con = constrain_expr(
                 constraints,
                 env,
                 arg_loc_expr.region,
                 &arg_loc_expr.value,
-                Expected::NoExpectation(arg_type_index),
+                expected_arg,
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the
             // expected type
-            let expected = constraints.push_expected_type(expected);
             let opaque_con = constraints.equal_types_with_storage(
                 opaque_type,
                 expected,
@@ -1331,8 +1315,6 @@ pub fn constrain_expr(
                 constraints.push_expected_type(NoExpectation(fn_type))
             };
 
-            let expected = constraints.push_expected_type(expected);
-
             let cons = [
                 opaque_con,
                 link_type_variables_con,
@@ -1385,7 +1367,8 @@ pub fn constrain_expr(
                     op: *op,
                     arg_index: HumanIndex::zero_based(index),
                 };
-                let expected_arg = ForReason(reason, arg_type, Region::zero());
+                let expected_arg =
+                    constraints.push_expected_type(ForReason(reason, arg_type, Region::zero()));
                 let arg_con = constrain_expr(constraints, env, Region::zero(), arg, expected_arg);
 
                 arg_types.push(arg_type);
@@ -1400,7 +1383,6 @@ pub fn constrain_expr(
             }
 
             let category = Category::LowLevelOpResult(*op);
-            let expected = constraints.push_expected_type(expected);
 
             // Deviation: elm uses an additional And here
             let eq = constraints.equal_types_var(*ret_var, expected, category, region);
@@ -1427,7 +1409,8 @@ pub fn constrain_expr(
                     foreign_symbol: foreign_symbol.clone(),
                     arg_index: HumanIndex::zero_based(index),
                 };
-                let expected_arg = ForReason(reason, arg_type, Region::zero());
+                let expected_arg =
+                    constraints.push_expected_type(ForReason(reason, arg_type, Region::zero()));
                 let arg_con = constrain_expr(constraints, env, Region::zero(), arg, expected_arg);
 
                 arg_types.push(arg_type);
@@ -1442,7 +1425,6 @@ pub fn constrain_expr(
             }
 
             let category = Category::ForeignCall;
-            let expected = constraints.push_expected_type(expected);
 
             // Deviation: elm uses an additional And here
             let eq = constraints.equal_types_var(*ret_var, expected, category, region);
@@ -1451,7 +1433,6 @@ pub fn constrain_expr(
         }
         TypedHole(var) => {
             // store the expected type for this position
-            let expected = constraints.push_expected_type(expected);
             constraints.equal_types_var(
                 *var,
                 expected,
@@ -1465,8 +1446,7 @@ pub fn constrain_expr(
             // Instead, trivially equate the expected type to itself. This will never yield
             // unification errors but it will catch errors in type translation, including ability
             // obligations.
-            let trivial_type = *expected.get_type_ref();
-            let expected = constraints.push_expected_type(expected);
+            let trivial_type = *constraints[expected].get_type_ref();
             constraints.equal_types(trivial_type, expected, Category::Unknown, region)
         }
     }
@@ -1554,14 +1534,14 @@ fn constrain_function_def(
                         def_pattern_state
                     };
 
-                    let annotation_expected = FromAnnotation(
+                    let annotation_expected = constraints.push_expected_type(FromAnnotation(
                         loc_pattern,
                         arity,
                         AnnotationSource::TypedBody {
                             region: annotation.region,
                         },
                         signature_index,
-                    );
+                    ));
 
                     let ret_constraint = constrain_untyped_closure(
                         constraints,
@@ -1678,14 +1658,14 @@ fn constrain_function_def(
                 &mut vars,
             );
 
-            let annotation_expected = FromAnnotation(
+            let annotation_expected = constraints.push_expected_type(FromAnnotation(
                 loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 ret_type_index,
-            );
+            ));
 
             let ret_constraint = constrain_expr(
                 constraints,
@@ -1745,11 +1725,12 @@ fn constrain_function_def(
         None => {
             let expr_type = constraints.push_type(Variable(expr_var));
 
+            let expected_expr = constraints.push_expected_type(NoExpectation(expr_type));
             let expr_con = constrain_untyped_closure(
                 constraints,
                 env,
                 loc_function_def.region,
-                NoExpectation(expr_type),
+                expected_expr,
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
@@ -1823,14 +1804,14 @@ fn constrain_destructure_def(
 
             let signature_index = constraints.push_type(signature);
 
-            let annotation_expected = FromAnnotation(
+            let annotation_expected = constraints.push_expected_type(FromAnnotation(
                 loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 signature_index,
-            );
+            ));
 
             // This will fill in inference variables in the `signature` as well, so that we can
             // then take the signature as the source-of-truth without having to worry about
@@ -1862,12 +1843,13 @@ fn constrain_destructure_def(
         None => {
             let expr_type = constraints.push_type(Variable(expr_var));
 
+            let expected_type = constraints.push_expected_type(NoExpectation(expr_type));
             let expr_con = constrain_expr(
                 constraints,
                 env,
                 loc_expr.region,
                 &loc_expr.value,
-                NoExpectation(expr_type),
+                expected_type,
             );
 
             constrain_function_def_make_constraint(
@@ -1920,14 +1902,14 @@ fn constrain_value_def(
 
             let signature_index = constraints.push_type(signature);
 
-            let annotation_expected = FromAnnotation(
+            let annotation_expected = constraints.push_expected_type(FromAnnotation(
                 loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 signature_index,
-            );
+            ));
 
             // This will fill in inference variables in the `signature` as well, so that we can
             // then take the signature as the source-of-truth without having to worry about
@@ -1962,12 +1944,13 @@ fn constrain_value_def(
         None => {
             let expr_type = constraints.push_type(Type::Variable(expr_var));
 
+            let expected_type = constraints.push_expected_type(NoExpectation(expr_type));
             let expr_con = constrain_expr(
                 constraints,
                 env,
                 loc_expr.region,
                 &loc_expr.value,
-                NoExpectation(expr_type),
+                expected_type,
             );
 
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
@@ -2005,6 +1988,7 @@ fn constrain_when_branch_help(
     pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<TypeOrVar>,
     expr_expected: Expected<TypeOrVar>,
 ) -> ConstrainedBranch {
+    let expr_expected = constraints.push_expected_type(expr_expected);
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -2021,8 +2005,10 @@ fn constrain_when_branch_help(
     };
 
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
-        let pattern_expected =
-            pattern_expected(HumanIndex::zero_based(i), loc_pattern.pattern.region);
+        let pattern_expected = constraints.push_pat_expected_type(pattern_expected(
+            HumanIndex::zero_based(i),
+            loc_pattern.pattern.region,
+        ));
 
         let mut partial_state = PatternState::default();
         constrain_pattern(
@@ -2076,14 +2062,14 @@ fn constrain_when_branch_help(
     let (pattern_constraints, delayed_is_open_constraints, body_constraints) =
         if let Some(loc_guard) = &when_branch.guard {
             let bool_index = constraints.push_type(Variable(Variable::BOOL));
+            let expected_guard = constraints.push_expected_type(Expected::ForReason(
+                Reason::WhenGuard,
+                bool_index,
+                loc_guard.region,
+            ));
 
-            let guard_constraint = constrain_expr(
-                constraints,
-                env,
-                region,
-                &loc_guard.value,
-                Expected::ForReason(Reason::WhenGuard, bool_index, loc_guard.region),
-            );
+            let guard_constraint =
+                constrain_expr(constraints, env, region, &loc_guard.value, expected_guard);
 
             // must introduce the headers from the pattern before constraining the guard
             let delayed_is_open_constraints = state.delayed_is_open_constraints;
@@ -2117,7 +2103,7 @@ fn constrain_field(
     loc_expr: &Loc<Expr>,
 ) -> (Type, Constraint) {
     let field_type = constraints.push_type(Variable(field_var));
-    let field_expected = NoExpectation(field_type);
+    let field_expected = constraints.push_expected_type(NoExpectation(field_type));
     let constraint = constrain_expr(
         constraints,
         env,
@@ -2133,11 +2119,10 @@ fn constrain_field(
 fn constrain_empty_record(
     constraints: &mut Constraints,
     region: Region,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
 ) -> Constraint {
     let record_type_index = constraints.push_type(Type::EmptyRec);
-    let expected_index = constraints.push_expected_type(expected);
-    constraints.equal_types(record_type_index, expected_index, Category::Record, region)
+    constraints.equal_types(record_type_index, expected, Category::Record, region)
 }
 
 /// Constrain top-level module declarations
@@ -2174,8 +2159,11 @@ pub fn constrain_decls(
                 let loc_expr = &declarations.expressions[index];
 
                 let bool_type = constraints.push_type(Variable(Variable::BOOL));
-                let expected =
-                    Expected::ForReason(Reason::ExpectCondition, bool_type, loc_expr.region);
+                let expected = constraints.push_expected_type(Expected::ForReason(
+                    Reason::ExpectCondition,
+                    bool_type,
+                    loc_expr.region,
+                ));
 
                 let expect_constraint = constrain_expr(
                     constraints,
@@ -2191,8 +2179,11 @@ pub fn constrain_decls(
                 let loc_expr = &declarations.expressions[index];
 
                 let bool_type = constraints.push_type(Variable(Variable::BOOL));
-                let expected =
-                    Expected::ForReason(Reason::ExpectCondition, bool_type, loc_expr.region);
+                let expected = constraints.push_expected_type(Expected::ForReason(
+                    Reason::ExpectCondition,
+                    bool_type,
+                    loc_expr.region,
+                ));
 
                 let expect_constraint = constrain_expr(
                     constraints,
@@ -2267,7 +2258,7 @@ pub(crate) fn constrain_def_pattern(
     loc_pattern: &Loc<Pattern>,
     expr_type: TypeOrVar,
 ) -> PatternState {
-    let pattern_expected = PExpected::NoExpectation(expr_type);
+    let pattern_expected = constraints.push_pat_expected_type(PExpected::NoExpectation(expr_type));
 
     let mut state = PatternState {
         headers: VecMap::default(),
@@ -2404,14 +2395,14 @@ fn constrain_typed_def(
                 &mut vars,
             );
 
-            let body_type = FromAnnotation(
+            let body_type = constraints.push_expected_type(FromAnnotation(
                 def.loc_pattern.clone(),
                 arguments.len(),
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 ret_type_index,
-            );
+            ));
 
             let ret_constraint = constrain_expr(
                 constraints,
@@ -2470,14 +2461,14 @@ fn constrain_typed_def(
         }
 
         _ => {
-            let annotation_expected = FromAnnotation(
+            let annotation_expected = constraints.push_expected_type(FromAnnotation(
                 def.loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
                 expr_type_index,
-            );
+            ));
 
             let ret_constraint = constrain_expr(
                 constraints,
@@ -2524,14 +2515,14 @@ fn constrain_typed_function_arguments(
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
-            let pattern_expected = PExpected::ForReason(
+            let pattern_expected = constraints.push_pat_expected_type(PExpected::ForReason(
                 PReason::TypedArg {
                     index: HumanIndex::zero_based(index),
                     opt_name: opt_label,
                 },
                 ann_index,
                 loc_pattern.region,
-            );
+            ));
 
             constrain_pattern(
                 constraints,
@@ -2571,7 +2562,8 @@ fn constrain_typed_function_arguments(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
+                let pattern_expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
                 constrain_pattern(
                     constraints,
                     env,
@@ -2651,14 +2643,14 @@ fn constrain_typed_function_arguments_simple(
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
             // Check instead only that the pattern unifies with the annotation type.
-            let pattern_expected = PExpected::ForReason(
+            let pattern_expected = constraints.push_pat_expected_type(PExpected::ForReason(
                 PReason::TypedArg {
                     index: HumanIndex::zero_based(index),
                     opt_name: Some(symbol),
                 },
                 ann_index,
                 loc_pattern.region,
-            );
+            ));
 
             constrain_pattern(
                 constraints,
@@ -2698,7 +2690,8 @@ fn constrain_typed_function_arguments_simple(
             {
                 // First, solve the type that the pattern is expecting to match in this
                 // position.
-                let pattern_expected = PExpected::NoExpectation(pattern_var_index);
+                let pattern_expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
                 constrain_pattern(
                     constraints,
                     env,
@@ -2781,12 +2774,13 @@ fn constrain_def(
             def_pattern_state.vars.push(expr_var);
             // no annotation, so no extra work with rigids
 
+            let expected = constraints.push_expected_type(NoExpectation(expr_type_index));
             let expr_con = constrain_expr(
                 constraints,
                 env,
                 def.loc_expr.region,
                 &def.loc_expr.value,
-                NoExpectation(expr_type_index),
+                expected,
             );
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
@@ -3077,11 +3071,12 @@ fn constraint_recursive_function(
         None => {
             let expr_type_index = constraints.push_type(Type::Variable(expr_var));
 
+            let expected_expr = constraints.push_expected_type(NoExpectation(expr_type_index));
             let expr_con = constrain_untyped_closure(
                 constraints,
                 env,
                 loc_function_def.region,
-                NoExpectation(expr_type_index),
+                expected_expr,
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
@@ -3203,12 +3198,13 @@ fn constraint_recursive_function(
             ));
 
             let expr_con = {
+                let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
                 constrain_expr(
                     constraints,
                     env,
                     loc_body_expr.region,
                     &loc_body_expr.value,
-                    NoExpectation(ret_type_index),
+                    expected,
                 )
             };
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
@@ -3289,12 +3285,14 @@ pub fn rec_defs_help_simple(
 
                 match opt_annotation {
                     None => {
+                        let expected =
+                            constraints.push_expected_type(NoExpectation(expr_var_index));
                         let expr_con = constrain_expr(
                             constraints,
                             env,
                             loc_expr.region,
                             &loc_expr.value,
-                            NoExpectation(expr_var_index),
+                            expected,
                         );
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
@@ -3339,7 +3337,7 @@ pub fn rec_defs_help_simple(
                             signature_index,
                         );
 
-                        let expected = annotation_expected;
+                        let expected = constraints.push_expected_type(annotation_expected);
 
                         let ret_constraint = constrain_expr(
                             constraints,
@@ -3501,12 +3499,13 @@ fn rec_defs_help(
 
         match &def.annotation {
             None => {
+                let expected = constraints.push_expected_type(NoExpectation(expr_type_index));
                 let expr_con = constrain_expr(
                     constraints,
                     env,
                     def.loc_expr.region,
                     &def.loc_expr.value,
-                    NoExpectation(expr_type_index),
+                    expected,
                 );
                 let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
@@ -3617,7 +3616,8 @@ fn rec_defs_help(
                             Box::new(Type::Variable(closure_var)),
                             Box::new(*ret_type.clone()),
                         ));
-                        let body_type = NoExpectation(ret_type_index);
+                        let body_type =
+                            constraints.push_expected_type(NoExpectation(ret_type_index));
                         let expr_con = constrain_expr(
                             constraints,
                             env,
@@ -3684,7 +3684,7 @@ fn rec_defs_help(
                         }
                     }
                     _ => {
-                        let expected = annotation_expected;
+                        let expected = constraints.push_expected_type(annotation_expected);
 
                         let ret_constraint = constrain_expr(
                             constraints,
@@ -3815,7 +3815,7 @@ fn constrain_field_update(
 ) -> (Variable, Type, Constraint) {
     let field_type = constraints.push_type(Variable(var));
     let reason = Reason::RecordUpdateValue(field);
-    let expected = ForReason(reason, field_type, region);
+    let expected = constraints.push_expected_type(ForReason(reason, field_type, region));
     let con = constrain_expr(constraints, env, loc_expr.region, &loc_expr.value, expected);
 
     (var, Variable(var), con)

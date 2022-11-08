@@ -145,7 +145,7 @@ pub fn can_expr_with<'a>(
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let var_index = constraints.push_type(Type::Variable(var));
-    let expected = Expected::NoExpectation(var_index);
+    let expected = constraints.push_expected_type(Expected::NoExpectation(var_index));
     let mut module_ids = ModuleIds::default();
 
     // ensure the Test module is accessible in our tests
