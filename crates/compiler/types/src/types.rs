@@ -173,7 +173,6 @@ impl RecordField<Type> {
         &mut self,
         region: Region,
         aliases: &'a F,
-        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_sets: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -183,7 +182,6 @@ impl RecordField<Type> {
         self.as_inner_mut().instantiate_aliases(
             region,
             aliases,
-            push_problem,
             var_store,
             new_lambda_sets,
             new_infer_ext_vars,
@@ -230,7 +228,6 @@ impl LambdaSet {
         &mut self,
         region: Region,
         aliases: &'a F,
-        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_sets: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -240,7 +237,6 @@ impl LambdaSet {
         self.0.instantiate_aliases(
             region,
             aliases,
-            push_problem,
             var_store,
             new_lambda_sets,
             new_infer_ext_vars,
@@ -2293,7 +2289,6 @@ impl Type {
         &mut self,
         region: Region,
         aliases: &'a F,
-        push_problem: &mut impl FnMut(Problem),
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
@@ -2308,7 +2303,6 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2317,7 +2311,6 @@ impl Type {
                 closure.instantiate_aliases(
                     region,
                     aliases,
-                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2325,7 +2318,6 @@ impl Type {
                 ret.instantiate_aliases(
                     region,
                     aliases,
-                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2336,7 +2328,6 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2349,7 +2340,6 @@ impl Type {
                         x.instantiate_aliases(
                             region,
                             aliases,
-                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
@@ -2361,7 +2351,6 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2373,7 +2362,6 @@ impl Type {
                     x.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2384,7 +2372,6 @@ impl Type {
                     ext.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2407,7 +2394,6 @@ impl Type {
                     t.value.typ.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2424,7 +2410,6 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2435,7 +2420,6 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2445,7 +2429,6 @@ impl Type {
                 actual_type.instantiate_aliases(
                     region,
                     aliases,
-                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2461,7 +2444,6 @@ impl Type {
                     arg.typ.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2472,7 +2454,6 @@ impl Type {
                     arg.instantiate_aliases(
                         region,
                         aliases,
-                        push_problem,
                         var_store,
                         new_lambda_set_variables,
                         new_infer_ext_vars,
@@ -2482,7 +2463,6 @@ impl Type {
                 actual_type.instantiate_aliases(
                     region,
                     aliases,
-                    push_problem,
                     var_store,
                     new_lambda_set_variables,
                     new_infer_ext_vars,
@@ -2536,13 +2516,6 @@ impl Type {
                         *self = alias;
                     } else {
                         if args.len() != alias.type_variables.len() {
-                            push_problem(Problem::BadTypeArguments {
-                                symbol: *symbol,
-                                region,
-                                type_got: args.len() as u8,
-                                alias_needs: alias.type_variables.len() as u8,
-                                alias_kind: AliasKind::Structural,
-                            });
                             *self = Type::Erroneous;
                             return;
                         }
@@ -2570,7 +2543,6 @@ impl Type {
                             filler.value.instantiate_aliases(
                                 region,
                                 aliases,
-                                push_problem,
                                 var_store,
                                 new_lambda_set_variables,
                                 new_infer_ext_vars,
@@ -2607,7 +2579,6 @@ impl Type {
                         actual.instantiate_aliases(
                             region,
                             aliases,
-                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
@@ -2648,7 +2619,6 @@ impl Type {
                         x.value.instantiate_aliases(
                             region,
                             aliases,
-                            push_problem,
                             var_store,
                             new_lambda_set_variables,
                             new_infer_ext_vars,
