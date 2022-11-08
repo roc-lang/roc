@@ -975,7 +975,6 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
         }
-        FlatType::Erroneous(e) => write!(f, "Erroneous({:?})", e),
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
     }
@@ -2517,7 +2516,6 @@ pub enum FlatType {
     FunctionOrTagUnion(SubsSlice<TagName>, SubsSlice<Symbol>, Variable),
 
     RecursiveTagUnion(Variable, UnionTags, Variable),
-    Erroneous(SubsIndex<Problem>),
     EmptyRecord,
     EmptyTagUnion,
 }
@@ -3274,7 +3272,7 @@ fn occurs(
 
                         short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
-                    EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
+                    EmptyRecord | EmptyTagUnion => Ok(()),
                 }
             }
             Alias(_, args, _, _) => {
@@ -3445,7 +3443,7 @@ fn explicit_substitute(
                         subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
                     }
 
-                    EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
+                    EmptyRecord | EmptyTagUnion => {}
                 }
 
                 in_var
@@ -3628,9 +3626,7 @@ fn get_var_names(
                     accum
                 }
 
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::Erroneous(_) => {
-                    taken_names
-                }
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion => taken_names,
 
                 FlatType::Record(vars_by_field, ext_var) => {
                     let mut accum = get_var_names(subs, ext_var, taken_names);
@@ -4039,8 +4035,6 @@ fn flat_type_to_err_type(
                     panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
             }
         }
-
-        Erroneous(_) => ErrorType::Error,
     }
 }
 
@@ -4320,9 +4314,6 @@ impl StorageSubs {
                 Self::offset_tag_union(offsets, *union_tags),
                 Self::offset_variable(offsets, *ext),
             ),
-            FlatType::Erroneous(problem) => {
-                FlatType::Erroneous(Self::offset_problem(offsets, *problem))
-            }
             FlatType::EmptyRecord => FlatType::EmptyRecord,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
         }
@@ -4606,7 +4597,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {
@@ -5024,13 +5015,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
     match desc.content {
-        Structure(Erroneous(_)) => {
-            // Make this into a flex var so that we don't have to copy problems across module
-            // boundaries - the error will be reported locally.
-            env.target.set(copy, make_descriptor(FlexVar(None)));
-
-            copy
-        }
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
@@ -5060,8 +5044,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
-
-                Erroneous(_) => internal_error!("I thought this was handled above"),
 
                 same @ EmptyRecord | same @ EmptyTagUnion => same,
 
@@ -5435,8 +5417,6 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.push(ext_var);
                     stack.push(rec_var);
                 }
-
-                Erroneous(_) => (),
             },
             Alias(_, args, var, _) => {
                 let var = *var;
@@ -5539,7 +5519,7 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     );
                     stack.push(*ext);
                 }
-                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, real_var, _) => {
                 stack.push(*real_var);
@@ -5606,7 +5586,6 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                     }
                 }
                 FlatType::FunctionOrTagUnion(_, _, _) => {}
-                FlatType::Erroneous(_) => {}
                 FlatType::EmptyRecord => {}
                 FlatType::EmptyTagUnion => {
                     return false;

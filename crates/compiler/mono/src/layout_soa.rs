@@ -189,8 +189,6 @@ impl FunctionLayout {
                 })
             }
 
-            FlatType::Erroneous(_) => Err(TypeError(())),
-
             _ => todo!(),
         }
     }
@@ -867,7 +865,6 @@ impl Layout {
 
                 Ok(Layout::UnionRecursive(slices))
             }
-            FlatType::Erroneous(_) => Err(TypeError(())),
             FlatType::EmptyRecord => Ok(Layout::UNIT),
             FlatType::EmptyTagUnion => Ok(Layout::VOID),
         }

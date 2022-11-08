@@ -408,7 +408,7 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
+        Error | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
     }
@@ -1284,7 +1284,6 @@ fn write_flat_type<'a>(
                 )
             })
         }
-        Erroneous(problem) => write!(buf, "<Type Mismatch: {:?}>", problem).unwrap(),
     }
 }
 

@@ -1490,13 +1490,7 @@ fn solve(
                 let branches_content = subs.get_content_without_compacting(branches_var);
                 let already_have_error = matches!(
                     (real_content, branches_content),
-                    (
-                        Content::Error | Content::Structure(FlatType::Erroneous(_)),
-                        _
-                    ) | (
-                        _,
-                        Content::Error | Content::Structure(FlatType::Erroneous(_))
-                    )
+                    (Content::Error, _) | (_, Content::Error)
                 );
 
                 let snapshot = subs.snapshot();
@@ -3826,8 +3820,6 @@ fn adjust_rank_content(
 
                     rank
                 }
-
-                Erroneous(_) => group_rank,
             }
         }
 
@@ -4076,7 +4068,7 @@ fn deep_copy_var_help(
                         Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                    same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {

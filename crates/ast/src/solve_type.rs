@@ -1455,8 +1455,6 @@ fn adjust_rank_content(
 
                     rank
                 }
-
-                Erroneous(_) => group_rank,
             }
         }
 
@@ -1595,7 +1593,7 @@ fn instantiate_rigids_help(
                     }
                 }
 
-                EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRecord | EmptyTagUnion => {}
 
                 Record(fields, ext_var) => {
                     for index in fields.iter_variables() {
@@ -1775,7 +1773,7 @@ fn deep_copy_var_help(
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {
