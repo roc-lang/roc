@@ -143,6 +143,13 @@ pub struct Aliases {
 }
 
 impl Aliases {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            aliases: Vec::with_capacity(cap),
+            variables: Vec::with_capacity(cap * 2),
+        }
+    }
+
     pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
         let alias_variables =
             {
