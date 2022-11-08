@@ -197,52 +197,46 @@ fn buildWidgets<B: Backend>(f: &mut Frame<B>, elems : &RocList<Elem>){
     }
 }
 
-
-// Block::default()
-//     .title("My Block!!")
-//     .style(Style::default().fg(Color::LightBlue))
-//     .borders(Borders::ALL)
-
-// pub struct ParagraphConfig {
-//     pub borderStyle: Styles,
-//     pub borders: roc_std::RocList<BorderModifier>,
-//     pub style: Styles,
-//     pub title: roc_std::RocStr,
-//     pub titleStyle: Styles,
-//     pub borderType: BorderType,
-//     pub titleAlignment: Alignment,
-// }
 fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem){
     
     // For now there is only one Elem type will change later
     // roc_std::RocList<roc_std::RocList<Span>>, ParagraphConfig
     let (listSpans, config) = paragraph.as_Paragraph();
 
+    // Build pargraph up from nested Span(s)
     let mut text = Vec::with_capacity(listSpans.len());
-
     for aSpans in listSpans {
-
         let mut spansElements = Vec::with_capacity(aSpans.len());
-
         for span in aSpans {
             let s = Span::styled(span.text.as_str(),getStyle(&span.style));
             spansElements.push(s);  
         }
-
         text.push(Spans::from(spansElements)); 
     }
 
+    // Get pargraph properties from config etc
     let title = config.title.as_str();
+    let titleAlignment = getAlignment(config.titleAlignment);
+    let textAlignment = getAlignment(config.textAlignment);
     let borderType = getBorderType(config.borderType);
+    let borders = getBorders(&config.borders);
 
+    // Block window for the paragraph text to live in
+    let block = Block::default()
+    .title(title)
+    .title_alignment(titleAlignment)
+    .borders(borders)
+    .border_type(borderType);
+
+    // Create the paragraph
     let p = Paragraph::new(text)
-    .block(Block::default().title(title).borders(Borders::ALL).border_type(borderType))
+    .block(block)
     .style(getStyle(&config.style))
-    .alignment(getAlignment(config.titleAlignment))
+    .alignment(textAlignment)
     .wrap(Wrap { trim: true });
-    f.render_widget(p,area);
 
-    
+    // Render to the frame
+    f.render_widget(p,area);
 }
 
 fn getStyle(rocStyle : &crate::glue::Styles) -> Style {
@@ -312,4 +306,19 @@ fn getBorderType(rocBorderType : crate::glue::BorderType) -> BorderType {
         crate::glue::BorderType::Double => BorderType::Double,
         crate::glue::BorderType::Thick => BorderType::Thick,
     }
+}
+
+fn getBorders(rocBorders : &roc_std::RocList<crate::glue::BorderModifier>) -> Borders {
+    let mut borders = Borders::empty();
+    for border in rocBorders {
+        match border {
+            crate::glue::BorderModifier::ALL => borders.insert(Borders::ALL),
+            crate::glue::BorderModifier::BOTTOM => borders.insert(Borders::BOTTOM),
+            crate::glue::BorderModifier::LEFT => borders.insert(Borders::LEFT),
+            crate::glue::BorderModifier::NONE => borders.insert(Borders::NONE),
+            crate::glue::BorderModifier::RIGHT => borders.insert(Borders::RIGHT),
+            crate::glue::BorderModifier::TOP => borders.insert(Borders::TOP),
+        }
+    }
+    borders
 }

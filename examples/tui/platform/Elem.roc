@@ -76,6 +76,7 @@ ParagraphConfig : {
     title : Str,
     titleStyle : Styles,
     titleAlignment : Alignment,
+    textAlignment : Alignment,
     borders : List BorderModifier,
     borderStyle : Styles,
     borderType : BorderType,

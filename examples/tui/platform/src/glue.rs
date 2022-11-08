@@ -228,6 +228,7 @@ pub struct ParagraphConfig {
     pub title: roc_std::RocStr,
     pub titleStyle: Styles,
     pub borderType: BorderType,
+    pub textAlignment: Alignment,
     pub titleAlignment: Alignment,
 }
 
