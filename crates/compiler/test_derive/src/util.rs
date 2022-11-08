@@ -20,7 +20,7 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, LoadedModule, Threading};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -399,7 +399,7 @@ fn check_derived_typechecks_and_golden(
         constr,
         RigidVariables::default(),
         test_subs,
-        default_aliases(),
+        Default::default(),
         abilities_store,
         Default::default(),
         &exposed_for_module.exposed_by_module,

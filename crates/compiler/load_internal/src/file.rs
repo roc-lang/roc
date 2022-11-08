@@ -49,7 +49,7 @@ use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModu
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, Types};
+use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -4449,8 +4449,7 @@ fn run_solve_solve(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let mut solve_aliases = default_aliases();
-
+    let mut solve_aliases = roc_solve::solve::Aliases::default();
     for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(*name, alias.clone());
     }
@@ -6003,47 +6002,4 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
-}
-
-/// Builtin aliases that are not covered by type checker optimizations
-///
-/// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
-/// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
-/// type solving.
-/// All that remains are Signed8, Signed16, etc.
-pub fn default_aliases() -> roc_solve::solve::Aliases {
-    use roc_types::types::Type;
-
-    let mut solve_aliases = roc_solve::solve::Aliases::default();
-
-    let mut zero_opaque = |alias_name: Symbol| {
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            infer_ext_in_output_variables: Default::default(),
-            typ: Type::EmptyTagUnion,
-            kind: AliasKind::Opaque,
-        };
-
-        solve_aliases.insert(alias_name, alias);
-    };
-
-    zero_opaque(Symbol::NUM_SIGNED8);
-    zero_opaque(Symbol::NUM_SIGNED16);
-    zero_opaque(Symbol::NUM_SIGNED32);
-    zero_opaque(Symbol::NUM_SIGNED64);
-    zero_opaque(Symbol::NUM_SIGNED128);
-
-    zero_opaque(Symbol::NUM_UNSIGNED8);
-    zero_opaque(Symbol::NUM_UNSIGNED16);
-    zero_opaque(Symbol::NUM_UNSIGNED32);
-    zero_opaque(Symbol::NUM_UNSIGNED64);
-    zero_opaque(Symbol::NUM_UNSIGNED128);
-
-    zero_opaque(Symbol::NUM_BINARY32);
-    zero_opaque(Symbol::NUM_BINARY64);
-
-    solve_aliases
 }

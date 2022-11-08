@@ -287,6 +287,18 @@ impl Aliases {
 
                 Some((num_content_var, AliasKind::Structural))
             }
+            Symbol::NUM_SIGNED8 => Some((Variable::SIGNED8, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED16 => Some((Variable::SIGNED16, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED32 => Some((Variable::SIGNED32, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED64 => Some((Variable::SIGNED64, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED128 => Some((Variable::SIGNED128, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED8 => Some((Variable::UNSIGNED8, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED16 => Some((Variable::UNSIGNED16, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED32 => Some((Variable::UNSIGNED32, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED64 => Some((Variable::UNSIGNED64, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED128 => Some((Variable::UNSIGNED128, AliasKind::Opaque)),
+            Symbol::NUM_BINARY32 => Some((Variable::BINARY32, AliasKind::Opaque)),
+            Symbol::NUM_BINARY64 => Some((Variable::BINARY64, AliasKind::Opaque)),
             _ => None,
         }
     }
