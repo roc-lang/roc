@@ -419,35 +419,29 @@ fn unify_help<M: MetaCollector>(
             ErrorTypeContext::None
         };
 
-        let (type1, mut problems) =
-            env.subs
-                .var_to_error_type_contextual(var1, error_context, observed_pol);
-        let (type2, problems2) =
-            env.subs
-                .var_to_error_type_contextual(var2, error_context, observed_pol);
-
-        problems.extend(problems2);
+        let type1 = env
+            .subs
+            .var_to_error_type_contextual(var1, error_context, observed_pol);
+        let type2 = env
+            .subs
+            .var_to_error_type_contextual(var2, error_context, observed_pol);
 
         env.subs.union(var1, var2, Content::Error.into());
 
-        if !problems.is_empty() {
-            Unified::BadType(vars, problems.remove(0))
-        } else {
-            let do_not_implement_ability = mismatches
-                .into_iter()
-                .filter_map(|mismatch| match mismatch {
-                    Mismatch::DoesNotImplementAbiity(var, ab) => {
-                        let (err_type, _new_problems) =
-                            env.subs
-                                .var_to_error_type_contextual(var, error_context, observed_pol);
-                        Some((err_type, ab))
-                    }
-                    _ => None,
-                })
-                .collect();
+        let do_not_implement_ability = mismatches
+            .into_iter()
+            .filter_map(|mismatch| match mismatch {
+                Mismatch::DoesNotImplementAbiity(var, ab) => {
+                    let err_type =
+                        env.subs
+                            .var_to_error_type_contextual(var, error_context, observed_pol);
+                    Some((err_type, ab))
+                }
+                _ => None,
+            })
+            .collect();
 
-            Unified::Failure(vars, type1, type2, do_not_implement_ability)
-        }
+        Unified::Failure(vars, type1, type2, do_not_implement_ability)
     }
 }
 

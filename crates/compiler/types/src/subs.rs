@@ -2041,11 +2041,7 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(
-        &mut self,
-        var: Variable,
-        observed_pol: Polarity,
-    ) -> (ErrorType, Vec<Problem>) {
+    pub fn var_to_error_type(&mut self, var: Variable, observed_pol: Polarity) -> ErrorType {
         self.var_to_error_type_contextual(var, ErrorTypeContext::None, observed_pol)
     }
 
@@ -2054,7 +2050,7 @@ impl Subs {
         var: Variable,
         context: ErrorTypeContext,
         observed_pol: Polarity,
-    ) -> (ErrorType, Vec<Problem>) {
+    ) -> ErrorType {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -2069,7 +2065,7 @@ impl Subs {
             recursive_tag_unions_seen: Vec::new(),
         };
 
-        (var_to_err_type(self, &mut state, var, observed_pol), vec![])
+        var_to_err_type(self, &mut state, var, observed_pol)
     }
 
     pub fn len(&self) -> usize {
