@@ -625,15 +625,13 @@ fn can_annotation_help(
                     // use a known alias
 
                     if alias.type_variables.len() != args.len() {
-                        env.problem(roc_problem::can::Problem::BadType(
-                            Problem::BadTypeArguments {
-                                symbol,
-                                region,
-                                alias_needs: alias.type_variables.len() as u8,
-                                type_got: args.len() as u8,
-                                alias_kind: alias.kind,
-                            },
-                        ));
+                        env.problem(roc_problem::can::Problem::BadTypeArguments {
+                            symbol,
+                            region,
+                            alias_needs: alias.type_variables.len() as u8,
+                            type_got: args.len() as u8,
+                            alias_kind: alias.kind,
+                        });
                         return Type::Erroneous;
                     }
 

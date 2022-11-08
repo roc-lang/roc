@@ -188,7 +188,13 @@ pub enum Problem {
     MultipleListRestPattern {
         region: Region,
     },
-    BadType(roc_types::types::Problem),
+    BadTypeArguments {
+        symbol: Symbol,
+        region: Region,
+        alias_needs: u8,
+        type_got: u8,
+        alias_kind: AliasKind,
+    },
 }
 
 impl Problem {
@@ -318,6 +324,7 @@ impl Problem {
                 ..
             }
             | Problem::MultipleListRestPattern { region }
+            | Problem::BadTypeArguments { region, .. }
             | Problem::UnnecessaryOutputWildcard { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
@@ -331,7 +338,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
             | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
             | Problem::ExposedButNotDefined(_) => None,
-            Problem::BadType(..) => None,
         }
     }
 }
