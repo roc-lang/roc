@@ -8,11 +8,11 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
-use roc_types::types::{Category, PatternCategory, Type};
+use roc_types::types::{Category, PatternCategory, Type, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Cell<Type>>,
+    pub types: Vec<Cell<Index<TypeTag>>>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
@@ -60,7 +60,7 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
+pub type TypeOrVar = EitherIndex<Cell<Index<TypeTag>>, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
@@ -82,9 +82,9 @@ impl Constraints {
         let cycles = Vec::new();
 
         types.extend([
-            Cell::new(Type::EmptyRec),
-            Cell::new(Type::EmptyTagUnion),
-            Cell::new(Type::Apply(Symbol::STR_STR, vec![], Region::zero())),
+            Cell::new(Types::EMPTY_RECORD),
+            Cell::new(Types::EMPTY_TAG_UNION),
+            Cell::new(Types::STR),
         ]);
 
         categories.extend([
@@ -138,9 +138,9 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Cell<Type>> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<Cell<Type>> = Index::new(1);
-    pub const STR: Index<Cell<Type>> = Index::new(2);
+    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = Index::new(1);
+    pub const STR: Index<Cell<Index<TypeTag>>> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -170,16 +170,22 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(&mut self, typ: Type) -> EitherIndex<Cell<Type>, Variable> {
-        match typ {
-            Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
-            Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
-            Type::Apply(Symbol::STR_STR, args, _) if args.is_empty() => {
-                EitherIndex::from_left(Self::STR)
-            }
-            Type::Variable(var) => Self::push_type_variable(var),
-            other => {
-                let index: Index<Cell<Type>> = Index::push_new(&mut self.types, Cell::new(other));
+    pub fn push_type(
+        &mut self,
+        types: &Types,
+        typ: Index<TypeTag>,
+    ) -> EitherIndex<Cell<Index<TypeTag>>, Variable> {
+        match types[typ] {
+            TypeTag::EmptyRecord => EitherIndex::from_left(Self::EMPTY_RECORD),
+            TypeTag::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
+            TypeTag::Apply {
+                symbol: Symbol::STR_STR,
+                ..
+            } => EitherIndex::from_left(Self::STR),
+            TypeTag::Variable(var) => Self::push_type_variable(var),
+            _ => {
+                let index: Index<Cell<Index<TypeTag>>> =
+                    Index::push_new(&mut self.types, Cell::new(typ));
                 EitherIndex::from_left(index)
             }
         }
@@ -203,6 +209,11 @@ impl Constraints {
         writeln!(buf, "   categories length: {}:", self.categories.len())?;
 
         Ok(buf)
+    }
+
+    #[inline(always)]
+    pub const fn push_variable(&self, var: Variable) -> TypeOrVar {
+        Self::push_type_variable(var)
     }
 
     #[inline(always)]

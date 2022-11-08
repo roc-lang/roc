@@ -7,11 +7,12 @@ use roc_region::all::{Loc, Region};
 use roc_types::num::{NumericRange, SingleQuoteBound};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
-use roc_types::types::{AliasKind, Category};
+use roc_types::types::{AliasKind, Category, Types};
 use roc_types::types::{OptAbleType, Reason};
 
 #[inline(always)]
 pub fn add_numeric_bound_constr(
+    types: &mut Types,
     constraints: &mut Constraints,
     num_constraints: &mut impl Extend<Constraint>,
     num_var: Variable,
@@ -30,9 +31,9 @@ pub fn add_numeric_bound_constr(
             num_num(Variable(num_var))
         }
         NumericBound::FloatExact(width) => {
-            let actual_type = constraints.push_type(Variable(float_width_to_variable(width)));
+            let actual_type = constraints.push_variable(float_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
-            let type_index = constraints.push_type(Variable(num_var));
+            let type_index = constraints.push_variable(num_var);
             let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
                 constraints.equal_types(type_index, expected_index, category, region);
@@ -42,9 +43,9 @@ pub fn add_numeric_bound_constr(
             Variable(num_var)
         }
         NumericBound::IntExact(width) => {
-            let actual_type = constraints.push_type(Variable(int_lit_width_to_variable(width)));
+            let actual_type = constraints.push_variable(int_lit_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
-            let type_index = constraints.push_type(Variable(num_var));
+            let type_index = constraints.push_variable(num_var);
             let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
                 constraints.equal_types(type_index, expected_index, category, region);
@@ -54,8 +55,10 @@ pub fn add_numeric_bound_constr(
             Variable(num_var)
         }
         NumericBound::Range(range) => {
-            let precision_type = constraints.push_type(Variable(precision_var));
-            let expected = Expected::NoExpectation(constraints.push_type(RangedNumber(range)));
+            let precision_type = constraints.push_variable(precision_var);
+            let expected = Expected::NoExpectation(
+                constraints.push_type(types, types.from_old_type(&RangedNumber(range))),
+            );
             let expected_index = constraints.push_expected_type(expected);
             let constr = constraints.equal_types(precision_type, expected_index, category, region);
 
@@ -68,6 +71,7 @@ pub fn add_numeric_bound_constr(
 
 #[inline(always)]
 pub fn int_literal(
+    types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
@@ -80,6 +84,7 @@ pub fn int_literal(
     // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
     let mut constrs = ArrayVec::<_, 3>::new();
     let num_type = add_numeric_bound_constr(
+        types,
         constraints,
         &mut constrs,
         num_var,
@@ -89,8 +94,11 @@ pub fn int_literal(
         Category::Num,
     );
 
-    let num_type_index = constraints.push_type(num_type);
-    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
+    let int_precision_type = constraints.push_type(
+        types,
+        types.from_old_type(&num_int(Type::Variable(precision_var))),
+    );
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, int_precision_type, region));
@@ -106,6 +114,7 @@ pub fn int_literal(
 }
 
 pub fn single_quote_literal(
+    types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
@@ -118,6 +127,7 @@ pub fn single_quote_literal(
     // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
     let mut constrs = ArrayVec::<_, 3>::new();
     let num_type = add_numeric_bound_constr(
+        types,
         constraints,
         &mut constrs,
         num_var,
@@ -127,8 +137,11 @@ pub fn single_quote_literal(
         Category::Character,
     );
 
-    let num_type_index = constraints.push_type(num_type);
-    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
+    let int_precision_type = constraints.push_type(
+        types,
+        types.from_old_type(&num_int(Type::Variable(precision_var))),
+    );
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, int_precision_type, region));
@@ -149,6 +162,7 @@ pub fn single_quote_literal(
 
 #[inline(always)]
 pub fn float_literal(
+    types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
@@ -160,6 +174,7 @@ pub fn float_literal(
 
     let mut constrs = ArrayVec::<_, 3>::new();
     let num_type = add_numeric_bound_constr(
+        types,
         constraints,
         &mut constrs,
         num_var,
@@ -169,8 +184,11 @@ pub fn float_literal(
         Category::Frac,
     );
 
-    let num_type_index = constraints.push_type(num_type);
-    let float_precision_type = constraints.push_type(num_float(Type::Variable(precision_var)));
+    let num_type_index = constraints.push_type(types, types.from_old_type(&num_type));
+    let float_precision_type = constraints.push_type(
+        types,
+        types.from_old_type(&num_float(Type::Variable(precision_var))),
+    );
 
     let expect_precision_var =
         constraints.push_expected_type(ForReason(reason, float_precision_type, region));
@@ -186,6 +204,7 @@ pub fn float_literal(
 
 #[inline(always)]
 pub fn num_literal(
+    types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
     expected: ExpectedTypeIndex,
@@ -194,6 +213,7 @@ pub fn num_literal(
 ) -> Constraint {
     let mut constrs = ArrayVec::<_, 2>::new();
     let num_type = add_numeric_bound_constr(
+        types,
         constraints,
         &mut constrs,
         num_var,
@@ -203,7 +223,7 @@ pub fn num_literal(
         Category::Num,
     );
 
-    let type_index = constraints.push_type(num_type);
+    let type_index = constraints.push_type(types, types.from_old_type(&num_type));
     constrs.extend([constraints.equal_types(type_index, expected, Category::Num, region)]);
 
     let and_constraint = constraints.and_constraint(constrs);

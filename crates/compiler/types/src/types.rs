@@ -496,11 +496,35 @@ impl Default for Types {
 }
 
 impl Types {
+    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
+    const EMPTY_RECORD_TAG: TypeTag = TypeTag::EmptyRecord;
+    const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
+
+    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+    const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::EmptyTagUnion;
+    const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
+
+    pub const STR: Index<TypeTag> = Index::new(2);
+    const STR_TAG: TypeTag = TypeTag::Apply {
+        symbol: Symbol::STR_STR,
+        type_argument_regions: Slice::empty(),
+        region: Region::zero(),
+    };
+    const STR_ARGS: Slice<TypeTag> = Slice::empty();
+
     pub fn new() -> Self {
         Self {
             // tags.len() == tags_slices.len()
-            tags: vec![TypeTag::EmptyRecord, TypeTag::EmptyTagUnion],
-            tags_slices: vec![Default::default(), Default::default()],
+            tags: vec![
+                Self::EMPTY_RECORD_TAG,
+                Self::EMPTY_TAG_UNION_TAG,
+                Self::STR_TAG,
+            ],
+            tags_slices: vec![
+                Self::EMPTY_RECORD_ARGS,
+                Self::EMPTY_TAG_UNION_ARGS,
+                Self::STR_ARGS,
+            ],
 
             aside_types_slices: Default::default(),
 
@@ -589,7 +613,10 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_old_type_slice(&mut self, old: &[Type]) -> Slice<TypeTag> {
+    pub fn from_old_type_slice<'a>(
+        &mut self,
+        old: impl ExactSizeIterator<Item = &'a Type>,
+    ) -> Slice<TypeTag> {
         let slice = self.reserve_type_tags(old.len());
 
         for (index, argument) in slice.into_iter().zip(old) {
@@ -614,7 +641,7 @@ impl Types {
         );
 
         for (slice_index, (_, types)) in type_slices.indices().zip(tags) {
-            self.aside_types_slices[slice_index] = self.from_old_type_slice(types);
+            self.aside_types_slices[slice_index] = self.from_old_type_slice(types.iter());
         }
 
         let union_tags = UnionTags {
@@ -688,6 +715,19 @@ impl Types {
         index
     }
 
+    pub fn function(
+        &mut self,
+        arguments: Slice<TypeTag>,
+        lambda_set: Index<TypeTag>,
+        ret: Index<TypeTag>,
+    ) -> Index<TypeTag> {
+        let index = self.reserve_type_tag();
+
+        let tag = TypeTag::Function(lambda_set, ret);
+        self.set_type_tag(index, tag, arguments);
+        index
+    }
+
     #[allow(clippy::wrong_self_convention)]
     fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
         match old {
@@ -696,7 +736,7 @@ impl Types {
                 self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
             }
             Type::Function(arguments, lambda_set, return_type) => {
-                let argument_slice = self.from_old_type_slice(arguments);
+                let argument_slice = self.from_old_type_slice(arguments.iter());
 
                 let tag = TypeTag::Function(
                     self.from_old_type(lambda_set),
@@ -797,7 +837,7 @@ impl Types {
                 captures,
                 ambient_function,
             } => {
-                let type_slice = self.from_old_type_slice(captures);
+                let type_slice = self.from_old_type_slice(captures.iter());
 
                 let tag = TypeTag::ClosureTag {
                     name: *name,
@@ -911,7 +951,7 @@ impl Types {
                 actual_var,
                 actual,
             } => {
-                let type_arguments_slice = self.from_old_type_slice(type_arguments);
+                let type_arguments_slice = self.from_old_type_slice(type_arguments.iter());
 
                 let lambda_set_slice = {
                     let slice = self.reserve_type_tags(lambda_set_variables.len());
