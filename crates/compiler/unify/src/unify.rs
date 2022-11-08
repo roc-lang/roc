@@ -225,7 +225,6 @@ pub enum Unified<M: MetaCollector = NoCollector> {
         extra_metadata: M,
     },
     Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
-    BadType(Pool, roc_types::types::Problem),
 }
 
 impl<M: MetaCollector> Unified<M> {

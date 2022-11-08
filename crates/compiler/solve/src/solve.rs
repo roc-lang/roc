@@ -945,13 +945,6 @@ fn solve(
 
                         state
                     }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        state
-                    }
                 }
             }
             Store(source_index, target, _filename, _linenr) => {
@@ -1069,13 +1062,6 @@ fn solve(
 
                                 state
                             }
-                            BadType(vars, problem) => {
-                                introduce(subs, rank, pools, &vars);
-
-                                problems.push(TypeError::BadType(problem));
-
-                                state
-                            }
                         }
                     }
                     None => {
@@ -1180,13 +1166,6 @@ fn solve(
                         );
 
                         problems.push(problem);
-
-                        state
-                    }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
 
                         state
                     }
@@ -1403,13 +1382,6 @@ fn solve(
 
                         state
                     }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        state
-                    }
                 }
             }
             &Exhaustive(eq, sketched_rows, context, exhaustive_mark) => {
@@ -1608,15 +1580,6 @@ fn solve(
                                 _ => internal_error!("Must be failure"),
                             }
                         }
-                    }
-                    BadType(vars, problem) => {
-                        subs.commit_snapshot(snapshot);
-
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        should_check_exhaustiveness = false;
                     }
                 }
 
@@ -2098,14 +2061,6 @@ fn check_ability_specialization(
                 );
 
                 problems.push(problem);
-
-                Err(())
-            }
-            BadType(vars, problem) => {
-                subs.commit_snapshot(snapshot);
-                introduce(subs, rank, pools, &vars);
-
-                problems.push(TypeError::BadType(problem));
 
                 Err(())
             }
@@ -3045,11 +3000,6 @@ fn type_to_variable<'a>(
                         );
 
                         problems.push(problem);
-                    }
-                    BadType(_vars, problem) => {
-                        // No introduction needed
-
-                        problems.push(TypeError::BadType(problem));
                     }
                 }
             }
