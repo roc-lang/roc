@@ -49,7 +49,7 @@ use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModu
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind};
+use roc_types::types::{Alias, AliasKind, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -646,6 +646,7 @@ struct ConstrainedModule {
     var_store: VarStore,
     dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
+    types: Types,
     // Rather than adding pending derives as constraints, hand them directly to solve because they
     // must be solved at the end of a module.
     pending_derives: PendingDerives,
@@ -4703,6 +4704,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
     );
+    let types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();
@@ -4817,6 +4819,7 @@ fn canonicalize_and_constrain<'a>(
         ident_ids: module_output.scope.locals.ident_ids,
         dep_idents,
         module_timing,
+        types,
         pending_derives: module_output.pending_derives,
     };
 

@@ -365,6 +365,7 @@ impl std::ops::Neg for Polarity {
     }
 }
 
+#[derive(Debug)]
 pub struct AliasShared {
     pub symbol: Symbol,
     pub type_argument_abilities: Slice<AbilitySet>,
@@ -456,6 +457,7 @@ impl AsideTypeSlice {
 /// the [type solving representation][crate::subs::Content] of types.
 ///
 /// See [TypeTag].
+#[derive(Debug)]
 pub struct Types {
     // main storage. Each type is represented by a tag, which is identified by its index.
     // `tags_slices` is a parallel array (so these two vectors always have the same size), that
