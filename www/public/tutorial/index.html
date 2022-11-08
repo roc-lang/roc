@@ -33,7 +33,7 @@
             <li><a href="#installation">Installation</a></li>
             <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
             <li><a href="#building-an-application">Building an Application</a></li>
-            <li><a href="#functions-and-if">Functions and <code>if</code></a></li>
+            <li><a href="#functions-and-if-else">Functions and if/else</a></li>
             <li><a href="#records">Records</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
@@ -220,21 +220,23 @@ a name to an expression, we can't reassign it! We'd get an error if we wrote the
 <samp>birds <span class="kw">=</span> 3
 birds <span class="kw">=</span> 2</samp>
 </section>
-<!--
-<section><h2 id="functions-and-if-">Functions and <code>if</code></h2>
-<p>So far we've called functions like <code>Num.toStr</code>, <code>Str.concat</code>, and <code>Stdout.line</code>.
+<section><h2 id="functions-and-if-else"><a href="#functions-and-if-else">Functions and if/else</a></h2>
+<p>So far we've called functions like <code>Num.toStr</code>, Str.concat</code>, and <code>Stdout.line</code>.
 Next let's try defining a function of our own.</p>
-<pre><code class="lang-coffee"><span class="hljs-attr">main</span> = Stdout.line <span class="hljs-string">"There are \(total) animals."</span> |&gt; Program.quick
+<samp>birds <span class="kw">=</span> 3
 
-<span class="hljs-attr">birds</span> = <span class="hljs-number">3</span>
+iguanas <span class="kw">=</span> 2
 
-<span class="hljs-attr">iguanas</span> = <span class="hljs-number">2</span>
+total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
 
-<span class="hljs-attr">total</span> = addAndStringify birds iguanas
+main <span class="kw">=</span>
+    Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
+    <span class="kw">|&gt;</span> Program.quick
 
-<span class="hljs-attr">addAndStringify</span> = \num1, num2 -&gt;
-    Num.toStr (num1 + num2)
-</code></pre>
+addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
+    Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
+</samp>
+
 <p>This new <code>addAndStringify</code> function we've defined takes two numbers, adds them,
 calls <code>Num.toStr</code> on the result, and returns that. The <code>\num1, num2 -&gt;</code> syntax
 defines a function's arguments, and the expression after the <code>-&gt;</code> is the body
@@ -293,7 +295,8 @@ convention is to write <code>else if</code> on the same line.</p>
 <p><em>Note</em>: In Roc, <code>if</code> conditions must always be booleans. (Roc doesn't have a concept of "truthiness,"
 so the compiler will report an error for conditionals like <code>if 1 then</code> or <code>if "true" then</code>.)</p>
 </blockquote>
-<h2 id="records">Records</h2>
+</section>
+<!--<section><h2 id="records">Records</h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
 <pre><code class="lang-coffee">total = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">5</span>, iguanas: <span class="hljs-number">7</span> }
