@@ -4409,7 +4409,7 @@ pub fn add_imports(
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
-    types: Types,
+    mut types: Types,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4451,7 +4451,7 @@ fn run_solve_solve(
 
     let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
-        solve_aliases.insert(*name, alias.clone());
+        solve_aliases.insert(&mut types, *name, alias.clone());
     }
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {

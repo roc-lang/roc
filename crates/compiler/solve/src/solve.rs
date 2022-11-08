@@ -138,7 +138,7 @@ impl DelayedAliasVariables {
 
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: Vec<(Symbol, Type, DelayedAliasVariables, AliasKind)>,
+    aliases: Vec<(Symbol, Index<TypeTag>, DelayedAliasVariables, AliasKind)>,
     variables: Vec<OptAbleVar>,
 }
 
@@ -150,7 +150,7 @@ impl Aliases {
         }
     }
 
-    pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
+    pub fn insert(&mut self, types: &mut Types, symbol: Symbol, alias: Alias) {
         let alias_variables =
             {
                 let start = self.variables.len() as _;
@@ -195,8 +195,11 @@ impl Aliases {
                 }
             };
 
+        // TODO: can we construct Aliases from TypeTag directly?
+        let alias_typ = types.from_old_type(&alias.typ);
+
         self.aliases
-            .push((symbol, alias.typ, alias_variables, alias.kind));
+            .push((symbol, alias_typ, alias_variables, alias.kind));
     }
 
     fn instantiate_result_result(
@@ -335,18 +338,15 @@ impl Aliases {
             return (var, kind);
         }
 
-        let (typ, delayed_variables, &mut kind) =
-            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+        let (typ, delayed_variables, kind) =
+            match self.aliases.iter().find(|(s, _, _, _)| *s == symbol) {
                 None => internal_error!(
                     "Alias {:?} not registered in delayed aliases! {:?}",
                     symbol,
                     &self.aliases
                 ),
-                Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
+                Some(&(_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
-
-        // TODO(types-soa) store SoA type in aliases directly
-        let typ = types.from_old_type(typ);
 
         let mut substitutions: MutMap<_, _> = Default::default();
 

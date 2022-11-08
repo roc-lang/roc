@@ -18,7 +18,7 @@ use roc_region::all::Loc;
 use roc_solve::solve::{self, Aliases};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::{Type, Types};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +31,7 @@ pub fn test_home() -> ModuleId {
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<TypeError>,
+    types: Types,
     constraints: &Constraints,
     constraint: &Constraint,
     pending_derives: PendingDerives,
@@ -41,7 +42,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let (solved, _) = solve::run(
         ModuleId::ATTR,
-        Default::default(),
+        types,
         constraints,
         problems,
         subs,
@@ -113,6 +114,7 @@ pub struct CanExprOut {
     pub var: Variable,
     pub constraint: Constraint,
     pub constraints: Constraints,
+    pub types: Types,
 }
 
 #[derive(Debug)]
@@ -203,6 +205,7 @@ pub fn can_expr_with<'a>(
         var,
         constraint,
         constraints,
+        types: Default::default(),
     })
 }
 

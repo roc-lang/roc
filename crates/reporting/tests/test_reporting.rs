@@ -202,6 +202,7 @@ mod test_reporting {
             home,
             interns,
             problems: can_problems,
+            mut types,
             ..
         } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new_from_varstore(var_store);
@@ -217,7 +218,7 @@ mod test_reporting {
         let mut solve_aliases = roc_solve::solve::Aliases::default();
 
         for (name, alias) in output.aliases {
-            solve_aliases.insert(name, alias);
+            solve_aliases.insert(&mut types, name, alias);
         }
 
         let mut unify_problems = Vec::new();
@@ -225,6 +226,7 @@ mod test_reporting {
         let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
+            types,
             &constraints,
             &constraint,
             // Use `new_report_problem_as` in order to get proper derives.
