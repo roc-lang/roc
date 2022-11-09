@@ -305,52 +305,12 @@ pub(crate) fn num_floatingpoint(range: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub(crate) fn num_u32() -> Type {
-    builtin_num_alias(
-        Symbol::NUM_U32,
-        vec![],
-        Box::new(num_int(num_unsigned32())),
-        AliasKind::Structural,
-    )
-}
-
-#[cfg_attr(not(debug_assertions), inline(always))]
-fn num_unsigned32() -> Type {
-    builtin_num_alias(
-        Symbol::NUM_UNSIGNED32,
-        vec![],
-        Box::new(Type::EmptyTagUnion),
-        AliasKind::Opaque,
-    )
-}
-
-#[cfg_attr(not(debug_assertions), inline(always))]
-pub(crate) fn num_binary64() -> Type {
-    builtin_num_alias(
-        Symbol::NUM_BINARY64,
-        vec![],
-        Box::new(Type::EmptyTagUnion),
-        AliasKind::Opaque,
-    )
-}
-
-#[cfg_attr(not(debug_assertions), inline(always))]
 pub(crate) fn num_int(range: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_INT,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_integer(range))),
         AliasKind::Structural,
-    )
-}
-
-#[cfg_attr(not(debug_assertions), inline(always))]
-pub(crate) fn num_signed64() -> Type {
-    builtin_num_alias(
-        Symbol::NUM_SIGNED64,
-        vec![],
-        Box::new(Type::EmptyTagUnion),
-        AliasKind::Opaque,
     )
 }
 
