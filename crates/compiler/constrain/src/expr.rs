@@ -2534,11 +2534,7 @@ fn constrain_typed_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let ret_type_index = {
-                // TODO(types-soa) get rid of clone
-                let typ = types.clone_with_variable_substitutions(ret_type, &Default::default());
-                constraints.push_type(types, typ)
-            };
+            let ret_type_index = constraints.push_type(types, ret_type);
 
             vars.push(ret_var);
             vars.push(closure_var);
