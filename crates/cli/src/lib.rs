@@ -301,7 +301,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .trailing_var_arg(true)
         .arg(flag_optimize)
-            .arg(flag_max_threads.clone())
+        .arg(flag_max_threads.clone())
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
