@@ -204,7 +204,7 @@ pub fn constrain_pattern(
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
             let expected_type = *constraints[expected].get_type_ref();
-            if could_be_a_tag_union(types, constraints, expected_type) {
+            if could_be_a_tag_union(types, expected_type) {
                 state
                     .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected_type));
@@ -218,7 +218,7 @@ pub fn constrain_pattern(
             let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
-            if could_be_a_tag_union(types, constraints, type_index) {
+            if could_be_a_tag_union(types, type_index) {
                 state
                     .delayed_is_open_constraints
                     .push(constraints.is_open_type(type_index));
@@ -240,7 +240,7 @@ pub fn constrain_pattern(
             let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
-            if could_be_a_tag_union(types, constraints, type_index) {
+            if could_be_a_tag_union(types, type_index) {
                 state.constraints.push(constraints.is_open_type(type_index));
             }
 
@@ -766,15 +766,12 @@ pub fn constrain_pattern(
     }
 }
 
-fn could_be_a_tag_union(types: &Types, constraints: &mut Constraints, typ: TypeOrVar) -> bool {
+fn could_be_a_tag_union(types: &Types, typ: TypeOrVar) -> bool {
     match typ.split() {
-        Ok(typ_index) => {
-            let typ_cell = &mut constraints.types[typ_index.index()];
-            !matches!(
-                types[*typ_cell.get_mut()].get(),
-                TypeTag::Apply { .. } | TypeTag::Function(..) | TypeTag::Record(..)
-            )
-        }
+        Ok(typ_index) => !matches!(
+            types[typ_index].get(),
+            TypeTag::Apply { .. } | TypeTag::Function(..) | TypeTag::Record(..)
+        ),
         Err(_) => {
             // Variables are opaque at this point, assume yes
             true

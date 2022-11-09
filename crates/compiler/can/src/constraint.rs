@@ -12,7 +12,6 @@ use roc_types::types::{Category, PatternCategory, TypeCell, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Cell<Index<TypeCell>>>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
@@ -60,12 +59,11 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<Cell<Index<TypeCell>>, Variable>;
+pub type TypeOrVar = EitherIndex<TypeCell, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
-        let mut types = Vec::new();
         let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
         let loc_symbols = Vec::new();
@@ -80,12 +78,6 @@ impl Constraints {
         let eq = Vec::new();
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
-
-        types.extend([
-            Cell::new(Types::EMPTY_RECORD),
-            Cell::new(Types::EMPTY_TAG_UNION),
-            Cell::new(Types::STR),
-        ]);
 
         categories.extend([
             Category::Record,
@@ -120,7 +112,6 @@ impl Constraints {
 
         Self {
             constraints,
-            types,
             type_slices,
             variables,
             loc_symbols,
@@ -170,24 +161,11 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(
-        &mut self,
-        types: &Types,
-        typ: Index<TypeCell>,
-    ) -> EitherIndex<Cell<Index<TypeCell>>, Variable> {
-        match types[typ].get() {
-            TypeTag::EmptyRecord => EitherIndex::from_left(Self::EMPTY_RECORD),
-            TypeTag::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
-            TypeTag::Apply {
-                symbol: Symbol::STR_STR,
-                ..
-            } => EitherIndex::from_left(Self::STR),
-            TypeTag::Variable(var) => Self::push_type_variable(var),
-            _ => {
-                let index: Index<Cell<Index<TypeCell>>> =
-                    Index::push_new(&mut self.types, Cell::new(typ));
-                EitherIndex::from_left(index)
-            }
+    pub fn push_type(&mut self, types: &Types, typ: Index<TypeCell>) -> TypeOrVar {
+        if let TypeTag::Variable(var) = types[typ].get() {
+            Self::push_type_variable(var)
+        } else {
+            EitherIndex::from_left(typ)
         }
     }
 
@@ -199,7 +177,6 @@ impl Constraints {
         writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
 
         writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
-        writeln!(buf, "   types length: {}:", self.types.len())?;
         writeln!(
             buf,
             "   let_constraints length: {}:",
