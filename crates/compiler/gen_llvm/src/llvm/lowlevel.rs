@@ -1174,7 +1174,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => env.call_intrinsic(
-            &LLVM_ADD_WITH_OVERFLOW[int_width],
+            &LLVM_SUB_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumSubSaturated => {
@@ -1197,7 +1197,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &bitcode::NUM_MUL_SATURATED_INT[int_width],
         ),
         NumMulChecked => env.call_intrinsic(
-            &LLVM_ADD_WITH_OVERFLOW[int_width],
+            &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumGt => {
