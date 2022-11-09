@@ -35,13 +35,37 @@ pub fn run_event_loop(title: &str) {
         // Handle any events
         let result = match events.next().unwrap() {
             InputEvent::KeyPressed(key) => {
-                appReturn = true;
+                if key.code == crossterm::event::KeyCode::Esc {
+                    // TODO don't hardcode the escape
+                    appReturn = true;
+                } else {
+                    let keyCode = getKeyCode(key.code);
+                    let event = crate::glue::Event::KeyPressed(keyCode);
+                    (model, elems) = crate::roc::update_and_render(model, event);
+                }
             },
-            InputEvent::FocusGained => {},
-            InputEvent::FocusLost => {},
-            InputEvent::Paste(contents) => {},
-            InputEvent::Resize(column, row) => {},
-            InputEvent::Tick => {},
+            InputEvent::FocusGained => {
+                let event = crate::glue::Event::FocusGained;
+                (model, elems) = crate::roc::update_and_render(model, event);
+            },
+            InputEvent::FocusLost => {
+                let event = crate::glue::Event::FocusLost;
+                (model, elems) = crate::roc::update_and_render(model, event);
+            },
+            InputEvent::Paste(contents) => {
+                let roc_string = roc_std::RocStr::from(&contents[..]); 
+                let event = crate::glue::Event::Paste(roc_string);
+                (model, elems) = crate::roc::update_and_render(model, event);
+            },
+            InputEvent::Resize(column, row) => {
+                let window_bounds = crate::glue::Bounds{
+                    height: column,
+                    width : row,
+                };
+                let event = crate::glue::Event::Resize(window_bounds);
+                (model, elems) = crate::roc::update_and_render(model, event);
+            },
+            InputEvent::Tick => {}, // TODO add ticks? What are these needed for? 
         };
 
         if appReturn {
@@ -308,5 +332,80 @@ fn getLayoutDirection(direction : crate::glue::LayoutDirection) -> tui::layout::
     match direction {
         crate::glue::LayoutDirection::Horizontal => tui::layout::Direction::Horizontal,
         crate::glue::LayoutDirection::Vertical => tui::layout::Direction::Vertical,    
+    }
+}
+
+fn getKeyCode(event: crossterm::event::KeyCode) -> crate::glue::KeyCode {
+    match event {
+        crossterm::event::KeyCode::BackTab => crate::glue::KeyCode::KeyBackTab,
+        crossterm::event::KeyCode::Backspace => crate::glue::KeyCode::KeyBackspace,
+        crossterm::event::KeyCode::CapsLock => crate::glue::KeyCode::KeyCapsLock,
+        crossterm::event::KeyCode::Delete => crate::glue::KeyCode::KeyDelete,
+        crossterm::event::KeyCode::Down => crate::glue::KeyCode::KeyDown,
+        crossterm::event::KeyCode::End => crate::glue::KeyCode::KeyEnd,
+        crossterm::event::KeyCode::Enter => crate::glue::KeyCode::KeyEnter,
+        crossterm::event::KeyCode::Esc => crate::glue::KeyCode::KeyEsc,
+        crossterm::event::KeyCode::F(number) => crate::glue::KeyCode::KeyFunction(number),
+        crossterm::event::KeyCode::Home => crate::glue::KeyCode::KeyHome,
+        crossterm::event::KeyCode::Insert => crate::glue::KeyCode::KeyInsert,
+        crossterm::event::KeyCode::KeypadBegin => crate::glue::KeyCode::KeyKeypadBegin,
+        crossterm::event::KeyCode::Left => crate::glue::KeyCode::KeyLeft,
+        crossterm::event::KeyCode::Media(mediaKey) => {
+            crate::glue::KeyCode::KeyMedia(getKeyMedia(mediaKey))
+        },
+        crossterm::event::KeyCode::Menu => crate::glue::KeyCode::KeyMenu,
+        crossterm::event::KeyCode::Modifier(keyMod) => {
+            crate::glue::KeyCode::KeyModifier(getKeyModifier(keyMod))
+        },
+        crossterm::event::KeyCode::Null => crate::glue::KeyCode::KeyNull,
+        crossterm::event::KeyCode::NumLock => crate::glue::KeyCode::KeyNumLock,
+        crossterm::event::KeyCode::PageDown => crate::glue::KeyCode::KeyPageDown,
+        crossterm::event::KeyCode::PageUp => crate::glue::KeyCode::KeyPageUp,
+        crossterm::event::KeyCode::Pause => crate::glue::KeyCode::KeyPause,
+        crossterm::event::KeyCode::PrintScreen => crate::glue::KeyCode::KeyPrintScreen,
+        crossterm::event::KeyCode::Right => crate::glue::KeyCode::KeyRight,
+        crossterm::event::KeyCode::Char(ch) => {
+            crate::glue::KeyCode::KeyScalar(char::to_digit(ch, 10u32).unwrap())
+        },
+        crossterm::event::KeyCode::ScrollLock => crate::glue::KeyCode::KeyScrollLock,
+        crossterm::event::KeyCode::Tab => crate::glue::KeyCode::KeyTab,
+        crossterm::event::KeyCode::Up => crate::glue::KeyCode::KeyUp,
+    }
+}
+
+fn getKeyModifier(keyMod: crossterm::event::ModifierKeyCode) -> crate::glue::ModifierKeyCode {
+    match keyMod {
+        crossterm::event::ModifierKeyCode::IsoLevel3Shift => crate::glue::ModifierKeyCode::KeyIsoLevel3Shift,
+        crossterm::event::ModifierKeyCode::IsoLevel5Shift => crate::glue::ModifierKeyCode::KeyIsoLevel5Shift,
+        crossterm::event::ModifierKeyCode::LeftAlt => crate::glue::ModifierKeyCode::KeyLeftAlt,
+        crossterm::event::ModifierKeyCode::LeftControl => crate::glue::ModifierKeyCode::KeyLeftControl,
+        crossterm::event::ModifierKeyCode::LeftHyper => crate::glue::ModifierKeyCode::KeyLeftHyper,
+        crossterm::event::ModifierKeyCode::LeftMeta => crate::glue::ModifierKeyCode::KeyLeftMeta,
+        crossterm::event::ModifierKeyCode::LeftShift => crate::glue::ModifierKeyCode::KeyLeftShift,
+        crossterm::event::ModifierKeyCode::LeftSuper => crate::glue::ModifierKeyCode::KeyLeftSuper,
+        crossterm::event::ModifierKeyCode::RightAlt => crate::glue::ModifierKeyCode::KeyRightAlt,
+        crossterm::event::ModifierKeyCode::RightControl => crate::glue::ModifierKeyCode::KeyRightControl,
+        crossterm::event::ModifierKeyCode::RightHyper => crate::glue::ModifierKeyCode::KeyRightHyper,
+        crossterm::event::ModifierKeyCode::RightMeta => crate::glue::ModifierKeyCode::KeyRightMeta,
+        crossterm::event::ModifierKeyCode::RightShift => crate::glue::ModifierKeyCode::KeyRightShift,
+        crossterm::event::ModifierKeyCode::RightSuper => crate::glue::ModifierKeyCode::KeyRightSuper,
+    }
+}
+
+fn getKeyMedia(mediaKey: crossterm::event::MediaKeyCode) -> crate::glue::MediaKeyCode {
+    match mediaKey {
+        crossterm::event::MediaKeyCode::Play => crate::glue::MediaKeyCode::KeyPlay,
+        crossterm::event::MediaKeyCode::Pause => crate::glue::MediaKeyCode::KeyPause,
+        crossterm::event::MediaKeyCode::PlayPause => crate::glue::MediaKeyCode::KeyPlayPause,
+        crossterm::event::MediaKeyCode::Reverse => crate::glue::MediaKeyCode::KeyReverse,
+        crossterm::event::MediaKeyCode::Stop => crate::glue::MediaKeyCode::KeyStop,
+        crossterm::event::MediaKeyCode::FastForward => crate::glue::MediaKeyCode::KeyFastForward,
+        crossterm::event::MediaKeyCode::Rewind => crate::glue::MediaKeyCode::KeyRewind,
+        crossterm::event::MediaKeyCode::TrackNext => crate::glue::MediaKeyCode::KeyTrackNext,
+        crossterm::event::MediaKeyCode::TrackPrevious => crate::glue::MediaKeyCode::KeyTrackPrevious,
+        crossterm::event::MediaKeyCode::Record => crate::glue::MediaKeyCode::KeyRecord,
+        crossterm::event::MediaKeyCode::LowerVolume => crate::glue::MediaKeyCode::KeyLowerVolume,
+        crossterm::event::MediaKeyCode::RaiseVolume => crate::glue::MediaKeyCode::KeyRaiseVolume,
+        crossterm::event::MediaKeyCode::MuteVolume => crate::glue::MediaKeyCode::KeyMuteVolume,
     }
 }

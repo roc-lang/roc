@@ -11,7 +11,33 @@ init : Bounds -> Model
 init = \_ -> { text: "Luke!" }
 
 update : Model, Event -> Model
-update = \model, _ -> model
+update = \model, event ->
+    when event is 
+        KeyPressed code ->
+            when code is 
+                KeyLeft -> { text : "KeyLeft" }
+                KeyRight -> { text : "KeyRight" }
+                KeyUp -> { text : "KeyUp" }
+                KeyDown -> { text : "KeyDown" }
+                _ -> model
+
+        Resize bounds -> 
+            { text: (boundsToStr bounds)}
+
+        FocusGained ->
+            { text: "Focus Gained" }
+
+        Paste content ->
+            { text: content }
+
+        _ ->
+            model
+
+boundsToStr : Bounds -> Str 
+boundsToStr = \{height, width} ->
+    h = Num.toStr height
+    w = Num.toStr width
+    "H: \(h), W:\(w)"
 
 style1 = { bg: Blue, fg: Magenta, modifiers: [BOLD, ITALIC] }
 style2 = { bg: Black, fg: LightRed, modifiers: [SLOWBLINK, UNDERLINED] }
