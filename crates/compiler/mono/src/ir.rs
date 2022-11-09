@@ -2360,8 +2360,7 @@ impl<'a> Stmt<'a> {
 
         matches!(
             self,
-            Switch { .. } | Ret(_) | Jump(_, _)
-            // TODO for Switch; is this the reason Lean only looks at the outermost `when`?
+            Switch { .. } | Ret(_) | Jump(_, _) // TODO for Switch; is this the reason Lean only looks at the outermost `when`?
         )
     }
 
