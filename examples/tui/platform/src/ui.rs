@@ -1,18 +1,18 @@
 
 pub fn run_event_loop(title: &str) {
     
-    crossterm::terminal::enable_raw_mode().unwrap();
+    crossterm::terminal::enable_raw_mode().expect("TODO handle enabling Raw mode on terminal");
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout, 
         crossterm::terminal::EnterAlternateScreen, 
         crossterm::event::EnableMouseCapture
-    ).unwrap();
+    ).expect("TODO handle entering alternate screen and enabling mouse capture on terminal");
     let backend = tui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = tui::Terminal::new(backend).unwrap();
+    let mut terminal = tui::Terminal::new(backend).expect("TODO handle unable to create crossterm backend");
     let tick_rate = std::time::Duration::from_millis(200);
     let events = Events::new(tick_rate);
-    let size = terminal.size().unwrap();
+    let size = terminal.size().expect("TODO unable to get frame size");
     let window_bounds = crate::glue::Bounds{
         height: size.height,
         width : size.width,
@@ -30,10 +30,10 @@ pub fn run_event_loop(title: &str) {
             for elem in &elems {
                 renderWidget(f, f.size(), &elem)
             }
-        }).unwrap();
+        }).expect("Err: Unable to draw to terminal.");
 
         // Handle any events
-        let result = match events.next().unwrap() {
+        let result = match events.next().expect("TODO handle unable to spawn event thread") {
             InputEvent::KeyPressed(key) => {
                 if key.code == crossterm::event::KeyCode::Esc {
                     // TODO don't hardcode the escape
@@ -74,13 +74,13 @@ pub fn run_event_loop(title: &str) {
     }
 
     // restore terminal
-    crossterm::terminal::disable_raw_mode().unwrap();
+    crossterm::terminal::disable_raw_mode().expect("TODO handle unable to disable Raw mode on terminal");
     crossterm::execute!(
         terminal.backend_mut(),
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture
-    ).unwrap();
-    terminal.show_cursor().unwrap();
+    ).expect("TODO handle unable to leave alternate screen or disable mouse capture");
+    terminal.show_cursor().expect("TODO handle unable to show cursor in terminal");
 
 }
 
@@ -107,30 +107,30 @@ impl Events {
         std::thread::spawn(move || {
             loop {
                 // poll for tick rate duration, if no event, sent tick event.
-                if crossterm::event::poll(tick_rate).unwrap() {
-                    match crossterm::event::read().unwrap() {
+                if crossterm::event::poll(tick_rate).expect("TODO handle unable to poll for crossterm events") {
+                    match crossterm::event::read().expect("TODO handle unable to read crossterm events, this shouldn't happen") {
                         crossterm::event::Event::Key(key) => {
                             let key = crossterm::event::KeyEvent::from(key);
-                            event_tx.send(InputEvent::KeyPressed(key)).unwrap();
+                            event_tx.send(InputEvent::KeyPressed(key)).expect("TODO hangle unable to send keypress event to channel");
                         },
                         crossterm::event::Event::FocusGained => {
-                            event_tx.send(InputEvent::FocusGained).unwrap();
+                            event_tx.send(InputEvent::FocusGained).expect("TODO hangle unable to send focus gained event to channel");
                         },
                         crossterm::event::Event::FocusLost => {
-                            event_tx.send(InputEvent::FocusLost).unwrap();
+                            event_tx.send(InputEvent::FocusLost).expect("TODO hangle unable to send focus lost event to channel");
                         },
                         crossterm::event::Event::Mouse(_) => {
                             // TODO support mouse stuff
                         },
                         crossterm::event::Event::Paste(contents) => {
-                            event_tx.send(InputEvent::Paste(contents)).unwrap();
+                            event_tx.send(InputEvent::Paste(contents)).expect("TODO hangle unable to send paste event to channel");
                         },
                         crossterm::event::Event::Resize(column, row) => {
-                            event_tx.send(InputEvent::Resize(column, row)).unwrap();
+                            event_tx.send(InputEvent::Resize(column, row)).expect("TODO hangle unable to send resize event to channel");
                         },
                     }
                 }
-                event_tx.send(InputEvent::Tick).unwrap();
+                event_tx.send(InputEvent::Tick).expect("TODO hangle unable to send tick event to channel");
             }
         });
 
@@ -365,7 +365,7 @@ fn getKeyCode(event: crossterm::event::KeyCode) -> crate::glue::KeyCode {
         crossterm::event::KeyCode::PrintScreen => crate::glue::KeyCode::KeyPrintScreen,
         crossterm::event::KeyCode::Right => crate::glue::KeyCode::KeyRight,
         crossterm::event::KeyCode::Char(ch) => {
-            crate::glue::KeyCode::KeyScalar(char::to_digit(ch, 10u32).unwrap())
+            crate::glue::KeyCode::KeyScalar(char::to_digit(ch, 10u32).expect("TODO handle error converting char to scalar"))
         },
         crossterm::event::KeyCode::ScrollLock => crate::glue::KeyCode::KeyScrollLock,
         crossterm::event::KeyCode::Tab => crate::glue::KeyCode::KeyTab,
