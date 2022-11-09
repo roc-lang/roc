@@ -1,120 +1,29 @@
-use crate::{
-    glue::{
-        Bounds, 
-        Elem,
-    },
-};
-use roc_std::{
-    RocList,
-    // RocStr,
-};
-use std::{
-    io, 
-    thread, 
-    time::Duration, 
-    sync::mpsc::{RecvError,Receiver,Sender}
-};
-use tui::{
-    backend::{Backend, CrosstermBackend},
-    widgets::{
-        Widget, 
-        Block, 
-        Borders, 
-        BorderType,
-        List,
-        Paragraph,
-        ListItem,
-        Wrap,
-    },
-    style::{
-        Style,
-        Color,
-        Modifier,
-    },
-    text::{
-        Span,
-        Spans,
-    },
-    layout::{Layout, Constraint, Direction, Alignment, Rect},
-    Terminal,
-    Frame,
-};
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, KeyEvent
-        // Event, KeyCode
-    },
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
 
-pub fn run_event_loop(title: &str, window_bounds: Bounds) {
+pub fn run_event_loop(title: &str, window_bounds: crate::glue::Bounds) {
     
-    use crate::roc;
-    let (mut model, mut elems) = roc::init_and_render(window_bounds);
+    let (mut model, mut elems) = crate::roc::init_and_render(window_bounds);
 
-    // dbg!(&elems);
+    crossterm::terminal::enable_raw_mode().unwrap();
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(
+        stdout, 
+        crossterm::terminal::EnterAlternateScreen, 
+        crossterm::event::EnableMouseCapture
+    ).unwrap();
+    let backend = tui::backend::CrosstermBackend::new(stdout);
+    let mut terminal = tui::Terminal::new(backend).unwrap();
 
-    // macro_rules! update_and_rerender {
-    //     ($event:expr) => {
-    //         // TODO use (model, elems) =  ... once we've upgraded rust versions
-    //         let pair = roc::update_and_render(model, $event);
-
-    //         model = pair.0;
-    //         elems = pair.1;
-
-    //         window.request_redraw();
-    //     };
-    // }
-
-    enable_raw_mode().unwrap();
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).unwrap();
-
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = std::time::Duration::from_millis(200);
     let events = Events::new(tick_rate);
     
     loop {
         let mut appReturn = false;
-        terminal.draw(|f| buildWidgets(f, &elems)).unwrap();
-
-        // terminal.draw(|f| {
-        //     let size = f.size();
-
-        //     // let chunks = Layout::default()
-        //     //     .direction(Direction::Horizontal)
-        //     //     .margin(1)
-        //     //     .constraints(
-        //     //         [
-        //     //             Constraint::Percentage(10),
-        //     //             Constraint::Percentage(80),
-        //     //             Constraint::Percentage(10)
-        //     //         ].as_ref()
-        //     //     )
-        //     //     .split(size);
-
-        //     // f.render_widget(block, chunks[0]);
-        //     // f.render_widget(list, chunks[2]);
-        //     // f.render_widget(paragrph, chunks[1]);
-            
-            
-            
-        //     // let block = buildWidgets(&elems);
-                
-        //     // let items = [ListItem::new("Item 1"), ListItem::new("Item 2"), ListItem::new("Item 3")];
-        //     // let list = List::new(items)
-        //     //     .block(Block::default().title("List").borders(Borders::ALL))
-        //     //     .style(Style::default().fg(Color::Magenta))
-        //     //     .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-        //     //     .highlight_symbol(">>");
-            
-            
-
-
-        // }).unwrap();
-
-
+        
+        terminal.draw(|f| {
+            for elem in &elems {
+                renderWidget(f, f.size(), &elem)
+            }
+        }).unwrap();
 
         let result = match events.next().unwrap() {
             InputEvent::Input(key) => {
@@ -126,41 +35,39 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) {
             break;
         }
     }
-        
-    // thread::sleep(Duration::from_millis(5000));
 
     // restore terminal
-    disable_raw_mode().unwrap();
-    execute!(
+    crossterm::terminal::disable_raw_mode().unwrap();
+    crossterm::execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::event::DisableMouseCapture
     ).unwrap();
     terminal.show_cursor().unwrap();
 
 }
 
 pub enum InputEvent {
-    Input(KeyEvent),
+    Input(crossterm::event::KeyEvent),
     Tick,
 }
 
 pub struct Events {
-    rx: Receiver<InputEvent>,
-    _tx: Sender<InputEvent>,
+    rx: std::sync::mpsc::Receiver<InputEvent>,
+    _tx: std::sync::mpsc::Sender<InputEvent>,
 }
 
 impl Events {
-    pub fn new(tick_rate: Duration) -> Events {
+    pub fn new(tick_rate: std::time::Duration) -> Events {
         let (tx, rx) = std::sync::mpsc::channel();
 
         let event_tx = tx.clone(); // the thread::spawn own event_tx 
-        thread::spawn(move || {
+        std::thread::spawn(move || {
             loop {
                 // poll for tick rate duration, if no event, sent tick event.
                 if crossterm::event::poll(tick_rate).unwrap() {
-                    if let event::Event::Key(key) = event::read().unwrap() {
-                        let key = KeyEvent::from(key);
+                    if let crossterm::event::Event::Key(key) = crossterm::event::read().unwrap() {
+                        let key = crossterm::event::KeyEvent::from(key);
                         event_tx.send(InputEvent::Input(key)).unwrap();
                     }
                 }
@@ -173,23 +80,44 @@ impl Events {
 
     /// Attempts to read an event.
     /// This function block the current thread.
-    pub fn next(&self) -> Result<InputEvent, RecvError> {
+    pub fn next(&self) -> Result<InputEvent, std::sync::mpsc::RecvError> {
         self.rx.recv()
     }
 }
 
-fn buildWidgets<B: Backend>(f: &mut Frame<B>, elems : &RocList<Elem>){
-    let size = f.size();
-
-    for elem in elems {
-        renderParagraph(f, size, elem);
+fn renderWidget<B: tui::backend::Backend>(f: &mut tui::Frame<B>, area : tui::layout::Rect, elem : &crate::glue::Elem){
+    match elem.discriminant(){
+        crate::glue::DiscriminantElem::Paragraph => renderParagraph(f, area, elem),
+        crate::glue::DiscriminantElem::Layout => renderLayout(f, area, elem),
     }
 }
 
-fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem){
+fn renderLayout<B: tui::backend::Backend>(f: &mut tui::Frame<B>, area : tui::layout::Rect, layout : &crate::glue::Elem){
+    let (mut elems, mut config) = unsafe { layout.as_Layout()};
+    let layoutDirection = getLayoutDirection(config.direction);
+    let mut constraints = getConstraints(&config.constraints);
+
+    // check we have enough constriants otherwise add some default to stop tui from crashing
+    while constraints.len() < elems.len() {
+        constraints.push(tui::layout::Constraint::Ratio(1,1));
+    }
+
+    let chunks = tui::layout::Layout::default()
+        .direction(layoutDirection)
+        .horizontal_margin(config.hMargin)
+        .vertical_margin(config.vMargin)
+        .constraints(constraints)
+        .split(area);
+
+    let mut chunkIndex = 0;
+    for elem in elems {
+        renderWidget(f, chunks[chunkIndex], elem);
+        chunkIndex += 1;
+    }
+}
+
+fn renderParagraph<B: tui::backend::Backend>(f: &mut tui::Frame<B>, area : tui::layout::Rect, paragraph : &crate::glue::Elem){
     
-    // For now there is only one Elem type will change later
-    // roc_std::RocList<roc_std::RocList<Span>>, ParagraphConfig
     let (listSpans, config) = unsafe {paragraph.as_Paragraph()};
 
     // Build pargraph up from nested Span(s)
@@ -197,10 +125,10 @@ fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem
     for aSpans in listSpans {
         let mut spansElements = Vec::with_capacity(aSpans.len());
         for span in aSpans {
-            let s = Span::styled(span.text.as_str(),getStyle(&span.style));
+            let s = tui::text::Span::styled(span.text.as_str(),getStyle(&span.style));
             spansElements.push(s);  
         }
-        text.push(Spans::from(spansElements)); 
+        text.push(tui::text::Spans::from(spansElements)); 
     }
 
     // Get pargraph properties from config etc
@@ -211,25 +139,25 @@ fn renderParagraph<B: Backend>(f: &mut Frame<B>, area : Rect , paragraph : &Elem
     let borders = getBorders(&config.borders);
 
     // Block window for the paragraph text to live in
-    let block = Block::default()
+    let block = tui::widgets::Block::default()
     .title(title)
     .title_alignment(titleAlignment)
     .borders(borders)
     .border_type(borderType);
 
     // Create the paragraph
-    let p = Paragraph::new(text)
+    let p = tui::widgets::Paragraph::new(text)
     .block(block)
     .style(getStyle(&config.style))
     .alignment(textAlignment)
-    .wrap(Wrap { trim: true });
+    .wrap(tui::widgets::Wrap { trim: true });
 
     // Render to the frame
     f.render_widget(p,area);
 }
 
-fn getStyle(rocStyle : &crate::glue::Styles) -> Style {
-    let mut style = Style::default();
+fn getStyle(rocStyle : &crate::glue::Styles) -> tui::style::Style {
+    let mut style = tui::style::Style::default();
 
     if rocStyle.bg.discriminant() != crate::glue::DiscriminantColor::None {
         style = style.bg(getColor(rocStyle.bg));
@@ -239,18 +167,18 @@ fn getStyle(rocStyle : &crate::glue::Styles) -> Style {
         style = style.fg(getColor(rocStyle.fg));
     }
 
-    let mut modifiers = Modifier::empty();
+    let mut modifiers = tui::style::Modifier::empty();
     for modifier in &rocStyle.modifiers {
         match modifier {
-            crate::glue::TextModifier::BOLD => {modifiers.insert(Modifier::BOLD);},
-            crate::glue::TextModifier::CROSSEDOUT => {modifiers.insert(Modifier::CROSSED_OUT);},
-            crate::glue::TextModifier::DIM => {modifiers.insert(Modifier::DIM);},
-            crate::glue::TextModifier::HIDDEN => {modifiers.insert(Modifier::HIDDEN);},
-            crate::glue::TextModifier::ITALIC => {modifiers.insert(Modifier::ITALIC);},
-            crate::glue::TextModifier::RAPIDBLINK => {modifiers.insert(Modifier::RAPID_BLINK);},
-            crate::glue::TextModifier::REVERSED => {modifiers.insert(Modifier::REVERSED);},
-            crate::glue::TextModifier::SLOWBLINK => {modifiers.insert(Modifier::SLOW_BLINK);},
-            crate::glue::TextModifier::UNDERLINED => {modifiers.insert(Modifier::UNDERLINED);},
+            crate::glue::TextModifier::BOLD => {modifiers.insert(tui::style::Modifier::BOLD);},
+            crate::glue::TextModifier::CROSSEDOUT => {modifiers.insert(tui::style::Modifier::CROSSED_OUT);},
+            crate::glue::TextModifier::DIM => {modifiers.insert(tui::style::Modifier::DIM);},
+            crate::glue::TextModifier::HIDDEN => {modifiers.insert(tui::style::Modifier::HIDDEN);},
+            crate::glue::TextModifier::ITALIC => {modifiers.insert(tui::style::Modifier::ITALIC);},
+            crate::glue::TextModifier::RAPIDBLINK => {modifiers.insert(tui::style::Modifier::RAPID_BLINK);},
+            crate::glue::TextModifier::REVERSED => {modifiers.insert(tui::style::Modifier::REVERSED);},
+            crate::glue::TextModifier::SLOWBLINK => {modifiers.insert(tui::style::Modifier::SLOW_BLINK);},
+            crate::glue::TextModifier::UNDERLINED => {modifiers.insert(tui::style::Modifier::UNDERLINED);},
         }
     }
     style = style.add_modifier(modifiers);
@@ -258,56 +186,92 @@ fn getStyle(rocStyle : &crate::glue::Styles) -> Style {
     style
 }
 
-fn getColor(color : crate::glue::Color) -> Color {
+fn getColor(color : crate::glue::Color) -> tui::style::Color {
     match color.discriminant() {
-        crate::glue::DiscriminantColor::None => Color::Reset,
-        crate::glue::DiscriminantColor::Black => Color::Black,
-        crate::glue::DiscriminantColor::Red => Color::Red,
-        crate::glue::DiscriminantColor::Green => Color::Green,
-        crate::glue::DiscriminantColor::Yellow => Color::Yellow,
-        crate::glue::DiscriminantColor::Blue => Color::Blue,
-        crate::glue::DiscriminantColor::Magenta => Color::Magenta,
-        crate::glue::DiscriminantColor::Cyan => Color::Cyan,
-        crate::glue::DiscriminantColor::Gray => Color::Gray,
-        crate::glue::DiscriminantColor::DarkGray => Color::DarkGray,
-        crate::glue::DiscriminantColor::LightRed => Color::LightRed,
-        crate::glue::DiscriminantColor::LightGreen => Color::LightGreen,
-        crate::glue::DiscriminantColor::LightYellow => Color::LightYellow,
-        crate::glue::DiscriminantColor::LightBlue => Color::LightBlue,
-        crate::glue::DiscriminantColor::LightMagenta => Color::LightMagenta,
-        crate::glue::DiscriminantColor::LightCyan => Color::LightCyan,
-        crate::glue::DiscriminantColor::White => Color::White,
+        crate::glue::DiscriminantColor::None => tui::style::Color::Reset,
+        crate::glue::DiscriminantColor::Black => tui::style::Color::Black,
+        crate::glue::DiscriminantColor::Red => tui::style::Color::Red,
+        crate::glue::DiscriminantColor::Green => tui::style::Color::Green,
+        crate::glue::DiscriminantColor::Yellow => tui::style::Color::Yellow,
+        crate::glue::DiscriminantColor::Blue => tui::style::Color::Blue,
+        crate::glue::DiscriminantColor::Magenta => tui::style::Color::Magenta,
+        crate::glue::DiscriminantColor::Cyan => tui::style::Color::Cyan,
+        crate::glue::DiscriminantColor::Gray => tui::style::Color::Gray,
+        crate::glue::DiscriminantColor::DarkGray => tui::style::Color::DarkGray,
+        crate::glue::DiscriminantColor::LightRed => tui::style::Color::LightRed,
+        crate::glue::DiscriminantColor::LightGreen => tui::style::Color::LightGreen,
+        crate::glue::DiscriminantColor::LightYellow => tui::style::Color::LightYellow,
+        crate::glue::DiscriminantColor::LightBlue => tui::style::Color::LightBlue,
+        crate::glue::DiscriminantColor::LightMagenta => tui::style::Color::LightMagenta,
+        crate::glue::DiscriminantColor::LightCyan => tui::style::Color::LightCyan,
+        crate::glue::DiscriminantColor::White => tui::style::Color::White,
     }
 }
 
-fn getAlignment(rocAlignment : crate::glue::Alignment) -> Alignment {
+fn getAlignment(rocAlignment : crate::glue::Alignment) -> tui::layout::Alignment {
     match rocAlignment {
-        crate::glue::Alignment::Left => Alignment::Left,
-        crate::glue::Alignment::Center => Alignment::Center,
-        crate::glue::Alignment::Right => Alignment::Right,
+        crate::glue::Alignment::Left => tui::layout::Alignment::Left,
+        crate::glue::Alignment::Center => tui::layout::Alignment::Center,
+        crate::glue::Alignment::Right => tui::layout::Alignment::Right,
     }
 }
 
-fn getBorderType(rocBorderType : crate::glue::BorderType) -> BorderType {
+fn getBorderType(rocBorderType : crate::glue::BorderType) -> tui::widgets::BorderType {
     match rocBorderType {
-        crate::glue::BorderType::Plain => BorderType::Plain,
-        crate::glue::BorderType::Rounded => BorderType::Rounded,
-        crate::glue::BorderType::Double => BorderType::Double,
-        crate::glue::BorderType::Thick => BorderType::Thick,
+        crate::glue::BorderType::Plain => tui::widgets::BorderType::Plain,
+        crate::glue::BorderType::Rounded => tui::widgets::BorderType::Rounded,
+        crate::glue::BorderType::Double => tui::widgets::BorderType::Double,
+        crate::glue::BorderType::Thick => tui::widgets::BorderType::Thick,
     }
 }
 
-fn getBorders(rocBorders : &roc_std::RocList<crate::glue::BorderModifier>) -> Borders {
-    let mut borders = Borders::empty();
+fn getBorders(rocBorders : &roc_std::RocList<crate::glue::BorderModifier>) -> tui::widgets::Borders {
+    let mut borders = tui::widgets::Borders::empty();
     for border in rocBorders {
         match border {
-            crate::glue::BorderModifier::ALL => borders.insert(Borders::ALL),
-            crate::glue::BorderModifier::BOTTOM => borders.insert(Borders::BOTTOM),
-            crate::glue::BorderModifier::LEFT => borders.insert(Borders::LEFT),
-            crate::glue::BorderModifier::NONE => borders.insert(Borders::NONE),
-            crate::glue::BorderModifier::RIGHT => borders.insert(Borders::RIGHT),
-            crate::glue::BorderModifier::TOP => borders.insert(Borders::TOP),
+            crate::glue::BorderModifier::ALL => borders.insert(tui::widgets::Borders::ALL),
+            crate::glue::BorderModifier::BOTTOM => borders.insert(tui::widgets::Borders::BOTTOM),
+            crate::glue::BorderModifier::LEFT => borders.insert(tui::widgets::Borders::LEFT),
+            crate::glue::BorderModifier::NONE => borders.insert(tui::widgets::Borders::NONE),
+            crate::glue::BorderModifier::RIGHT => borders.insert(tui::widgets::Borders::RIGHT),
+            crate::glue::BorderModifier::TOP => borders.insert(tui::widgets::Borders::TOP),
         }
     }
     borders
+}
+
+fn getConstraints(rocConstraints : &roc_std::RocList<crate::glue::Constraint>) -> Vec<tui::layout::Constraint> {
+    let mut constraints: Vec<tui::layout::Constraint> = Vec::with_capacity(rocConstraints.len());
+    for constraint in rocConstraints {
+        match constraint.discriminant() {
+            crate::glue::DiscriminantConstraint::Length => {
+                let l = unsafe {constraint.as_Length()};
+                constraints.push(tui::layout::Constraint::Length(*l));
+            },
+            crate::glue::DiscriminantConstraint::Max => {
+                let l = unsafe {constraint.as_Max()};
+                constraints.push(tui::layout::Constraint::Max(*l));
+            },
+            crate::glue::DiscriminantConstraint::Min => {
+                let l = unsafe {constraint.as_Min()};
+                constraints.push(tui::layout::Constraint::Min(*l));
+            },
+            crate::glue::DiscriminantConstraint::Percentage => {
+                let l = unsafe {constraint.as_Percentage()};
+                constraints.push(tui::layout::Constraint::Percentage(*l));
+            },
+            crate::glue::DiscriminantConstraint::Ratio => {
+                let (r1, r2) = unsafe { constraint.as_Ratio() };
+                constraints.push(tui::layout::Constraint::Ratio(*r1,*r2));
+            },
+        }
+    } 
+    constraints
+}
+
+fn getLayoutDirection(direction : crate::glue::LayoutDirection) -> tui::layout::Direction {
+    match direction {
+        crate::glue::LayoutDirection::Horizontal => tui::layout::Direction::Horizontal,
+        crate::glue::LayoutDirection::Vertical => tui::layout::Direction::Vertical,    
+    }
 }

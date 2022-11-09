@@ -19,8 +19,7 @@ style3 = { bg: Cyan, fg: LightMagenta, modifiers: [] }
 style4 = { bg: None, fg: Yellow, modifiers: [] }
 style5 = { bg: None, fg: Red, modifiers: [] }
 
-render : Model -> List Elem
-render = \model -> [
+paragraph =\model -> 
     Paragraph
         (
             [
@@ -39,12 +38,39 @@ render = \model -> [
             titleStyle: style1,
             titleAlignment: Right,
             textAlignment: Center,
-            borders: [TOP, BOTTOM],
+            borders: [ALL],
             borderStyle: style3,
-            borderType: Double,
+            borderType: Plain,
             style: style4,
-        },
-]
+        }
+
+layout = \model ->
+    Layout 
+    [
+        paragraph model,
+        paragraph model,
+    ]
+    {
+        constraints : [Percentage 20, Ratio 1 3],
+        vMargin : 5,
+        hMargin : 2,
+        direction : Horizontal,
+    }
+
+render : Model -> List Elem
+render = \model -> [
+    Layout 
+        [
+            layout model,
+            paragraph model,
+        ]
+        {
+            constraints : [Ratio 2 3, Ratio 1 3],
+            vMargin : 0,
+            hMargin : 0,
+            direction : Vertical,
+        }
+    ]
 
 program = { init, update, render }
 
