@@ -13,7 +13,7 @@ use roc_types::types::{AliasKind, Category, Types};
 use roc_types::types::{OptAbleType, Reason};
 
 #[inline(always)]
-pub fn add_numeric_bound_constr(
+pub(crate) fn add_numeric_bound_constr(
     types: &mut Types,
     constraints: &mut Constraints,
     num_constraints: &mut impl Extend<Constraint>,
@@ -73,7 +73,7 @@ pub fn add_numeric_bound_constr(
 }
 
 #[inline(always)]
-pub fn int_literal(
+pub(crate) fn int_literal(
     types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
@@ -119,7 +119,7 @@ pub fn int_literal(
     constraints.exists([num_var], and_constraint)
 }
 
-pub fn single_quote_literal(
+pub(crate) fn single_quote_literal(
     types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
@@ -170,7 +170,7 @@ pub fn single_quote_literal(
 }
 
 #[inline(always)]
-pub fn float_literal(
+pub(crate) fn float_literal(
     types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
@@ -215,7 +215,7 @@ pub fn float_literal(
 }
 
 #[inline(always)]
-pub fn num_literal(
+pub(crate) fn num_literal(
     types: &mut Types,
     constraints: &mut Constraints,
     num_var: Variable,
@@ -249,7 +249,7 @@ pub fn num_literal(
 // Inlining these tiny leaf functions can lead to death by a thousand cuts,
 // where we end up with huge stack frames in non-tail-recursive functions.
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
+pub(crate) fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
     Type::Apply(
         symbol,
         args.into_iter().map(Loc::at_zero).collect(),
@@ -258,12 +258,12 @@ pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn empty_list_type(var: Variable) -> Type {
+pub(crate) fn empty_list_type(var: Variable) -> Type {
     list_type(Type::Variable(var))
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn list_type(typ: Type) -> Type {
+pub(crate) fn list_type(typ: Type) -> Type {
     builtin_type(Symbol::LIST_LIST, vec![typ])
 }
 
@@ -285,7 +285,7 @@ fn builtin_num_alias(
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_float(range: Type) -> Type {
+pub(crate) fn num_float(range: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_FRAC,
         vec![OptAbleType::unbound(range.clone())],
@@ -295,7 +295,7 @@ pub fn num_float(range: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_floatingpoint(range: Type) -> Type {
+pub(crate) fn num_floatingpoint(range: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_FLOATINGPOINT,
         vec![OptAbleType::unbound(range.clone())],
@@ -305,7 +305,7 @@ pub fn num_floatingpoint(range: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_u32() -> Type {
+pub(crate) fn num_u32() -> Type {
     builtin_num_alias(
         Symbol::NUM_U32,
         vec![],
@@ -325,7 +325,7 @@ fn num_unsigned32() -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_binary64() -> Type {
+pub(crate) fn num_binary64() -> Type {
     builtin_num_alias(
         Symbol::NUM_BINARY64,
         vec![],
@@ -335,7 +335,7 @@ pub fn num_binary64() -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_int(range: Type) -> Type {
+pub(crate) fn num_int(range: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_INT,
         vec![OptAbleType::unbound(range.clone())],
@@ -345,7 +345,7 @@ pub fn num_int(range: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_signed64() -> Type {
+pub(crate) fn num_signed64() -> Type {
     builtin_num_alias(
         Symbol::NUM_SIGNED64,
         vec![],
@@ -355,7 +355,7 @@ pub fn num_signed64() -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_integer(range: Type) -> Type {
+pub(crate) fn num_integer(range: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_INTEGER,
         vec![OptAbleType::unbound(range.clone())],
@@ -365,7 +365,7 @@ pub fn num_integer(range: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn num_num(typ: Type) -> Type {
+pub(crate) fn num_num(typ: Type) -> Type {
     builtin_num_alias(
         Symbol::NUM_NUM,
         vec![OptAbleType::unbound(typ.clone())],
