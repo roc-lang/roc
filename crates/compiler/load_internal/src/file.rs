@@ -4282,8 +4282,6 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
-    use roc_types::types::Type;
-
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();

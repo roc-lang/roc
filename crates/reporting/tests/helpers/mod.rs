@@ -18,7 +18,7 @@ use roc_region::all::Loc;
 use roc_solve::solve::{self, Aliases};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
-use roc_types::types::{Type, Types};
+use roc_types::types::Types;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 

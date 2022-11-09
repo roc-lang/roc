@@ -8,7 +8,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
-use roc_types::types::{Category, PatternCategory, Type, TypeTag, Types};
+use roc_types::types::{Category, PatternCategory, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,

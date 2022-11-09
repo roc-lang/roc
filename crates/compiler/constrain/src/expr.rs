@@ -1,8 +1,9 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::ops::Range;
 
 use crate::builtins::{
     empty_list_type, float_literal, int_literal, list_type, num_literal, single_quote_literal,
-    str_type,
 };
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
@@ -102,7 +103,6 @@ fn constrain_untyped_args(
     (vars, pattern_state, function_type)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn constrain_untyped_closure(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -166,7 +166,7 @@ fn constrain_untyped_closure(
 
     let function_type = {
         let typ = types.from_old_type(&function_type);
-        constraints.push_type(&types, typ)
+        constraints.push_type(types, typ)
     };
 
     let cons = [
@@ -233,7 +233,7 @@ pub fn constrain_expr(
                 let record_type = {
                     let typ =
                         types.from_old_type(&Type::Record(field_types, TypeExtension::Closed));
-                    constraints.push_type(&types, typ)
+                    constraints.push_type(types, typ)
                 };
 
                 let record_con = constraints.equal_types_with_storage(
@@ -280,11 +280,11 @@ pub fn constrain_expr(
                     fields,
                     TypeExtension::from_type(Type::Variable(*ext_var)),
                 ));
-                constraints.push_type(&types, typ)
+                constraints.push_type(types, typ)
             };
             let record_type = {
                 let typ = types.from_old_type(&Type::Variable(*record_var));
-                constraints.push_type(&types, typ)
+                constraints.push_type(types, typ)
             };
 
             // NOTE from elm compiler: fields_type is separate so that Error propagates better
@@ -376,7 +376,7 @@ pub fn constrain_expr(
 
                 let elem_type_index = {
                     let typ = types.from_old_type(&list_type(list_elem_type));
-                    constraints.push_type(&types, typ)
+                    constraints.push_type(types, typ)
                 };
                 list_constraints.push(constraints.equal_types(
                     elem_type_index,
@@ -1606,7 +1606,7 @@ fn constrain_function_def(
                 &mut ftv,
             );
 
-            let signature_index = constraints.push_type(types, signature.clone());
+            let signature_index = constraints.push_type(types, signature);
 
             let (arg_types, signature_closure_type, ret_type) = match types[signature] {
                 TypeTag::Function(signature_closure_type, ret_type) => (
@@ -2492,7 +2492,7 @@ fn constrain_typed_def(
 
     let signature_index = {
         // TODO(types-soa) get rid of clone
-        let typ = types.clone_with_variable_substitutions(signature.clone(), &Default::default());
+        let typ = types.clone_with_variable_substitutions(signature, &Default::default());
         constraints.push_type(types, typ)
     };
 
@@ -2705,7 +2705,7 @@ fn constrain_typed_function_arguments(
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = {
             // TODO(types-soa) remove clone
-            let typ = types.clone_with_variable_substitutions(ann.clone(), &Default::default());
+            let typ = types.clone_with_variable_substitutions(ann, &Default::default());
             constraints.push_type(types, typ)
         };
 
@@ -3024,7 +3024,6 @@ pub(crate) fn constrain_def_make_constraint(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn constrain_value_def_make_constraint(
     constraints: &mut Constraints,
     new_rigid_variables: Vec<Variable>,
@@ -3273,7 +3272,6 @@ fn constrain_recursive_declarations(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn constraint_recursive_function(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -3481,7 +3479,6 @@ fn constraint_recursive_function(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn rec_defs_help_simple(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -3567,10 +3564,8 @@ pub fn rec_defs_help_simple(
 
                         let signature_index = {
                             // TODO(types-soa) remove clone
-                            let typ = types.clone_with_variable_substitutions(
-                                signature.clone(),
-                                &Default::default(),
-                            );
+                            let typ = types
+                                .clone_with_variable_substitutions(signature, &Default::default());
                             constraints.push_type(types, typ)
                         };
 
@@ -3792,8 +3787,8 @@ fn rec_defs_help(
                 hybrid_and_flex_info.vars.extend(new_infer_variables);
 
                 let signature_index = {
-                    let typ = types
-                        .clone_with_variable_substitutions(signature.clone(), &Default::default());
+                    let typ =
+                        types.clone_with_variable_substitutions(signature, &Default::default());
                     constraints.push_type(
                         types, // TODO(types-soa) remove clone
                         typ,

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints, ExpectedTypeIndex};
 use roc_can::expected::Expected::{self, *};

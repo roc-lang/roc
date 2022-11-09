@@ -65,7 +65,7 @@ fn headers_from_annotation_help(
             ident: symbol,
             specializes: _,
         } => {
-            let annotation_index = { let typ = types.from_old_type(&annotation.value); constraints.push_type(types, typ) };
+            let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
@@ -165,7 +165,7 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                let annotation_index = { let typ = types.from_old_type( &annotation.value ); constraints.push_type(types, typ) };
+                let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
                 let typ = Loc::at(annotation.region, annotation_index);
                 headers.insert(*opaque, typ);
 
