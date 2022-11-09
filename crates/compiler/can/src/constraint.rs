@@ -8,11 +8,11 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
-use roc_types::types::{Category, PatternCategory, TypeTag, Types};
+use roc_types::types::{Category, PatternCategory, TypeCell, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Cell<Index<TypeTag>>>,
+    pub types: Vec<Cell<Index<TypeCell>>>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
@@ -60,7 +60,7 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<Cell<Index<TypeTag>>, Variable>;
+pub type TypeOrVar = EitherIndex<Cell<Index<TypeCell>>, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
@@ -138,9 +138,9 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = Index::new(1);
-    pub const STR: Index<Cell<Index<TypeTag>>> = Index::new(2);
+    pub const EMPTY_RECORD: Index<Cell<Index<TypeCell>>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeCell>>> = Index::new(1);
+    pub const STR: Index<Cell<Index<TypeCell>>> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -173,9 +173,9 @@ impl Constraints {
     pub fn push_type(
         &mut self,
         types: &Types,
-        typ: Index<TypeTag>,
-    ) -> EitherIndex<Cell<Index<TypeTag>>, Variable> {
-        match types[typ] {
+        typ: Index<TypeCell>,
+    ) -> EitherIndex<Cell<Index<TypeCell>>, Variable> {
+        match types[typ].get() {
             TypeTag::EmptyRecord => EitherIndex::from_left(Self::EMPTY_RECORD),
             TypeTag::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
             TypeTag::Apply {
@@ -184,7 +184,7 @@ impl Constraints {
             } => EitherIndex::from_left(Self::STR),
             TypeTag::Variable(var) => Self::push_type_variable(var),
             _ => {
-                let index: Index<Cell<Index<TypeTag>>> =
+                let index: Index<Cell<Index<TypeCell>>> =
                     Index::push_new(&mut self.types, Cell::new(typ));
                 EitherIndex::from_left(index)
             }

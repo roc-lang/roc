@@ -771,7 +771,7 @@ fn could_be_a_tag_union(types: &Types, constraints: &mut Constraints, typ: TypeO
         Ok(typ_index) => {
             let typ_cell = &mut constraints.types[typ_index.index()];
             !matches!(
-                types[*typ_cell.get_mut()],
+                types[*typ_cell.get_mut()].get(),
                 TypeTag::Apply { .. } | TypeTag::Function(..) | TypeTag::Record(..)
             )
         }

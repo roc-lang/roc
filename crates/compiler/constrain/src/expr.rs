@@ -30,7 +30,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField,
+    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField, TypeCell,
     TypeExtension, TypeTag, Types,
 };
 
@@ -1608,7 +1608,7 @@ fn constrain_function_def(
 
             let signature_index = constraints.push_type(types, signature);
 
-            let (arg_types, signature_closure_type, ret_type) = match types[signature] {
+            let (arg_types, signature_closure_type, ret_type) = match types[signature].get() {
                 TypeTag::Function(signature_closure_type, ret_type) => (
                     types.get_type_arguments(signature),
                     signature_closure_type,
@@ -2503,7 +2503,7 @@ fn constrain_typed_def(
     //
     // This means we get errors like "the first argument of `f` is weird"
     // instead of the more generic "something is wrong with the body of `f`"
-    match (&def.loc_expr.value, types[signature]) {
+    match (&def.loc_expr.value, types[signature].get()) {
         (
             Closure(ClosureData {
                 function_type: fn_var,
@@ -2667,7 +2667,7 @@ fn constrain_typed_function_arguments(
     def_pattern_state: &mut PatternState,
     argument_pattern_state: &mut PatternState,
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
-    arg_types: Slice<TypeTag>,
+    arg_types: Slice<TypeCell>,
 ) {
     // ensure type matches the one in the annotation
     let opt_label = if let Pattern::Identifier(label) = def.loc_pattern.value {
@@ -2805,7 +2805,7 @@ fn constrain_typed_function_arguments_simple(
     def_pattern_state: &mut PatternState,
     argument_pattern_state: &mut PatternState,
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
-    arg_types: Slice<TypeTag>,
+    arg_types: Slice<TypeCell>,
 ) {
     let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
@@ -3094,7 +3094,7 @@ fn constrain_closure_size(
 }
 
 pub struct InstantiateRigids {
-    pub signature: Index<TypeTag>,
+    pub signature: Index<TypeCell>,
     pub new_rigid_variables: Vec<Variable>,
     pub new_infer_variables: Vec<Variable>,
 }
@@ -3321,7 +3321,7 @@ fn constraint_recursive_function(
                 signature_index,
             ));
 
-            let (arg_types, _signature_closure_type, ret_type) = match types[signature] {
+            let (arg_types, _signature_closure_type, ret_type) = match types[signature].get() {
                 TypeTag::Function(signature_closure_type, ret_type) => (
                     types.get_type_arguments(signature),
                     signature_closure_type,
@@ -3764,7 +3764,7 @@ fn rec_defs_help(
                 //
                 // This means we get errors like "the first argument of `f` is weird"
                 // instead of the more generic "something is wrong with the body of `f`"
-                match (&def.loc_expr.value, types[signature]) {
+                match (&def.loc_expr.value, types[signature].get()) {
                     (
                         Closure(ClosureData {
                             function_type: fn_var,

@@ -34,7 +34,7 @@ use roc_types::subs::{
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
-    RecordField, Type, TypeExtension, TypeTag, Types, Uls,
+    RecordField, Type, TypeCell, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -138,7 +138,7 @@ impl DelayedAliasVariables {
 
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: Vec<(Symbol, Index<TypeTag>, DelayedAliasVariables, AliasKind)>,
+    aliases: Vec<(Symbol, Index<TypeCell>, DelayedAliasVariables, AliasKind)>,
     variables: Vec<OptAbleVar>,
 }
 
@@ -195,7 +195,7 @@ impl Aliases {
                 }
             };
 
-        // TODO: can we construct Aliases from TypeTag directly?
+        // TODO: can we construct Aliases from TypeCell directly?
         let alias_typ = types.from_old_type(&alias.typ);
 
         self.aliases
@@ -2263,7 +2263,7 @@ fn type_cell_to_var(
     pools: &mut Pools,
     types: &mut Types,
     aliases: &mut Aliases,
-    typ_cell: &Cell<Index<TypeTag>>,
+    typ_cell: &Cell<Index<TypeCell>>,
 ) -> Variable {
     let typ = typ_cell.get();
     let var = type_to_var(
@@ -2278,7 +2278,7 @@ fn type_cell_to_var(
         typ,
     );
     unsafe {
-        types.set_variable(typ, var);
+        types.emplace_variable(typ, var);
     }
 
     var
@@ -2293,9 +2293,9 @@ pub(crate) fn type_to_var(
     pools: &mut Pools,
     types: &mut Types,
     aliases: &mut Aliases,
-    typ: Index<TypeTag>,
+    typ: Index<TypeCell>,
 ) -> Variable {
-    if let TypeTag::Variable(var) = types[typ] {
+    if let TypeTag::Variable(var) = types[typ].get() {
         var
     } else {
         let mut arena = take_scratchpad();
@@ -2336,11 +2336,11 @@ impl RegisterVariable {
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
-        typ: Index<TypeTag>,
+        typ: Index<TypeCell>,
     ) -> Self {
         use RegisterVariable::*;
 
-        match types[typ] {
+        match types[typ].get() {
             TypeTag::Variable(var) => Direct(var),
             TypeTag::EmptyRecord => Direct(Variable::EMPTY_RECORD),
             TypeTag::EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
@@ -2373,7 +2373,7 @@ impl RegisterVariable {
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
-        typ: Index<TypeTag>,
+        typ: Index<TypeCell>,
         stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
     ) -> Variable {
         match Self::from_type(subs, rank, pools, arena, types, typ) {
@@ -2444,7 +2444,7 @@ impl AmbientFunctionPolicy {
 #[derive(Debug)]
 enum TypeToVar {
     Defer {
-        typ: Index<TypeTag>,
+        typ: Index<TypeCell>,
         destination: Variable,
         ambient_function: AmbientFunctionPolicy,
     },
@@ -2461,7 +2461,7 @@ fn type_to_variable<'a>(
     arena: &'a bumpalo::Bump,
     aliases: &mut Aliases,
     types: &mut Types,
-    typ: Index<TypeTag>,
+    typ: Index<TypeCell>,
     // Helpers for instantiating ambient functions of lambda set variables from type aliases.
     is_alias_lambda_set_arg: bool,
 ) -> Variable {
@@ -2505,7 +2505,7 @@ fn type_to_variable<'a>(
     }) = stack.pop()
     {
         use TypeTag::*;
-        match types[typ] {
+        match types[typ].get() {
             Variable(_) | EmptyRecord | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
             }
@@ -2812,7 +2812,7 @@ fn type_to_variable<'a>(
             }
 
             StructuralAlias { shared, actual } | OpaqueAlias { shared, actual } => {
-                let kind = match types[typ] {
+                let kind = match types[typ].get() {
                     StructuralAlias { .. } => AliasKind::Structural,
                     OpaqueAlias { .. } => AliasKind::Opaque,
                     _ => internal_error!(),
@@ -3062,10 +3062,10 @@ fn roc_result_to_var(
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
-    result_type: Index<TypeTag>,
+    result_type: Index<TypeCell>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> Variable {
-    match types[result_type] {
+    match types[result_type].get() {
         TypeTag::TagUnion(tags) => {
             let ext_slice = types.get_type_arguments(result_type);
 
@@ -3245,7 +3245,7 @@ fn register_tag_arguments(
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
-    arguments: Slice<TypeTag>,
+    arguments: Slice<TypeCell>,
 ) -> VariableSubsSlice {
     if arguments.is_empty() {
         VariableSubsSlice::default()
@@ -3374,7 +3374,7 @@ fn type_to_union_tags(
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
     union_tags: UnionTags,
-    opt_ext_slice: Slice<TypeTag>,
+    opt_ext_slice: Slice<TypeCell>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
@@ -3430,7 +3430,7 @@ fn create_union_lambda(
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
     closure: Symbol,
-    capture_types: Slice<TypeTag>,
+    capture_types: Slice<TypeCell>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionLambdas {
     let variable_slice =

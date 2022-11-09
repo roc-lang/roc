@@ -12,6 +12,7 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
+use std::cell::Cell;
 use std::fmt;
 use std::fmt::Write;
 
@@ -370,8 +371,28 @@ pub struct AliasShared {
     pub symbol: Symbol,
     pub type_argument_abilities: Slice<AbilitySet>,
     pub type_argument_regions: Slice<Region>,
-    pub lambda_set_variables: Slice<TypeTag>,
-    pub infer_ext_in_output_variables: Slice<TypeTag>,
+    pub lambda_set_variables: Slice<TypeCell>,
+    pub infer_ext_in_output_variables: Slice<TypeCell>,
+}
+
+#[derive(Debug, Clone)]
+#[repr(transparent)]
+pub struct TypeCell(Cell<TypeTag>);
+
+static_assertions::assert_eq_size!(TypeCell, TypeTag);
+
+impl TypeCell {
+    const fn new(tag: TypeTag) -> Self {
+        Self(Cell::new(tag))
+    }
+
+    fn set(&self, tag: TypeTag) {
+        self.0.set(tag)
+    }
+
+    pub fn get(&self) -> TypeTag {
+        self.0.get()
+    }
 }
 
 /// The tag (head constructor) of a canonical type stored in [Types].
@@ -382,9 +403,9 @@ pub enum TypeTag {
     /// The arguments are implicit
     Function(
         /// lambda set
-        Index<TypeTag>,
+        Index<TypeCell>,
         /// return type
-        Index<TypeTag>,
+        Index<TypeCell>,
     ),
     /// Closure arguments are implicit
     ClosureTag {
@@ -402,21 +423,21 @@ pub enum TypeTag {
     },
     StructuralAlias {
         shared: Index<AliasShared>,
-        actual: Index<TypeTag>,
+        actual: Index<TypeCell>,
     },
     OpaqueAlias {
         shared: Index<AliasShared>,
-        actual: Index<TypeTag>,
+        actual: Index<TypeCell>,
     },
     HostExposedAlias {
         shared: Index<AliasShared>,
-        actual_type: Index<TypeTag>,
+        actual_type: Index<TypeCell>,
         actual_variable: Variable,
     },
 
     Apply {
         symbol: Symbol,
-        // type_argument_types: Slice<TypeTag>, implicit
+        // type_argument_types: Slice<TypeCell>, implicit
         type_argument_regions: Slice<Region>,
         region: Region, // IDEA: make implicit, final element of `type_argument_regions`
     },
@@ -437,10 +458,10 @@ pub enum TypeTag {
 /// type arguments of a [TypeTag].
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct AsideTypeSlice(Slice<TypeTag>);
+pub struct AsideTypeSlice(Slice<TypeCell>);
 
 impl AsideTypeSlice {
-    pub fn into_iter(&self) -> impl Iterator<Item = Index<TypeTag>> {
+    pub fn into_iter(&self) -> impl Iterator<Item = Index<TypeCell>> {
         self.0.into_iter()
     }
 
@@ -463,12 +484,12 @@ pub struct Types {
     // `tags_slices` is a parallel array (so these two vectors always have the same size), that
     // allows storing a slice of types. This is used for storing the function argument types, or
     // the extension parameter of tag unions/records.
-    tags: Vec<TypeTag>,
-    tags_slices: Vec<Slice<TypeTag>>,
+    tags: Vec<TypeCell>,
+    tags_slices: Vec<Slice<TypeCell>>,
 
     // used to store other slices of types that are not the "main" arguments of a type stored in
     // `tags_slices`.
-    aside_types_slices: Vec<Slice<TypeTag>>,
+    aside_types_slices: Vec<Slice<TypeCell>>,
 
     // region info where appropriate (retained for generating error messages)
     regions: Vec<Region>,
@@ -486,7 +507,7 @@ pub struct Types {
 
     // these tag types are relatively rare, and so we store them in a way that reduces space, at
     // the cost of slightly higher lookup time
-    single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
+    single_tag_union_tag_names: VecMap<Index<TypeCell>, TagName>,
 }
 
 impl Default for Types {
@@ -496,21 +517,21 @@ impl Default for Types {
 }
 
 impl Types {
-    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
-    const EMPTY_RECORD_TAG: TypeTag = TypeTag::EmptyRecord;
-    const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
+    pub const EMPTY_RECORD: Index<TypeCell> = Index::new(0);
+    const EMPTY_RECORD_TAG: TypeCell = TypeCell::new(TypeTag::EmptyRecord);
+    const EMPTY_RECORD_ARGS: Slice<TypeCell> = Slice::empty();
 
-    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
-    const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::EmptyTagUnion;
-    const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
+    pub const EMPTY_TAG_UNION: Index<TypeCell> = Index::new(1);
+    const EMPTY_TAG_UNION_TAG: TypeCell = TypeCell::new(TypeTag::EmptyTagUnion);
+    const EMPTY_TAG_UNION_ARGS: Slice<TypeCell> = Slice::empty();
 
-    pub const STR: Index<TypeTag> = Index::new(2);
-    const STR_TAG: TypeTag = TypeTag::Apply {
+    pub const STR: Index<TypeCell> = Index::new(2);
+    const STR_TAG: TypeCell = TypeCell::new(TypeTag::Apply {
         symbol: Symbol::STR_STR,
         type_argument_regions: Slice::empty(),
         region: Region::zero(),
-    };
-    const STR_ARGS: Slice<TypeTag> = Slice::empty();
+    });
+    const STR_ARGS: Slice<TypeCell> = Slice::empty();
 
     pub fn new() -> Self {
         Self {
@@ -548,7 +569,7 @@ impl Types {
     }
 
     #[track_caller]
-    pub fn get_tag_name(&self, typ: &Index<TypeTag>) -> &TagName {
+    pub fn get_tag_name(&self, typ: &Index<TypeCell>) -> &TagName {
         self.single_tag_union_tag_names
             .get(typ)
             .expect("typ is not a single tag union")
@@ -557,7 +578,7 @@ impl Types {
     pub fn record_fields_slices(
         &self,
         fields: RecordFields,
-    ) -> (Slice<Lowercase>, Slice<RecordField<()>>, Slice<TypeTag>) {
+    ) -> (Slice<Lowercase>, Slice<RecordField<()>>, Slice<TypeCell>) {
         let RecordFields {
             length,
             field_names_start,
@@ -589,11 +610,11 @@ impl Types {
     /// # Safety
     ///
     /// May only be called if `var` is known to represent the type at `index`.
-    pub unsafe fn set_variable(&mut self, index: Index<TypeTag>, var: Variable) {
-        self.tags[index.index()] = TypeTag::Variable(var);
+    pub unsafe fn emplace_variable(&self, index: Index<TypeCell>, var: Variable) {
+        self.tags[index.index()].0.replace(TypeTag::Variable(var));
     }
 
-    fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
+    fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeCell> {
         use std::iter::repeat;
 
         debug_assert_eq!(self.tags.len(), self.tags_slices.len());
@@ -601,21 +622,24 @@ impl Types {
         self.tags_slices
             .extend(repeat(Slice::default()).take(length));
 
-        Slice::extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
+        Slice::extend_new(
+            &mut self.tags,
+            repeat(TypeCell::new(TypeTag::EmptyRecord)).take(length),
+        )
     }
 
-    fn reserve_type_tag(&mut self) -> Index<TypeTag> {
+    fn reserve_type_tag(&mut self) -> Index<TypeCell> {
         debug_assert_eq!(self.tags.len(), self.tags_slices.len());
 
         self.tags_slices.push(Slice::default());
 
-        Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
+        Index::push_new(&mut self.tags, TypeCell::new(TypeTag::EmptyRecord))
     }
 
-    fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {
+    fn set_type_tag(&mut self, index: Index<TypeCell>, tag: TypeTag, type_slice: Slice<TypeCell>) {
         debug_assert_eq!(self.tags.len(), self.tags_slices.len());
 
-        self.tags[index.index()] = tag;
+        self.tags[index.index()].set(tag);
         self.tags_slices[index.index()] = type_slice;
     }
 
@@ -624,7 +648,7 @@ impl Types {
         &mut self,
         // evil, but allows us to emulate reference-polymorphism
         old: impl ExactSizeIterator<Item = B>,
-    ) -> Slice<TypeTag>
+    ) -> Slice<TypeCell>
     where
         B: std::borrow::Borrow<Type>,
     {
@@ -641,7 +665,7 @@ impl Types {
         &mut self,
         tags: &[(TagName, Vec<Type>)],
         extension: &TypeExtension,
-    ) -> (UnionTags, Slice<TypeTag>) {
+    ) -> (UnionTags, Slice<TypeCell>) {
         let tag_names_slice =
             Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
 
@@ -720,7 +744,7 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_old_type(&mut self, old: &Type) -> Index<TypeTag> {
+    pub fn from_old_type(&mut self, old: &Type) -> Index<TypeCell> {
         let index = self.reserve_type_tag();
         self.from_old_type_at(index, old);
         index
@@ -728,10 +752,10 @@ impl Types {
 
     pub fn function(
         &mut self,
-        arguments: Slice<TypeTag>,
-        lambda_set: Index<TypeTag>,
-        ret: Index<TypeTag>,
-    ) -> Index<TypeTag> {
+        arguments: Slice<TypeCell>,
+        lambda_set: Index<TypeCell>,
+        ret: Index<TypeCell>,
+    ) -> Index<TypeCell> {
         let index = self.reserve_type_tag();
 
         let tag = TypeTag::Function(lambda_set, ret);
@@ -740,7 +764,7 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
+    fn from_old_type_at(&mut self, index: Index<TypeCell>, old: &Type) {
         match old {
             Type::EmptyRec => self.set_type_tag(index, TypeTag::EmptyRecord, Slice::default()),
             Type::EmptyTagUnion => {
@@ -1003,9 +1027,9 @@ impl Types {
     /// Creates a deep clone of a type with substituted variables.
     pub fn clone_with_variable_substitutions(
         &mut self,
-        typ: Index<TypeTag>,
+        typ: Index<TypeCell>,
         subs: &MutMap<Variable, Variable>,
-    ) -> Index<TypeTag> {
+    ) -> Index<TypeCell> {
         let cloned = self.reserve_type_tag();
 
         let mut stack = vec![(cloned, typ)];
@@ -1085,7 +1109,7 @@ impl Types {
         while let Some((dest_index, typ)) = stack.pop() {
             use TypeTag::*;
 
-            let (tag, args) = match self[typ] {
+            let (tag, args) = match self[typ].get() {
                 Variable(v) => (Variable(subst!(v)), Default::default()),
                 EmptyRecord => (EmptyRecord, Default::default()),
                 EmptyTagUnion => (EmptyTagUnion, Default::default()),
@@ -1599,7 +1623,7 @@ macro_rules! impl_types_index_slice {
 }
 
 impl_types_index! {
-    tags, TypeTag
+    tags, TypeCell
     aliases, AliasShared
     type_arg_abilities, AbilitySet
     regions, Region
@@ -1613,7 +1637,7 @@ impl_types_index_slice! {
 }
 
 impl std::ops::Index<Index<AsideTypeSlice>> for Types {
-    type Output = Slice<TypeTag>;
+    type Output = Slice<TypeCell>;
 
     fn index(&self, slice: Index<AsideTypeSlice>) -> &Self::Output {
         &self.aside_types_slices[slice.index()]
@@ -1621,7 +1645,7 @@ impl std::ops::Index<Index<AsideTypeSlice>> for Types {
 }
 
 impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
-    type Output = [Slice<TypeTag>];
+    type Output = [Slice<TypeCell>];
 
     fn index(&self, slice: Slice<AsideTypeSlice>) -> &Self::Output {
         &self.aside_types_slices[slice.indices()]
