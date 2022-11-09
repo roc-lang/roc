@@ -15,7 +15,7 @@ update = \model, event ->
     when event is 
         KeyPressed code ->
             when code is 
-                Left -> { text : "Left" }
+                Left -> { text : "" }
                 Right -> { text : "Right" }
                 Up -> { text : "Up" }
                 Down -> { text : "Down" }
@@ -38,66 +38,79 @@ boundsToStr : Bounds -> Str
 boundsToStr = \{height, width} ->
     h = Num.toStr height
     w = Num.toStr width
-    "H: \(h), W:\(w)"
+    "Current Window H: \(h), W:\(w)"
 
-style1 = { bg: Blue, fg: Magenta, modifiers: [Bold, Italic] }
-style2 = { bg: Black, fg: LightRed, modifiers: [SlowBlink, Underlined] }
-style3 = { bg: Cyan, fg: LightMagenta, modifiers: [] }
-style4 = { bg: None, fg: Yellow, modifiers: [] }
-style5 = { bg: None, fg: Red, modifiers: [] }
+noStyle = { bg: None, fg: None, modifiers: [] }
+style0 = { bg: LightBlue, fg: Black, modifiers: [Bold] }
+style1 = { bg: None, fg: Blue, modifiers: [] }
+style2 = { bg: Black, fg: White, modifiers: [SlowBlink, Underlined] }
+style3 = { bg: None, fg: Red, modifiers: [RapidBlink, Italic] }
 
-paragraph =\model -> 
-    Paragraph
-        (
-            [
-                [{ text: "Ahoy there ", style: style1 }, { text: model.text, style: style2 }],
-                [
-                    { text: loremIpsum1, style: style1 },
-                    { text: loremIpsum2, style: style2 },
-                    { text: loremIpsum3, style: style3 },
-                    { text: loremIpsum4, style: style4 },
-                    { text: loremIpsum5, style: style5 },
-                ],
-            ]
-        )
+header = Paragraph
+        ([[{ text: loremIpsum1, style: style1 }]])
         {
-            title: "My Roc Box",
-            titleStyle: style1,
-            titleAlignment: Right,
-            textAlignment: Center,
+            title: "Header",
+            titleStyle: style0,
+            titleAlignment: Left,
+            textAlignment: Left,
             borders: [All],
-            borderStyle: style3,
-            borderType: Plain,
-            style: style4,
+            borderStyle: noStyle,
+            borderType: Double,
+            style: noStyle,
         }
 
-layout = \model ->
-    Layout 
+bodySection = \sectionTile, sectionText -> 
+    Paragraph
+        ([[{ text: sectionText, style: style1 }]])
+        {
+            title: sectionTile,
+            titleStyle: style2,
+            titleAlignment: Left,
+            textAlignment: Left,
+            borders: [],
+            borderStyle: noStyle,
+            borderType: Plain,
+            style: noStyle,
+        }
+
+bodyLayout = Layout
     [
-        paragraph model,
-        paragraph model,
+        bodySection "Section 1" loremIpsum2,
+        bodySection "Section 2" loremIpsum3,
+        bodySection "Section 3" loremIpsum4,
     ]
     {
-        constraints : [Percentage 20, Ratio 1 3],
-        vMargin : 5,
-        hMargin : 2,
-        direction : Horizontal,
+        constraints : [Ratio 1 3, Ratio 1 3, Ratio 1 3],
+        vMargin : 1,
+        hMargin : 0,
+        direction : Vertical,
+    }
+
+footer = Paragraph
+        ([[{ text: loremIpsum5, style: style3 }]])
+        {
+            title: "Footer",
+            titleStyle: style3,
+            titleAlignment: Right,
+            textAlignment: Right,
+            borders: [Top],
+            borderStyle: style3,
+            borderType: Thick,
+            style: noStyle,
+        }
+
+
+layout = Layout 
+    [header,bodyLayout,footer]
+    {
+        constraints : [Ratio 1 5, Ratio 3 5, Ratio 1 5],
+        vMargin : 0,
+        hMargin : 1,
+        direction : Vertical,
     }
 
 render : Model -> List Elem
-render = \model -> [
-    Layout 
-        [
-            layout model,
-            paragraph model,
-        ]
-        {
-            constraints : [Ratio 2 3, Ratio 1 3],
-            vMargin : 0,
-            hMargin : 0,
-            direction : Vertical,
-        }
-    ]
+render = \_ -> [layout]
 
 program = { init, update, render }
 
