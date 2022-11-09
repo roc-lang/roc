@@ -1143,20 +1143,20 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This expression is used in an unexpected way:
+    This 1st argument to `f` has an unexpected type:
 
     7│      g = \x -> f [x]
-                      ^^^^^
+                        ^^^
 
-    This `f` call produces:
-
-        List List b
-
-    But you are trying to use it as:
+    The argument is a list of type:
 
         List b
 
-    Tip: The type annotation uses the type variable `b` to say that this
+    But `f` needs its 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
     definition can produce any type of value. But in the body I see that
     it will only produce a `List` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
