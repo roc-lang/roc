@@ -1717,11 +1717,7 @@ fn constrain_function_def(
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
 
-            let ret_type_index = {
-                // TODO(types-soa) get rid of clone
-                let typ = types.clone_with_variable_substitutions(ret_type, &Default::default());
-                constraints.push_type(types, typ)
-            };
+            let ret_type_index = constraints.push_type(types, ret_type);
 
             vars.push(ret_var);
             vars.push(closure_var);
