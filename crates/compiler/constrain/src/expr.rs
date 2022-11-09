@@ -1388,7 +1388,7 @@ pub fn constrain_expr(
                     constraints.push_type(types, typ)
                 };
                 let specialized_type_index = {
-                    let typ = types.from_old_type(&(*specialized_def_type));
+                    let typ = types.from_old_type(specialized_def_type);
                     constraints.push_type(types, typ)
                 };
                 let expected_specialized =
