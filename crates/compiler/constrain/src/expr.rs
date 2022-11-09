@@ -3393,9 +3393,7 @@ fn constraint_recursive_function(
             let fn_type = {
                 // TODO(types-soa) optimize for Variable
                 let lambda_set = types.from_old_type(&Type::Variable(closure_var));
-                // TODO(types-soa) remove clone
-                let ret = types.clone_with_variable_substitutions(ret_type, &Default::default());
-                let typ = types.function(pattern_types, lambda_set, ret);
+                let typ = types.function(pattern_types, lambda_set, ret_type);
                 constraints.push_type(types, typ)
             };
 
