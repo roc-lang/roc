@@ -1347,10 +1347,10 @@ fn solve(
                     .map(|v| Type::Variable(*v))
                     .collect();
 
-                let tag_ty = Type::TagUnion(
+                let tag_ty = can_types.from_old_type(&Type::TagUnion(
                     vec![(tag_name.clone(), payload_types)],
                     TypeExtension::Closed,
-                );
+                ));
                 let includes = type_to_var(
                     subs,
                     rank,
@@ -1360,7 +1360,7 @@ fn solve(
                     pools,
                     &mut can_types,
                     aliases,
-                    &tag_ty,
+                    tag_ty,
                 );
 
                 match unify(
@@ -2265,7 +2265,7 @@ fn type_cell_to_var(
     aliases: &mut Aliases,
     typ_cell: &Cell<Index<TypeTag>>,
 ) -> Variable {
-    let typ = typ_cell.replace(Type::EmptyTagUnion);
+    let typ = typ_cell.get();
     let var = type_to_var(
         subs,
         rank,
@@ -2275,9 +2275,12 @@ fn type_cell_to_var(
         pools,
         types,
         aliases,
-        &typ,
+        typ,
     );
-    typ_cell.replace(Type::Variable(var));
+    unsafe {
+        types.set_variable(typ, var);
+    }
+
     var
 }
 
@@ -2290,13 +2293,12 @@ pub(crate) fn type_to_var(
     pools: &mut Pools,
     types: &mut Types,
     aliases: &mut Aliases,
-    typ: &Type,
+    typ: Index<TypeTag>,
 ) -> Variable {
-    if let Type::Variable(var) = typ {
-        *var
+    if let TypeTag::Variable(var) = types[typ] {
+        var
     } else {
         let mut arena = take_scratchpad();
-        let typ = types.from_old_type(typ);
 
         let var = type_to_variable(
             subs,

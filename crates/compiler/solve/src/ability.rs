@@ -75,6 +75,7 @@ impl PendingDerivesTable {
                 let derive_key = RequestedDeriveKey { opaque, ability };
 
                 // Neither rank nor pools should matter here.
+                let typ = types.from_old_type(&typ);
                 let opaque_var = type_to_var(
                     subs,
                     Rank::toplevel(),
@@ -84,7 +85,7 @@ impl PendingDerivesTable {
                     &mut Pools::default(),
                     types,
                     aliases,
-                    &typ,
+                    typ,
                 );
                 let real_var = match subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,

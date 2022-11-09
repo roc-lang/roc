@@ -143,11 +143,12 @@ pub fn can_expr_with<'a>(
         }
     };
 
+    let mut types = Types::new();
     let mut constraints = Constraints::new();
 
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
-    let var_index = constraints.push_type(Type::Variable(var));
+    let var_index = constraints.push_variable(var);
     let expected = constraints.push_expected_type(Expected::NoExpectation(var_index));
     let mut module_ids = ModuleIds::default();
 
@@ -176,6 +177,7 @@ pub fn can_expr_with<'a>(
     );
 
     let constraint = constrain_expr(
+        &mut types,
         &mut constraints,
         &mut roc_constrain::expr::Env {
             rigids: MutMap::default(),
@@ -205,7 +207,7 @@ pub fn can_expr_with<'a>(
         var,
         constraint,
         constraints,
-        types: Default::default(),
+        types,
     })
 }
 

@@ -27,6 +27,7 @@ use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
     subs::{ExposedTypesStorageSubs, Subs, Variable},
+    types::Types,
 };
 
 const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
@@ -343,11 +344,12 @@ fn check_derived_typechecks_and_golden(
     check_golden: impl Fn(&str),
 ) {
     // constrain the derived
+    let mut types = Types::new();
     let mut constraints = Constraints::new();
     let def_var = derived_def.expr_var;
     let mut decls = Declarations::new();
     decls.push_def(derived_def);
-    let constr = constrain_decls(&mut constraints, test_module, &decls);
+    let constr = constrain_decls(&mut types, &mut constraints, test_module, &decls);
 
     // the derived implementation on stuff from the builtin module, so
     //   - we need to add those dependencies as imported on the constraint
@@ -394,7 +396,7 @@ fn check_derived_typechecks_and_golden(
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
-        Default::default(),
+        types,
         &constraints,
         constr,
         RigidVariables::default(),

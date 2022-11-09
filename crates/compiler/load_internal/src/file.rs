@@ -4713,7 +4713,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
     );
-    let types = Types::new();
+    let mut types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();

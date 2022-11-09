@@ -586,6 +586,13 @@ impl Types {
         (tags, payload_slices)
     }
 
+    /// # Safety
+    ///
+    /// May only be called if `var` is known to represent the type at `index`.
+    pub unsafe fn set_variable(&mut self, index: Index<TypeTag>, var: Variable) {
+        self.tags[index.index()] = TypeTag::Variable(var);
+    }
+
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
         use std::iter::repeat;
 
