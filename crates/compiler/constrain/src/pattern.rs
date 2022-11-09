@@ -725,11 +725,7 @@ pub fn constrain_pattern(
             // This must **always** be a presence constraint, that is enforcing
             // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
-            let arg_pattern_type = {
-                // TODO(types-soa) this is just a variable
-                let typ = types.from_old_type(&arg_pattern_type);
-                constraints.push_type(types, typ)
-            };
+            let arg_pattern_type = constraints.push_variable(*arg_pattern_var);
             let specialized_type_index = {
                 let typ = types.from_old_type(&(**specialized_def_type));
                 constraints.push_type(types, typ)
