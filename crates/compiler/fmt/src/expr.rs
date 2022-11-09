@@ -34,8 +34,10 @@ impl<'a> Formattable for Expr<'a> {
             | Num(..)
             | NonBase10Int { .. }
             | SingleQuote(_)
-            | Access(_, _)
-            | AccessorFunction(_)
+            | RecordAccess(_, _)
+            | RecordAccessorFunction(_)
+            | TupleAccess(_, _)
+            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -399,12 +401,22 @@ impl<'a> Formattable for Expr<'a> {
 
                 sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
-            AccessorFunction(key) => {
+            RecordAccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
-            Access(expr, key) => {
+            RecordAccess(expr, key) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            TupleAccessorFunction(key) => {
+                buf.indent(indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            TupleAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);

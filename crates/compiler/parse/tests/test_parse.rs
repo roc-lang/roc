@@ -279,6 +279,7 @@ mod test_parse {
         pass/underscore_backpassing.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
+        pass/tuple_accessor_function.expr,
         pass/var_if.expr,
         pass/var_is.expr,
         pass/var_minus_two.expr,

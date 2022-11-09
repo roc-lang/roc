@@ -2236,7 +2236,7 @@ fn canonicalize_pending_body<'a>(
                     ident: defined_symbol,
                     ..
                 },
-                ast::Expr::AccessorFunction(field),
+                ast::Expr::RecordAccessorFunction(field),
             ) => {
                 let (loc_can_expr, can_output) = (
                     Loc::at(

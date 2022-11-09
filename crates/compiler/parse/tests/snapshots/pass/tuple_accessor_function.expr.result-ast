@@ -1,0 +1,21 @@
+Apply(
+    @0-2 TupleAccessorFunction(
+        "1",
+    ),
+    [
+        @3-12 Tuple(
+            [
+                @4-5 Num(
+                    "1",
+                ),
+                @7-8 Num(
+                    "2",
+                ),
+                @10-11 Num(
+                    "3",
+                ),
+            ],
+        ),
+    ],
+    Space,
+)
