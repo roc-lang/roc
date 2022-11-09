@@ -1,6 +1,7 @@
 [toolchain]
-channel = "1.63.0"
-# channel = "nightly-2022-04-03" # nightly to be able to use unstable features
+channel = "1.64.0" # when changing this, update the date below with the last nightly with matching version using the link below
+# https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2022
+# channel = "nightly-2022-08-06" # 1.64 nightly to be able to use unstable features
 profile = "default"
 components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`

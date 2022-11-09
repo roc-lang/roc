@@ -2358,15 +2358,11 @@ impl<'a> Stmt<'a> {
     pub fn is_terminal(&self) -> bool {
         use Stmt::*;
 
-        match self {
-            Switch { .. } => {
-                // TODO is this the reason Lean only looks at the outermost `when`?
-                true
-            }
-            Ret(_) => true,
-            Jump(_, _) => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Switch { .. } | Ret(_) | Jump(_, _)
+            // TODO for Switch; is this the reason Lean only looks at the outermost `when`?
+        )
     }
 
     pub fn if_then_else(
