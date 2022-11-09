@@ -3144,6 +3144,7 @@ fn instantiate_rigids(
     if !rigid_substitution.is_empty() {
         annotation.substitute_variables(&rigid_substitution);
     }
+    let annotation_index = types.from_old_type(&annotation);
 
     // TODO investigate when we can skip this. It seems to only be required for correctness
     // for recursive functions. For non-recursive functions the final type is correct, but
@@ -3152,10 +3153,7 @@ fn instantiate_rigids(
     // Skipping all of this cloning here would be neat!
     let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
     if let Pattern::Identifier(symbol) = loc_pattern.value {
-        let annotation_index = {
-            let typ = types.from_old_type(&annotation);
-            constraints.push_type(types, typ)
-        };
+        let annotation_index = constraints.push_type(types, annotation_index);
         headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
     } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
         types,
@@ -3167,8 +3165,7 @@ fn instantiate_rigids(
     }
 
     InstantiateRigids {
-        // TODO(types-soa) coalesce with types.from_old_type(annotation) above
-        signature: types.from_old_type(&annotation),
+        signature: annotation_index,
         new_rigid_variables,
         new_infer_variables,
     }
