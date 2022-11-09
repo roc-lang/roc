@@ -518,19 +518,19 @@ impl Default for Types {
 
 impl Types {
     pub const EMPTY_RECORD: Index<TypeCell> = Index::new(0);
-    const EMPTY_RECORD_TAG: TypeCell = TypeCell::new(TypeTag::EmptyRecord);
+    #[allow(clippy::declare_interior_mutable_const)] // variables in type cells will never be moved
+    const EMPTY_RECORD_TAG: TypeCell = TypeCell::new(TypeTag::Variable(Variable::EMPTY_RECORD));
     const EMPTY_RECORD_ARGS: Slice<TypeCell> = Slice::empty();
 
     pub const EMPTY_TAG_UNION: Index<TypeCell> = Index::new(1);
-    const EMPTY_TAG_UNION_TAG: TypeCell = TypeCell::new(TypeTag::EmptyTagUnion);
+    #[allow(clippy::declare_interior_mutable_const)] // variables in type cells will never be moved
+    const EMPTY_TAG_UNION_TAG: TypeCell =
+        TypeCell::new(TypeTag::Variable(Variable::EMPTY_TAG_UNION));
     const EMPTY_TAG_UNION_ARGS: Slice<TypeCell> = Slice::empty();
 
     pub const STR: Index<TypeCell> = Index::new(2);
-    const STR_TAG: TypeCell = TypeCell::new(TypeTag::Apply {
-        symbol: Symbol::STR_STR,
-        type_argument_regions: Slice::empty(),
-        region: Region::zero(),
-    });
+    #[allow(clippy::declare_interior_mutable_const)] // variables in type cells will never be moved
+    const STR_TAG: TypeCell = TypeCell::new(TypeTag::Variable(Variable::STR));
     const STR_ARGS: Slice<TypeCell> = Slice::empty();
 
     pub fn new() -> Self {
